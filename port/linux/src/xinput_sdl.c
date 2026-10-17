@@ -636,6 +636,15 @@ still, only turning and looking up and down (where remote players aim and
 whether they stand) */
 static int test_input_holding_action;
 static Uint64 test_input_holding_action_since;
+/* "tickbot:<seed>": the same pattern timed by the game's ticks, which the
+network test gives here each frame (test_input_set_game_time): with
+debug.fixed_step, the same input at the same tick on any machine */
+static long test_input_game_ticks;
+
+void test_input_set_game_time(long ticks)
+{
+	test_input_game_ticks = ticks;
+}
 
 /* the automated tests (port/linux/game/network_test.c): the scripted player
 stands still, holding the action button (X: picking up, swapping weapons)
@@ -652,6 +661,7 @@ static void test_input_gamepad(XINPUT_GAMEPAD *pad)
 	static int checked;
 	static int seed = -1;
 	static int looking;
+	static int ticked;
 	double t;
 
 	if (!checked)
@@ -661,6 +671,11 @@ static void test_input_gamepad(XINPUT_GAMEPAD *pad)
 		checked = 1;
 		if (!strncmp(setting, "bot:", 4))
 			seed = atoi(setting + 4);
+		else if (!strncmp(setting, "tickbot:", 8))
+		{
+			seed = atoi(setting + 8);
+			ticked = 1;
+		}
 		else if (!strcmp(setting, "bot"))
 			seed = 0;
 		else if (!strncmp(setting, "look:", 5))
@@ -678,7 +693,7 @@ static void test_input_gamepad(XINPUT_GAMEPAD *pad)
 			pad->bAnalogButtons[XINPUT_GAMEPAD_X] = 255;
 		return;
 	}
-	t = (double)SDL_GetTicks() / 1000.0 + seed * 1.7;
+	t = (ticked ? (double)test_input_game_ticks / 30.0 : (double)SDL_GetTicks() / 1000.0) + seed * 1.7;
 	if (looking)
 	{
 		pad->sThumbRX = (SHORT)(sin(t * 0.5) * 14000.0);

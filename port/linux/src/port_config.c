@@ -542,13 +542,19 @@ static const struct config_setting config_settings[] =
 		"damaged too)." },
 	{ "debug.test_input", _config_string, "\"\"", "HALO_TEST_INPUT", _environment_value, _platform_all,
 		"\"bot:<seed>\" plays controller 1 with a scripted pattern (automated\n"
-		"network tests); \"look:<seed>\" stands still, only turning and looking\n"
-		"up and down; empty for none." },
+		"network tests), timed by the clock; \"tickbot:<seed>\" the same pattern\n"
+		"timed by the game's ticks (with debug.fixed_step, the same game on any\n"
+		"machine, for comparing runs); \"look:<seed>\" stands still, only turning\n"
+		"and looking up and down; empty for none." },
 	{ "debug.update_answer", _config_string, "\"\"", "HALO_UPDATE_ANSWER", _environment_value, _platform_desktop,
 		"The answer to the new version question, for automated tests: \"yes\",\n"
 		"\"no\" or \"never\" (do not ask again, confirmed); empty asks." },
 	{ "debug.exit_after", _config_real, "0.0", "HALO_EXIT_AFTER", _environment_value, _platform_all,
 		"Quit this many seconds after the window opens; 0 never." },
+	{ "debug.fixed_step", _config_boolean, "false", "HALO_FIXED_STEP", _environment_set_is_true, _platform_all,
+		"Each frame is one tick, 1/30 s of game time, however long it took, so\n"
+		"that runs of automated tests at different speeds (an emulator's, a slow\n"
+		"machine's) play the same game; with debug.test_input \"tickbot\"." },
 	{ "debug.random_seed", _config_integer, "0", "HALO_RANDOM_SEED", _environment_value, _platform_all,
 		"The game's local random seed at start-up and a hosted game's seed, for\n"
 		"comparing runs of automated tests; 0 seeds them from the clock, as the\n"

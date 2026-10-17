@@ -81,6 +81,7 @@ void network_distributed_item_statistics(long *creates, long *deletes, long *fai
 void network_damage_statistics(long *sent_reports, long *dealt_reports, long *rejected_reports, long *replayed_events);
 /* xinput_sdl.c's */
 void test_input_hold_action(int hold);
+void test_input_set_game_time(long ticks);
 
 enum
 {
@@ -748,6 +749,10 @@ void network_test_update(
 		network_test_read_settings();
 	if (network_test.mode == _network_test_off)
 		return;
+
+	/* (the game's time for the tick-timed scripted player: xinput_sdl.c's
+	"tickbot") */
+	test_input_set_game_time(game_in_progress() && !main_menu_loaded ? game_time_get() : 0);
 
 	/* the game running: report (from the start of each game: the next
 	game's time starts over) */

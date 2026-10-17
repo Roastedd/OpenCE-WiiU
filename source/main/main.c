@@ -680,6 +680,21 @@ typedef char screenshot_and_framerate_globals_size_assert[
 	sizeof(struct _screenshot_and_framerate_globals) == 0x38B ? 1 : -1];
 
 void network_test_update(boolean main_menu_loaded, real seconds);
+/* port: port/linux/src/port_config.c */
+int config_boolean(const char *name);
+
+/* port: debug.fixed_step: each frame one tick of game time, however long it
+took, so that runs of automated tests at different speeds play the same game */
+static real main_fixed_step(
+	real seconds_elapsed)
+{
+	static int fixed_step = -1;
+
+	if (fixed_step < 0)
+		fixed_step = config_boolean("debug.fixed_step") != 0;
+
+	return fixed_step ? 1.0f / TICKS_PER_SECOND : seconds_elapsed;
+}
 
 /* ---------- prototypes */
 
@@ -2463,6 +2478,8 @@ static void main_update_time_unthrottled(
 	}
 
 	main_globals.frame_start_milliseconds = system_milliseconds();
+	/* port: (debug.fixed_step) */
+	seconds_elapsed = main_fixed_step(seconds_elapsed);
 	main_globals.seconds_elapsed = seconds_elapsed;
 	profile_seconds_elapsed(seconds_elapsed);
 	main_globals.rasterizer_initial_index =
@@ -2706,6 +2723,8 @@ static void main_update_time(
 
 	main_globals.frame_start_milliseconds = end_milliseconds;
 	main_globals.rasterizer_target_index = target_index;
+	/* port: (debug.fixed_step) */
+	seconds_elapsed = main_fixed_step(seconds_elapsed);
 	main_globals.seconds_elapsed = seconds_elapsed;
 	profile_seconds_elapsed(seconds_elapsed);
 	main_globals.rasterizer_initial_index =

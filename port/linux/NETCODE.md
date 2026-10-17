@@ -724,7 +724,9 @@ Unity's Netcode for Entities, lightyear, netfox and the Ares source):
 game without the menus (in a team game the joining player takes the other
 team), and `debug.test_input` plays controller 1 with a scripted bot (or,
 `look:<seed>`, one that stands still, only turning and looking up and
-down); each machine logs every player's position, health and shields,
+down; or, `tickbot:<seed>`, the bot timed by the game's ticks, which with
+`debug.fixed_step` and `debug.random_seed` plays the same game on any
+machine, so that two builds' runs can be compared); each machine logs every player's position, health and shields,
 where they aim and face, their animation state and how hard they move,
 weapons, grenades, score, kills and deaths every second, with the objects
 made and removed and the hits reported, dealt, rejected and replayed, so
