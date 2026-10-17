@@ -22,8 +22,18 @@ enum
 
 /* ---------- macros */
 
+/* port: every use converts between big-endian data (network byte order,
+the editing kit's tag files, compressed data's headers, a tag's four
+characters) and the host's order, which on the Xbox reverses the bytes. On a
+big-endian host (the Wii U's) the two orders are one, and these change
+nothing */
+#ifdef __BIG_ENDIAN__
+#define SWAP2(q) (q)
+#define SWAP4(q) (q)
+#else
 #define SWAP2(q) (((q)>>8) | (((q)<<8)&0xff00))
 #define SWAP4(q) (((q)>>24) | (((q)>>8)&0xff00) | (((q)<<8)&0x00ff0000) | (((q)<<24)&0xff000000))
+#endif
 
 /* ---------- types */
 

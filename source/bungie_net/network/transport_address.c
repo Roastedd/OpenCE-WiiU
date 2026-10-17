@@ -181,10 +181,12 @@ char const *transport_address_to_string(
 			transport_address_string,
 			NUMBEROF(transport_address_string),
 			"%hd.%hd.%hd.%hd:%hd",
-			addr->address.bytes[3],
-			addr->address.bytes[2],
-			addr->address.bytes[1],
-			addr->address.bytes[0],
+			/* port: the octets of the host-order address by value, not by
+			their bytes' places, which are a little-endian host's */
+			(short)((addr->address.long_words[0] >> 24) & 0xFF),
+			(short)((addr->address.long_words[0] >> 16) & 0xFF),
+			(short)((addr->address.long_words[0] >> 8) & 0xFF),
+			(short)(addr->address.long_words[0] & 0xFF),
 			addr->port);
 	}
 	else if (addr->address_length == IPV6_ADDRESS_LENGTH)

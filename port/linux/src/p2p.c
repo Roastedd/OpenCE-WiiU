@@ -485,14 +485,24 @@ static int hex_value(char digit)
 	return -1;
 }
 
+/* (host to network byte order and back: a little-endian host's bytes
+reverse, a big-endian one's stay) */
 static unsigned long network_long(unsigned long value)
 {
+#ifdef __BIG_ENDIAN__
+	return value;
+#else
 	return __builtin_bswap32(value);
+#endif
 }
 
 static unsigned short network_short(unsigned short value)
 {
+#ifdef __BIG_ENDIAN__
+	return value;
+#else
 	return (unsigned short)(value << 8 | value >> 8);
+#endif
 }
 
 static void put_short(unsigned char *bytes, unsigned short value)

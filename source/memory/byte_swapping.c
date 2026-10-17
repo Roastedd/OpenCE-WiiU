@@ -59,10 +59,15 @@ symbols in this file:
 
 /* ---------- macros */
 
+/* port: as SWAP2 and SWAP4 (byte_swapping.h), nothing on a big-endian host */
+#ifdef __BIG_ENDIAN__
+#define SWAP8(q) (q)
+#else
 #define SWAP8(q) \
 	(((q)>>56) | (((q)>>40)&0xff00) | (((q)>>24)&0xff0000) | (((q)>>8)&0xff000000) | \
 	 (((q)<<8)&0xff00000000ui64) | (((q)<<24)&0xff0000000000ui64) | \
 	 (((q)<<40)&0xff000000000000ui64) | ((q)<<56))
+#endif
 
 /* ---------- structures */
 

@@ -1069,24 +1069,34 @@ int PASCAL __WSAFDIsSet(SOCKET socket, halo_ws_fd_set *set)
 
 /* ---------- byte order and addresses */
 
+/* (network byte order is big-endian: the bytes reverse on a little-endian
+host, and stay on a big-endian one, the Wii U's) */
 u_long WSAAPI halo_ws_htonl(u_long value)
 {
+#ifdef __BIG_ENDIAN__
+	return value;
+#else
 	return __builtin_bswap32(value);
+#endif
 }
 
 u_long WSAAPI halo_ws_ntohl(u_long value)
 {
-	return __builtin_bswap32(value);
+	return halo_ws_htonl(value);
 }
 
 u_short WSAAPI halo_ws_htons(u_short value)
 {
+#ifdef __BIG_ENDIAN__
+	return value;
+#else
 	return (u_short)((value << 8) | (value >> 8));
+#endif
 }
 
 u_short WSAAPI halo_ws_ntohs(u_short value)
 {
-	return (u_short)((value << 8) | (value >> 8));
+	return halo_ws_htons(value);
 }
 
 unsigned long WSAAPI halo_ws_inet_addr(const char *text)
@@ -1113,8 +1123,8 @@ unsigned long WSAAPI halo_ws_inet_addr(const char *text)
 	}
 	if (count != 4 || *text)
 		return INADDR_NONE;
-	/* network byte order on a little-endian host */
-	return parts[0] | (parts[1] << 8) | (parts[2] << 16) | (parts[3] << 24);
+	/* network byte order: the first part first in memory */
+	return halo_ws_htonl((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]);
 }
 
 /* ---------- XNet */
