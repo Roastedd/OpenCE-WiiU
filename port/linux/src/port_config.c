@@ -559,7 +559,8 @@ static const struct config_setting config_settings[] =
 	{ "debug.fixed_step", _config_boolean, "false", "HALO_FIXED_STEP", _environment_set_is_true, _platform_all,
 		"Each frame is one tick, 1/30 s of game time, however long it took, so\n"
 		"that runs of automated tests at different speeds (an emulator's, a slow\n"
-		"machine's) play the same game; with debug.test_input \"tickbot\"." },
+		"machine's) play the same game, and a game's connection does not go\n"
+		"stale or time out by the clock; with debug.test_input \"tickbot\"." },
 	{ "debug.random_seed", _config_integer, "0", "HALO_RANDOM_SEED", _environment_value, _platform_all,
 		"The game's local random seed at start-up and a hosted game's seed, for\n"
 		"comparing runs of automated tests; 0 seeds them from the clock, as the\n"

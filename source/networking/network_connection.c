@@ -1632,6 +1632,21 @@ static boolean network_connection_idle_server_reliable_endpoint(
 	return success;
 }
 
+/* port: port/linux/src/port_config.c, and the game's clock (game/game_time.c) */
+int config_boolean(const char *name);
+boolean game_time_initialized(void);
+
+static boolean network_connection_fixed_step(
+	void)
+{
+	static int fixed_step = -1;
+
+	if (fixed_step < 0)
+		fixed_step = config_boolean("debug.fixed_step") != 0;
+
+	return fixed_step;
+}
+
 boolean network_connection_idle(
 	struct network_connection *connection,
 	long timeout,
@@ -1647,6 +1662,17 @@ boolean network_connection_idle(
 		connection);
 
 	SET_FLAG(connection->flags, _connection_going_stale_bit, FALSE);
+	/* port: debug.fixed_step plays a game at whatever speed the machine
+	manages, a fraction of real time under an emulator, while the host speaks
+	once a game second: a silence the clock calls long (5 s: going stale, and
+	a "network trouble" dialog that takes the player's controller) is a few
+	ticks. In such a game's course the connection neither goes stale nor
+	times out by the clock. */
+	if (timeout && game_time_initialized() && network_connection_fixed_step())
+	{
+		connection->last_keep_alive_time = current_time;
+		timeout = 0;
+	}
 	if (timeout)
 	{
 		/* (differences, which the millisecond clock's wrap leaves right) */
