@@ -62,6 +62,7 @@ what it says it has grows.
 #include "text/font_group.h"
 #include "rasterizer/rasterizer.h"
 #include "network_distributed.h"
+#include "network_wire_order.h"
 #include "cache_file_formats.h"
 #include "custom_edition_cache.h"
 #include "custom_edition_maps.h"
@@ -1388,6 +1389,9 @@ static void download_report(
 	message.progress.state = state;
 	message.progress.done = download->done_bytes;
 	message.progress.total = download->total_bytes;
+	/* (in the wire's order: network_wire_order.c) */
+	NETWORK_WIRE(message.progress.done);
+	NETWORK_WIRE(message.progress.total);
 	network_distributed_client_send_reliably(&message, (word)sizeof(message));
 	download->reported_at = system_milliseconds();
 }
@@ -1407,6 +1411,8 @@ static void download_ask(
 	level_name_copy(message.request.level_name, download->level_name);
 	message.request.version = download->version;
 	message.request.wanted = download->wanted;
+	/* (in the wire's order) */
+	NETWORK_WIRE(message.request.version);
 	network_distributed_client_send_reliably(&message, (word)sizeof(message));
 }
 
@@ -2964,6 +2970,8 @@ static void host_offer(
 
 		message.files[index].kind = (byte)machine->file_kinds[index];
 		message.files[index].size = file->size;
+		/* (in the wire's order) */
+		NETWORK_WIRE(message.files[index].size);
 		csmemcpy(message.files[index].hash, file->hash, MAP_SHARE_HASH_BYTES);
 	}
 	network_distributed_server_send_to_machine_reliably(machine_index, &message, size);
@@ -3018,6 +3026,8 @@ static void host_sources(
 		}
 		if (map_share_machine_downloading(index) && !globals->machines[index].downloaded)
 			entry->flags |= FLAG(_source_downloading_bit);
+		/* (in the wire's order) */
+		NETWORK_WIRE(entry->address);
 		count++;
 	}
 	size = (word)(sizeof(message.header) + sizeof(message.sources) + count * sizeof(message.entries[0]));
@@ -3279,6 +3289,8 @@ void map_share_handle_message(
 			return;
 		}
 		csmemcpy(&request, entries, sizeof(request));
+		/* (in this machine's order: network_wire_order.c) */
+		NETWORK_WIRE(request.version);
 		if (!level_name_valid(request.level_name))
 			return;
 		host_asked(machine_index, &request);
@@ -3294,6 +3306,8 @@ void map_share_handle_message(
 			return;
 		}
 		csmemcpy(&progress, entries, sizeof(progress));
+		NETWORK_WIRE(progress.done);
+		NETWORK_WIRE(progress.total);
 		host_progress(machine_index, &progress);
 		break;
 	}
@@ -3311,6 +3325,12 @@ void map_share_handle_message(
 			return;
 		}
 		csmemcpy(files, entries + sizeof(offer), offer.file_count * sizeof(files[0]));
+		{
+			short file_index;
+
+			for (file_index = 0; file_index < offer.file_count; file_index++)
+				NETWORK_WIRE(files[file_index].size);
+		}
 		download_offered(&offer, files);
 		break;
 	}
@@ -3328,6 +3348,12 @@ void map_share_handle_message(
 			return;
 		}
 		csmemcpy(sources_entries, entries + sizeof(sources), sources.count * sizeof(sources_entries[0]));
+		{
+			short source_index;
+
+			for (source_index = 0; source_index < sources.count; source_index++)
+				NETWORK_WIRE(sources_entries[source_index].address);
+		}
 		download_sources(&sources, sources_entries);
 		break;
 	}

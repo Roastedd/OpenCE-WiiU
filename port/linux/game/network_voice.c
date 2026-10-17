@@ -51,6 +51,7 @@ game_engine.c), which it does not tell anyone.
 #include "networking/network_client_manager.h"
 #include "objects/objects.h"
 #include "network_distributed.h"
+#include "network_wire_order.h"
 #include "network_voice.h"
 #include "../src/voice_audio.h"
 
@@ -491,6 +492,9 @@ static void voice_host_tell(
 	message.config.mode = (byte)voice_host_settings.mode;
 	message.config.kbps = (byte)voice_host_settings.kbps;
 	message.config.proximity_tenths = (word)(voice_host_settings.proximity * 10.0f);
+	/* (in the wire's order: network_wire_order.c) */
+	NETWORK_WIRE(message.config.key);
+	NETWORK_WIRE(message.config.proximity_tenths);
 	if (network_distributed_server_send_to_machine_reliably(machine_index, &message, (word)sizeof(message)))
 	{
 		voice_machines[machine_index].told = TRUE;
@@ -662,6 +666,9 @@ static void voice_host_relay(
 			message.down.route = (byte)route;
 			message.down.length = (byte)length;
 			csmemcpy(message.packet, packet, length);
+			/* (in the wire's order) */
+			NETWORK_WIRE(message.down.key);
+			NETWORK_WIRE(message.down.sequence);
 			network_distributed_server_send_to_machine(listener, &message,
 				(word)(sizeof(message.header) + sizeof(message.down) + length));
 		}
@@ -739,6 +746,9 @@ void network_voice_handle_message(
 		if (machine_index == NONE || !voice_host() || length < (long)sizeof(up))
 			return;
 		csmemcpy(&up, entries, sizeof(up));
+		/* (in this machine's order: network_wire_order.c) */
+		NETWORK_WIRE(up.key);
+		NETWORK_WIRE(up.sequence);
 		voice_host_handle_up(machine_index, &up, entries + sizeof(up), length - (long)sizeof(up));
 		break;
 	}
@@ -749,6 +759,8 @@ void network_voice_handle_message(
 		if (machine_index != NONE || voice_host() || !voice_settings_heard || length < (long)sizeof(down))
 			return;
 		csmemcpy(&down, entries, sizeof(down));
+		NETWORK_WIRE(down.key);
+		NETWORK_WIRE(down.sequence);
 		if (down.key != voice_key || down.length != length - (long)sizeof(down) ||
 			down.machine_index == network_game_client_get_local_machine_index())
 		{
@@ -765,6 +777,8 @@ void network_voice_handle_message(
 		if (machine_index != NONE || voice_host() || length < (long)sizeof(config))
 			return;
 		csmemcpy(&config, entries, sizeof(config));
+		NETWORK_WIRE(config.key);
+		NETWORK_WIRE(config.proximity_tenths);
 		voice_key = config.key;
 		voice_settings.lobby = TEST_FLAG(config.flags, _voice_config_lobby_bit);
 		voice_settings.mode = config.mode < NUMBER_OF_VOICE_MODES ? config.mode : _voice_mode_off;
@@ -849,6 +863,9 @@ static void voice_send(
 		message.up.key = voice_key;
 		message.up.sequence = voice_sequence;
 		message.up.length = (byte)length;
+		/* (in the wire's order) */
+		NETWORK_WIRE(message.up.key);
+		NETWORK_WIRE(message.up.sequence);
 		if (length > 0)
 			csmemcpy(message.packet, packet, length);
 		network_distributed_client_send(&message, (word)(sizeof(message.header) + sizeof(message.up) + length));

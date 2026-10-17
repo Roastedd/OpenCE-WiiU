@@ -85,6 +85,7 @@ symbols in this file:
 #include "text/text_group.h"
 #include "text/unicode.h"
 #include "units/units.h"
+#include "network_wire_order.h" /* port: port/linux/game/network_wire_order.c */
 
 /* ---------- constants */
 
@@ -738,6 +739,17 @@ long distributed_player_from_byte(byte player_index);
 
 /* the distributed netcode (port/linux/game/network_distributed.c): the game
 type's state the host sends its clients, which take it as it is */
+/* port: the state's values in the wire's order, little-endian, or back
+(network_wire_order.c): each of 2 bytes or more */
+static void game_engine_slayer_network_state_wire_order(
+	struct slayer_network_state *state)
+{
+	NETWORK_WIRE_ARRAY(state->globals.team_score);
+	NETWORK_WIRE_ARRAY(state->globals.individual_score);
+	NETWORK_WIRE_ARRAY(state->speeds);
+	return;
+}
+
 long game_engine_slayer_write_network_state(
 	byte *buffer,
 	long size)
@@ -762,6 +774,7 @@ long game_engine_slayer_write_network_state(
 			state.speeds[absolute_index] = (word)PIN(player->speed_multiplier * SLAYER_SPEED_UNITS + 0.5f, 0.0f, 65535.0f);
 		}
 	}
+	game_engine_slayer_network_state_wire_order(&state);
 	csmemcpy(buffer, &state, sizeof(state));
 	return sizeof(state);
 }
@@ -778,6 +791,7 @@ boolean game_engine_slayer_read_network_state(
 	if (size != (long)sizeof(state))
 		return FALSE;
 	csmemcpy(&state, buffer, sizeof(state));
+	game_engine_slayer_network_state_wire_order(&state);
 	slayer_globals = state.globals;
 	data_iterator_new(&iterator, player_data);
 	while ((player = (struct player_datum *)data_iterator_next(&iterator)))

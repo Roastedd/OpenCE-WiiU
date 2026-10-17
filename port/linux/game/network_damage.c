@@ -56,6 +56,7 @@ being hit looks and feels like on the clients).
 #include "scenario/scenario.h"
 #include "units/units.h"
 #include "network_distributed.h"
+#include "network_wire_order.h"
 
 #include <math.h>
 
@@ -2373,4 +2374,72 @@ void network_damage_new_game(
 	}
 	for (player_index = 0; player_index < DAMAGE_RATE_CACHE_SIZE; player_index++)
 		damage_rate_cache[player_index].source_index = NONE;
+}
+
+/* a damage's values in the wire's order, little-endian, or back */
+static void distributed_damage_wire_order(
+	struct distributed_damage *damage)
+{
+	NETWORK_WIRE(damage->definition_index);
+	NETWORK_WIRE(damage->flags);
+	NETWORK_WIRE(damage->owner_team_index);
+	NETWORK_WIRE(damage->owner_object_index);
+	NETWORK_WIRE_PARTS(damage->origin, real);
+	NETWORK_WIRE_PARTS(damage->epicenter, real);
+	NETWORK_WIRE_PARTS(damage->direction, real);
+	NETWORK_WIRE(damage->scale);
+	NETWORK_WIRE(damage->multiplier);
+	NETWORK_WIRE(damage->material_effect_scale);
+	NETWORK_WIRE(damage->material_type);
+}
+
+/* a message's entries in the wire's order, little-endian, or back: each value
+of 2 bytes or more by its field (network_wire_order.c) */
+void network_damage_wire_order(
+	byte type,
+	void *entries,
+	short count,
+	long size)
+{
+	short index;
+
+	switch (type)
+	{
+	case _distributed_message_damage_events:
+		for (index = 0; index < count && (index + 1) * (long)sizeof(struct distributed_damage_event) <= size; index++)
+		{
+			struct distributed_damage_event *event = (struct distributed_damage_event *)entries + index;
+
+			NETWORK_WIRE(event->object_index);
+			distributed_damage_wire_order(&event->damage);
+			NETWORK_WIRE(event->being_damaged_flags);
+			NETWORK_WIRE(event->shield_damage);
+			NETWORK_WIRE(event->body_damage);
+			NETWORK_WIRE(event->body_damage_multiplier);
+			NETWORK_WIRE(event->total_damage);
+			NETWORK_WIRE(event->body_part);
+			NETWORK_WIRE(event->node_index);
+			NETWORK_WIRE(event->region_index);
+			NETWORK_WIRE(event->material_index);
+			NETWORK_WIRE(event->killer_score);
+		}
+		break;
+	case _distributed_message_hit_reports:
+		for (index = 0; index < count && (index + 1) * (long)sizeof(struct distributed_hit_report) <= size; index++)
+		{
+			struct distributed_hit_report *report = (struct distributed_hit_report *)entries + index;
+
+			NETWORK_WIRE(report->object_index);
+			distributed_damage_wire_order(&report->damage);
+			NETWORK_WIRE_PARTS(report->target_position, real);
+			NETWORK_WIRE_PARTS(report->object_normal, real);
+			NETWORK_WIRE(report->node_index);
+			NETWORK_WIRE(report->region_index);
+			NETWORK_WIRE(report->material_index);
+			NETWORK_WIRE(report->host_time);
+		}
+		break;
+	}
+
+	return;
 }

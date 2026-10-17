@@ -114,6 +114,7 @@ index and tag, since the map placed them at the same index everywhere.
 #include "coop_spectate.h"
 #include "network_coop.h"
 #include "network_distributed.h"
+#include "network_wire_order.h"
 
 /* ---------- constants */
 
@@ -3110,4 +3111,164 @@ static void client_play_presentation(
 	}
 	if (presentation)
 		client_presentation_apply(presentation);
+}
+
+/* a message's entries in the wire's order, little-endian, or back: each value
+of 2 bytes or more by its field (network_wire_order.c; the skip vote is bytes) */
+void network_coop_wire_order(
+	byte type,
+	void *entries,
+	short count,
+	long size)
+{
+	short index;
+
+#define COOP_ENTRIES(entry_type, name) \
+	for (index = 0; index < count && (index + 1) * (long)sizeof(entry_type) <= size; index++) \
+		if ((name = (entry_type *)entries + index) != NULL)
+
+	switch (type)
+	{
+	case _distributed_message_coop_presentation:
+	{
+		struct distributed_coop_presentation *presentation;
+
+		COOP_ENTRIES(struct distributed_coop_presentation, presentation)
+		{
+			NETWORK_WIRE(presentation->fade_ticks);
+			NETWORK_WIRE(presentation->fade_elapsed);
+			NETWORK_WIRE(presentation->fade_start_time);
+			NETWORK_WIRE_PARTS(presentation->camera_position, real);
+			NETWORK_WIRE_PARTS(presentation->camera_forward, short);
+			NETWORK_WIRE_PARTS(presentation->camera_up, short);
+			NETWORK_WIRE(presentation->camera_field_of_view);
+			NETWORK_WIRE(presentation->unit_hud_flags);
+			NETWORK_WIRE(presentation->weapon_hud_flags);
+			NETWORK_WIRE(presentation->timer_reference_time);
+			NETWORK_WIRE(presentation->timer_ticks);
+			NETWORK_WIRE(presentation->timer_flash_cutoff);
+			NETWORK_WIRE(presentation->timer_x);
+			NETWORK_WIRE(presentation->timer_y);
+			NETWORK_WIRE(presentation->timer_corner);
+			NETWORK_WIRE(presentation->camera_object_index);
+			NETWORK_WIRE_PARTS(presentation->camera_object_offset, real);
+			NETWORK_WIRE(presentation->activating_cluster);
+			NETWORK_WIRE(presentation->players_maximum_body_vitality);
+			NETWORK_WIRE(presentation->players_maximum_shield_vitality);
+			NETWORK_WIRE_ARRAY(presentation->ally_teams);
+			NETWORK_WIRE_ARRAY(presentation->friendly_teams);
+		}
+		break;
+	}
+	case _distributed_message_coop_events:
+	{
+		struct distributed_coop_event *event;
+
+		COOP_ENTRIES(struct distributed_coop_event, event)
+		{
+			NETWORK_WIRE(event->number);
+			NETWORK_WIRE(event->value);
+			NETWORK_WIRE(event->frame);
+			NETWORK_WIRE(event->name_index);
+			NETWORK_WIRE(event->object_index);
+			NETWORK_WIRE(event->target);
+			NETWORK_WIRE(event->tag_index);
+			NETWORK_WIRE(event->definition_index);
+			NETWORK_WIRE_ARRAY(event->reals);
+		}
+		break;
+	}
+	case _distributed_message_coop_device_groups:
+	{
+		struct distributed_coop_device_group *group;
+
+		COOP_ENTRIES(struct distributed_coop_device_group, group)
+		{
+			NETWORK_WIRE(group->group_index);
+			NETWORK_WIRE(group->name_index);
+			NETWORK_WIRE(group->object_index);
+			NETWORK_WIRE(group->definition_index);
+			NETWORK_WIRE(group->value);
+		}
+		break;
+	}
+	case _distributed_message_coop_object_names:
+	{
+		struct distributed_coop_object_names *names;
+
+		/* (the names present are a byte array) */
+		COOP_ENTRIES(struct distributed_coop_object_names, names)
+		{
+			NETWORK_WIRE(names->structure_bsp_index);
+			NETWORK_WIRE(names->name_count);
+		}
+		break;
+	}
+	case _distributed_message_coop_object_transforms:
+	{
+		struct distributed_coop_object_transform *transform;
+
+		COOP_ENTRIES(struct distributed_coop_object_transform, transform)
+		{
+			NETWORK_WIRE(transform->name_index);
+			NETWORK_WIRE(transform->object_index);
+			NETWORK_WIRE(transform->definition_index);
+			NETWORK_WIRE_PARTS(transform->position, real);
+			NETWORK_WIRE_PARTS(transform->forward, short);
+			NETWORK_WIRE_PARTS(transform->up, short);
+		}
+		break;
+	}
+	case _distributed_message_coop_object_looks:
+	{
+		struct distributed_coop_object_look *look;
+
+		COOP_ENTRIES(struct distributed_coop_object_look, look)
+		{
+			NETWORK_WIRE(look->name_index);
+			NETWORK_WIRE(look->object_index);
+			NETWORK_WIRE(look->definition_index);
+			NETWORK_WIRE(look->scale);
+		}
+		break;
+	}
+	case _distributed_message_coop_screen_effect:
+	{
+		struct rasterizer_screen_effect_port_state *state;
+
+		COOP_ENTRIES(struct rasterizer_screen_effect_port_state, state)
+		{
+			NETWORK_WIRE(state->convolution_extra_passes);
+			NETWORK_WIRE(state->convolution_type);
+			NETWORK_WIRE(state->video_overbright_mode);
+			NETWORK_WIRE_PARTS(state->filter_desaturation_tint, real);
+			NETWORK_WIRE(state->video_noise_intensity);
+			NETWORK_WIRE_ARRAY(state->convolution_radius);
+			NETWORK_WIRE_ARRAY(state->convolution_time);
+			NETWORK_WIRE_ARRAY(state->filter_light_enhancement_intensity);
+			NETWORK_WIRE_ARRAY(state->filter_desaturation_intensity);
+			NETWORK_WIRE_ARRAY(state->filter_time);
+			NETWORK_WIRE_ARRAY(state->script_values);
+			NETWORK_WIRE(state->near_clip_distance);
+		}
+		break;
+	}
+	case _distributed_message_coop_device_states:
+	{
+		struct distributed_coop_device_state *state;
+
+		COOP_ENTRIES(struct distributed_coop_device_state, state)
+		{
+			NETWORK_WIRE(state->name_index);
+			NETWORK_WIRE(state->object_index);
+			NETWORK_WIRE(state->definition_index);
+			NETWORK_WIRE(state->position);
+			NETWORK_WIRE(state->power);
+		}
+		break;
+	}
+	}
+#undef COOP_ENTRIES
+
+	return;
 }

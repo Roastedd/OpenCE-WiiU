@@ -370,9 +370,15 @@ static int elapsed(unsigned long since, unsigned long time)
 	return (unsigned int)(p2p_now() - since) >= (unsigned int)time;
 }
 
+/* (host to network byte order and back: a little-endian host's bytes
+reverse, a big-endian one's stay) */
 static unsigned short network_short(unsigned short value)
 {
+#ifdef __BIG_ENDIAN__
+	return value;
+#else
 	return (unsigned short)(value << 8 | value >> 8);
+#endif
 }
 
 /* whether some of a budget is left now (maximum at once, one more each

@@ -364,6 +364,13 @@ void network_objects_handle_vehicle_prediction(long machine_index, void const *e
 /* (the host) the vehicle predictions come in since the last tick, taken */
 void network_objects_apply_vehicle_predictions(void);
 word network_objects_entry_size(byte type);
+/* (network_wire_order.c) a message's entries in the wire's order,
+little-endian, or back: network_objects.c's, network_damage.c's,
+network_actors.c's and network_coop.c's types */
+void network_objects_wire_order(byte type, void *entries, short count, long size);
+void network_damage_wire_order(byte type, void *entries, short count, long size);
+void network_actors_wire_order(byte type, void *entries, short count, long size);
+void network_coop_wire_order(byte type, void *entries, short count, long size);
 /* whether this client has the host's object at this index */
 boolean network_objects_client_has(long object_index);
 /* moves the object where the host has it, drawn gliding from where it was */

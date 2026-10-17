@@ -255,6 +255,7 @@ symbols in this file:
 #include "game/game_engine.h"
 #include "game/players.h"
 #include "networking/network_connection.h"
+#include "network_wire_order.h" /* port: port/linux/game/network_wire_order.c */
 #include "networking/network_game_globals.h"
 #include "networking/network_game_manager.h"
 #include "networking/network_game_protocol.h"
@@ -793,6 +794,9 @@ boolean network_game_server_send_game_settings_to_client_machine(
 	struct message_server_game_settings_update message;
 	long offset;
 
+	/* port: the record goes raw, in the wire's order, little-endian
+	(network_wire_order.c) */
+	game = network_wire_order_game_to_send(game, game_size);
 	for (offset = 0; offset < game_size; offset += sizeof(message.data))
 	{
 		void *encoded_message;
@@ -1079,6 +1083,9 @@ boolean network_game_server_send_game_settings_to_all_machines(
 	/* every piece goes out even if one fails for a machine: the others
 	would otherwise keep the old settings (a machine whose connection failed
 	is closed, and is skipped when the update is sent again) */
+	/* port: the record goes raw, in the wire's order, little-endian
+	(network_wire_order.c) */
+	game = network_wire_order_game_to_send(game, game_size);
 	for (offset = 0; offset < game_size; offset += sizeof(message.data))
 	{
 		void *encoded_message;

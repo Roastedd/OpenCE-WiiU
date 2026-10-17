@@ -43,6 +43,7 @@ an AI unit the same way it kills a player's.
 #include "units/unit_control_data.h"
 #include "network_coop.h"
 #include "network_distributed.h"
+#include "network_wire_order.h"
 
 #include <math.h>
 
@@ -899,4 +900,58 @@ void network_actors_drive(
 			actor->user_animation_graph = NONE;
 		}
 	}
+}
+
+/* a message's entries in the wire's order, little-endian, or back: each value
+of 2 bytes or more by its field (network_wire_order.c) */
+void network_actors_wire_order(
+	byte type,
+	void *entries,
+	short count,
+	long size)
+{
+	short index;
+
+	switch (type)
+	{
+	case _distributed_message_actor_states:
+		for (index = 0; index < count && (index + 1) * (long)sizeof(struct distributed_actor_state) <= size; index++)
+		{
+			struct distributed_actor_state *state = (struct distributed_actor_state *)entries + index;
+
+			NETWORK_WIRE(state->unit_index);
+			NETWORK_WIRE(state->vehicle_index);
+			NETWORK_WIRE(state->seat_index);
+			NETWORK_WIRE(state->control_flags);
+			NETWORK_WIRE_ARRAY(state->facing);
+			NETWORK_WIRE_ARRAY(state->aiming);
+			NETWORK_WIRE_ARRAY(state->looking);
+			NETWORK_WIRE(state->impulse_alignment);
+			NETWORK_WIRE(state->run_blindly_angle);
+			NETWORK_WIRE(state->body_vitality);
+			NETWORK_WIRE(state->shield_vitality);
+			NETWORK_WIRE(state->speech_sound);
+			NETWORK_WIRE(state->user_animation_graph);
+			NETWORK_WIRE(state->user_animation);
+			NETWORK_WIRE_PARTS(state->position, real);
+			NETWORK_WIRE_PARTS(state->velocity, short);
+			NETWORK_WIRE_PARTS(state->forward, short);
+			NETWORK_WIRE_PARTS(state->up, short);
+		}
+		break;
+	case _distributed_message_actor_damage:
+		for (index = 0; index < count && (index + 1) * (long)sizeof(struct distributed_actor_damage) <= size; index++)
+		{
+			struct distributed_actor_damage *damage = (struct distributed_actor_damage *)entries + index;
+
+			NETWORK_WIRE(damage->unit_index);
+			NETWORK_WIRE(damage->current_shield_damage);
+			NETWORK_WIRE(damage->recent_shield_damage);
+			NETWORK_WIRE(damage->current_body_damage);
+			NETWORK_WIRE(damage->recent_body_damage);
+		}
+		break;
+	}
+
+	return;
 }

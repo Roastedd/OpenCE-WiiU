@@ -65,6 +65,7 @@ same datum index (identifier and all), so that any message can name one:
 #include "cutscene/cinematics.h"
 #include "network_coop.h"
 #include "network_distributed.h"
+#include "network_wire_order.h"
 #include "profile_sections.h"
 
 #include <math.h>
@@ -3259,4 +3260,74 @@ void network_objects_new_game(
 			objects_client_own_vehicles[local_player_index][index].vehicle_index = NONE;
 		}
 	}
+}
+
+/* a message's entries in the wire's order, little-endian, or back: each value
+of 2 bytes or more by its field (network_wire_order.c) */
+void network_objects_wire_order(
+	byte type,
+	void *entries,
+	short count,
+	long size)
+{
+	short index;
+
+	switch (type)
+	{
+	case _distributed_message_object_changes:
+		for (index = 0; index < count && (index + 1) * (long)sizeof(struct distributed_object_change) <= size; index++)
+		{
+			struct distributed_object_change *change = (struct distributed_object_change *)entries + index;
+
+			NETWORK_WIRE(change->object_index);
+			NETWORK_WIRE(change->definition_index);
+			NETWORK_WIRE(change->owner_team_index);
+			NETWORK_WIRE(change->variant_number);
+			NETWORK_WIRE_PARTS(change->position, real);
+			NETWORK_WIRE_PARTS(change->forward, real);
+			NETWORK_WIRE_PARTS(change->up, real);
+			NETWORK_WIRE_PARTS(change->translational_velocity, real);
+			NETWORK_WIRE_PARTS(change->angular_velocity, real);
+			NETWORK_WIRE_PARTS(change->change_colors, real);
+		}
+		break;
+	case _distributed_message_object_states:
+	case _distributed_message_vehicle_prediction:
+		for (index = 0; index < count && (index + 1) * (long)sizeof(struct distributed_object_state) <= size; index++)
+		{
+			struct distributed_object_state *state = (struct distributed_object_state *)entries + index;
+
+			NETWORK_WIRE(state->object_index);
+			NETWORK_WIRE(state->time);
+			NETWORK_WIRE_PARTS(state->position, real);
+			NETWORK_WIRE_PARTS(state->forward, short);
+			NETWORK_WIRE_PARTS(state->up, short);
+			NETWORK_WIRE_PARTS(state->translational_velocity, short);
+			NETWORK_WIRE_PARTS(state->angular_velocity, short);
+		}
+		break;
+	case _distributed_message_inventories:
+		for (index = 0; index < count && (index + 1) * (long)sizeof(struct distributed_inventory) <= size; index++)
+		{
+			struct distributed_inventory *inventory = (struct distributed_inventory *)entries + index;
+
+			NETWORK_WIRE(inventory->unit_index);
+			NETWORK_WIRE_ARRAY(inventory->weapon_indices);
+			NETWORK_WIRE_PARTS(inventory->rounds_total, short);
+			NETWORK_WIRE_PARTS(inventory->rounds_loaded, short);
+			NETWORK_WIRE_ARRAY(inventory->age);
+		}
+		break;
+	case _distributed_message_damage_animations:
+		for (index = 0; index < count && (index + 1) * (long)sizeof(struct distributed_damage_animation) <= size; index++)
+		{
+			struct distributed_damage_animation *animation = (struct distributed_damage_animation *)entries + index;
+
+			NETWORK_WIRE(animation->unit_index);
+			NETWORK_WIRE(animation->animation_index);
+		}
+		break;
+	}
+
+	return;
 }

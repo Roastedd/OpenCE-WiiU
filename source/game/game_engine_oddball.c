@@ -118,6 +118,7 @@ symbols in this file:
 #include "text/text_group.h"
 #include "text/unicode.h"
 #include "units/units.h"
+#include "network_wire_order.h" /* port: port/linux/game/network_wire_order.c */
 
 /* ---------- constants */
 
@@ -1460,6 +1461,17 @@ static void oddball_client_score_sounds(
 
 /* the distributed netcode (port/linux/game/network_distributed.c): the game
 type's state the host sends its clients, which take it as it is */
+/* port: the state's values in the wire's order, little-endian, or back
+(network_wire_order.c): each of 2 bytes or more */
+static void game_engine_oddball_network_state_wire_order(
+	struct oddball_network_state *state)
+{
+	NETWORK_WIRE_ARRAY(state->team_score);
+	NETWORK_WIRE_ARRAY(state->individual_score);
+	NETWORK_WIRE_ARRAY(state->ball_spawn_timer);
+	return;
+}
+
 long game_engine_oddball_write_network_state(
 	byte *buffer,
 	long size)
@@ -1480,6 +1492,7 @@ long game_engine_oddball_write_network_state(
 	state.touched_resets = oddball_events.touched_resets;
 	state.transfers = oddball_events.transfers;
 	state.transfer_player = oddball_events.transfer_player;
+	game_engine_oddball_network_state_wire_order(&state);
 	csmemcpy(buffer, &state, sizeof(state));
 	return sizeof(state);
 }
@@ -1495,6 +1508,7 @@ boolean game_engine_oddball_read_network_state(
 	if (size != (long)sizeof(state))
 		return FALSE;
 	csmemcpy(&state, buffer, sizeof(state));
+	game_engine_oddball_network_state_wire_order(&state);
 	for (ball_index = 0; ball_index < MAXIMUM_ODDBALLS; ball_index++)
 		oddball_globals.current_ball_owner[ball_index] = distributed_player_from_byte(state.current_ball_owner[ball_index]);
 	if (!first)

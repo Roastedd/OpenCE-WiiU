@@ -101,6 +101,7 @@ symbols in this file:
 #include "text/text_group.h"
 #include "text/unicode.h"
 #include "units/units.h"
+#include "network_wire_order.h" /* port: port/linux/game/network_wire_order.c */
 
 /* ---------- constants */
 
@@ -1134,13 +1135,38 @@ typedef char verify_king_network_state_size[
 
 /* the distributed netcode (port/linux/game/network_distributed.c): the game
 type's state the host sends its clients */
+/* port: the state's values in the wire's order, little-endian, or back
+(network_wire_order.c): each of 2 bytes or more */
+static void game_engine_king_network_state_wire_order(
+	struct king_globals *state)
+{
+	NETWORK_WIRE_ARRAY(state->score);
+	NETWORK_WIRE_ARRAY(state->score_tick);
+	NETWORK_WIRE(state->hill_point_count);
+	NETWORK_WIRE_PARTS(state->hill_points, real);
+	NETWORK_WIRE_PARTS(state->convex_hull, real);
+	NETWORK_WIRE_PARTS(state->hill_center, real);
+	NETWORK_WIRE(state->hill_state);
+	NETWORK_WIRE(state->hill_controlled_count);
+	NETWORK_WIRE(state->hill_previous_controller);
+	NETWORK_WIRE(state->hill_top);
+	NETWORK_WIRE(state->hill_bottom);
+	NETWORK_WIRE(state->hill_id);
+	NETWORK_WIRE(state->hill_timer);
+	return;
+}
+
 long game_engine_king_write_network_state(
 	byte *buffer,
 	long size)
 {
+	/* port: (a copy, in the wire's order) */
+	struct king_globals state = king_globals;
+
 	if (size < (long)sizeof(king_globals))
 		return 0;
-	csmemcpy(buffer, &king_globals, sizeof(king_globals));
+	game_engine_king_network_state_wire_order(&state);
+	csmemcpy(buffer, &state, sizeof(state));
 	return sizeof(king_globals);
 }
 
@@ -1209,6 +1235,7 @@ boolean game_engine_king_read_network_state(
 	if (size != (long)sizeof(state))
 		return FALSE;
 	csmemcpy(&state, buffer, sizeof(state));
+	game_engine_king_network_state_wire_order(&state);
 	for (team_index = 0; team_index < (long)NUMBEROF(state.score); team_index++)
 	{
 		if (!first)

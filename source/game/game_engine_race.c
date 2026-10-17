@@ -115,6 +115,7 @@ symbols in this file:
 #include "text/text_group.h"
 #include "text/unicode.h"
 #include "units/units.h"
+#include "network_wire_order.h" /* port: port/linux/game/network_wire_order.c */
 
 /* ---------- constants */
 
@@ -1604,6 +1605,23 @@ struct race_network_state
 typedef char verify_race_network_state_size[
 	sizeof(struct race_network_state) <= GAME_ENGINE_MAXIMUM_NETWORK_STATE_SIZE ? 1 : -1];
 
+/* port: the state's values in the wire's order, little-endian, or back
+(network_wire_order.c): each of 2 bytes or more */
+static void game_engine_race_network_state_wire_order(
+	struct race_network_state *state)
+{
+	NETWORK_WIRE(state->globals.lap_completed_value);
+	NETWORK_WIRE_ARRAY(state->globals.first_flag);
+	NETWORK_WIRE_ARRAY(state->globals.lap_bit_vector);
+	NETWORK_WIRE(state->globals.rally_flag);
+	NETWORK_WIRE_ARRAY(state->globals.team_laps);
+	NETWORK_WIRE(state->globals.persistent_team_score);
+	NETWORK_WIRE_ARRAY(state->last_lap_times);
+	NETWORK_WIRE_ARRAY(state->best_lap_times);
+	NETWORK_WIRE_ARRAY(state->laps_completed);
+	return;
+}
+
 long game_engine_race_write_network_state(
 	byte *buffer,
 	long size)
@@ -1631,6 +1649,7 @@ long game_engine_race_write_network_state(
 		state.best_lap_times[absolute_index] = statistics->best_lap_time;
 		state.laps_completed[absolute_index] = statistics->laps;
 	}
+	game_engine_race_network_state_wire_order(&state);
 	csmemcpy(buffer, &state, sizeof(state));
 	return sizeof(state);
 }
@@ -1649,6 +1668,7 @@ boolean game_engine_race_read_network_state(
 	if (size != (long)sizeof(state))
 		return FALSE;
 	csmemcpy(&state, buffer, sizeof(state));
+	game_engine_race_network_state_wire_order(&state);
 	race_globals = state.globals;
 	race_globals.vehicles_have_been_added = vehicles_have_been_added;
 	race_globals.lap_completed_value = lap_completed_value;

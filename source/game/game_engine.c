@@ -593,6 +593,7 @@ struct network_game *network_game_server_get_game(struct network_game_server *se
 #include "units/bipeds.h"
 #include "units/units.h"
 #include "custom_edition_cache.h" /* port: port/linux/game/custom_edition_cache.c */
+#include "network_wire_order.h" /* port: port/linux/game/network_wire_order.c */
 
 /* network_game_globals.c's */
 boolean network_game_distributed_client(void);
@@ -9549,6 +9550,8 @@ long game_engine_write_network_state(
 		return 0;
 	/* whether the game is over, then the game type's */
 	postgame_state = game_engine_globals.postgame_state;
+	/* port: in the wire's order (network_wire_order.c) */
+	NETWORK_WIRE(postgame_state);
 	csmemcpy(buffer, &postgame_state, sizeof(postgame_state));
 	buffer += sizeof(postgame_state);
 	size -= sizeof(postgame_state);
@@ -9576,6 +9579,8 @@ void game_engine_read_network_state(
 	if (!game_engine || size < (long)sizeof(postgame_state))
 		return;
 	csmemcpy(&postgame_state, buffer, sizeof(postgame_state));
+	/* port: (in the wire's order) */
+	NETWORK_WIRE(postgame_state);
 	buffer += sizeof(postgame_state);
 	size -= sizeof(postgame_state);
 	first = !game_engine_network_state_read;

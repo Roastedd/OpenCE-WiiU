@@ -197,6 +197,7 @@ symbols in this file:
 #include "game/game_engine.h"
 #include "game/players.h"
 #include "networking/network_client_manager.h"
+#include "network_wire_order.h" /* port: port/linux/game/network_wire_order.c */
 #include "networking/network_client_message_handler.h"
 #include "networking/network_game_manager.h"
 #include "networking/network_messages.h"
@@ -985,6 +986,8 @@ static boolean network_game_client_receive_game_settings_piece(
 			if (network_game_client_settings_staging_size == piece->total_size)
 			{
 				network_game_client_settings_staging_size = 0;
+				/* port: in this machine's order (network_wire_order.c) */
+				network_wire_order_game(&network_game_client_settings_staging, TRUE);
 				result = network_game_client_game_settings_updated(client, &network_game_client_settings_staging);
 				if (!result)
 				{

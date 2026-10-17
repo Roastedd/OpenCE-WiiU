@@ -181,6 +181,7 @@ symbols in this file:
 #include "bungie_net/common/message_header.h"
 #include "memory/data_packet_groups.h"
 #include "networking/network_messages.h"
+#include "network_wire_order.h" /* port: port/linux/game/network_wire_order.c */
 
 /* cseries_windows.c's */
 unsigned long system_milliseconds(void);
@@ -689,6 +690,11 @@ void *create_network_game_message(
 	byte encoded_message[HALO_PORT_NETWORK_PACKET_SIZE];
 	union network_game_message_size encoded_message_size;
 	void *message;
+#ifdef __BIG_ENDIAN__
+	/* port: (an advertisement in the wire's order, below: alive until it is
+	encoded) */
+	byte wire_advertisement[sizeof(message_server_game_advertise)];
+#endif
 
 	encoded_message_size.value = sizeof(encoded_message);
 
@@ -840,6 +846,16 @@ void *create_network_game_message(
 		break;
 	}
 
+	/* port: an advertisement goes raw, in the wire's order, little-endian: a
+	big-endian machine sends a copy turned to it (network_wire_order.c) */
+#ifdef __BIG_ENDIAN__
+	if (message_type == _message_server_game_advertise)
+	{
+		csmemcpy(wire_advertisement, message_struct, sizeof(wire_advertisement));
+		network_wire_order_advertisement(wire_advertisement, FALSE);
+		message_struct = wire_advertisement;
+	}
+#endif
 	if (encode_network_game_message(message_struct, encoded_message, &encoded_message_size.encoded, message_type, 1))
 	{
 		/* a message header holds lengths up to HALO_PORT_MAXIMUM_NETWORK_MESSAGE_SIZE-1,
@@ -880,6 +896,9 @@ boolean decode_network_game_message(
 	match_assert(__FILE__, __LINE__, message_struct && encoded_message && encoded_message_size && (*encoded_message_size>0) && packet_type && (*packet_type>=0) && packet_version && (*packet_version>0));
 
 	result = data_packet_group_decode_packet(&data_0030aa68.group, message_struct, encoded_message, encoded_message_size, packet_type, packet_version, expected_packet_class);
+	/* port: and an advertisement in this machine's order (network_wire_order.c) */
+	if (result && *packet_type == _message_server_game_advertise)
+		network_wire_order_advertisement(message_struct, TRUE);
 
 	if (!result)
 	{
