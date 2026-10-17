@@ -24,6 +24,9 @@ typedef unsigned short word;
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define _error_silent 0
 #define error(level, ...) ((void)0)
+/* (the wire's byte order, network_wire_order.c: the test reads what is sent as
+it was written) */
+#define NETWORK_WIRE(value) ((void)(value))
 #define _distributed_message_map_share_offer 0x40
 
 /* the fake world: a clock, the host's game and its machines, a catalog of one
