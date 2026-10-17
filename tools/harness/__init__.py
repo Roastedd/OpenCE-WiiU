@@ -87,7 +87,10 @@ def build(test, generated):
     for name, text in generated:
         (work / name).write_text(text)
     executable = work / test
-    command = [os.environ.get("CC", "clang"), "-m32", "-std=gnu99", "-O2", "-Wall", "-Werror", "-Wno-unused-function",
+    # (HALO_HARNESS_TARGET replaces -m32: "--target=powerpc-linux-gnu -fsigned-char -fuse-ld=lld -no-pie" builds
+    # the tests big-endian, run by HALO_HARNESS_RUNNER, qemu-ppc)
+    target = os.environ.get("HALO_HARNESS_TARGET", "-m32").split()
+    command = [os.environ.get("CC", "clang"), *target, "-std=gnu99", "-O2", "-Wall", "-Werror", "-Wno-unused-function",
                "-Wno-unused-variable", "-I", str(HARNESS / "include"), "-I", str(work),
                str(HARNESS / "tests" / f"{test}.c"), "-o", str(executable), "-lm"]
     result = subprocess.run(command, capture_output=True, text=True)
@@ -96,7 +99,24 @@ def build(test, generated):
     return executable
 
 
+def runner():
+    """what runs the tests' executables (HALO_HARNESS_RUNNER: qemu-ppc for the big-endian tests), or nothing"""
+    return os.environ.get("HALO_HARNESS_RUNNER", "").split()
+
+
+def big_endian():
+    """whether the tests are built for a big-endian machine (HALO_HARNESS_TARGET), whose output's numbers are
+    in its byte order"""
+    return "powerpc" in os.environ.get("HALO_HARNESS_TARGET", "")
+
+
+def timeout_scale():
+    """how much longer the tests may take: 10 times under an emulator"""
+    return 10 if runner() else 1
+
+
 def run(executable, case):
     """Run one case: (exit status, output)."""
-    result = subprocess.run([str(executable), case], capture_output=True, text=True, timeout=60)
+    result = subprocess.run([*runner(), str(executable), case], capture_output=True, text=True,
+                            timeout=60 * timeout_scale())
     return result.returncode, (result.stdout + result.stderr).strip()

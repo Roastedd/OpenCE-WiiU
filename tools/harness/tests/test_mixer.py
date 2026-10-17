@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from harness import CHECK_FAILED, build, mutated, read, run  # noqa: E402
+from harness import CHECK_FAILED, big_endian, build, mutated, read, run, runner, timeout_scale  # noqa: E402
 
 SOURCE = "port/linux/src/dsound_sdl.c"
 CASES = ["reference", "impulse", "sines", "aliases", "silent-voice", "mono"]
@@ -43,9 +43,12 @@ def rendered(scalar):
     import array
     import subprocess
 
-    result = subprocess.run([str(build("mixer", generated(scalar=scalar))), "render"], capture_output=True,
-                            timeout=120, check=True)
-    return array.array("f", result.stdout)
+    result = subprocess.run([*runner(), str(build("mixer", generated(scalar=scalar))), "render"],
+                            capture_output=True, timeout=120 * timeout_scale(), check=True)
+    samples = array.array("f", result.stdout)
+    if big_endian() != (sys.byteorder == "big"):
+        samples.byteswap()
+    return samples
 
 
 @pytest.mark.parametrize("case", CASES)
