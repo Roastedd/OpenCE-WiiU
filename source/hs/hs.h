@@ -112,6 +112,20 @@ enum hs_function_index
 #define HS_TYPE_IS_OBJECT_NAME(type) ((type)>=_hs_type_object_name && (type)<=_hs_type_scenery_name)
 #define HS_TYPE_IS_OBJECT(type) ((type)>=_hs_type_object && (type)<=_hs_type_scenery)
 
+/* port: a script value is a long (hs_evaluate and hs_return pass it), and a
+short or boolean one is in its low-order bytes: the first bytes of a
+little-endian host's long, the last of a big-endian host's, which is where
+a short or boolean written, read or compared in place must be. HS_VALUE_SHORT
+and HS_VALUE_BOOLEAN name the place in a long (a variable or *pointer);
+HS_VALUE_BYTES the size low-order bytes of one. */
+#ifdef __BIG_ENDIAN__
+#define HS_VALUE_BYTES(value, size) ((byte *)&(value) + sizeof(value) - (size))
+#else
+#define HS_VALUE_BYTES(value, size) ((byte *)&(value))
+#endif
+#define HS_VALUE_SHORT(value) (*(short *)HS_VALUE_BYTES(value, sizeof(short)))
+#define HS_VALUE_BOOLEAN(value) (*(boolean *)HS_VALUE_BYTES(value, sizeof(boolean)))
+
 /* ---------- structures */
 
 struct hs_enum_definition

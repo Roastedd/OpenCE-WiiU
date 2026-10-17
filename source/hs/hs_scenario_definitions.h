@@ -77,12 +77,29 @@ struct hs_syntax_node
 		long string_offset;
 		long source_offset;
 	};
+	/* port: a boolean or short value is in the long's low-order bytes, the
+	last of a big-endian host's (hs.h's HS_VALUE_BYTES): as a map holds it
+	(a little-endian long, turned as one by the map's conversion) */
 	union
 	{
 		long data;
+#ifdef __BIG_ENDIAN__
+		struct
+		{
+			byte boolean_pad[sizeof(long) - sizeof(boolean)];
+			boolean boolean_value;
+		};
+		real real_value;
+		struct
+		{
+			word short_pad;
+			short short_value;
+		};
+#else
 		boolean boolean_value;
 		real real_value;
 		short short_value;
+#endif
 	};
 };
 

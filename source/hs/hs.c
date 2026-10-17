@@ -3267,9 +3267,25 @@ static void evaluator( \
 
 /* ---------- structures */
 
+/* port: a short, word or boolean argument is in its 4-byte slot's low-order
+bytes (see the unions below): the slot's pad is after it on a little-endian
+host and before it on a big-endian one. HS_ARGUMENT_PAD_BEFORE and _AFTER
+place the pad a structure names; HS_ARGUMENT_SLOT_PAD makes one (on a
+big-endian host only) for a member that names none. */
+#ifdef __BIG_ENDIAN__
+#define HS_ARGUMENT_PAD_BEFORE(type, pad) type pad;
+#define HS_ARGUMENT_PAD_AFTER(type, pad)
+#define HS_ARGUMENT_SLOT_PAD(type, pad) byte pad[sizeof(long) - sizeof(type)];
+#else
+#define HS_ARGUMENT_PAD_BEFORE(type, pad)
+#define HS_ARGUMENT_PAD_AFTER(type, pad) type pad;
+#define HS_ARGUMENT_SLOT_PAD(type, pad)
+#endif
+
 struct hs_object_list_get_element_arguments
 {
 	long object_list_index;
+	HS_ARGUMENT_SLOT_PAD(unsigned short, element_index_pad)
 	unsigned short element_index;
 };
 
@@ -3279,9 +3295,21 @@ union hs_real_value
 	long long_value;
 };
 
+/* port: a short or boolean in a value (a long, as hs_return takes it and
+hs_evaluate writes it) is in the long's low-order bytes: the first of a
+little-endian host's, the last of a big-endian one's (HS_VALUE_BYTES in
+hs.h) */
 union hs_short_result
 {
+#ifdef __BIG_ENDIAN__
+	struct
+	{
+		word short_pad;
+		short short_value;
+	};
+#else
 	short short_value;
+#endif
 	long value;
 };
 
@@ -3289,14 +3317,33 @@ union hs_evaluation_argument
 {
 	long long_value;
 	real real_value;
+#ifdef __BIG_ENDIAN__
+	struct
+	{
+		word short_pad;
+		short short_value;
+	};
+	struct
+	{
+		word unsigned_short_pad;
+		unsigned short unsigned_short_value;
+	};
+	struct
+	{
+		byte boolean_pad[sizeof(long) - sizeof(boolean)];
+		boolean boolean_value;
+	};
+#else
 	short short_value;
 	unsigned short unsigned_short_value;
 	boolean boolean_value;
+#endif
 	char const *string_value;
 };
 
 struct hs_arguments_boolean
 {
+	HS_ARGUMENT_SLOT_PAD(boolean, value_pad)
 	boolean value;
 };
 
@@ -3307,19 +3354,22 @@ struct hs_arguments_long
 
 struct hs_arguments_word
 {
+	HS_ARGUMENT_SLOT_PAD(word, value_pad)
 	word value;
 };
 
 struct hs_arguments_short_long
 {
+	HS_ARGUMENT_PAD_BEFORE(word, pad0)
 	short value0;
-	word pad0;
+	HS_ARGUMENT_PAD_AFTER(word, pad0)
 	long value1;
 };
 
 struct hs_arguments_long_word
 {
 	long value0;
+	HS_ARGUMENT_SLOT_PAD(word, value1_pad)
 	word value1;
 };
 
@@ -3349,8 +3399,10 @@ struct hs_arguments_long_long_string
 
 struct hs_arguments_short_word
 {
+	HS_ARGUMENT_PAD_BEFORE(word, pad0)
 	short value0;
-	word pad0;
+	HS_ARGUMENT_PAD_AFTER(word, pad0)
+	HS_ARGUMENT_SLOT_PAD(word, value1_pad)
 	word value1;
 };
 
@@ -3407,6 +3459,7 @@ struct hs_arguments_long_long_string_word
 	long value0;
 	long value1;
 	char const *value2;
+	HS_ARGUMENT_SLOT_PAD(word, value3_pad)
 	word value3;
 };
 
@@ -3415,6 +3468,7 @@ struct hs_arguments_long_long_long_boolean
 	long value0;
 	long value1;
 	char const *value2;
+	HS_ARGUMENT_SLOT_PAD(boolean, value3_pad)
 	boolean value3;
 };
 
@@ -3423,8 +3477,10 @@ struct hs_arguments_long_long_long_boolean_word
 	long value0;
 	long value1;
 	char const *value2;
+	HS_ARGUMENT_PAD_BEFORE(byte, pad3[3])
 	boolean value3;
-	byte pad3[3];
+	HS_ARGUMENT_PAD_AFTER(byte, pad3[3])
+	HS_ARGUMENT_SLOT_PAD(word, value4_pad)
 	word value4;
 };
 
@@ -3456,21 +3512,26 @@ struct hs_arguments_real_real_real_real
 
 struct hs_arguments_word_word_word_real
 {
+	HS_ARGUMENT_PAD_BEFORE(word, pad0)
 	word value0;
-	word pad0;
+	HS_ARGUMENT_PAD_AFTER(word, pad0)
+	HS_ARGUMENT_PAD_BEFORE(word, pad1)
 	word value1;
-	word pad1;
+	HS_ARGUMENT_PAD_AFTER(word, pad1)
+	HS_ARGUMENT_PAD_BEFORE(word, pad2)
 	word value2;
-	word pad2;
+	HS_ARGUMENT_PAD_AFTER(word, pad2)
 	real value3;
 };
 
 struct hs_arguments_word_word_long_real
 {
+	HS_ARGUMENT_PAD_BEFORE(word, pad0)
 	word value0;
-	word pad0;
+	HS_ARGUMENT_PAD_AFTER(word, pad0)
+	HS_ARGUMENT_PAD_BEFORE(word, pad1)
 	word value1;
-	word pad1;
+	HS_ARGUMENT_PAD_AFTER(word, pad1)
 	long value2;
 	real value3;
 };
@@ -3481,8 +3542,9 @@ struct hs_arguments_real_real_real_real_boolean_real
 	real value1;
 	real value2;
 	real value3;
+	HS_ARGUMENT_PAD_BEFORE(byte, pad4[3])
 	boolean value4;
-	byte pad4[3];
+	HS_ARGUMENT_PAD_AFTER(byte, pad4[3])
 	real value5;
 };
 
@@ -3490,6 +3552,7 @@ struct hs_arguments_long_real_word
 {
 	long value0;
 	real value1;
+	HS_ARGUMENT_SLOT_PAD(word, value2_pad)
 	word value2;
 };
 
@@ -3505,15 +3568,18 @@ struct hs_arguments_real_real_real_word
 	real value0;
 	real value1;
 	real value2;
+	HS_ARGUMENT_SLOT_PAD(word, value3_pad)
 	word value3;
 };
 
 struct hs_arguments_short_word_real_real_real
 {
+	HS_ARGUMENT_PAD_BEFORE(word, pad0)
 	short value0;
-	word pad0;
+	HS_ARGUMENT_PAD_AFTER(word, pad0)
+	HS_ARGUMENT_PAD_BEFORE(word, pad1)
 	word value1;
-	word pad1;
+	HS_ARGUMENT_PAD_AFTER(word, pad1)
 	real value2;
 	real value3;
 	real value4;
@@ -3521,33 +3587,48 @@ struct hs_arguments_short_word_real_real_real
 
 struct hs_arguments_word_word_word
 {
+	HS_ARGUMENT_PAD_BEFORE(word, pad0)
 	word value0;
-	word pad0;
+	HS_ARGUMENT_PAD_AFTER(word, pad0)
+	HS_ARGUMENT_PAD_BEFORE(word, pad1)
 	word value1;
-	word pad1;
+	HS_ARGUMENT_PAD_AFTER(word, pad1)
+	HS_ARGUMENT_SLOT_PAD(word, value2_pad)
 	word value2;
 };
 
 struct hs_arguments_word_word_long
 {
+	HS_ARGUMENT_PAD_BEFORE(word, pad0)
 	word value0;
-	word pad0;
+	HS_ARGUMENT_PAD_AFTER(word, pad0)
+	HS_ARGUMENT_PAD_BEFORE(word, pad1)
 	word value1;
-	word pad1;
+	HS_ARGUMENT_PAD_AFTER(word, pad1)
 	long value2;
 };
 
 struct hs_arguments_long_word_boolean
 {
 	long value0;
+	HS_ARGUMENT_PAD_BEFORE(word, pad1)
 	word value1;
-	word pad1;
+	HS_ARGUMENT_PAD_AFTER(word, pad1)
+	HS_ARGUMENT_SLOT_PAD(boolean, value2_pad)
 	boolean value2;
 };
 
 union hs_boolean_result
 {
+#ifdef __BIG_ENDIAN__
+	struct
+	{
+		byte boolean_pad[sizeof(long) - sizeof(boolean)];
+		boolean boolean;
+	};
+#else
 	boolean boolean;
+#endif
 	long value;
 };
 
