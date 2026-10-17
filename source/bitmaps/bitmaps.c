@@ -784,6 +784,16 @@ void *bitmap_mipmap_address(
 	return mipmap_address;
 }
 
+/* port: a map's pixels are in the Xbox's byte order, little-endian, where the
+map has them: read as that on a big-endian host too */
+#ifdef __BIG_ENDIAN__
+#define BITMAP_PIXEL_WORD(value) S3TC_WORD(value)
+#define BITMAP_PIXEL_LONG(value) ((pixel32)S3TC_LONG(value))
+#else
+#define BITMAP_PIXEL_WORD(value) (value)
+#define BITMAP_PIXEL_LONG(value) (value)
+#endif
+
 pixel32 bitmap_format_to_a8r8g8b8(
 	short format,
 	void const *mipmap_address,
@@ -800,7 +810,7 @@ pixel32 bitmap_format_to_a8r8g8b8(
 	{
 	case _bitmap_format_r5g6b5:
 	{
-		word pixel = ((word const *)mipmap_address)[pixel_index];
+		word pixel = BITMAP_PIXEL_WORD(((word const *)mipmap_address)[pixel_index]);
 
 		result = 0xFF000000 |
 			(((((pixel >> 11) & 0x1F) << 3) | (((pixel >> 11) & 0x1F) >> 2)) << 16) |
@@ -811,7 +821,7 @@ pixel32 bitmap_format_to_a8r8g8b8(
 
 	case _bitmap_format_a1r5g5b5:
 	{
-		word pixel = ((word const *)mipmap_address)[pixel_index];
+		word pixel = BITMAP_PIXEL_WORD(((word const *)mipmap_address)[pixel_index]);
 
 		result = (((pixel >> 15) * 0xFF) << 24) |
 			(((((pixel >> 10) & 0x1F) << 3) | (((pixel >> 10) & 0x1F) >> 2)) << 16) |
@@ -822,7 +832,7 @@ pixel32 bitmap_format_to_a8r8g8b8(
 
 	case _bitmap_format_a4r4g4b4:
 	{
-		word pixel = ((word const *)mipmap_address)[pixel_index];
+		word pixel = BITMAP_PIXEL_WORD(((word const *)mipmap_address)[pixel_index]);
 
 		result = (((((pixel >> 12) & 0xF) << 4) | ((pixel >> 12) & 0xF)) << 24) |
 			(((((pixel >> 8) & 0xF) << 4) | ((pixel >> 8) & 0xF)) << 16) |
@@ -832,11 +842,11 @@ pixel32 bitmap_format_to_a8r8g8b8(
 	}
 
 	case _bitmap_format_x8r8g8b8:
-		result = ((pixel32 const *)mipmap_address)[pixel_index];
+		result = BITMAP_PIXEL_LONG(((pixel32 const *)mipmap_address)[pixel_index]);
 		break;
 
 	case _bitmap_format_a8r8g8b8:
-		result = ((pixel32 const *)mipmap_address)[pixel_index];
+		result = BITMAP_PIXEL_LONG(((pixel32 const *)mipmap_address)[pixel_index]);
 		break;
 
 	case _bitmap_format_a8:
@@ -861,7 +871,7 @@ pixel32 bitmap_format_to_a8r8g8b8(
 
 	case _bitmap_format_a8y8:
 	{
-		word pixel = ((word const *)mipmap_address)[pixel_index];
+		word pixel = BITMAP_PIXEL_WORD(((word const *)mipmap_address)[pixel_index]);
 		byte intensity = (byte)pixel;
 
 		result = ((pixel >> 8) << 24) | (intensity << 16) | (intensity << 8) | intensity;

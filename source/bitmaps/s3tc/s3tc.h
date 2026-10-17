@@ -20,6 +20,19 @@ enum
 
 /* ---------- macros */
 
+/* port: a block is in the Xbox's byte order, little-endian, where the map has
+it: what the decoders read of it is read as that, on a big-endian host too */
+#ifdef __BIG_ENDIAN__
+#define S3TC_WORD(value) \
+	((word)(((byte const *)&(value))[0] | (((byte const *)&(value))[1] << 8)))
+#define S3TC_LONG(value) \
+	((unsigned long)(((byte const *)&(value))[0] | (((byte const *)&(value))[1] << 8) | \
+		(((byte const *)&(value))[2] << 16) | ((unsigned long)((byte const *)&(value))[3] << 24)))
+#else
+#define S3TC_WORD(value) (value)
+#define S3TC_LONG(value) (value)
+#endif
+
 /* ---------- structures */
 
 struct s3tc_color

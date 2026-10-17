@@ -591,6 +591,8 @@ void DecodeBlockRGB(
 	unsigned long bitmap;
 	long pixel;
 	long channel;
+	word color0;
+	word color1;
 
 	if (source == NULL)
 	{
@@ -598,11 +600,15 @@ void DecodeBlockRGB(
 		return;
 	}
 
-	RGBToColor(&source->color0, &color[0]);
-	RGBToColor(&source->color1, &color[1]);
+	/* port: the block as its little-endian bytes have it (S3TC_WORD) */
+	color0 = S3TC_WORD(source->color0);
+	color1 = S3TC_WORD(source->color1);
+
+	RGBToColor(&color0, &color[0]);
+	RGBToColor(&color1, &color[1]);
 	color[0].rgba[S3TC_ALPHA] = color[1].rgba[S3TC_ALPHA] = color[2].rgba[S3TC_ALPHA] = 0xFF;
 
-	if (source->color0 > source->color1)
+	if (color0 > color1)
 	{
 		word c0;
 		word c1;
@@ -631,7 +637,7 @@ void DecodeBlockRGB(
 		color[3].rgba[S3TC_ALPHA] = 0;
 	}
 
-	bitmap = source->bitmap;
+	bitmap = S3TC_LONG(source->bitmap);
 	for (pixel = 0; pixel < S3TC_BLOCK_PIXELS; ++pixel)
 	{
 		for (channel = 0; channel < 4; ++channel)
@@ -652,6 +658,8 @@ void DecodeBlockRGB__single_pixel(
 {
 	struct s3tc_color colors[4];
 	long channel;
+	word color0;
+	word color1;
 
 	if (pblockSrc == NULL)
 	{
@@ -659,11 +667,15 @@ void DecodeBlockRGB__single_pixel(
 		return;
 	}
 
-	RGBToColor(&pblockSrc->color0, &colors[0]);
-	RGBToColor(&pblockSrc->color1, &colors[1]);
+	/* port: the block as its little-endian bytes have it (S3TC_WORD) */
+	color0 = S3TC_WORD(pblockSrc->color0);
+	color1 = S3TC_WORD(pblockSrc->color1);
+
+	RGBToColor(&color0, &colors[0]);
+	RGBToColor(&color1, &colors[1]);
 	colors[0].rgba[S3TC_ALPHA] = colors[1].rgba[S3TC_ALPHA] = colors[2].rgba[S3TC_ALPHA] = 0xFF;
 
-	if (pblockSrc->color0 > pblockSrc->color1)
+	if (color0 > color1)
 	{
 		word c0;
 		word c1;
@@ -695,7 +707,7 @@ void DecodeBlockRGB__single_pixel(
 	match_assert("c:\\halo\\SOURCE\\bitmaps\\s3tc\\s3tc.c", 773, u >= 0 && u < 4);
 	match_assert("c:\\halo\\SOURCE\\bitmaps\\s3tc\\s3tc.c", 774, v >= 0 && v < 4);
 
-	*colorDst = colors[(pblockSrc->bitmap >> (2 * (4 * v + u))) & 3];
+	*colorDst = colors[(S3TC_LONG(pblockSrc->bitmap) >> (2 * (4 * v + u))) & 3];
 
 	return;
 }
@@ -712,7 +724,7 @@ void DecodeBlockAlpha4(
 
 	for (row = 0; row < 4; ++row)
 	{
-		alpha = source->alpha_bitmap[row];
+		alpha = S3TC_WORD(source->alpha_bitmap[row]);
 
 		for (column = 0; column < 4; ++column)
 		{
@@ -735,7 +747,7 @@ void DecodeBlockAlpha4__single_pixel(
 
 	DecodeBlockRGB__single_pixel(&source->rgb, color, u, v);
 
-	alpha = (source->alpha_bitmap[v] >> (4 * u)) & 0xF;
+	alpha = (S3TC_WORD(source->alpha_bitmap[v]) >> (4 * u)) & 0xF;
 	color->rgba[S3TC_ALPHA] = (alpha << 4) | alpha;
 
 	return;
