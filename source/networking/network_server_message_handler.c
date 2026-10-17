@@ -450,7 +450,15 @@ struct message_client_settings_request
 
 struct message_client_game_start_request
 {
+	/* port: a short on the wire, which the decoder writes into this field's
+	first two bytes: the long's low-order half on the Xbox, its high-order
+	half on a big-endian host, where it is declared as the short it is */
+#ifdef __BIG_ENDIAN__
+	short countdown_time;
+	short countdown_time_pad;
+#else
 	long countdown_time;
+#endif
 };
 
 struct message_client_graceful_game_exit_pregame

@@ -275,7 +275,18 @@ struct network_game_message_packet_definitions
 union network_game_message_size
 {
 	long value;
+	/* port: the size is set as a long and given to the encoder as a short,
+	which on a big-endian host must be the long's low-order half, as it is
+	on the Xbox */
+#ifdef __BIG_ENDIAN__
+	struct
+	{
+		short encoded_high;
+		short encoded;
+	};
+#else
 	short encoded;
+#endif
 };
 
 #define DEFINE_NETWORK_GAME_MESSAGE(name, size) typedef struct name { byte opaque[size]; } name
