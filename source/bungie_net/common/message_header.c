@@ -27,6 +27,7 @@ symbols in this file:
 /* ---------- headers */
 
 #include "cseries.h"
+#include "memory/byte_swapping.h" /* port: SWAP2 */
 #include "message_header.h"
 
 /* ---------- constants */
@@ -67,17 +68,20 @@ void byte_swap_message_header(
 
 	match_assert("c:\\halo\\SOURCE\\bungie_net\\common\\message_header.c", 80, header);
 
+	/* port: by SWAP2, between network byte order and the host's: the
+	original reversed the bytes, right only on a little-endian host
+	(memory/byte_swapping.h) */
 	if (byte_order == _byte_order_network)
 	{
 		value = *header;
-		*header = (value << 8) | (value >> 8);
+		*header = (word)SWAP2(value);
 		return;
 	}
 
 	if (byte_order == _byte_order_host)
 	{
 		value = *header;
-		*header = (value << 8) | (value >> 8);
+		*header = (word)SWAP2(value);
 		return;
 	}
 
