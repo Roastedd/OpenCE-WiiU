@@ -38,6 +38,9 @@ ROOT = Path(__file__).resolve().parent.parent
 XDK = ROOT / "port" / "include" / "xdk"
 NAMES = XDK / "pdb_names.txt"
 OUTPUT = XDK / "xdk_pdb.h"
+# 64-bit integers' unions whose 32-bit halves the game reads by name: on a
+# big-endian machine the high half comes first (Generator.word_order)
+WORD_ORDER_UNIONS = ("_LARGE_INTEGER", "_ULARGE_INTEGER")
 
 # the targets whose layouts must agree with the PDB's (each port's ABI flags)
 TARGETS = {
@@ -442,6 +445,27 @@ class Writer:
             return [(item.kind, item.name)]
         return []
 
+    @staticmethod
+    def word_order(item: Aggregate, lines: List[str]) -> List[str]:
+        """A 64-bit integer's union (LARGE_INTEGER, ULARGE_INTEGER) with its
+        halves in the order a big-endian machine keeps them (the big-endian
+        build, configure.py --linux-target=ppc): each LowPart and the
+        HighPart after it, swapped under __BIG_ENDIAN__."""
+        if item.name not in WORD_ORDER_UNIONS:
+            return lines
+        result: List[str] = []
+        index = 0
+        while index < len(lines):
+            line = lines[index]
+            if line.rstrip().endswith(" LowPart;") and index + 1 < len(lines) and \
+                    lines[index + 1].rstrip().endswith(" HighPart;"):
+                result += ["#ifdef __BIG_ENDIAN__", lines[index + 1], line, "#else", line, lines[index + 1], "#endif"]
+                index += 2
+                continue
+            result.append(line)
+            index += 1
+        return result
+
     def write(self) -> str:
         out = [
             "/*",
@@ -476,7 +500,7 @@ class Writer:
             pack = self.packing.get((item.kind, item.name))
             if pack:
                 out.append(f"#pragma pack(push, {pack})")
-            out += [f"{item.kind} {item.name} {{", *self.body(item, "    "), "};"]
+            out += [f"{item.kind} {item.name} {{", *self.word_order(item, self.body(item, "    ")), "};"]
             if pack:
                 out.append("#pragma pack(pop)")
             out.append("")
