@@ -114,6 +114,8 @@ static struct
 	boolean team_set;
 	real kill_interval;
 	real shoot_interval;
+	/* the ticks between the players' states in the log (a second's, unless set) */
+	long log_ticks;
 	real vehicle_time;
 	real pickup_time;
 	char pickup_weapon[64];
@@ -182,6 +184,9 @@ static void network_test_read_settings(
 	network_test.start_delay = (real)config_real("debug.network_test_start");
 	network_test.kill_interval = (real)config_real("debug.network_test_kill");
 	network_test.shoot_interval = (real)config_real("debug.network_test_shoot");
+	network_test.log_ticks = config_integer("debug.network_test_log");
+	if (network_test.log_ticks <= 0)
+		network_test.log_ticks = TICKS_PER_SECOND;
 	network_test.vehicle_time = (real)config_real("debug.network_test_vehicle");
 	network_test.pickup_time = (real)config_real("debug.network_test_pickup");
 	snprintf(network_test.pickup_weapon, sizeof(network_test.pickup_weapon), "%s",
@@ -758,7 +763,7 @@ void network_test_update(
 	game's time starts over) */
 	if (game_in_progress() && game_time_get() < network_test.logged_time)
 		network_test.logged_time = 0;
-	if (game_in_progress() && !main_menu_loaded && game_time_get() - network_test.logged_time >= TICKS_PER_SECOND)
+	if (game_in_progress() && !main_menu_loaded && game_time_get() - network_test.logged_time >= network_test.log_ticks)
 	{
 		network_test.logged_time = game_time_get();
 		network_test_log_players();

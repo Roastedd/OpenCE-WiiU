@@ -488,6 +488,11 @@ static const struct config_setting config_settings[] =
 		"Seconds after hosting that an automated test game starts." },
 	{ "debug.network_test_kill", _config_real, "0.0", "HALO_NETWORK_TEST_KILL", _environment_value, _platform_all,
 		"Every this many seconds an automated test host kills its last player; 0 never." },
+	{ "debug.network_test_log", _config_integer, "0", "HALO_NETWORK_TEST_LOG", _environment_value, _platform_all,
+		"The ticks between the automated test's log lines of every player's\n"
+		"state (to find the tick two runs first differ at); 0 one second's. Not\n"
+		"with the scripted kills, shots, vehicle ride or pickup, which act once a\n"
+		"log line." },
 	{ "debug.network_test_score", _config_integer, "0", "HALO_NETWORK_TEST_SCORE", _environment_value, _platform_all,
 		"The score an automated test host's game type plays to (a short game, to\n"
 		"test the next); 0 the game type's own." },
