@@ -385,7 +385,12 @@ void data_delete_all(
 	data->count = 0;
 	data->actual_count = 0;
 	data->first_free_absolute_index = 0;
-	csstrncpy((char *)&data->next_identifier, data->name, sizeof(data->next_identifier));
+	/* port: the first two characters as a little-endian short, as the copy
+	into the short gave on the Xbox: a datum's identifier is in the object
+	and other indices the machines send each other, so every machine must
+	number its data alike, whatever its byte order */
+	data->next_identifier = (short)((unsigned char)data->name[0] |
+		(data->name[0] ? (unsigned char)data->name[1] << 8 : 0));
 	data->next_identifier |= 0x8000;
 
 	for (absolute_index = 0; absolute_index<data->maximum_count; absolute_index++)
