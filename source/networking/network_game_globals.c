@@ -206,6 +206,10 @@ typedef char network_game_globals_size_assert[
 
 /* ---------- prototypes */
 
+/* port: port/linux/src/port_config.c */
+long config_integer(const char *name);
+
+
 /* ---------- globals */
 
 static struct network_game_globals bss_004566dc = { 0 };
@@ -785,6 +789,13 @@ boolean create_global_network_game_server(
 	{
 		network_game_set_random_seed(
 			seed_random(get_global_local_random_seed_address()));
+		/* port: or the debug.random_seed setting's, whatever the menus drew
+		from the local seed before, so that runs of automated tests play the
+		same game (port/linux/src/port_config.c) */
+		if (config_integer("debug.random_seed"))
+		{
+			network_game_set_random_seed(config_integer("debug.random_seed"));
+		}
 	}
 
 	return global_network_game_server != NULL;

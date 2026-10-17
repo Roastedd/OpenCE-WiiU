@@ -550,9 +550,9 @@ static const struct config_setting config_settings[] =
 	{ "debug.exit_after", _config_real, "0.0", "HALO_EXIT_AFTER", _environment_value, _platform_all,
 		"Quit this many seconds after the window opens; 0 never." },
 	{ "debug.random_seed", _config_integer, "0", "HALO_RANDOM_SEED", _environment_value, _platform_all,
-		"The game's local random seed at start-up (spawn points, a hosted game's\n"
-		"seed), for comparing runs of automated tests; 0 seeds it from the clock,\n"
-		"as the game does." },
+		"The game's local random seed at start-up and a hosted game's seed, for\n"
+		"comparing runs of automated tests; 0 seeds them from the clock, as the\n"
+		"game does." },
 	{ "debug.hidden_window", _config_boolean, "false", "HALO_HIDDEN_WINDOW", _environment_set_is_true, _platform_desktop,
 		"Keep the window hidden (and never fullscreen)." },
 	{ "debug.voice_test", _config_boolean, "false", "HALO_VOICE_TEST", _environment_set_is_true, _platform_all,
