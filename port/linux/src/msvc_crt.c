@@ -351,6 +351,56 @@ unsigned int _clearfp(void)
 	__builtin_arm_wsr64("fpsr", __builtin_arm_rsr64("fpsr") & ~0x9fULL);
 	return status;
 }
+#elif defined(HALO_PPC)
+/* PowerPC: the rounding mode and the sticky exception flags are FPSCR's,
+reached through C99's <fenv.h>. Precision control and exception unmasking
+have no equivalent; the rest of the MSVC control word is only remembered. */
+static unsigned int msvc_control_word = CW_DEFAULT;
+
+unsigned int _control87(unsigned int new_value, unsigned int mask)
+{
+	if (mask)
+	{
+		msvc_control_word = (msvc_control_word & ~mask) | (new_value & mask);
+		switch (msvc_control_word & _MCW_RC)
+		{
+		case _RC_UP: fesetround(FE_UPWARD); break;
+		case _RC_DOWN: fesetround(FE_DOWNWARD); break;
+		case _RC_CHOP: fesetround(FE_TOWARDZERO); break;
+		default: fesetround(FE_TONEAREST); break;
+		}
+	}
+	return msvc_control_word;
+}
+
+unsigned int _controlfp(unsigned int new_value, unsigned int mask)
+{
+	/* _controlfp ignores the denormal mask */
+	return _control87(new_value, mask & ~_EM_DENORMAL);
+}
+
+unsigned int _statusfp(void)
+{
+	int flags = fetestexcept(FE_ALL_EXCEPT);
+	unsigned int result = 0;
+
+	/* as the x87 status word's low bits: invalid, (no denormal), zero
+	divide, overflow, underflow, precision */
+	if (flags & FE_INVALID) result |= 0x01;
+	if (flags & FE_DIVBYZERO) result |= 0x04;
+	if (flags & FE_OVERFLOW) result |= 0x08;
+	if (flags & FE_UNDERFLOW) result |= 0x10;
+	if (flags & FE_INEXACT) result |= 0x20;
+	return result;
+}
+
+unsigned int _clearfp(void)
+{
+	unsigned int status = _statusfp();
+
+	feclearexcept(FE_ALL_EXCEPT);
+	return status;
+}
 #elif defined(HALO_WEB)
 /* WebAssembly: rounding to nearest and no exception flags, always. The MSVC
 control word is only remembered, so that the game reads back what it set. */
@@ -425,6 +475,15 @@ unsigned int _clearfp(void)
 	return status;
 }
 
+#endif
+
+#ifdef HALO_PPC
+/* MSVC's compiler barrier, which clang has as a builtin only for x86
+(scenario.c declares and calls it): a call to a function in another unit is
+one already */
+void _ReadWriteBarrier(void)
+{
+}
 #endif
 
 int _isnan(double value)

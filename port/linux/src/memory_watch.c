@@ -24,6 +24,9 @@ renderer can protect the pages again before the kernel writes them.
 #include <stdio.h>
 #include <string.h>
 #include <ucontext.h>
+#ifdef HALO_PPC
+#include <asm/ptrace.h>
+#endif
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -88,14 +91,26 @@ static void segv_handler(int signal_number, siginfo_t *information, void *contex
 		void *frames[48];
 		int count, length;
 
+#ifdef HALO_PPC
+		/* (PowerPC: the instruction, the link register and the stack
+		pointer, r1) */
+		length = snprintf(line, sizeof(line), "halo-linux: segmentation fault at %p, nip %08x lr %08x r1 %08x\n",
+			information->si_addr, (unsigned)ucontext->uc_mcontext.uc_regs->gregs[PT_NIP],
+			(unsigned)ucontext->uc_mcontext.uc_regs->gregs[PT_LNK], (unsigned)ucontext->uc_mcontext.uc_regs->gregs[PT_R1]);
+#else
 		length = snprintf(line, sizeof(line), "halo-linux: segmentation fault at %p, eip %08x ebp %08x esp %08x\n",
 			information->si_addr, (unsigned)ucontext->uc_mcontext.gregs[REG_EIP],
 			(unsigned)ucontext->uc_mcontext.gregs[REG_EBP], (unsigned)ucontext->uc_mcontext.gregs[REG_ESP]);
+#endif
 		write(STDERR_FILENO, line, (size_t)length);
 		crash_debug_line(line);
 		{
 			/* the return address a call through a bad pointer left behind */
+#ifdef HALO_PPC
+			const unsigned *stack = (const unsigned *)ucontext->uc_mcontext.uc_regs->gregs[PT_R1];
+#else
 			const unsigned *stack = (const unsigned *)ucontext->uc_mcontext.gregs[REG_ESP];
+#endif
 
 			length = snprintf(line, sizeof(line), "halo-linux: stack %08x %08x %08x %08x %08x %08x\n",
 				stack[0], stack[1], stack[2], stack[3], stack[4], stack[5]);

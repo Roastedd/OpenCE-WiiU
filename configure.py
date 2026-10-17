@@ -24,6 +24,14 @@ parser.add_argument(
     help="compiler for the native Linux build, `ninja linux` (default: clang)",
 )
 parser.add_argument(
+    "--linux-target",
+    choices=["x86", "ppc"],
+    default="x86",
+    help="the native Linux build's processor: x86 (the default, `ninja linux`) or ppc, 32-bit big-endian "
+    "PowerPC (`ninja linux_ppc`, build/linux-ppc, run under qemu-ppc), for finding what assumes a "
+    "little-endian machine",
+)
+parser.add_argument(
     "--compiler-launcher",
     metavar="BINARY",
     help="a program that runs each compile, such as ccache "
@@ -99,6 +107,7 @@ except ValueError as error:
 sln = SimpleNamespace(
     build_dir=Path("build"),
     linux_cc=args.linux_cc,
+    linux_target=args.linux_target,
     compiler_launcher=args.compiler_launcher,
     port_release=args.release,
     port_profile=args.profile,

@@ -342,8 +342,8 @@ void stack_walk_with_context(
 
 		for (frame_number = levels_dumped - 1; frame_number >= levels_to_ignore; frame_number--)
 		{
-#ifdef HALO_ARM64_GUEST
-			/* the call site (the BL before the return address), for
+#if defined(HALO_ARM64_GUEST) || defined(HALO_PPC)
+			/* port: the call site (the BL before the return address), for
 			llvm-symbolizer --obj=build/android/halo_guest.elf */
 			unsigned long routine_address = routine_addresses[frame_number] - 4;
 #else
@@ -738,6 +738,11 @@ static unsigned long walk_up(
 		/* an AArch64 frame record: the caller's frame pointer, then the
 		return address, 8 bytes each (the upper halves are zero) */
 		routine_address = ((unsigned long *)walk_up_current_frame)[2];
+#elif defined(HALO_PPC)
+		/* port: a PowerPC frame: the back chain, and the return address in
+		the caller's frame, 4 bytes past its back chain */
+		routine_address = ((unsigned long *)walk_up_current_frame)[0] ?
+			((unsigned long *)((unsigned long *)walk_up_current_frame)[0])[1] : 0;
 #else
 		routine_address = ((unsigned long *)walk_up_current_frame)[1];
 #endif

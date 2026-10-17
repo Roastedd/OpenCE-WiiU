@@ -10,7 +10,13 @@ byte-for-byte identical to what the matching MSVC build compiles.
 #ifndef __HALO_LINUX_PREFIX_H
 #define __HALO_LINUX_PREFIX_H
 
-#if !defined(__i386__) && !defined(HALO_ARM64_GUEST) && !defined(__wasm32__)
+/* the big-endian build (configure.py --linux-target=ppc): 32-bit PowerPC
+Linux under qemu-ppc, standing in for the Wii U's Espresso */
+#if defined(__powerpc__) && !defined(__powerpc64__)
+#define HALO_PPC 1
+#endif
+
+#if !defined(__i386__) && !defined(HALO_ARM64_GUEST) && !defined(__wasm32__) && !defined(HALO_PPC)
 #error the Linux port targets 32-bit x86: game data structures assume 32-bit pointers
 #endif
 

@@ -247,8 +247,38 @@ def march_flag(sln: Any) -> str:
     """The instruction set of the native x86 builds: this machine's
     (-march=native, the default), or with configure.py --portable the
     baseline every x86-64 processor has (SSE2), for builds that run on other
-    computers. The game stays 32-bit code either way."""
+    computers. The game stays 32-bit code either way. The big-endian build's
+    is the PowerPC 750's, the Wii U's Espresso."""
+    if is_big_endian_build(sln):
+        return "-mcpu=750"
     return "-march=x86-64" if getattr(sln, "port_portable", False) else "-march=native"
+
+
+# The big-endian build (configure.py --linux-target=ppc, ninja linux_ppc):
+# the same game and platform layer for 32-bit big-endian PowerPC Linux, run
+# under qemu-ppc, so that the code's and the data's assumptions of a
+# little-endian machine can be found without a console. Its ABI is the x86
+# build's but for what only x86 has: -m32 and -malign-double (PowerPC's
+# System V ABI aligns doubles to 8 bytes, as MSVC does), and
+# -freg-struct-return, whose PowerPC counterpart -msvr4-struct-return
+# returns structures of up to 8 bytes in r3 and r4. PowerPC's char is
+# unsigned, MSVC's signed: the game keeps NONE (-1) in char indices, so it is
+# made signed (the Android guest's Apple target has a signed char already).
+X86_TARGET = "--target=i686-linux-gnu"
+X86_ONLY_FLAGS = ("--target=i686-linux-gnu", "-m32", "-malign-double", "-freg-struct-return")
+PPC_TARGET_FLAGS = ["--target=powerpc-linux-gnu", "-msvr4-struct-return", "-fsigned-char"]
+
+
+def is_big_endian_build(sln: Any) -> bool:
+    return getattr(sln, "linux_target", "x86") == "ppc"
+
+
+def target_flags(sln: Any, flags: Sequence[str]) -> List[str]:
+    """flags (LINUX_ABI_FLAGS, POSIX_FLAGS, a link's) for the build's target"""
+    if not is_big_endian_build(sln):
+        return list(flags)
+    kept = [flag for flag in flags if flag not in X86_ONLY_FLAGS]
+    return PPC_TARGET_FLAGS + kept if X86_TARGET in flags else kept
 
 
 # The portable build (configure.py --portable, as tools/ci_build.py builds)
@@ -421,7 +451,8 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
         # a checkout without the port (or a test fixture): nothing to emit
         return
     config = _load_port_config()
-    build_dir: Path = sln.build_dir / "linux"
+    big_endian = is_big_endian_build(sln)
+    build_dir: Path = sln.build_dir / ("linux-ppc" if big_endian else "linux")
     obj_dir = build_dir / "obj"
     output = build_dir / "halo"
     cc = sln.linux_cc or "clang"
@@ -507,11 +538,18 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
     # (a debug build checks its stack frames, and stops at the first one
     # overrun, as it stops at the first failed assertion; a release build
     # does not, so that an overrun nobody has met cannot end a game)
-    abi = " ".join(LINUX_ABI_FLAGS + target + configuration_defines(sln)
+    abi = " ".join(target_flags(sln, LINUX_ABI_FLAGS) + target + configuration_defines(sln)
                    + ([] if getattr(sln, "port_release", False) else ["-fstack-protector-strong"]))
     port_include = PORT_DIR / "include"
     sdk_flags = f"-idirafter {XDK_INCLUDE}"
     libs = " ".join(f"-l{lib}" for lib in config.get("libraries", []))
+    if big_endian:
+        # (32-bit PowerPC has no 64-bit atomic instructions: the 64-bit
+        # counters' loads and exchanges are libatomic's)
+        libs += " -latomic"
+
+    # (lld links the big-endian build: the system's ld is the build machine's)
+    link_target = PPC_TARGET_FLAGS[:1] + ["-fuse-ld=lld"] if big_endian else [X86_TARGET, "-m32"]
 
     def emit(obj_dir: Path, output: Path, extra_cflags: List[str], extra_ldflags: List[str],
              implicit_inputs: List[Path], validator: Optional[Path] = None) -> None:
@@ -578,7 +616,8 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
             "-Isource -Isource/cseries",
             sdk_flags,
         ])
-        posix_cflags = " ".join(POSIX_FLAGS + target + [f"-I{platform_dir}"])
+        posix_flags = target_flags(sln, POSIX_FLAGS)
+        posix_cflags = " ".join(posix_flags + target + [f"-I{platform_dir}"])
         mbedtls_include = f"-I{MBEDTLS_DIR / 'include'}"
         for source in sorted(platform_dir.glob("*.c")):
             if source.name in ("posix_update.c", "posix_dtls.c"):
@@ -599,13 +638,13 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
         # wcslen, which linux_link_check.py rejects: the game's wchar_t is
         # 16-bit)
         for source in sorted((MBEDTLS_DIR / "library").glob("*.c")):
-            add_object(source, " ".join(POSIX_FLAGS + target + [mbedtls_include,
+            add_object(source, " ".join(posix_flags + target + [mbedtls_include,
                                                                 f"-I{MBEDTLS_DIR / 'library'}", "-fno-builtin-wcslen",
                                                                 "-w"]), posix=True)
         # internet play's UPnP (port/third_party/miniupnpc), with the host's
         # ABI as posix_upnp.c, which uses it
         for source in miniupnpc_sources():
-            add_object(source, " ".join(POSIX_FLAGS + target + [*MINIUPNPC_DEFINES,
+            add_object(source, " ".join(posix_flags + target + [*MINIUPNPC_DEFINES,
                                                                 f"-I{MINIUPNPC_DIR / 'include'}",
                                                                 f"-I{MINIUPNPC_DIR / 'src'}",
                                                                 "-fno-builtin-wcslen", "-w"]), posix=True)
@@ -637,7 +676,7 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
             rule="linux_link",
             inputs=objects,
             variables={
-                "ldflags": " ".join(["--target=i686-linux-gnu", "-m32", "-no-pie", "-g", *sysroot_ldflags,
+                "ldflags": " ".join([*link_target, "-no-pie", "-g", *sysroot_ldflags,
                                      *extra_ldflags,
                                      # (posix_trace_marker.c's, which the GPU driver's calls must reach)
                                      *(f"-Wl,--export-dynamic-symbol={name}"
@@ -673,7 +712,11 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
                 outputs=validator,
                 rule="linux_tool_link",
                 inputs=tool_objects,
-                variables={"ldflags": " ".join(["--target=i686-linux-gnu", "-m32", "-no-pie", "-g", *sysroot_ldflags,
+                # (static under qemu-ppc, whose 32-bit guests' libraries and
+                # mappings start at 0x40000000, where the Custom Edition tag
+                # cache must be)
+                variables={"ldflags": " ".join([*link_target, *(["-static"] if big_endian else []), "-no-pie", "-g",
+                                                *sysroot_ldflags,
                                                 *extra_ldflags])},
             )
 
@@ -702,6 +745,6 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
     # internet play's MQTT brokers, a file beside the game (network.brokers_file)
     brokers = build_dir / "brokers.txt"
     n.build(outputs=brokers, rule="linux_copy", inputs=Path("port/assets/network/brokers.txt"))
-    n.build(outputs="linux", rule="phony",
+    n.build(outputs="linux_ppc" if big_endian else "linux", rule="phony",
             inputs=[output, brokers, validator, *sdl_outputs])
     n.newline()
