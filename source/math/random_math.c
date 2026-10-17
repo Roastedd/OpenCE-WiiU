@@ -85,6 +85,10 @@ struct random_math_globals
 
 /* ---------- prototypes */
 
+/* port: port/linux/src/port_config.c */
+long config_integer(const char *name);
+
+
 static real_vector3d *
 direction3d_from_table(
 	real_vector3d *result,
@@ -167,6 +171,12 @@ random_math_initialize(
 	short index;
 
 	random_math_globals.global_local_random_seed= get_number_suitable_for_initializing_random_seed();
+	/* port: or the debug.random_seed setting's, so that runs of automated
+	tests can be compared (port/linux/src/port_config.c) */
+	if (config_integer("debug.random_seed"))
+	{
+		random_math_globals.global_local_random_seed= (unsigned long)config_integer("debug.random_seed");
+	}
 	random_direction_geosphere= geosphere_new(RANDOM_DIRECTION_TABLE_GEOSPHERE_SEGMENT_COUNT);
 	match_assert("c:\\halo\\SOURCE\\math\\random_math.c", 174, random_direction_geosphere);
 	random_math_globals.random_direction_table= match_malloc(
