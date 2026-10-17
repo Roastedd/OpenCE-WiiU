@@ -130,10 +130,20 @@ struct direction_playback_controller
 	short pitch;
 };
 
+/* port: the byte a stream holds (a map's, made by little-endian tools) has the
+time delta in its low two bits and the event type above them: a compiler
+allocates a byte's bit fields from its low bits on a little-endian host and
+from its high bits on a big-endian one, so a big-endian host declares them
+in the other order */
 struct animation_event_header
 {
+#ifdef __BIG_ENDIAN__
+	byte event_type : 6;
+	byte time_delta : 2;
+#else
 	byte time_delta : 2;
 	byte event_type : 6;
+#endif
 };
 
 struct vector_char_difference_data
