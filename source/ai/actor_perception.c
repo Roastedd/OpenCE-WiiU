@@ -706,10 +706,13 @@ struct actor_perception_unit_view
 	short parent_seat_index;
 };
 
+/* port: a word, as object.damage_flags (the field at 0xB6) is: read as a byte
+it was the high-order byte of the word on a big-endian host (the dead bit, bit
+2, was bit 10) */
 struct actor_perception_target_unit_view
 {
 	byte __unknown000[0xB6];
-	byte active_region_flags;
+	word active_region_flags;
 };
 
 struct actor_perception_status_unit_view
@@ -724,12 +727,15 @@ struct actor_target_weight_weapon_definition_view
 	real minimum_target_range;
 };
 
+/* port: a long, as the vehicle definition's flags are (vehicle_definition in
+port/linux/game/tag_schema_objects.c): read as a byte it was their high-order
+byte on a big-endian host, and no vehicle was a danger to an actor */
 struct actor_perception_vehicle_definition_view
 {
 	byte __unknown000[4];
 	real bounding_radius;
 	byte __unknown008[0x2E8];
-	byte danger_zone_flags;
+	unsigned long danger_zone_flags;
 };
 
 struct actor_perception_communication_context
