@@ -905,10 +905,24 @@ void game_sound_update(
 	return;
 }
 
+/* port: port/linux/src/port_config.c */
+int config_boolean(const char *name);
+
 void game_sound_set_mouth_aperture(
 	long object_index,
 	real mouth_aperture)
 {
+	static int fixed_step = -1;
+
+	/* port: debug.fixed_step plays a game the same on any machine, and a
+	mouth's opening follows its sound's playing position, which the audio
+	clock sets (the sound manager reads the clock, and the mixer's channel
+	states): the jaw moved with it, and the unit's pose, so that two runs of
+	one build parted within seconds. The mouth stays shut. */
+	if (fixed_step < 0)
+		fixed_step = config_boolean("debug.fixed_step") != 0;
+	if (fixed_step)
+		return;
 	if (game_looping_sound_data->valid)
 	{
 		if (object_try_and_get_and_verify_type(object_index, _object_mask_unit))
