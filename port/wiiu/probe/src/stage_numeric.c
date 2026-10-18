@@ -16,7 +16,7 @@ static int stopping(const stage_context *context)
 }
 
 #ifdef HAVE_FPSCR
-static uint32_t read_fpscr(void)
+static uint32_t real_read_fpscr(void)
 {
 	union
 	{
@@ -27,7 +27,37 @@ static uint32_t read_fpscr(void)
 	__asm__ volatile("mffs %0" : "=f"(value.d));
 	return (uint32_t)value.u;
 }
+
+/* FPSCR[NI], bit 29: with it set a PowerPC flushes denormals to zero, where x86 keeps them */
+static void real_clear_non_ieee(void)
+{
+	__asm__ volatile("mtfsb0 29");
+}
+
+static uint32_t (*read_fpscr)(void) = real_read_fpscr;
+static void (*clear_non_ieee)(void) = real_clear_non_ieee;
+
+uint32_t stage_read_fpscr(void)
+{
+	return real_read_fpscr();
+}
+#else
+static uint32_t (*read_fpscr)(void);
+static void (*clear_non_ieee)(void);
+
+uint32_t stage_read_fpscr(void)
+{
+	return 0;
+}
 #endif
+
+/* for the tests: a floating-point unit that says what they want it to (the stage cannot otherwise be run with the bit set on a
+machine that does not start with it, which the emulator does not) */
+void stage_numeric_use_fpu(uint32_t (*read)(void), void (*clear)(void))
+{
+	read_fpscr = read;
+	clear_non_ieee = clear;
+}
 
 /* the compiler may not fold these: every operand is read from a volatile */
 static void check_fused(report *r)
@@ -52,7 +82,14 @@ static void check_fused(report *r)
 		(double)float_product_then_sum);
 }
 
-static void check_denormals(report *r)
+typedef struct denormal_results
+{
+	uint64_t half_double;
+	uint32_t half_float;
+	uint32_t narrowed;
+} denormal_results;
+
+static void measure_denormals(denormal_results *results)
 {
 	volatile double d = DBL_MIN;
 	volatile float f = FLT_MIN;
@@ -60,15 +97,19 @@ static void check_denormals(report *r)
 	double half = d / 2.0;
 	float half_float = f / 2.0f;
 	float narrowed = (float)wide;
-	const uint64_t half_bits = probe_double_bits(half);
-	const uint32_t half_float_bits = probe_float_bits(half_float);
-	const uint32_t narrowed_bits = probe_float_bits(narrowed);
 
-	report_check(r, half_bits == 0x0008000000000000ull, "double denormal", "DBL_MIN/2 is %016llX, expected 0008000000000000",
-		(unsigned long long)half_bits);
-	report_check(r, half_float_bits == 0x00400000u, "float denormal", "FLT_MIN/2 is %08X, expected 00400000", half_float_bits);
-	report_check(r, narrowed_bits == 0x000116C2u, "double to float denormal", "1e-40 narrowed is %08X, expected 000116C2",
-		narrowed_bits);
+	results->half_double = probe_double_bits(half);
+	results->half_float = probe_float_bits(half_float);
+	results->narrowed = probe_float_bits(narrowed);
+}
+
+static void check_denormals(report *r, const denormal_results *results)
+{
+	report_check(r, results->half_double == 0x0008000000000000ull, "double denormal", "DBL_MIN/2 is %016llX, expected 0008000000000000",
+		(unsigned long long)results->half_double);
+	report_check(r, results->half_float == 0x00400000u, "float denormal", "FLT_MIN/2 is %08X, expected 00400000", results->half_float);
+	report_check(r, results->narrowed == 0x000116C2u, "double to float denormal", "1e-40 narrowed is %08X, expected 000116C2",
+		results->narrowed);
 }
 
 /* what out-of-range and NaN conversions give is C undefined behaviour and differs by CPU: reported, not judged */
@@ -95,23 +136,42 @@ static void report_conversions(report *r)
 void stage_numeric(stage_context *context)
 {
 	report *r = context->report;
+	denormal_results results;
 
 	if (stopping(context))
 		return;
 	report_section(r, "numeric");
-#ifdef HAVE_FPSCR
+	if (read_fpscr)
 	{
 		const uint32_t fpscr = read_fpscr();
 
-		report_value(r, "FPSCR", "%08X", (unsigned)fpscr);
+		report_value(r, "FPSCR at start", "%08X", (unsigned)fpscr);
 		report_check(r, (fpscr & 0x3u) == 0, "rounding mode", "RN %u, expected 0 (to nearest)", (unsigned)(fpscr & 0x3u));
-		report_check(r, (fpscr & 0x4u) == 0, "non-IEEE mode", "NI %u, expected 0 (denormals kept)", (unsigned)((fpscr >> 2) & 1u));
 		report_check(r, (fpscr & 0xF8u) == 0, "trapping exceptions", "enable bits %02X, expected 0", (unsigned)(fpscr & 0xF8u));
+		if (fpscr & 0x4u)
+		{
+			uint32_t after;
+
+			/* the first console run found it set: say what it does, then clear it and test again */
+			measure_denormals(&results);
+			report_note(r, "non-IEEE mode is on at start: denormals are flushed to zero (DBL_MIN/2 is %016llX, FLT_MIN/2 is %08X, 1e-40 narrowed is %08X)",
+				(unsigned long long)results.half_double, results.half_float, results.narrowed);
+			clear_non_ieee();
+			after = read_fpscr();
+			report_value(r, "FPSCR after clearing NI", "%08X", (unsigned)after);
+			report_check(r, (after & 0x4u) == 0, "non-IEEE mode cleared", "NI %u after mtfsb0 29, expected 0", (unsigned)((after >> 2) & 1u));
+		}
+		else
+		{
+			report_check(r, 1, "non-IEEE mode", "NI 0 at start (denormals kept)");
+		}
 	}
-#else
-	report_note(r, "FPSCR: not PowerPC, not read");
-#endif
+	else
+	{
+		report_note(r, "FPSCR: not PowerPC, not read");
+	}
 	check_fused(r);
-	check_denormals(r);
+	measure_denormals(&results);
+	check_denormals(r, &results);
 	report_conversions(r);
 }

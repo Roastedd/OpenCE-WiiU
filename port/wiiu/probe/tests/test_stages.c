@@ -195,6 +195,57 @@ static void test_numeric(void)
 	CHECK(contains(&r, "int32 of NaN = ") && contains(&r, "0/0 bits = "));
 }
 
+/* a floating-point unit that starts as the console's does, with the non-IEEE bit set, and one that cannot clear it */
+static uint32_t fake_fpscr;
+
+static uint32_t fake_read(void)
+{
+	return fake_fpscr;
+}
+
+static void fake_clear(void)
+{
+	fake_fpscr &= ~4u;
+}
+
+static void fake_cannot_clear(void)
+{
+}
+
+static void test_numeric_with_the_non_ieee_bit_set(void)
+{
+	static char storage[8192];
+	report r;
+
+	/* as the first console run found it (FPSCR 82028004): the stage says what the bit does, clears it, and says so */
+	fake_fpscr = 0x82028004u;
+	stage_numeric_use_fpu(fake_read, fake_clear);
+	stage_run(stage_numeric, &r, storage, sizeof(storage), always);
+	CHECK(contains(&r, "FPSCR at start = 82028004") && contains(&r, "# non-IEEE mode is on at start"));
+	CHECK(contains(&r, "FPSCR after clearing NI = 82028000") && contains(&r, "PASS non-IEEE mode cleared"));
+	CHECK(r.failures == 0);
+
+	/* one that cannot be cleared is a failure the report names */
+	fake_fpscr = 0x82028004u;
+	stage_numeric_use_fpu(fake_read, fake_cannot_clear);
+	stage_run(stage_numeric, &r, storage, sizeof(storage), always);
+	CHECK(contains(&r, "FAIL non-IEEE mode cleared") && r.failures == 1);
+
+	/* one that starts clean has nothing to clear */
+	fake_fpscr = 0x00000000u;
+	stage_numeric_use_fpu(fake_read, fake_clear);
+	stage_run(stage_numeric, &r, storage, sizeof(storage), always);
+	CHECK(contains(&r, "PASS non-IEEE mode: NI 0 at start") && !contains(&r, "cleared") && r.failures == 0);
+
+	/* a rounding mode that is not to-nearest, and traps enabled, are failures too */
+	fake_fpscr = 0x00000003u | 0x80u;
+	stage_run(stage_numeric, &r, storage, sizeof(storage), always);
+	CHECK(contains(&r, "FAIL rounding mode") && contains(&r, "FAIL trapping exceptions"));
+	stage_numeric_use_fpu(NULL, NULL);
+	stage_run(stage_numeric, &r, storage, sizeof(storage), always);
+	CHECK(contains(&r, "# FPSCR: not PowerPC, not read") && r.failures == 0);
+}
+
 static void test_maths(void)
 {
 	static char storage[8192];
@@ -254,6 +305,7 @@ int main(void)
 	test_report();
 	test_abi();
 	test_numeric();
+	test_numeric_with_the_non_ieee_bit_set();
 	test_maths();
 	if (failures)
 	{

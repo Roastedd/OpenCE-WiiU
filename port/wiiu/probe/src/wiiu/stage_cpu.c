@@ -32,6 +32,7 @@ typedef struct core_job
 	unsigned core_ran;
 	double copy_small, copy_large, fill_large, read_large, swap_small, swap_large, float_chain, integer_chain;
 	uint32_t sink;
+	uint32_t fpscr;
 	double float_sink;
 } core_job;
 
@@ -45,6 +46,8 @@ static int worker(int argc, const char **argv)
 
 	(void)argc;
 	job->core_ran = OSGetCoreId();
+	/* (a new thread's FPSCR: whether the non-IEEE mode the main thread started with is every thread's) */
+	job->fpscr = stage_read_fpscr();
 	job->copy_small = bench_copy(clock_now_ns, job->destination, job->source, SMALL);
 	job->copy_large = bench_copy(clock_now_ns, job->destination, job->source, LARGE);
 	job->fill_large = bench_fill(clock_now_ns, job->destination, LARGE);
@@ -104,6 +107,7 @@ void stage_cpu(stage_context *context)
 		OSResumeThread(&threads[core]);
 		OSJoinThread(&threads[core], &result);
 		report_check(r, jobs[core].core_ran == core, "worker core", "asked for core %u, ran on %u", core, jobs[core].core_ran);
+		report_value(r, "core", "%u: FPSCR at thread start %08X", core, (unsigned)jobs[core].fpscr);
 		report_value(r, "core", "%u: copy %.0f MB/s in 256 KiB, %.0f MB/s in 8 MiB; fill %.0f; read %.0f", core,
 			megabytes_per_second(jobs[core].copy_small), megabytes_per_second(jobs[core].copy_large),
 			megabytes_per_second(jobs[core].fill_large), megabytes_per_second(jobs[core].read_large));

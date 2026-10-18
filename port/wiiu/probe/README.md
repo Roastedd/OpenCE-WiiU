@@ -39,12 +39,12 @@ finding, send it.
 | --- | --- | --- |
 | `system` | Which console, clocks, cores; is the card there? | nothing; context for the rest |
 | `abi` | Is the compiled ABI the one the port assumes (big-endian, ILP32, 16-bit `wchar_t`, signed `char`, 8-byte `double` alignment, MSB-first bit fields)? | the compiler flags in `port/wiiu/abi.mk` |
-| `numeric` | FPSCR (rounding, denormals, traps), no fused multiply-add, denormals kept, what out-of-range float to int conversions give | whether the netcode's floating point can match x86 bit for bit |
+| `numeric` | FPSCR (rounding, denormals, traps), no fused multiply-add, denormals kept (**the console starts with the non-IEEE bit set, which flushes them to zero; the stage clears it and tests again**), what out-of-range float to int conversions give | whether the netcode's floating point can match x86 bit for bit |
 | `maths` | The game's own maths (musl, `halo_sin` and the rest) gives the checksums every other machine gives | cross-play determinism |
 | `cpu` | Per core: memory copy, fill, read and byte-swap throughput (cache-resident and not), dependent multiply-add latency | which core runs what; what swapping at load would cost |
 | `memory` | The address space page by page; the heaps; whether `0x80000000` can be reserved and mapped; where a 128 MiB range goes if not; mapped memory's speed against the heap's | plan 6.2: map the window, or rebase the tag pointers |
 
-| `unaligned` | Which misaligned loads and stores work, at what cost (a 750 does some in hardware and some by an alignment exception) | whether the engine's odd-offset reads of animation data need the port layer's help (last stage: it may end the run) |
+| `unaligned` | Which misaligned loads and stores work, at what cost (a 750 does some in hardware and some by an alignment exception). **A misaligned `lfs` froze the console in the first run**, so each case now runs on a thread on core 0 or 2 that the main thread waits for; a case that does not come back is reported and recorded in `unaligned-fatal-<compiler>.txt` and the next goes to another core; the fault handler counts and skips an alignment exception if the system delivers one. | whether the engine's odd-offset reads of animation data need the platform layer's help (last stage: it may cost a restart) |
 
 Reading the `memory` stage:
 

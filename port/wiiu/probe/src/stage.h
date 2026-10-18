@@ -41,6 +41,12 @@ void stage_abi(stage_context *context, const stage_abi_expectation *expected);
 /* The floating-point unit: FPSCR (PowerPC), fused multiply-adds, denormals, conversions. */
 void stage_numeric(stage_context *context);
 
+/* A floating-point unit for the numeric stage to ask, instead of the machine's own (tests only). */
+void stage_numeric_use_fpu(uint32_t (*read)(void), void (*clear)(void));
+
+/* The FPSCR of the calling thread (0 where there is none: not PowerPC). */
+uint32_t stage_read_fpscr(void);
+
 /* The game's maths against the checksums every other machine gets. */
 void stage_maths(stage_context *context);
 
