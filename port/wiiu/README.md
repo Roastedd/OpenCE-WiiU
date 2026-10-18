@@ -10,6 +10,7 @@ console.
 | --- | --- |
 | `abi.mk` | The code generation flags the game's code is built with on the Wii U, for every compiler. |
 | `probe/` | A Wii U application that measures the console (memory mapping, FPU, unaligned access, speed). See its README. |
+| `probe_gx2/` | A Wii U application that asks the GPU's questions: CafeGLSL on the console, BC1/BC2/BC3 byte order, little-endian vertex streams, index types. See its README. |
 | `src/` | The Wii U's own units: the shell (lifecycle, log, black box, watchdog), thread-local storage, 64-bit atomics, the C library's gaps. See its README. |
 | `tests/` | Desktop tests of the shell's portable parts (`tools/wiiu/shell_tests.sh`: ARM64, x86, big-endian PowerPC). |
 | `stubbed_symbols.txt` | The symbols the link still lacks, as the build last found them. |
