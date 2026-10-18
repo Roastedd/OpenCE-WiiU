@@ -138,7 +138,9 @@ def test_every_object_is_checked_and_the_link_is_the_wii_us(monkeypatch):
     assert "wiiu_stubs.o" not in stubs and "build/linux-wiiu/obj/source/main/main.o" in stubs
     elf = re.search(r"^build build/linux-wiiu/halo\.elf [^\n]*: wiiu_link ([^\n]*)", text, re.M).group(1)
     assert "build/linux-wiiu/obj/wiiu_stubs.o" in elf and "build/linux-wiiu/obj/source/main/main.o" in elf
-    assert re.search(r"^build linux_wiiu: phony build/linux-wiiu/halo\.rpx build/linux-wiiu/halo\.sizes\.txt", text, re.M)
+    assert re.search(r"^build linux_wiiu: phony build/linux-wiiu/halo\.rpx build/linux-wiiu/halo\.wuhb build/linux-wiiu/halo\.sizes\.txt",
+                     text, re.M)
+    assert re.search(r"^build build/linux-wiiu/halo\.wuhb: wiiu_wuhb build/linux-wiiu/halo\.rpx", text, re.M)
 
 
 def test_the_games_main_is_the_shells_to_run(monkeypatch):

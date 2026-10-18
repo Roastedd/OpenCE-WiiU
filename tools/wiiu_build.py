@@ -215,6 +215,12 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
         rspfile_content="$in_newline",
     )
     n.rule(name="wiiu_rpx", command="$wiiu_elf2rpl $in $out", description="WIIU RPX $out")
+    # (what Aroma's menu lists with a name; the same program as the RPX)
+    n.rule(
+        name="wiiu_wuhb",
+        command='wuhbtool $in $out --name "OpenCE (Wii U, shell test)" --short-name "OpenCE" --author "OpenCE Wii U port"',
+        description="WIIU WUHB $out",
+    )
     n.rule(
         name="wiiu_size",
         command="$python tools/wiiu_size_report.py $in --map $map > $out",
@@ -350,8 +356,9 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
     )
     rpx = build_dir / "halo.rpx"
     n.build(outputs=rpx, rule="wiiu_rpx", inputs=elf)
+    n.build(outputs=build_dir / "halo.wuhb", rule="wiiu_wuhb", inputs=rpx)
     sizes = build_dir / "halo.sizes.txt"
     n.build(outputs=sizes, rule="wiiu_size", inputs=elf, implicit=[Path("tools/wiiu_size_report.py")],
             variables={"map": f"{elf}.map"})
-    n.build(outputs="linux_wiiu", rule="phony", inputs=[rpx, sizes])
+    n.build(outputs="linux_wiiu", rule="phony", inputs=[rpx, build_dir / "halo.wuhb", sizes])
     n.newline()

@@ -21,7 +21,7 @@ In the `opence-wiiu` container (`tools/wiiu` in the repository this port is deve
 in it):
 
     python3 configure.py --linux-target=wiiu     # replaces the Linux build in build.ninja
-    ninja linux_wiiu                             # build/linux-wiiu/halo.rpx, halo.elf, halo.sizes.txt, wiiu_stubs.txt
+    ninja linux_wiiu                             # build/linux-wiiu/halo.wuhb (for Aroma), halo.rpx, halo.elf, halo.sizes.txt, wiiu_stubs.txt
 
 The graph is `tools/wiiu_build.py`; its flags are `tools/linux_build.py`'s (the big-endian Linux build's, less the Linux
 target), not copies of them, and `test_wiiu_build.py` checks that. What it does:
