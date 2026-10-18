@@ -2889,6 +2889,12 @@ void ai_handle_spatial_effect(
 	short volume,
 	short count)
 {
+#ifdef __clang__
+	/* port: clang contracts what is under #pragma optimize("", off), whatever
+	-ffp-contract says: the position averages below were fused multiply-adds on
+	PowerPC and ARM and two roundings on x86, which the netcode cannot have */
+#pragma clang fp contract(off)
+#endif
 	if (ai_globals->ai_initialized_for_map)
 	{
 		long now = game_time_get();
