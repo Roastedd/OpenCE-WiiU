@@ -3051,21 +3051,24 @@ void actor_communication_update(
 			--actor->control.idle_vocalization_timer == 0)
 		{
 			long sound_definition_index = NONE;
-			long vocalization_type = in_combat != FALSE;
+			/* port: a short, which unit_test_speech sets by its address: read
+			through a long's address it was the long's high-order half on a
+			big-endian host, so that a unit in combat spoke of no combat */
+			short vocalization_type = in_combat != FALSE;
 			short play_type = unit_test_speech(
 				actor->meta.unit_index,
 				_unit_speech_idle,
 				TRUE,
 				FALSE,
 				NULL,
-				(short *)&vocalization_type,
+				&vocalization_type,
 				&sound_definition_index);
 			if (play_type > 0)
 			{
 				struct unit_speech_item speech_item;
 
 				csmemset(&speech_item, 0, sizeof(speech_item));
-				speech_item.vocalization_type = (short)vocalization_type;
+				speech_item.vocalization_type = vocalization_type;
 				speech_item.sound_definition_index = sound_definition_index;
 				speech_item.priority = _unit_speech_idle;
 				ai_communication_packet_new(&speech_item.ai);
