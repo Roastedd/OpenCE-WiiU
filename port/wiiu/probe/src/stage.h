@@ -48,5 +48,6 @@ void stage_maths(stage_context *context);
 void stage_system(stage_context *context);
 void stage_memory(stage_context *context);
 void stage_cpu(stage_context *context);
+void stage_unaligned(stage_context *context);
 
 #endif

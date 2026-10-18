@@ -12,6 +12,13 @@ Plain open/write/fsync/close on the card's path, which is how the other Wii U ap
 
 #define PROBE_DIRECTORY "/vol/external01/wiiu/apps/opence-probe"
 
+/* which compiler built this one (the Makefile says); the files carry it, so that the two builds' reports sit side by side */
+#ifndef PROBE_FLAVOUR
+#define PROBE_FLAVOUR "unknown"
+#endif
+#define PROBE_REPORT_FILE "report-" PROBE_FLAVOUR ".txt"
+#define PROBE_CRASH_FILE "crash-" PROBE_FLAVOUR ".txt"
+
 /* creates the folders (nothing if they exist) */
 void card_prepare(void);
 

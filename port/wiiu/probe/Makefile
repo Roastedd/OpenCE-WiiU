@@ -4,7 +4,7 @@
 #   make COMPILER=clang     clang, as the port builds  -> build/clang/opence-probe.{rpx,wuhb}
 #   make analyze            clang's static analyzer over the probe's own sources
 #   make inspect            the RPX's sections and imports (readrpl)
-#   make dist               dist/wiiu/apps/opence-probe/: what to copy to the SD card
+#   make dist               builds both: dist/wiiu/ is what to copy to the SD card
 #   make clean              the chosen compiler's build; distclean: all of them
 #
 # In the opence-wiiu container: tools/wiiu/build_probe.sh in the repository around OpenCE. V=1 shows the commands.
@@ -21,8 +21,8 @@ BUILD      := build/$(COMPILER)
 OPENCE     := $(abspath ../../..)
 MUSL       := $(OPENCE)/port/third_party/musl-math
 
-APP_NAME       := OpenCE Wii U probe
-APP_SHORTNAME  := OpenCE probe
+APP_NAME       := OpenCE Wii U probe ($(COMPILER))
+APP_SHORTNAME  := OpenCE probe $(COMPILER)
 APP_AUTHOR     := OpenCE Wii U port
 
 include $(DEVKITPRO)/wut/share/wut_rules
@@ -49,7 +49,7 @@ OFILES     := $(SOURCES:%.c=$(BUILD)/%.o) $(patsubst $(MUSL)/src/%.c,$(BUILD)/mu
 
 WARNINGS   := -Wall -Wextra -Werror -Wno-unused-parameter
 CFLAGS     := -std=gnu11 -O2 -g -ffunction-sections -fdata-sections $(HALO_WIIU_CODEGEN) $(EXTRA) $(WARNINGS) \
-	-DESPRESSO -D__WIIU__ -D__WUT__ -DPROBE_BUILD_ID='"$(BUILD_ID)"' -I$(WUT_ROOT)/include
+	-DESPRESSO -D__WIIU__ -D__WUT__ -DPROBE_BUILD_ID='"$(BUILD_ID)"' -DPROBE_FLAVOUR='"$(COMPILER)"' -I$(WUT_ROOT)/include
 # the maths is the game's own (vendored musl, port/third_party/musl-math): built as the game builds it
 MUSL_FLAGS := -std=gnu11 -O2 -g -ffunction-sections -fdata-sections $(HALO_WIIU_CODEGEN) $(EXTRA) -w \
 	-DESPRESSO -D__WIIU__ -D__WUT__ -I$(MUSL)/include -include $(MUSL)/include/libm.h -I$(WUT_ROOT)/include
@@ -75,6 +75,9 @@ $(BUILD)/$(TARGET).elf: $(OFILES)
 
 -include $(OFILES:.o=.d)
 
+# a change of flags or of the application's names is a change of the result
+$(OFILES) $(BUILD)/$(TARGET).wuhb: Makefile $(OPENCE)/port/wiiu/abi.mk
+
 # clang's static analyzer: the analyzer's findings are warnings, and any is a failure
 analyze:
 	@mkdir -p build
@@ -89,11 +92,17 @@ inspect: $(BUILD)/$(TARGET).rpx
 	readrpl -S $< | head -40
 	readrpl -i $< | head -40
 
-dist: $(BUILD)/$(TARGET).wuhb $(BUILD)/$(TARGET).rpx
+# both builds: the clang one is what the port is built with, the GCC one is for comparing the two
+dist:
+	$(MAKE) COMPILER=gcc all
+	$(MAKE) COMPILER=clang all
 	rm -rf dist
 	mkdir -p dist/wiiu/apps/opence-probe
-	cp $(BUILD)/$(TARGET).wuhb $(BUILD)/$(TARGET).rpx dist/wiiu/apps/opence-probe/
-	@echo "dist/wiiu/apps/opence-probe: copy the folder wiiu/ to the SD card's root"
+	for c in clang gcc; do \
+		cp build/$$c/$(TARGET).wuhb dist/wiiu/apps/opence-probe/$(TARGET)-$$c.wuhb; \
+		cp build/$$c/$(TARGET).rpx dist/wiiu/apps/opence-probe/$(TARGET)-$$c.rpx; \
+	done
+	@echo "dist/wiiu: copy this folder to the SD card's root"
 
 clean:
 	rm -rf $(BUILD) dist

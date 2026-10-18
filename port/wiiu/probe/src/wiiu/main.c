@@ -4,9 +4,9 @@ The Wii U probe: what the console and Cafe OS allow, measured instead of assumed
 It runs its stages once, one after the other, and writes what it finds as text:
 
  - on screen as it goes, the checks and notes (the values are in the file);
- - to /vol/external01/wiiu/apps/opence-probe/report.txt on the SD card, after every stage and
+ - to /vol/external01/wiiu/apps/opence-probe/report-<compiler>.txt on the SD card, after every stage and
    before the ones that might not return, so that the report ends where the console stopped;
- - to crash.txt, if the system tells us about a fault.
+ - to crash-<compiler>.txt, if the system tells us about a fault.
 
 Nothing here keeps the console busy: the stages ask the system whether the user has pressed HOME
 between steps, and a stage that has finished leaves the screen up until the user leaves.
@@ -61,7 +61,7 @@ static void flush_report(void)
 
 	if (!size)
 		return;
-	error = card_write("report.txt", pending, size, card_started);
+	error = card_write(PROBE_REPORT_FILE, pending, size, card_started);
 	if (error)
 	{
 		if (!card_error)
@@ -127,6 +127,7 @@ int main(void)
 	run_stage(&context, "maths", stage_maths);
 	run_stage(&context, "cpu", stage_cpu);
 	run_stage(&context, "memory", stage_memory);
+	run_stage(&context, "unaligned", stage_unaligned);
 
 	crash_set_stage("finished");
 	if (leaving)
@@ -144,7 +145,7 @@ int main(void)
 	if (card_error)
 		WHBLogPrintf("the report could not be written to the card (error %d)", card_error);
 	else
-		WHBLogPrint("report: " PROBE_DIRECTORY "/report.txt");
+		WHBLogPrint("report: " PROBE_DIRECTORY "/" PROBE_REPORT_FILE);
 	WHBLogPrint("Press HOME to leave.");
 
 	while (keep_going())

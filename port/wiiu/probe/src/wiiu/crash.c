@@ -101,7 +101,7 @@ static BOOL handle(OSExceptionType type, OSContext *context)
 			p = hex(p, context->gpr[i]);
 		}
 		*p++ = '\n';
-		card_write("crash.txt", note, (size_t)(p - note), 0);
+		card_write(PROBE_CRASH_FILE, note, (size_t)(p - note), 0);
 	}
 	return FALSE;
 }
