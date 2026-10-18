@@ -141,6 +141,19 @@ def test_every_object_is_checked_and_the_link_is_the_wii_us(monkeypatch):
     assert re.search(r"^build linux_wiiu: phony build/linux-wiiu/halo\.rpx build/linux-wiiu/halo\.sizes\.txt", text, re.M)
 
 
+def test_the_games_main_is_the_shells_to_run(monkeypatch):
+    """shell_xbox.c's main is halo_game_main, and the shell's units have the native ABI"""
+    text = graph(monkeypatch)
+    assert "-Dmain=halo_game_main" in compile_flags(text, "source/shell/shell_xbox.c").split()
+    assert "-Dmain=halo_game_main" not in compile_flags(text, "source/main/main.c")
+    for name in ("wiiu_main", "wiiu_shell", "wiiu_shell_log", "wiiu_shell_watch", "wiiu_shell_blackbox", "wiiu_crash", "wiiu_atomic",
+                 "wiiu_libc", "wiiu_tls"):
+        flags = compile_flags(text, f"port/wiiu/src/{name}.c").split()
+        assert "-fshort-wchar" not in flags and "-femulated-tls" in flags, name
+    # the Xbox kernel's Win32 shims are compiled, not left to stubs
+    assert is_compiled(text, "port/linux/src/xbox_kernel.c")
+
+
 def test_the_wii_us_own_units_are_built_as_the_platform_layer_is(monkeypatch, tmp_path):
     """port/wiiu/src/wiiu_*.c have the native ABI; others the platform layer's"""
     unit = ROOT / "port/wiiu/src" / "zz_test_unit.c"

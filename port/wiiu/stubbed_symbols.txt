@@ -1,11 +1,6 @@
 # The symbols the Wii U link still lacks (tools/wiiu_stubs.py defines each as a stub that names itself and stops).
 # tools/wiiu_stubs.py --compare build/linux-wiiu/wiiu_stubs.txt port/wiiu/stubbed_symbols.txt fails if a symbol is
 # missing that is not here (a regression), or is here and no longer missing (progress: take it off).
-CloseHandle
-CompareFileTime
-CreateEventA
-CreateMutexA
-CreateThread
 D3DCubeTexture_LockRect
 D3DDevice_Begin
 D3DDevice_BeginVisibilityTest
@@ -121,13 +116,6 @@ DirectSoundGetStreamVoiceStatus
 DirectSoundStopStream
 DirectSoundUseFullHRTF
 FreeUPNPUrls
-GetExitCodeThread
-GetLastError
-GetSystemTime
-GetTickCount
-GlobalAlloc
-GlobalMemoryStatus
-GlobalReAlloc
 IDirectSoundBuffer_Play
 IDirectSoundBuffer_Release
 IDirectSoundBuffer_SetBufferData
@@ -163,29 +151,12 @@ IDirectSound_SetOrientation
 IDirectSound_SetPosition
 IDirectSound_SetRolloffFactor
 IDirectSound_SetVelocity
-LocalFree
-LocalSize
-OutputDebugStringA
-QueryPerformanceCounter
-QueryPerformanceFrequency
-ReleaseMutex
-ResetEvent
-ResumeThread
-SetEvent
-SetLastError
-SetThreadPriority
-Sleep
-SleepEx
-SwitchToThread
-SystemTimeToFileTime
 UPNP_AddPortMapping
 UPNP_DeletePortMapping
 UPNP_GetExternalIPAddress
 UPNP_GetGenericPortMappingEntry
 UPNP_GetValidIGD
 VirtualProtect
-WaitForSingleObject
-WaitForSingleObjectEx
 XDEVICE_TYPE_DEBUG_KEYBOARD_TABLE
 XDEVICE_TYPE_GAMEPAD_TABLE
 XDEVICE_TYPE_MEMORY_UNIT_TABLE
@@ -260,20 +231,12 @@ platform_clipboard_get
 platform_clipboard_set
 platform_display_apply
 platform_display_resolutions
-platform_filetime_to_unix_time
-platform_handle_get
-platform_handle_new
 platform_is_contiguous
-platform_log
 platform_offer_game_data
-platform_queue_apc
-platform_request_quit
 platform_scoreboard_scroll
-platform_set_last_error_from_errno
 platform_show_message
 platform_text_field
 platform_text_typing
-platform_unix_time_to_filetime
 platform_window_sizes
 posix_command_line_argument
 posix_directory_close

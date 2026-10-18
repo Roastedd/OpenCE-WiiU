@@ -85,7 +85,6 @@ WIIU_EXCLUDE: Dict[str, str] = {
     "port/linux/src/updater.c": "the self-updater (SDL 3); the Wii U does not update itself",
     # system headers newlib does not have
     "port/linux/src/memory_watch.c": "execinfo.h; page protection the Wii U does not have (plan 6.2: a hash watch)",
-    "port/linux/src/xbox_kernel.c": "sys/mman.h; the Xbox kernel's threads, events and memory over OSThread and friends",
     "port/linux/src/xbox_memory.c": "sys/mman.h; the Xbox memory window (plan 6.2: waits for the probe)",
     "port/linux/src/posix_net.c": "ifaddrs.h; sockets over nsysnet",
     "port/linux/src/posix_trace_marker.c": "dlfcn.h; a Linux GPU driver's trace markers",
@@ -256,6 +255,9 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
         flags = game_cflags
         if source.as_posix() == "source/main/main.c":
             flags += " " + updater_defines(release)
+        if source.as_posix() == "source/shell/shell_xbox.c":
+            # (the Wii U's own main, port/wiiu/src/wiiu_main.c, runs the game's on a thread of its own, as the web build's does)
+            flags += " -Dmain=halo_game_main"
         add_object(source, flags)
     for source in sorted(Path(config["game_sources"]).glob("*.c")):
         add_object(source, game_cflags)

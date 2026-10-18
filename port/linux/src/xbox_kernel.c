@@ -14,11 +14,18 @@ threads, asynchronous procedure calls, time, memory and debug output.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef __WIIU__
+/* (nothing here uses it; newlib, the Wii U's C library, has no such header) */
 #include <sys/mman.h>
+#endif
 #include <time.h>
 #include <unistd.h>
 #ifdef HALO_WEB
 #include <emscripten.h>
+#endif
+#ifdef __WIIU__
+/* port: the Wii U has no stderr to read; its log is a queue the shell writes to the card (port/wiiu/src/wiiu_shell.c) */
+void wiiu_log_text(const char *text);
 #endif
 
 #define PLATFORM_HANDLE_SIGNATURE 0x686e646cUL /* 'hndl' */
@@ -28,12 +35,20 @@ threads, asynchronous procedure calls, time, memory and debug output.
 void platform_log(const char *format, ...)
 {
 	va_list arguments;
+#ifdef __WIIU__
+	char line[200];
 
+	va_start(arguments, format);
+	vsnprintf(line, sizeof(line), format, arguments);
+	va_end(arguments);
+	wiiu_log_text(line);
+#else
 	fputs("halo-linux: ", stderr);
 	va_start(arguments, format);
 	vfprintf(stderr, format, arguments);
 	va_end(arguments);
 	fputc('\n', stderr);
+#endif
 }
 
 void platform_unimplemented(const char *name)
@@ -876,6 +891,11 @@ VOID WINAPI GlobalMemoryStatus(LPMEMORYSTATUS status)
 
 VOID WINAPI OutputDebugStringA(LPCSTR string)
 {
+#ifdef __WIIU__
+	if (string)
+		wiiu_log_text(string);
+#else
 	if (string)
 		fputs(string, stderr);
+#endif
 }

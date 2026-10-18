@@ -10,7 +10,8 @@ console.
 | --- | --- |
 | `abi.mk` | The code generation flags the game's code is built with on the Wii U, for every compiler. |
 | `probe/` | A Wii U application that measures the console (memory mapping, FPU, unaligned access, speed). See its README. |
-| `src/` | The Wii U's own platform units (`wiiu_tls.c` so far; see its README). |
+| `src/` | The Wii U's own units: the shell (lifecycle, log, black box, watchdog), thread-local storage, 64-bit atomics, the C library's gaps. See its README. |
+| `tests/` | Desktop tests of the shell's portable parts (`tools/wiiu/shell_tests.sh`: ARM64, x86, big-endian PowerPC). |
 | `stubbed_symbols.txt` | The symbols the link still lacks, as the build last found them. |
 
 ## Building
@@ -79,23 +80,52 @@ All of this is checked by `tools/wiiu/verify.sh` (about two minutes), which runs
   them `pthread_key_create` returns ENOSYS and libgcc aborts at the first access. `src/wiiu_tls.c` defines them over the thread
   specific slots Cafe OS gives every thread. It links; it has not run on a console.
 
+## The shell
+
+`src/wiiu_shell.c` runs around the game (`wiiu_shell.h` is what the rest of the port calls). The system's `main` is
+`wiiu_main.c`; the game's own (`shell_xbox.c`'s) is built as `halo_game_main`, as the web build's is, and runs on a thread
+of its own on core 1 with an 8 MiB stack, so that the main thread can do what the system expects of it: answer HOME and closing
+every twenty milliseconds. Patterns from CoffeeFlix and CoffeeUnlocked, which have run on this console:
+
+- **ProcUI**: release (HOME) at priority 2000, so that it runs before other libraries' callbacks, acquire, exit and the network
+  stop and start, each logged; the game is told through `wiiu_in_foreground()` and `wiiu_exit_requested()`.
+- **The exit watchdog**: once the system asks the app to close it has ten seconds; a watchdog thread (at a higher priority than
+  the game) ends the process at the deadline, after a moment for the log to say so.
+- **The stall report**: after the game's first frame (`wiiu_frame()`), a loop that stops for 3 s while the app has the foreground
+  is told in the log, again at 8 s, 13 s, and so on up to twelve times; HOME does not count.
+- **The log** (`/vol/external01/wiiu/apps/halo/log.txt`): lines from any thread go into a queue; a worker thread appends them to
+  the card every tenth of a second. No thread but that one ever waits for the card; a full queue drops the new line and says how
+  many it dropped.
+- **The black box** (`blackbox.txt`): every five seconds a thread writes where every registered thread is (state, program counter,
+  return address, the lock it waits for and who holds it), the phase and frame count, the log's counts and the heap. The file
+  holds the last three records and is removed by a clean stop; one found at the next start is reported in the log.
+- **The crash note** (`crash.txt`): a fault handler writes the thread, phase, program counter, stack and registers by hand.
+
+The decisions and the files (the queue, the watch, the records) are plain C with pthreads, tested on the desktop under
+`tools/wiiu/shell_tests.sh`; the Cafe OS half (ProcUI, `OSThread`, the handler) has been compiled and linked, not run.
+
 ## What it takes to run
 
-The link needs **337 stubs** (331 functions, 6 tables: `stubbed_symbols.txt`), which are what the Wii U's platform layer has to
-provide, by the linker's own count:
+The link needs **300 stubs** (`stubbed_symbols.txt`), which are what the Wii U's platform layer still has to provide, by the
+linker's own count:
 
 | Symbols | What | Approach |
 | --- | --- | --- |
-| 105 | Direct3D 8 (`D3DDevice_*` and the rest) | a null renderer first (the headless milestone), then GX2 (plan 6.4) |
+| 108 | Direct3D 8 (`D3DDevice_*`, `Direct3DCreate8` and the rest) | a null renderer first (the headless milestone), then GX2 (plan 6.4) |
 | 50 | DirectSound (41, `dsound_sdl.c`) and voice chat (9, `voice_audio.c`) | AX; voice later |
-| 33 | the Win32 and XAPI shims of `xbox_kernel.c` (threads, events, mutexes, ticks), which does not compile (`sys/mman.h`) | over `OSThread` and friends |
 | 43 | `posix_*`: files, the command line, network, Discord | newlib's devoptab has most; the network is nsysnet |
-| 27 | the port platform layer (`platform_*`, `halo_linux_*`: input, audio devices, bindings) | VPAD/KPAD |
+| 19 | the port platform layer (`platform_*`, `halo_linux_*`: input, audio devices, bindings) | VPAD/KPAD |
 | 21 | `halo_*` hooks the SDL and GL files provide (screen size, menus, keyboard) | with the renderer and input |
-| 15 | XAPI devices (`XInitDevices`, the device tables) | small |
+| 16 | XAPI devices (`XInitDevices`, `XInput*`, the device tables: 11), and the memory window's `XPhysicalAlloc` and friends with `VirtualProtect` (5) | the devices are small; **the window waits for the probe** |
 | 10 | `config_*` (`port_config.c`, which uses SDL for the base path and to load files) | the same code with those two replaced |
 | 14 | UPnP (9, optional) and mbedtls's platform functions (5: entropy, time, zeroize) | UPnP out; mbedtls needs its three platform hooks |
 | 19 | the high-resolution HUD and text (GL), `memory_watch`, the test input, `pread`/`pwrite` (newlib has neither), `d3d_find_flipcount` | with the renderer; two small shims |
+
+Done: the Win32 and XAPI kernel shims (`xbox_kernel.c`: handles, events, mutexes, critical sections, threads, APCs, time, `Global*`
+and `Local*`, debug output) compile for the Wii U as they are, over pthreads, which wut provides (the only changes: an unused
+`<sys/mman.h>` is not included, and the log goes to the shell's); `platform_request_quit` (the menus' Quit) is the shell's;
+`wiiu_atomic.c` (the 64-bit atomics the 750 core lacks), `wiiu_libc.c` (`pause`, `sysconf`) and `wiiu_tls.c` fill what newlib and wut
+do not have.
 
 A unit that replaces an excluded source goes in `src/` (its README says how), and the symbols it defines come off the baseline:
 `python3 tools/wiiu_stubs.py --compare build/linux-wiiu/wiiu_stubs.txt port/wiiu/stubbed_symbols.txt` says which.
@@ -112,6 +142,4 @@ A unit that replaces an excluded source goes in `src/` (its README says how), an
 
 ## What does not wait
 
-The lifecycle every Wii U app needs, from CoffeeFlix (ProcUI release/acquire/exit callbacks and an exit watchdog, a heartbeat and
-a black box, logging from a worker thread so that no SD card or network call blocks the main thread) is the next piece of the
-shell; then the Win32 and XAPI shims, the files, and the null renderer.
+The files (`posix_files.c`'s `UTIME_OMIT`, `pread` and `pwrite`), the null renderer, and the Wii U's input; each replaces stubs.
