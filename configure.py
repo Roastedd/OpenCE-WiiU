@@ -14,6 +14,7 @@ from tools import ninja_syntax
 from tools.android_build import android_configure_inputs, generate_android_build
 from tools.linux_build import check_profile_options, generate_linux_build, linux_configure_inputs
 from tools.web_build import generate_web_build, web_configure_inputs
+from tools.wiiu_build import generate_wiiu_build, wiiu_configure_inputs
 from tools.windows_build import generate_windows_build, windows_configure_inputs
 
 # arguments
@@ -25,11 +26,18 @@ parser.add_argument(
 )
 parser.add_argument(
     "--linux-target",
-    choices=["x86", "ppc"],
+    choices=["x86", "ppc", "wiiu"],
     default="x86",
     help="the native Linux build's processor: x86 (the default, `ninja linux`) or ppc, 32-bit big-endian "
     "PowerPC (`ninja linux_ppc`, build/linux-ppc, run under qemu-ppc), for finding what assumes a "
-    "little-endian machine",
+    "little-endian machine; or wiiu, the same game for the Wii U's Espresso, built with the opence-wiiu "
+    "container's compiler (`ninja linux_wiiu`, build/linux-wiiu; port/wiiu/README.md), which replaces the "
+    "Linux build in this build.ninja",
+)
+parser.add_argument(
+    "--wiiu-cc",
+    metavar="BINARY",
+    help="the Wii U compiler for `ninja linux_wiiu` (default: wiiu-clang)",
 )
 parser.add_argument(
     "--compiler-launcher",
@@ -108,6 +116,7 @@ sln = SimpleNamespace(
     build_dir=Path("build"),
     linux_cc=args.linux_cc,
     linux_target=args.linux_target,
+    wiiu_cc=args.wiiu_cc,
     compiler_launcher=args.compiler_launcher,
     port_release=args.release,
     port_profile=args.profile,
@@ -140,7 +149,11 @@ n.variable(
 n.variable("python", f'"{sys.executable}"')
 n.newline()
 
-generate_linux_build(n, sln)
+if args.linux_target == "wiiu":
+    # (the Wii U's build, in place of the Linux one: the same game for another machine)
+    generate_wiiu_build(n, sln)
+else:
+    generate_linux_build(n, sln)
 generate_android_build(n, sln)
 generate_windows_build(n, sln)
 generate_web_build(n, sln)
@@ -159,6 +172,7 @@ n.build(
         configure_script,
         Path("tools/ninja_syntax.py"),
         *linux_configure_inputs(),
+        *(wiiu_configure_inputs() if args.linux_target == "wiiu" else []),
         *android_configure_inputs(),
         *windows_configure_inputs(),
         *web_configure_inputs(),

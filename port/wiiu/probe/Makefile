@@ -33,7 +33,7 @@ CC         := $(PREFIX)gcc
 EXTRA      := -meabi
 else ifeq ($(COMPILER),clang)
 CC         := wiiu-clang
-EXTRA      :=
+EXTRA      := $(HALO_WIIU_CODEGEN_CLANG)
 else
 $(error COMPILER is gcc or clang)
 endif

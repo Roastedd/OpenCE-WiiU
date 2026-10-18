@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""The instructions the Wii U build's objects must not contain (tools/wiiu_build.py runs this on each one).
+
+Disassembles each object with devkitPPC's objdump and reports any instruction from:
+
+  fused multiply-adds (fmadd, fmsub, fnmadd, fnmsub and their single-precision forms): they round once where x86
+      rounds twice, and every machine of a network game must simulate the same floating-point results (the
+      compiler's -ffp-contract=off keeps them out; clang is known to ignore it under #pragma optimize("", off),
+      which is why source/ai/ai.c has its own pragma);
+  fsqrt, fsqrts: Espresso is a 750-class core and does not have them (an illegal instruction);
+  paired singles (ps_*): not what any of this code means, and not in the Linux builds it is compared with.
+
+Objects allowed to contain them (one that calls fma() on purpose) are named with --allow. Exit status 1 when
+anything else has one.
+
+    wiiu_check_objects.py [--quiet] [--allow NAME]... OBJECT_OR_FOLDER...
+"""
+
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+FORBIDDEN = re.compile(r"^(fn?m(add|sub)s?\.?|fsqrts?\.?|ps_\w+)$")
+OBJDUMP = os.environ.get("WIIU_OBJDUMP", "powerpc-eabi-objdump")
+
+
+def objects(paths):
+    for path in map(Path, paths):
+        if not path.exists():
+            sys.exit(f"{path}: no such file or folder")
+        if path.is_dir():
+            found = sorted(path.rglob("*.o"))
+            if not found:
+                sys.exit(f"{path}: no objects in it")
+            yield from found
+        else:
+            yield path
+
+
+def forbidden_in(path):
+    listing = subprocess.run([OBJDUMP, "-d", "--no-show-raw-insn", str(path)], capture_output=True, text=True,
+                             check=True).stdout
+    found = {}
+    for line in listing.splitlines():
+        # "  1c:\tfmadd   f1,f2,f3,f4"
+        match = re.match(r"\s*[0-9a-f]+:\s+(\S+)", line)
+        if match and FORBIDDEN.match(match.group(1)):
+            found[match.group(1)] = found.get(match.group(1), 0) + 1
+    return found
+
+
+def main():
+    arguments = sys.argv[1:]
+    allowed = set()
+    quiet = False
+    while arguments and arguments[0] in ("--allow", "--quiet"):
+        if arguments[0] == "--quiet":
+            quiet = True
+            arguments = arguments[1:]
+        else:
+            allowed.add(arguments[1])
+            arguments = arguments[2:]
+    if not arguments:
+        print(__doc__)
+        return 2
+    checked = 0
+    bad = 0
+    for path in objects(arguments):
+        checked += 1
+        found = forbidden_in(path)
+        if found and path.name not in allowed:
+            bad += 1
+            print(f"{path}: " + ", ".join(f"{name} x{count}" for name, count in sorted(found.items())))
+        elif found and not quiet:
+            print(f"{path}: allowed ({', '.join(f'{name} x{count}' for name, count in sorted(found.items()))})")
+    if not quiet or bad:
+        print(f"{checked} objects checked, {bad} with forbidden instructions")
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

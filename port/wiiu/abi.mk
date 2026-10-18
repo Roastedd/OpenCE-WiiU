@@ -13,3 +13,7 @@
 # the probe's abi stage and the layout checks verify.)
 HALO_WIIU_CODEGEN := -mcpu=750 -mhard-float -fshort-wchar -fsigned-char -ffp-contract=off -fno-strict-aliasing -fwrapv \
 	-fno-delete-null-pointer-checks -fcommon
+
+# What clang also needs (GCC has no such option): an RPX has no TLS segment (elf2rpl refuses the relocations), so
+# thread-local variables go through libgcc and pthread keys (port/wiiu/src/wiiu_tls.c).
+HALO_WIIU_CODEGEN_CLANG := -femulated-tls
