@@ -23,7 +23,9 @@ swprintf()/vswprintf() take no buffer size.
 #error the Linux build requires -fshort-wchar
 #endif
 
-#ifndef __wint_t_defined
+/* newlib (the Wii U's C library) has declared wint_t by now, as an int; the
+functions below are defined with whichever it is, so that is as good */
+#if !defined(__wint_t_defined) && !defined(__NEWLIB__)
 #define __wint_t_defined 1
 #define _WINT_T 1
 typedef unsigned short wint_t;
