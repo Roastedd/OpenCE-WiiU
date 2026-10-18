@@ -81,8 +81,10 @@ static const access_case cases[] = {
 	{"lfs at +1", LOAD_FLOAT, 1},
 };
 
-/* froze the console, in the first two runs (2026-10-18), whatever was around it: not to be tried again */
-static const char *const known_fatal[] = {"lfs at +1"};
+/* Cases known to freeze the console, not to be tried again. 'lfs at +1' froze it in the first two runs (2026-10-18), when the fault
+handler wrote to the card from inside the exception; with the handler that does not, the other misaligned float cases came back
+(as exceptions it skipped), so it is tried again. Cases an earlier run froze in are in the file on the card as well. */
+static const char *const known_fatal[] = {NULL};
 
 typedef struct case_job
 {
@@ -239,7 +241,7 @@ void stage_unaligned(stage_context *context)
 		int known = listed(fatal, c->name);
 
 		for (k = 0; k < sizeof(known_fatal) / sizeof(known_fatal[0]); k++)
-			if (!strcmp(known_fatal[k], c->name))
+			if (known_fatal[k] && !strcmp(known_fatal[k], c->name))
 				known = 1;
 		if (known)
 		{
@@ -285,8 +287,8 @@ void stage_unaligned(stage_context *context)
 				uint32_t pc, address;
 
 				crash_alignment_last(&pc, &address);
-				report_check(r, 0, c->name, "%u alignment exceptions, pc %08X, address %08X: the handler skipped the instruction and the thread went on",
-					(unsigned)traps, (unsigned)pc, (unsigned)address);
+				report_check(r, 0, c->name, "%u alignment exceptions, %.2f us each, pc %08X, address %08X: the handler skipped the instruction and the thread went on",
+					(unsigned)traps, per_access / 1000.0, (unsigned)pc, (unsigned)address);
 			}
 			else
 			{

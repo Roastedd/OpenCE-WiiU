@@ -4,6 +4,7 @@
 #include <coreinit/core.h>
 #include <coreinit/exception.h>
 #include <coreinit/thread.h>
+#include <coreinit/time.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
@@ -13,8 +14,14 @@ static const char *crash_path;
 static const char *const *crash_phase;
 static const char *crash_beat;
 static OSExceptionCallbackFn previous[16];
-static volatile int taken;
 static char note[2048];
+static volatile size_t note_size;
+/* 0 nothing yet; 1 being filled in; 2 ready to be written; 3 written */
+static volatile int state;
+static OSThread writer_thread;
+static uint8_t writer_stack[16 * 1024] __attribute__((aligned(16)));
+/* how long the faulting thread waits for its note to be written */
+#define WAIT_MILLISECONDS 3000
 
 static char *put(char *p, const char *text, size_t limit)
 {
@@ -82,64 +89,94 @@ static void write_note(const char *text, size_t size)
 	close(file);
 }
 
+/* The note is written by a thread of its own, on another core: the probe's first runs froze the console in a fault handler that wrote
+the file itself (writing goes through messages to another processor, which a core stuck in an exception may not be able to wait
+for; measured, not proven), and survived the same faults once the handler did no input or output. */
+static int writer_main(int argc, const char **argv)
+{
+	(void)argc;
+	(void)argv;
+	for (;;)
+	{
+		if (state == 2)
+		{
+			write_note(note, note_size);
+			state = 3;
+		}
+		OSSleepTicks(OSMillisecondsToTicks(20));
+	}
+	return 0;
+}
+
+static void fill_note(OSExceptionType type, OSContext *context)
+{
+	char *p = note;
+	uint32_t frame = context->gpr[1];
+	OSThread *thread = OSGetCurrentThread();
+	const char *name = string_address(thread) ? OSGetThreadName(thread) : NULL;
+	const char *phase = crash_phase ? *crash_phase : NULL;
+	int depth;
+	int i;
+
+	p = put(p, "CRASH ", 8);
+	p = put(p, type_name(type), 80);
+	p = put(p, "\nthread ", 16);
+	p = put(p, string_address(name) ? name : "?", 40);
+	p = put(p, "\nphase ", 16);
+	p = put(p, string_address(phase) ? phase : "?", 120);
+	if (crash_beat)
+	{
+		p = put(p, "\nlast heartbeat ", 24);
+		p = put(p, crash_beat, 200);
+	}
+	p = put(p, "\ncore ", 16);
+	p = hex(p, OSGetCoreId());
+	p = put(p, " pc ", 8);
+	p = hex(p, context->srr0);
+	p = put(p, " lr ", 8);
+	p = hex(p, context->lr);
+	p = put(p, " sp ", 8);
+	p = hex(p, context->gpr[1]);
+	p = put(p, " dar ", 8);
+	p = hex(p, context->dar);
+	p = put(p, " dsisr ", 8);
+	p = hex(p, context->dsisr);
+	p = put(p, "\nstack ", 16);
+	p = hex(p, context->lr);
+	for (depth = 0; depth < 12 && stack_address(frame); depth++)
+	{
+		uint32_t next = *(const uint32_t *)frame; /* the caller's frame, whose return address is 4 into it */
+
+		if (next <= frame || next - frame > 0x200000u || !stack_address(next))
+			break;
+		*p++ = ' ';
+		p = hex(p, *(const uint32_t *)(next + 4));
+		frame = next;
+	}
+	p = put(p, "\nregisters", 16);
+	for (i = 0; i < 32; i++)
+	{
+		*p++ = ' ';
+		p = hex(p, context->gpr[i]);
+	}
+	*p++ = '\n';
+	note_size = (size_t)(p - note);
+}
+
 static BOOL handle(OSExceptionType type, OSContext *context)
 {
 	if (previous[type] && previous[type](context))
 		return TRUE;
 	/* one note is enough: a second fault in the handler or on another core must not overwrite it */
-	if (__sync_bool_compare_and_swap(&taken, 0, 1))
+	if (__sync_bool_compare_and_swap(&state, 0, 1))
 	{
-		char *p = note;
-		uint32_t frame = context->gpr[1];
-		OSThread *thread = OSGetCurrentThread();
-		const char *name = string_address(thread) ? OSGetThreadName(thread) : NULL;
-		const char *phase = crash_phase ? *crash_phase : NULL;
-		int depth;
-		int i;
+		const OSTime started = OSGetSystemTime();
 
-		p = put(p, "CRASH ", 8);
-		p = put(p, type_name(type), 80);
-		p = put(p, "\nthread ", 16);
-		p = put(p, string_address(name) ? name : "?", 40);
-		p = put(p, "\nphase ", 16);
-		p = put(p, string_address(phase) ? phase : "?", 120);
-		if (crash_beat)
+		fill_note(type, context);
+		state = 2;
+		while (state != 3 && OSGetSystemTime() - started < (OSTime)OSMillisecondsToTicks(WAIT_MILLISECONDS))
 		{
-			p = put(p, "\nlast heartbeat ", 24);
-			p = put(p, crash_beat, 200);
 		}
-		p = put(p, "\ncore ", 16);
-		p = hex(p, OSGetCoreId());
-		p = put(p, " pc ", 8);
-		p = hex(p, context->srr0);
-		p = put(p, " lr ", 8);
-		p = hex(p, context->lr);
-		p = put(p, " sp ", 8);
-		p = hex(p, context->gpr[1]);
-		p = put(p, " dar ", 8);
-		p = hex(p, context->dar);
-		p = put(p, " dsisr ", 8);
-		p = hex(p, context->dsisr);
-		p = put(p, "\nstack ", 16);
-		p = hex(p, context->lr);
-		for (depth = 0; depth < 12 && stack_address(frame); depth++)
-		{
-			uint32_t next = *(const uint32_t *)frame; /* the caller's frame, whose return address is 4 into it */
-
-			if (next <= frame || next - frame > 0x200000u || !stack_address(next))
-				break;
-			*p++ = ' ';
-			p = hex(p, *(const uint32_t *)(next + 4));
-			frame = next;
-		}
-		p = put(p, "\nregisters", 16);
-		for (i = 0; i < 32; i++)
-		{
-			*p++ = ' ';
-			p = hex(p, context->gpr[i]);
-		}
-		*p++ = '\n';
-		write_note(note, (size_t)(p - note));
 	}
 	return FALSE;
 }
@@ -166,6 +203,12 @@ void wiiu_crash_install(const char *path, const char *const *phase, const char *
 	crash_path = path;
 	crash_phase = phase;
 	crash_beat = beat;
+	if (OSCreateThread(&writer_thread, writer_main, 0, NULL, writer_stack + sizeof(writer_stack), sizeof(writer_stack), 1,
+			(OSThreadAttributes)(OS_THREAD_ATTRIB_AFFINITY_ANY | OS_THREAD_ATTRIB_DETACHED)))
+	{
+		OSSetThreadName(&writer_thread, "crash note writer");
+		OSResumeThread(&writer_thread);
+	}
 	hook(OS_EXCEPTION_TYPE_MACHINE_CHECK, on_machine_check);
 	hook(OS_EXCEPTION_TYPE_DSI, on_dsi);
 	hook(OS_EXCEPTION_TYPE_ISI, on_isi);

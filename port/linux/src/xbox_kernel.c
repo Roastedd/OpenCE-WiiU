@@ -26,6 +26,8 @@ threads, asynchronous procedure calls, time, memory and debug output.
 #ifdef __WIIU__
 /* port: the Wii U has no stderr to read; its log is a queue the shell writes to the card (port/wiiu/src/wiiu_shell.c) */
 void wiiu_log_text(const char *text);
+/* and Cafe OS starts every thread with the FPU flushing denormals to zero, which x86 does not (wiiu_shell.h) */
+void wiiu_fpu_setup(void);
 #endif
 
 #define PLATFORM_HANDLE_SIGNATURE 0x686e646cUL /* 'hndl' */
@@ -512,6 +514,9 @@ static void *thread_main(void *context)
 	DWORD exit_code;
 	BOOL free_now;
 
+#ifdef __WIIU__
+	wiiu_fpu_setup();
+#endif
 	pthread_mutex_lock(&handle->lock);
 	while (thread->suspended)
 		pthread_cond_wait(&handle->condition, &handle->lock);

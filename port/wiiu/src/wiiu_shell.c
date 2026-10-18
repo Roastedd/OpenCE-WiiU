@@ -212,6 +212,11 @@ void platform_request_quit(void)
 	wiiu_request_exit();
 }
 
+void wiiu_fpu_setup(void)
+{
+	__asm__ volatile("mtfsb0 29");
+}
+
 void wiiu_tag_thread(const char *name)
 {
 	wiiu_shell_blackbox_tag(&shell_box, name, OSGetCurrentThread());
@@ -452,6 +457,7 @@ static int game_entry(int argc, const char **argv)
 {
 	(void)argc;
 	(void)argv;
+	wiiu_fpu_setup();
 	setup_thread("game");
 	wiiu_phase("the game's main");
 	wiiu_log("The game starts on core %u", (unsigned)OSGetCoreId());

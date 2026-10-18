@@ -4,8 +4,8 @@ WIIU_CRASH.H
 A bad memory access, a jump to nowhere or an illegal instruction ends a Wii U app with the last picture on the screen and
 no word of why. The system calls a function of ours first, on the thread that faulted; this one writes where it was (the
 program counter, the return address, the stack, the registers, the thread's name) and what the shell last knew (the phase,
-the last heartbeat) to a file on the card, by hand: no printf, no allocation, no lock. Then the system carries on as it would
-have.
+the last heartbeat) into memory, by hand: no printf, no allocation, no lock, and no input or output; a thread of its own on another
+core writes it to the file while the faulting thread waits, a few seconds at most. Then the system carries on as it would have.
 */
 
 #ifndef HALO_WIIU_CRASH_H
