@@ -1,6 +1,7 @@
 #include "crash.h"
 
 #include "card.h"
+#include "../../../src/wiiu_align_fixup.h"
 
 #include <coreinit/context.h>
 #include <coreinit/core.h>
@@ -21,7 +22,9 @@ static volatile size_t note_size;
 static volatile int state;
 static OSThread writer_thread;
 static uint8_t writer_stack[WRITER_STACK_BYTES] __attribute__((aligned(16)));
-static volatile int recover_alignment;
+static volatile int recover_alignment; /* 0 off, 1 skip the instruction, 2 make the access (wiiu_align_fixup) */
+static volatile uint32_t alignment_emulated;
+static volatile uint32_t alignment_refused;
 static volatile uint32_t alignment_traps;
 static volatile uint32_t alignment_pc;
 static volatile uint32_t alignment_address;
@@ -135,10 +138,17 @@ static BOOL handle(OSExceptionType type, OSContext *context)
 		return TRUE;
 	if (type == OS_EXCEPTION_TYPE_ALIGNMENT && recover_alignment)
 	{
-		/* counted, the instruction skipped, the thread resumed: no I/O, nothing that waits */
+		/* counted, the access made or the instruction skipped, the thread resumed: no I/O, nothing that waits */
 		alignment_pc = context->srr0;
 		alignment_address = context->dar;
 		alignment_traps++;
+		if (recover_alignment == 2)
+		{
+			if (wiiu_align_fixup(*(const uint32_t *)context->srr0, context->dar, context->gpr, context->fpr))
+				alignment_emulated++;
+			else
+				alignment_refused++;
+		}
 		context->srr0 += 4;
 		return TRUE;
 	}
@@ -197,6 +207,12 @@ void crash_set_stage(const char *stage)
 void crash_recover_alignment(int on)
 {
 	recover_alignment = on;
+}
+
+uint32_t crash_alignment_emulated(uint32_t *refused)
+{
+	*refused = alignment_refused;
+	return alignment_emulated;
 }
 
 uint32_t crash_alignment_traps(void)

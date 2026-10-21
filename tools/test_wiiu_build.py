@@ -149,7 +149,7 @@ def test_the_games_main_is_the_shells_to_run(monkeypatch):
     assert "-Dmain=halo_game_main" in compile_flags(text, "source/shell/shell_xbox.c").split()
     assert "-Dmain=halo_game_main" not in compile_flags(text, "source/main/main.c")
     for name in ("wiiu_main", "wiiu_shell", "wiiu_shell_log", "wiiu_shell_watch", "wiiu_shell_blackbox", "wiiu_crash", "wiiu_atomic",
-                 "wiiu_libc", "wiiu_tls"):
+                 "wiiu_libc", "wiiu_tls", "wiiu_align_fixup"):
         flags = compile_flags(text, f"port/wiiu/src/{name}.c").split()
         assert "-fshort-wchar" not in flags and "-femulated-tls" in flags, name
     # the Xbox kernel's Win32 shims are compiled, not left to stubs

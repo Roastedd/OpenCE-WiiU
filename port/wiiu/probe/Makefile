@@ -45,7 +45,9 @@ Q          := $(if $(V),,@)
 
 SOURCES    := $(wildcard src/*.c) $(wildcard src/wiiu/*.c)
 MUSL_SOURCES := $(wildcard $(MUSL)/src/*.c)
-OFILES     := $(SOURCES:%.c=$(BUILD)/%.o) $(patsubst $(MUSL)/src/%.c,$(BUILD)/musl/%.o,$(MUSL_SOURCES))
+# units shared with the port (the shell's), built here with the probe's flags
+SHARED     := $(OPENCE)/port/wiiu/src/wiiu_align_fixup.c
+OFILES     := $(SOURCES:%.c=$(BUILD)/%.o) $(patsubst $(OPENCE)/port/wiiu/src/%.c,$(BUILD)/shared/%.o,$(SHARED)) $(patsubst $(MUSL)/src/%.c,$(BUILD)/musl/%.o,$(MUSL_SOURCES))
 
 WARNINGS   := -Wall -Wextra -Werror -Wno-unused-parameter
 CFLAGS     := -std=gnu11 -O2 -g -ffunction-sections -fdata-sections $(HALO_WIIU_CODEGEN) $(EXTRA) $(WARNINGS) \
@@ -62,6 +64,11 @@ all: $(BUILD)/$(TARGET).rpx $(BUILD)/$(TARGET).wuhb
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	@echo "  CC   $<"
+	$(Q)$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD)/shared/%.o: $(OPENCE)/port/wiiu/src/%.c
+	@mkdir -p $(dir $@)
+	@echo "  CC   $(notdir $<) (shared)"
 	$(Q)$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 $(BUILD)/musl/%.o: $(MUSL)/src/%.c
@@ -82,11 +89,11 @@ $(OFILES) $(BUILD)/$(TARGET).wuhb: Makefile $(OPENCE)/port/wiiu/abi.mk
 analyze:
 	@mkdir -p build
 	@rm -f build/analyze.log
-	@for f in $(SOURCES); do \
+	@for f in $(SOURCES) $(SHARED); do \
 		wiiu-clang --analyze -Xanalyzer -analyzer-output=text $(filter-out -meabi,$(CFLAGS)) $$f -o /dev/null 2>> build/analyze.log || exit 1; \
 	done
 	@if grep -q 'warning:' build/analyze.log; then cat build/analyze.log; echo "analyzer findings"; exit 1; fi
-	@echo "analyzer: $(words $(SOURCES)) files, no findings"
+	@echo "analyzer: $(words $(SOURCES) $(SHARED)) files, no findings"
 
 inspect: $(BUILD)/$(TARGET).rpx
 	readrpl -S $< | head -40

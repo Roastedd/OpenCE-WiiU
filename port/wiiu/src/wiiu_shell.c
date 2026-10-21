@@ -338,9 +338,24 @@ static size_t memory_line(char *out, size_t capacity)
 
 /* ---------- the monitor threads */
 
+/* tells the log of each place in the game an alignment exception has been answered at, the first time (the heartbeat has the count) */
+static void tell_new_fixups(uint32_t *told)
+{
+	uint32_t count;
+	uint32_t pc;
+
+	while ((pc = wiiu_crash_fixup_place(*told, &count)) != 0)
+	{
+		wiiu_log("A misaligned float or double was made at pc %08X (the first of %u there; the %u-th place): fix the code or leave it to the handler",
+			(unsigned)pc, (unsigned)count, (unsigned)(*told + 1));
+		(*told)++;
+	}
+}
+
 static void *watchdog_main(void *unused)
 {
 	uint32_t frames_before = 0;
+	uint32_t fixup_places_told = 0;
 	uint32_t last_beat_ms = shell_ms();
 
 	(void)unused;
@@ -353,6 +368,7 @@ static void *watchdog_main(void *unused)
 
 		sleep_ms(50);
 		now = shell_ms();
+		tell_new_fixups(&fixup_places_told);
 		result = wiiu_shell_watch_poll(&shell_watch, now, &stalled);
 		if (result == WIIU_WATCH_END)
 		{
@@ -377,7 +393,8 @@ static void *watchdog_main(void *unused)
 			wiiu_shell_log_counts(&shell_log, &pending, &queued, &written, &dropped);
 			wiiu_shell_watch_describe(&shell_watch, now, frames_before, now - last_beat_ms, text, sizeof(text));
 			snprintf(last_beat, sizeof(last_beat), "%s", text);
-			wiiu_log("beat: %s; %u log lines waiting", text, (unsigned)pending);
+			wiiu_log("beat: %s; %u log lines waiting; %u misaligned accesses made by the handler", text, (unsigned)pending,
+				(unsigned)wiiu_crash_fixups());
 			frames_before = shell_watch.frames;
 			last_beat_ms = now;
 		}

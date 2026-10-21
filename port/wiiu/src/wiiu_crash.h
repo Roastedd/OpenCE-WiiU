@@ -11,8 +11,16 @@ core writes it to the file while the faulting thread waits, a few seconds at mos
 #ifndef HALO_WIIU_CRASH_H
 #define HALO_WIIU_CRASH_H
 
+#include <stdint.h>
+
 /* path: the file to write. phase: the shell's current phase (a string literal, or NULL). beat: the last heartbeat line, in a
 buffer that stays where it is (or NULL). Both are read from the fault handler. */
 void wiiu_crash_install(const char *path, const char *const *phase, const char *beat);
+
+/* A float or double at an address that is not a multiple of 4 raises an alignment exception on this core; the handler makes the
+access itself (wiiu_align_fixup.c) and the game goes on. How many times, and the program counters it happened at (look them up
+in the link map), for finding the places in the game to fix: place index 0, 1, ... gives the pc (0 past the last) and its count. */
+uint32_t wiiu_crash_fixups(void);
+uint32_t wiiu_crash_fixup_place(uint32_t index, uint32_t *count);
 
 #endif

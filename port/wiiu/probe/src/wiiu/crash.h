@@ -26,8 +26,11 @@ void crash_install(void);
 /* a string literal: what the main thread is doing, for the note */
 void crash_set_stage(const char *stage);
 
-/* While on, an alignment exception is counted and skipped instead of reported. */
-void crash_recover_alignment(int on);
+/* While on, an alignment exception is counted and the thread resumed instead of reporting a crash: 1 skips the instruction, 2
+makes the access (src/wiiu_align_fixup.c) and then skips it. 0 is off. */
+void crash_recover_alignment(int mode);
+/* how many accesses the handler made, and how many instructions it could not (mode 2) */
+uint32_t crash_alignment_emulated(uint32_t *refused);
 /* how many alignment exceptions the handler has taken, and where the last one was (its pc, and the address) */
 uint32_t crash_alignment_traps(void);
 void crash_alignment_last(uint32_t *pc, uint32_t *address);

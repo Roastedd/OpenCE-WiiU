@@ -1,5 +1,7 @@
 #include "wiiu_crash.h"
 
+#include "wiiu_align_fixup.h"
+
 #include <coreinit/context.h>
 #include <coreinit/core.h>
 #include <coreinit/exception.h>
@@ -20,6 +22,15 @@ static volatile size_t note_size;
 static volatile int state;
 static OSThread writer_thread;
 static uint8_t writer_stack[16 * 1024] __attribute__((aligned(16)));
+/* the alignment exceptions answered by making the access (wiiu_align_fixup.c): how many, and where (the program counters) */
+#define FIXUP_PLACES 64
+static struct
+{
+	volatile uint32_t pc;
+	volatile uint32_t count;
+} fixup_places[FIXUP_PLACES];
+static volatile uint32_t fixup_total;
+static volatile uint32_t fixup_place_count;
 /* how long the faulting thread waits for its note to be written */
 #define WAIT_MILLISECONDS 3000
 
@@ -163,10 +174,62 @@ static void fill_note(OSExceptionType type, OSContext *context)
 	note_size = (size_t)(p - note);
 }
 
+static void record_fixup(uint32_t pc)
+{
+	uint32_t i;
+
+	__sync_fetch_and_add(&fixup_total, 1);
+	for (;;)
+	{
+		const uint32_t known = fixup_place_count;
+
+		for (i = 0; i < known && i < FIXUP_PLACES; i++)
+		{
+			if (fixup_places[i].pc == pc)
+			{
+				__sync_fetch_and_add(&fixup_places[i].count, 1);
+				return;
+			}
+		}
+		if (known >= FIXUP_PLACES)
+			return;
+		/* a place nobody has recorded: claim the slot after the known ones; if another core claimed it first, look again */
+		if (__sync_bool_compare_and_swap(&fixup_place_count, known, known + 1))
+		{
+			fixup_places[known].count = 1;
+			fixup_places[known].pc = pc;
+			return;
+		}
+	}
+}
+
+uint32_t wiiu_crash_fixups(void)
+{
+	return fixup_total;
+}
+
+uint32_t wiiu_crash_fixup_place(uint32_t index, uint32_t *count)
+{
+	if (index >= FIXUP_PLACES || index >= fixup_place_count || !fixup_places[index].pc)
+		return 0;
+	*count = fixup_places[index].count;
+	return fixup_places[index].pc;
+}
+
 static BOOL handle(OSExceptionType type, OSContext *context)
 {
 	if (previous[type] && previous[type](context))
 		return TRUE;
+	/* A float or double at an address that is not a multiple of 4 raises an alignment exception on this core (the probe measured it);
+	the access is made here, the instruction is skipped and the thread goes on, for about a microsecond. No input or output, nothing
+	that waits. */
+	if (type == OS_EXCEPTION_TYPE_ALIGNMENT &&
+		wiiu_align_fixup(*(const uint32_t *)context->srr0, context->dar, context->gpr, context->fpr))
+	{
+		record_fixup(context->srr0);
+		context->srr0 += 4;
+		return TRUE;
+	}
 	/* one note is enough: a second fault in the handler or on another core must not overwrite it */
 	if (__sync_bool_compare_and_swap(&state, 0, 1))
 	{

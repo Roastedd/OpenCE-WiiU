@@ -35,7 +35,7 @@ split an unaligned access into bytes, and nothing would be measured).
 #define ITERATIONS 20000
 #define PAGE 4096
 #define LINE 32
-#define CASE_COUNT 24
+#define CASE_COUNT 32
 #define STACK_BYTES (12 * 1024)
 #define PATIENCE_MS 5000
 
@@ -46,6 +46,7 @@ typedef enum access_kind
 	LOAD_FLOAT,
 	LOAD_DOUBLE,
 	STORE_WORD,
+	STORE_FLOAT,
 	STORE_DOUBLE
 } access_kind;
 
@@ -72,12 +73,15 @@ static const access_case cases[] = {
 	{"lfd aligned", LOAD_DOUBLE, 0},
 	{"lfd at +4", LOAD_DOUBLE, 4},
 	{"stfd at +4", STORE_DOUBLE, 4},
+	{"stfs aligned", STORE_FLOAT, 0},
 	{"lfs at +2", LOAD_FLOAT, 2},
 	{"lfs across a 32-byte line", LOAD_FLOAT, LINE - 2},
 	{"lfd at +1", LOAD_DOUBLE, 1},
 	{"lfd across a 32-byte line", LOAD_DOUBLE, LINE - 4},
 	{"lfd across a 4 KiB page", LOAD_DOUBLE, PAGE - 4},
 	{"stfd at +1", STORE_DOUBLE, 1},
+	{"stfs at +2", STORE_FLOAT, 2},
+	{"stfs at +1", STORE_FLOAT, 1},
 	{"lfs at +1", LOAD_FLOAT, 1},
 };
 
@@ -93,6 +97,8 @@ typedef struct case_job
 	uint8_t *address;
 	uint64_t (*now)(void);
 	uint64_t elapsed;
+	int verify;   /* check the value of one access before timing the loop */
+	int verified; /* and it was right */
 } case_job;
 
 static OSThread threads[CASE_COUNT];
@@ -129,6 +135,10 @@ static void run_loop(access_kind kind, uint8_t *address, uint64_t (*now)(void), 
 		for (i = 0; i < ITERATIONS; i++)
 			__asm__ volatile("stw %0, 0(%1)" : : "r"(integer), "b"(address) : "memory");
 		break;
+	case STORE_FLOAT:
+		for (i = 0; i < ITERATIONS; i++)
+			__asm__ volatile("stfs %0, 0(%1)" : : "f"(real), "b"(address) : "memory");
+		break;
 	case STORE_DOUBLE:
 		for (i = 0; i < ITERATIONS; i++)
 			__asm__ volatile("stfd %0, 0(%1)" : : "f"(real), "b"(address) : "memory");
@@ -141,11 +151,49 @@ static void run_loop(access_kind kind, uint8_t *address, uint64_t (*now)(void), 
 	(void)single;
 }
 
+/* One access of the kind, at the address, with a value that is known, and whether the right value came or went: the check that the
+emulation (crash.c, wiiu_align_fixup.c) did what the instruction means. Big-endian bytes written and read as integers, which work
+at every alignment. */
+static int verify_once(access_kind kind, uint8_t *address)
+{
+	static const uint8_t one_and_a_half[4] = {0x3F, 0xC0, 0x00, 0x00};
+	static const uint8_t minus_two_and_a_quarter[8] = {0xC0, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+	static const uint8_t three_and_a_half_single[4] = {0x40, 0x60, 0x00, 0x00};
+	static const uint8_t three_and_a_half_double[8] = {0x40, 0x0C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+	double value = 0.0;
+
+	switch (kind)
+	{
+	case LOAD_FLOAT:
+		memcpy(address, one_and_a_half, 4);
+		__asm__ volatile("lfs %0, 0(%1)" : "=f"(value) : "b"(address) : "memory");
+		return value == 1.5;
+	case LOAD_DOUBLE:
+		memcpy(address, minus_two_and_a_quarter, 8);
+		__asm__ volatile("lfd %0, 0(%1)" : "=f"(value) : "b"(address) : "memory");
+		return value == -2.25;
+	case STORE_FLOAT:
+		memset(address - 1, 0xEE, 6);
+		value = 3.5;
+		__asm__ volatile("stfs %0, 0(%1)" : : "f"(value), "b"(address) : "memory");
+		return !memcmp(address, three_and_a_half_single, 4) && address[-1] == 0xEE && address[4] == 0xEE;
+	case STORE_DOUBLE:
+		memset(address - 1, 0xEE, 10);
+		value = 3.5;
+		__asm__ volatile("stfd %0, 0(%1)" : : "f"(value), "b"(address) : "memory");
+		return !memcmp(address, three_and_a_half_double, 8) && address[-1] == 0xEE && address[8] == 0xEE;
+	default:
+		return 1;
+	}
+}
+
 static int case_worker(int argc, const char **argv)
 {
 	case_job *work = (case_job *)(uintptr_t)argv;
 
 	(void)argc;
+	if (work->verify)
+		work->verified = verify_once(work->kind, work->address);
 	run_loop(work->kind, work->address, work->now, &work->elapsed);
 	work->done = 1;
 	return 0;
@@ -170,7 +218,7 @@ static int listed(const char *list, const char *name)
 }
 
 /* Starts the case on a core and waits. Returns 1 if it came back, 0 if it did not (that core is lost). */
-static int run_on_core(stage_context *context, size_t index, unsigned core, uint8_t *buffer)
+static int run_on_core(stage_context *context, size_t index, unsigned core, uint8_t *buffer, int verify)
 {
 	uint32_t waited = 0;
 
@@ -179,6 +227,8 @@ static int run_on_core(stage_context *context, size_t index, unsigned core, uint
 	job.address = buffer + cases[index].offset;
 	job.now = context->now_ns;
 	job.elapsed = 0;
+	job.verify = verify;
+	job.verified = 0;
 	if (!OSCreateThread(&threads[index], case_worker, 0, (char *)&job, stacks[index] + STACK_BYTES, STACK_BYTES, 16,
 			(OSThreadAttributes)((OS_THREAD_ATTRIB_AFFINITY_CPU0 << core) | OS_THREAD_ATTRIB_DETACHED)))
 		return -1;
@@ -197,21 +247,25 @@ void stage_unaligned(stage_context *context)
 	report *r = context->report;
 	static char fatal[2048];
 	char progress[128];
+	uint8_t *raw;
 	uint8_t *buffer;
 	size_t i;
 	int usable[3] = {1, 0, 1}; /* the cores the cases may use: not core 1, the main thread's */
+	int trapped[CASE_COUNT] = {0};
 	double baseline = 0.0;
 
 	if (context->keep_going && !context->keep_going())
 		return;
 	report_section(r, "unaligned");
-	buffer = memalign(PAGE, 2 * PAGE);
-	if (!buffer)
+	/* two pages to try on, page aligned, with a page of guard either side (the checks write a byte around what they try) */
+	raw = memalign(PAGE, 4 * PAGE);
+	if (!raw)
 	{
-		report_check(r, 0, "unaligned buffer", "2 pages not available");
+		report_check(r, 0, "unaligned buffer", "4 pages not available");
 		return;
 	}
-	memset(buffer, 0, 2 * PAGE);
+	memset(raw, 0, 4 * PAGE);
+	buffer = raw + PAGE;
 
 	/* what the earlier runs knew: the file of cases that froze the console, and the case an earlier run was in when it did */
 	if (card_read(PROBE_UNALIGNED_FATAL_FILE, fatal, sizeof(fatal)) < 0)
@@ -260,7 +314,7 @@ void stage_unaligned(stage_context *context)
 		if (context->flush)
 			context->flush();
 		traps_before = crash_alignment_traps();
-		came_back = run_on_core(context, i, core, buffer);
+		came_back = run_on_core(context, i, core, buffer, 0);
 		if (came_back < 0)
 		{
 			report_check(r, 0, c->name, "no thread could be made to try it");
@@ -286,6 +340,7 @@ void stage_unaligned(stage_context *context)
 			{
 				uint32_t pc, address;
 
+				trapped[i] = 1;
 				crash_alignment_last(&pc, &address);
 				report_check(r, 0, c->name, "%u alignment exceptions, %.2f us each, pc %08X, address %08X: the handler skipped the instruction and the thread went on",
 					(unsigned)traps, per_access / 1000.0, (unsigned)pc, (unsigned)address);
@@ -300,7 +355,45 @@ void stage_unaligned(stage_context *context)
 		if (context->keep_going && !context->keep_going())
 			break;
 	}
+
+	/* the cases that raised the exception again, with the handler making the access (src/wiiu_align_fixup.c) instead of skipping it:
+	the value must be the right one, and what it costs is what a stray misaligned float in the game would cost */
+	report_note(r, "now the exceptions are answered by making the access in the handler, and the value checked");
+	crash_recover_alignment(2);
+	for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+	{
+		const access_case *c = &cases[i];
+		unsigned core;
+		uint32_t traps_before, emulated_before, refused_before, emulated, refused;
+		int came_back;
+
+		if (!trapped[i])
+			continue;
+		for (core = 0; core < 3 && !usable[core]; core++)
+			;
+		if (core == 3)
+			break;
+		report_value(r, "trying", "%s, emulated, on core %u", c->name, core);
+		card_write(PROBE_UNALIGNED_PROGRESS_FILE, c->name, strlen(c->name), 0);
+		if (context->flush)
+			context->flush();
+		traps_before = crash_alignment_traps();
+		emulated_before = crash_alignment_emulated(&refused_before);
+		came_back = run_on_core(context, i, core, buffer, 1);
+		if (came_back != 1)
+		{
+			report_check(r, 0, c->name, "emulated: the thread on core %u did not come back", core);
+			usable[core] = 0;
+			continue;
+		}
+		emulated = crash_alignment_emulated(&refused) - emulated_before;
+		refused -= refused_before;
+		report_check(r, job.verified && refused == 0 && emulated == crash_alignment_traps() - traps_before,
+			c->name, "emulated: the value is %s; %u accesses made, %u refused; %.2f us each", job.verified ? "right" : "WRONG",
+			(unsigned)emulated, (unsigned)refused, (double)job.elapsed / ITERATIONS / 1000.0);
+		card_remove(PROBE_UNALIGNED_PROGRESS_FILE);
+	}
 	crash_recover_alignment(0);
 	card_remove(PROBE_UNALIGNED_PROGRESS_FILE);
-	free(buffer);
+	free(raw);
 }
