@@ -61,8 +61,8 @@ SOURCES    := $(wildcard src/*.c) $(filter-out src/wiiu/stage_glsl.c,$(wildcard 
 else
 SOURCES    := $(wildcard src/*.c) $(wildcard src/wiiu/*.c)
 endif
-SHARED     := $(PROBE)/src/report.c
-OFILES     := $(SOURCES:%.c=$(BUILD)/%.o) $(BUILD)/probe/report.o
+SHARED     := $(PROBE)/src/report.c $(OPENCE)/port/wiiu/src/wiiu_align_fixup.c
+OFILES     := $(SOURCES:%.c=$(BUILD)/%.o) $(BUILD)/probe/report.o $(BUILD)/shared/wiiu_align_fixup.o
 
 WARNINGS   := -Wall -Wextra -Werror -Wno-unused-parameter
 INCLUDES   := -I$(PROBE)/src -I$(CAFEGLSL)/include -I$(WUT_ROOT)/include
@@ -83,9 +83,14 @@ $(BUILD)/%.o: %.c
 	@echo "  CC   $<"
 	$(Q)$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
-$(BUILD)/probe/report.o: $(SHARED)
+$(BUILD)/probe/report.o: $(PROBE)/src/report.c
 	@mkdir -p $(dir $@)
 	@echo "  CC   $< (shared with the first probe)"
+	$(Q)$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD)/shared/wiiu_align_fixup.o: $(OPENCE)/port/wiiu/src/wiiu_align_fixup.c
+	@mkdir -p $(dir $@)
+	@echo "  CC   $< (shared with the shell)"
 	$(Q)$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 $(BUILD)/$(TARGET).elf: $(OFILES)

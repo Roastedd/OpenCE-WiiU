@@ -119,6 +119,9 @@ static void compile_job(void)
 	static char log[LOG_BYTES];
 	unsigned i;
 
+	/* an alignment exception (the 750 does not do a misaligned float access) is answered by making the access, and counted: the
+	compiler is someone else's code, and if it has any this says so instead of ending the run */
+	crash_recover_alignment(2);
 	crash_set_stage("glsl: InitGLSLCompiler");
 	heap_before = mem2_free();
 	InitGLSLCompiler();
@@ -157,6 +160,14 @@ static void compile_job(void)
 		s->flush();
 	}
 	crash_set_stage("glsl: compiled");
+	{
+		uint32_t refused;
+		uint32_t made = crash_alignment_emulated(&refused);
+
+		report_value(r, "alignment exceptions in the compiler", "%u taken, %u accesses made, %u refused", (unsigned)crash_alignment_traps(), (unsigned)made,
+			(unsigned)refused);
+	}
+	crash_recover_alignment(0);
 }
 
 static void destroy_job(void)

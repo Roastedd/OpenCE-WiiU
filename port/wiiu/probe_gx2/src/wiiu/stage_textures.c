@@ -82,6 +82,131 @@ static void capture_samples(const gx_session *s, uint8_t observed[BC_EXPLAIN_SAM
 	}
 }
 
+/* The same upload as it is, copied by the GPU (GX2CopySurface) into a surface of a tiled mode, drawn and compared: if the linear
+surface does not draw right, a compressed texture may need to be tiled. */
+static void try_tiled(gx_session *s, bc_format format, const variant *linear, GX2TileMode mode, const char *mode_name)
+{
+	report *r = s->report;
+	variant tiled;
+	GX2Surface *d = &tiled.texture.texture.surface;
+
+	memset(&tiled, 0, sizeof(tiled));
+	tiled.texture.texture = linear->texture.texture;
+	d->tileMode = mode;
+	d->image = NULL;
+	d->mipmaps = NULL;
+	d->imageSize = 0;
+	d->pitch = 0;
+	d->alignment = 0;
+	GX2CalcSurfaceSizeAndAlignment(d);
+	d->image = gx_alloc(d->imageSize, d->alignment ? d->alignment : 256);
+	if (!d->image)
+	{
+		report_value(r, "texture tiled", "%s %s: no memory for %u bytes", bc_format_name(format), mode_name, (unsigned)d->imageSize);
+		return;
+	}
+	GX2InitTextureRegs(&tiled.texture.texture);
+	GX2CopySurface((GX2Surface *)&linear->texture.texture.surface, 0, 0, d, 0, 0);
+	GX2DrawDone();
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, d->image, d->imageSize);
+	draw_and_compare(s, &tiled, format);
+	report_value(r, "texture tiled", "%s as it is, copied to %s (image %u bytes, pitch %u): %u of %u pixels differ by more than 6 (largest difference %u)%s",
+		bc_format_name(format), mode_name, (unsigned)d->imageSize, (unsigned)d->pitch, tiled.compare.mismatches, tiled.compare.pixels,
+		tiled.compare.max_error, tiled.right ? " -> DRAWS RIGHT" : "");
+	if (tiled.compare.mismatches)
+		report_value(r, "texture tiled first wrong", "%s %s: pixel (%u,%u) is %u,%u,%u,%u; expected %u,%u,%u,%u", bc_format_name(format), mode_name,
+			tiled.compare.first_x, tiled.compare.first_y, tiled.compare.first_found[0], tiled.compare.first_found[1], tiled.compare.first_found[2],
+			tiled.compare.first_found[3], tiled.compare.first_expected[0], tiled.compare.first_expected[1], tiled.compare.first_expected[2],
+			tiled.compare.first_expected[3]);
+	gx_free(d->image);
+}
+
+/* What does the GPU make of one block that is a single color? BC1 blocks of red (color0 0xF800) with color1 blue (0x001F) and every
+index 0, uploaded as a DDS file has them and with the 16 and 32 bit halves swapped, drawn linear and copied to tiled surfaces. Four pixels
+of what is drawn say which byte order the GPU reads a color in, and whether it reads the surface at all. */
+static void solid_samples(gx_session *s, const char *what)
+{
+	static const unsigned at[4][2] = { { 0, 0 }, { 13, 2 }, { 5, 9 }, { 63, 63 } };
+	char text[160] = "";
+	unsigned i;
+
+	for (i = 0; i < 4; i++)
+	{
+		uint8_t px[4];
+		size_t used = strlen(text);
+
+		session_pixel(s, at[i][0], at[i][1], px);
+		snprintf(text + used, sizeof(text) - used, "%s(%u,%u)=%u,%u,%u,%u", i ? " " : "", at[i][0], at[i][1], px[0], px[1], px[2], px[3]);
+	}
+	report_value(s->report, "texture solid", "%s: %s", what, text);
+}
+
+static void test_solid(gx_session *s)
+{
+	static const uint8_t block_as_dds[8] = { 0x00, 0xF8, 0x1F, 0x00, 0x00, 0x00, 0x00, 0x00 };
+	static const char *const names[3] = { "as it is (a DDS file's bytes)", "16-bit halves swapped", "32-bit words swapped" };
+	static uint8_t upload[BC_BLOCKS * BC_BLOCKS * 8];
+	char error[160], what[96];
+	unsigned order, b, k;
+	variant v;
+
+	for (order = 0; order < 3; order++)
+	{
+		uint8_t block[8];
+
+		for (k = 0; k < 8; k++)
+			block[k] = order == 0 ? block_as_dds[k] : order == 1 ? block_as_dds[k ^ 1] : block_as_dds[k ^ 3];
+		for (b = 0; b < BC_BLOCKS * BC_BLOCKS; b++)
+			memcpy(upload + b * 8, block, 8);
+		memset(&v, 0, sizeof(v));
+		if (!make_variant(&v, BC_FORMAT_BC1, upload, error, sizeof(error)))
+		{
+			report_value(s->report, "texture solid", "BC1 %s: %s", names[order], error);
+			continue;
+		}
+		scene_begin(s);
+		draw_texture_fill(s, &v.texture.texture, (float)SCENE_SIZE, (float)SCENE_SIZE);
+		scene_end(s);
+		snprintf(what, sizeof(what), "BC1 red/blue block, linear, %s", names[order]);
+		solid_samples(s, what);
+		if (order == 0)
+		{
+			GX2TileMode modes[2] = { GX2_TILE_MODE_TILED_1D_THIN1, GX2_TILE_MODE_TILED_2D_THIN1 };
+			const char *mode_names[2] = { "1D_TILED_THIN1", "2D_TILED_THIN1" };
+
+			for (k = 0; k < 2; k++)
+			{
+				variant tiled;
+				GX2Surface *d = &tiled.texture.texture.surface;
+
+				memset(&tiled, 0, sizeof(tiled));
+				tiled.texture.texture = v.texture.texture;
+				d->tileMode = modes[k];
+				d->image = NULL;
+				d->mipmaps = NULL;
+				d->imageSize = 0;
+				d->pitch = 0;
+				d->alignment = 0;
+				GX2CalcSurfaceSizeAndAlignment(d);
+				d->image = gx_alloc(d->imageSize, d->alignment ? d->alignment : 256);
+				if (!d->image)
+					continue;
+				GX2InitTextureRegs(&tiled.texture.texture);
+				GX2CopySurface(&v.texture.texture.surface, 0, 0, d, 0, 0);
+				GX2DrawDone();
+				GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, d->image, d->imageSize);
+				scene_begin(s);
+				draw_texture_fill(s, &tiled.texture.texture, (float)SCENE_SIZE, (float)SCENE_SIZE);
+				scene_end(s);
+				snprintf(what, sizeof(what), "BC1 red/blue block, copied to %s", mode_names[k]);
+				solid_samples(s, what);
+				gx_free(d->image);
+			}
+		}
+		gx_texture_free(&v.texture);
+	}
+}
+
 static void test_format(gx_session *s, bc_format format, page *p, unsigned row)
 {
 	report *r = s->report;
@@ -124,6 +249,11 @@ static void test_format(gx_session *s, bc_format format, page *p, unsigned row)
 			capture_samples(s, observed);
 		report_value(r, "texture", "%s upload %s: %u of %u pixels differ by more than 6 (largest difference %u)%s", bc_format_name(format), v->name,
 			v->compare.mismatches, v->compare.pixels, v->compare.max_error, v->right ? " -> DRAWS RIGHT" : "");
+		if (v->compare.mismatches)
+			report_value(r, "texture first wrong", "%s upload %s: pixel (%u,%u) is %u,%u,%u,%u; expected %u,%u,%u,%u", bc_format_name(format), v->name,
+				v->compare.first_x, v->compare.first_y, v->compare.first_found[0], v->compare.first_found[1], v->compare.first_found[2],
+				v->compare.first_found[3], v->compare.first_expected[0], v->compare.first_expected[1], v->compare.first_expected[2],
+				v->compare.first_expected[3]);
 		if (v->right)
 		{
 			size_t used = strlen(right_names);
@@ -145,6 +275,12 @@ static void test_format(gx_session *s, bc_format format, page *p, unsigned row)
 		}
 		if (!s->keep_going())
 			return;
+	}
+
+	if (variants[format][BC_ORDER_AS_IS].built)
+	{
+		try_tiled(s, format, &variants[format][BC_ORDER_AS_IS], GX2_TILE_MODE_TILED_1D_THIN1, "1D_TILED_THIN1");
+		try_tiled(s, format, &variants[format][BC_ORDER_AS_IS], GX2_TILE_MODE_TILED_2D_THIN1, "2D_TILED_THIN1");
 	}
 
 	/* what rearrangement of the bytes explains the drawing of the upload as it is? */
@@ -221,6 +357,8 @@ void stage_textures(gx_session *s)
 		page_wrap(p, 1, 2, 100, STYLE_NORMAL, "A 64x64 pattern of 16x16 blocks uploaded with each block's bytes in each order, drawn 1:1. First tile: what it should look like. Green frame: the order that draws right.");
 		page_text(p, 1, 4, STYLE_DIM, "The label says how the Xbox's block was rearranged. Numbers: report [textures].");
 	}
+	if (s->keep_going())
+		test_solid(s);
 	for (f = 0; f < BC_FORMAT_COUNT && s->keep_going(); f++)
 		test_format(s, (bc_format)f, p, 5 + f * 10);
 }
