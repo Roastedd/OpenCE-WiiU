@@ -57,18 +57,23 @@ int gx_texture_create(gx_texture *t, unsigned width, unsigned height, GX2Surface
 	t->rows = compressed ? height / 4 : height;
 	if (compressed)
 	{
-		/* the pitch of a compressed surface is counted in texels (the first run on a console: rows of blocks 512 bytes apart, the size
-		of the padded image, drew block 0 right and the rest black; the GPU reads the rows (pitch / 4) blocks apart). The image is
-		larger than that, padded. */
-		unsigned a = (pitch / 4) * bytes_per_unit;
+		/* the pitch of a compressed surface is counted in texels (the Latte works in blocks of 4); if it turns out to count
+		blocks, the size says so. (On the console neither stride drew a linear BC texture right: the GPU needs these tiled, see
+		stage_textures.c.) */
+		unsigned a = (pitch / 4) * bytes_per_unit, b = pitch * bytes_per_unit;
 
-		if (a * t->rows > s->imageSize)
+		if (a * t->rows == s->imageSize)
+			t->row_bytes = a;
+		else if (b * t->rows == s->imageSize)
+			t->row_bytes = b;
+		else if (a * t->rows <= s->imageSize)
+			t->row_bytes = a;
+		else
 		{
-			snprintf(error, error_size, "compressed surface %ux%u: pitch %u, image size %u too small for %u rows of %u bytes", width, height, pitch,
-				(unsigned)s->imageSize, t->rows, a);
+			snprintf(error, error_size, "compressed surface %ux%u: pitch %u, image size %u fit neither rows of %u nor of %u bytes", width, height, pitch,
+				(unsigned)s->imageSize, a, b);
 			return 0;
 		}
-		t->row_bytes = a;
 	}
 	else
 	{

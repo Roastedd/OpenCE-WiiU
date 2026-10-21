@@ -152,6 +152,18 @@ void GX2CalcSurfaceSizeAndAlignment(GX2Surface *s)
 	s->alignment = 256;
 }
 
+/* (a copy between surfaces of the same size and tile mode is a copy of the bytes; any other draws nothing, as on the console for a
+linear compressed surface into a tiled one) */
+void GX2CopySurface(const GX2Surface *src, uint32_t srcLevel, uint32_t srcSlice, GX2Surface *dst, uint32_t dstLevel, uint32_t dstSlice)
+{
+	(void)srcLevel;
+	(void)srcSlice;
+	(void)dstLevel;
+	(void)dstSlice;
+	if (src->image && dst->image && src->tileMode == dst->tileMode && src->imageSize == dst->imageSize)
+		memcpy(dst->image, src->image, src->imageSize);
+}
+
 void GX2InitTextureRegs(GX2Texture *texture)
 {
 	(void)texture;

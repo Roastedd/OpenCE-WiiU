@@ -21,6 +21,23 @@ void crash_set_stage(const char *stage)
 	(void)stage;
 }
 
+/* (the fault handler's alignment recovery, which the compiler stage turns on) */
+void crash_recover_alignment(int mode)
+{
+	(void)mode;
+}
+
+uint32_t crash_alignment_emulated(uint32_t *refused)
+{
+	*refused = 0;
+	return 0;
+}
+
+uint32_t crash_alignment_traps(void)
+{
+	return 0;
+}
+
 static uint64_t fake_now(void)
 {
 	static uint64_t now;
