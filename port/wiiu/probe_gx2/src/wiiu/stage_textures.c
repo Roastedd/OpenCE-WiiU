@@ -82,6 +82,172 @@ static void capture_samples(const gx_session *s, uint8_t observed[BC_EXPLAIN_SAM
 	}
 }
 
+/* The Latte's 1D tiled thin layout, made on the CPU: the blocks in tiles of 8 x 8, each tile in the order of its pixel bits (x0 y0 x1 x2 y1 y2 for
+8 byte blocks, x0 y0 x1 y1 x2 y2 for 16 byte ones, the AddrLib's non displayable order), the tiles in rows across the pitch. */
+/* order[i] says which pixel bit goes to bit i of the index: 0, 1, 2 are x0, x1, x2 and 3, 4, 5 are y0, y1, y2 */
+static const uint8_t order_64[6] = { 0, 3, 1, 2, 4, 5 };   /* x0 y0 x1 x2 y1 y2 */
+static const uint8_t order_128[6] = { 3, 0, 1, 2, 4, 5 };  /* y0 x0 x1 x2 y1 y2: found on the console by the search (the only one of 720) */
+
+static unsigned micro_index(unsigned x, unsigned y, const uint8_t *order)
+{
+	unsigned bits[6] = { x & 1u, (x >> 1) & 1u, (x >> 2) & 1u, y & 1u, (y >> 1) & 1u, (y >> 2) & 1u }, index = 0, i;
+
+	for (i = 0; i < 6; i++)
+		index |= bits[order[i]] << i;
+	return index;
+}
+
+static void tile_1d(const uint8_t *tight, unsigned blocks_across, unsigned blocks_down, unsigned block_bytes, unsigned pitch_blocks, const uint8_t *order,
+	uint8_t *out)
+{
+	unsigned x, y;
+
+	for (y = 0; y < blocks_down; y++)
+		for (x = 0; x < blocks_across; x++)
+		{
+			size_t tile = (size_t)(y / 8) * (pitch_blocks / 8) + (x / 8);
+			size_t at = (tile * 64 + micro_index(x % 8, y % 8, order)) * block_bytes;
+
+			memcpy(out + at, tight + ((size_t)y * blocks_across + x) * block_bytes, block_bytes);
+		}
+}
+
+/* a texture of the tiled mode, with the blocks of tight (rows of blocks, no padding) put in it by tile_1d */
+static int make_cpu_tiled(variant *v, bc_format format, const uint8_t *tight, const uint8_t *order, char *error, size_t error_size)
+{
+	GX2Surface *d = &v->texture.texture.surface;
+	unsigned bytes = (unsigned)bc_block_bytes(format);
+
+	memset(v, 0, sizeof(*v));
+	d->dim = GX2_SURFACE_DIM_TEXTURE_2D;
+	d->width = BC_TEXTURE_SIZE;
+	d->height = BC_TEXTURE_SIZE;
+	d->depth = 1;
+	d->mipLevels = 1;
+	d->format = format == BC_FORMAT_BC3 ? GX2_SURFACE_FORMAT_UNORM_BC3 : format == BC_FORMAT_BC2 ? GX2_SURFACE_FORMAT_UNORM_BC2 : GX2_SURFACE_FORMAT_UNORM_BC1;
+	d->aa = GX2_AA_MODE1X;
+	d->use = GX2_SURFACE_USE_TEXTURE;
+	d->tileMode = GX2_TILE_MODE_TILED_1D_THIN1;
+	v->texture.texture.viewNumMips = 1;
+	v->texture.texture.viewNumSlices = 1;
+	v->texture.texture.compMap = GX2_COMP_MAP(GX2_SQ_SEL_R, GX2_SQ_SEL_G, GX2_SQ_SEL_B, GX2_SQ_SEL_A);
+	GX2CalcSurfaceSizeAndAlignment(d);
+	if (d->imageSize < (size_t)BC_BLOCKS * BC_BLOCKS * bytes || d->pitch < BC_BLOCKS)
+	{
+		snprintf(error, error_size, "tiled surface: pitch %u, image %u bytes", (unsigned)d->pitch, (unsigned)d->imageSize);
+		return 0;
+	}
+	d->image = gx_alloc(d->imageSize, d->alignment ? d->alignment : 256);
+	if (!d->image)
+	{
+		snprintf(error, error_size, "no memory for %u bytes", (unsigned)d->imageSize);
+		return 0;
+	}
+	tile_1d(tight, BC_BLOCKS, BC_BLOCKS, bytes, d->pitch, order, (uint8_t *)d->image);
+	GX2InitTextureRegs(&v->texture.texture);
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, d->image, d->imageSize);
+	return 1;
+}
+
+/* All 720 orders of the pixel bits, for a format whose order is not known: the ones that draw the pattern right (there should be one). */
+static void search_order(gx_session *s, bc_format format, const uint8_t *tight)
+{
+	uint8_t order[6];
+	unsigned n, i, j, found = 0;
+	char error[160], text[160] = "";
+	variant v;
+
+	for (n = 0; n < 720 && s->keep_going(); n++)
+	{
+		unsigned code = n, left[6] = { 0, 1, 2, 3, 4, 5 }, count = 6;
+
+		for (i = 0; i < 6; i++)
+		{
+			unsigned pick = code % count;
+
+			code /= count;
+			order[i] = (uint8_t)left[pick];
+			for (j = pick; j + 1 < count; j++)
+				left[j] = left[j + 1];
+			count--;
+		}
+		if (!make_cpu_tiled(&v, format, tight, order, error, sizeof(error)))
+			return;
+		draw_and_compare(s, &v, format);
+		if (v.right && found < 4)
+		{
+			size_t used = strlen(text);
+
+			snprintf(text + used, sizeof(text) - used, " [%u %u %u %u %u %u]", order[0], order[1], order[2], order[3], order[4], order[5]);
+			found++;
+		}
+		gx_free(v.texture.texture.surface.image);
+	}
+	report_value(s->report, "texture order search", "%s: %u orders draw right (bit i of the index comes from 0 1 2 = x0 x1 x2, 3 4 5 = y0 y1 y2):%s", bc_format_name(format), found, text);
+}
+
+/* every format drawn from CPU-tiled data, compared with the pattern; BC1 also with a color for each block */
+static void test_cpu_tiled(gx_session *s)
+{
+	static uint8_t upload[BC_BLOCKS * BC_BLOCKS * 16];
+	char error[160], text[200];
+	unsigned f, bx, by, right;
+	variant v;
+
+	for (f = 0; f < BC_FORMAT_COUNT && s->keep_going(); f++)
+	{
+		bc_pattern_upload((bc_format)f, BC_ORDER_AS_IS, upload);
+		if (!make_cpu_tiled(&v, (bc_format)f, upload, f == BC_FORMAT_BC1 ? order_64 : order_128, error, sizeof(error)))
+		{
+			report_value(s->report, "texture cpu-tiled", "%s: %s", bc_format_name((bc_format)f), error);
+			continue;
+		}
+		draw_and_compare(s, &v, (bc_format)f);
+		report_value(s->report, "texture cpu-tiled", "%s 1D tiled by the CPU (pitch %u, image %u bytes): %u of %u pixels differ by more than 6 (largest %u)%s",
+			bc_format_name((bc_format)f), (unsigned)v.texture.texture.surface.pitch, (unsigned)v.texture.texture.surface.imageSize, v.compare.mismatches,
+			v.compare.pixels, v.compare.max_error, v.right ? " -> DRAWS RIGHT" : "");
+		if (v.compare.mismatches)
+			report_value(s->report, "texture cpu-tiled first wrong", "%s: pixel (%u,%u) is %u,%u,%u,%u; expected %u,%u,%u,%u", bc_format_name((bc_format)f),
+				v.compare.first_x, v.compare.first_y, v.compare.first_found[0], v.compare.first_found[1], v.compare.first_found[2], v.compare.first_found[3],
+				v.compare.first_expected[0], v.compare.first_expected[1], v.compare.first_expected[2], v.compare.first_expected[3]);
+		gx_free(v.texture.texture.surface.image);
+		if (f != BC_FORMAT_BC1 && !v.right)
+			search_order(s, (bc_format)f, upload);
+	}
+	/* a color for each BC1 block */
+	for (by = 0; by < BC_BLOCKS; by++)
+		for (bx = 0; bx < BC_BLOCKS; bx++)
+		{
+			unsigned color = (((bx * 2u + 1u) & 31u) << 11) | (((by * 4u + 1u) & 63u) << 5);
+			uint8_t *block = upload + (by * BC_BLOCKS + bx) * 8;
+
+			block[0] = (uint8_t)color;
+			block[1] = (uint8_t)(color >> 8);
+			block[2] = block[0];
+			block[3] = block[1];
+			memset(block + 4, 0, 4);
+		}
+	if (make_cpu_tiled(&v, BC_FORMAT_BC1, upload, order_64, error, sizeof(error)))
+	{
+		scene_begin(s);
+		draw_texture_fill(s, &v.texture.texture, (float)SCENE_SIZE, (float)SCENE_SIZE);
+		scene_end(s);
+		right = 0;
+		for (by = 0; by < BC_BLOCKS; by++)
+			for (bx = 0; bx < BC_BLOCKS; bx++)
+			{
+				uint8_t px[4];
+
+				session_pixel(s, bx * 4 + 1, by * 4 + 1, px);
+				if ((px[0] * 31u + 127u) / 255u / 2u == bx && (px[1] * 63u + 127u) / 255u / 4u == by)
+					right++;
+			}
+		snprintf(text, sizeof(text), "%u of %u blocks read as written", right, BC_BLOCKS * BC_BLOCKS);
+		report_value(s->report, "texture cpu-tiled blocks", "BC1, a color for each block: %s", text);
+		gx_free(v.texture.texture.surface.image);
+	}
+}
+
 /* The same upload as it is, copied by the GPU (GX2CopySurface) into a surface of a tiled mode, drawn and compared: if the linear
 surface does not draw right, a compressed texture may need to be tiled. */
 static void try_tiled(gx_session *s, bc_format format, const variant *linear, GX2TileMode mode, const char *mode_name)
@@ -205,6 +371,64 @@ static void test_solid(gx_session *s)
 		}
 		gx_texture_free(&v.texture);
 	}
+}
+
+/* Every BC1 block a flat color of its own (the block's x in red, y in green), drawn 1:1: the picture says which block the GPU read
+for each place, if it is not the block there. */
+static void test_block_map(gx_session *s, unsigned row_bytes_override)
+{
+	static uint8_t upload[BC_BLOCKS * BC_BLOCKS * 8];
+	char error[160], text[200];
+	unsigned bx, by, right = 0;
+	variant v;
+
+	(void)row_bytes_override;
+	for (by = 0; by < BC_BLOCKS; by++)
+		for (bx = 0; bx < BC_BLOCKS; bx++)
+		{
+			unsigned color = (((bx * 2u + 1u) & 31u) << 11) | (((by * 4u + 1u) & 63u) << 5); /* RGB565, never black */
+			uint8_t *block = upload + (by * BC_BLOCKS + bx) * 8;
+
+			block[0] = (uint8_t)color;
+			block[1] = (uint8_t)(color >> 8);
+			block[2] = block[0];
+			block[3] = block[1];
+			memset(block + 4, 0, 4);
+		}
+	memset(&v, 0, sizeof(v));
+	if (!make_variant(&v, BC_FORMAT_BC1, upload, error, sizeof(error)))
+	{
+		report_value(s->report, "texture blocks", "%s", error);
+		return;
+	}
+	scene_begin(s);
+	draw_texture_fill(s, &v.texture.texture, (float)SCENE_SIZE, (float)SCENE_SIZE);
+	scene_end(s);
+	text[0] = 0;
+	for (by = 0; by < BC_BLOCKS; by++)
+	{
+		for (bx = 0; bx < BC_BLOCKS; bx++)
+		{
+			uint8_t px[4];
+			unsigned seen_x, seen_y;
+			size_t used = strlen(text);
+
+			session_pixel(s, bx * 4 + 1, by * 4 + 1, px);
+			seen_x = (px[0] * 31u + 127u) / 255u / 2u;
+			seen_y = (px[1] * 63u + 127u) / 255u / 4u;
+			if (px[0] == 0 && px[1] == 0)
+				snprintf(text + used, sizeof(text) - used, " --");
+			else
+				snprintf(text + used, sizeof(text) - used, " %X%X", seen_x & 15u, seen_y & 15u);
+			if (seen_x == bx && seen_y == by)
+				right++;
+		}
+		report_value(s->report, "texture blocks row", "%2u:%s", by, text);
+		text[0] = 0;
+	}
+	report_value(s->report, "texture blocks", "BC1, a color for each block, as it is: %u of %u blocks read as written (rows above: for each place, xy of the block whose color it shows, -- = black)", right,
+		BC_BLOCKS * BC_BLOCKS);
+	gx_texture_free(&v.texture);
 }
 
 static void test_format(gx_session *s, bc_format format, page *p, unsigned row)
@@ -358,7 +582,11 @@ void stage_textures(gx_session *s)
 		page_text(p, 1, 4, STYLE_DIM, "The label says how the Xbox's block was rearranged. Numbers: report [textures].");
 	}
 	if (s->keep_going())
+	{
 		test_solid(s);
+		test_block_map(s, 0);
+		test_cpu_tiled(s);
+	}
 	for (f = 0; f < BC_FORMAT_COUNT && s->keep_going(); f++)
 		test_format(s, (bc_format)f, p, 5 + f * 10);
 }
