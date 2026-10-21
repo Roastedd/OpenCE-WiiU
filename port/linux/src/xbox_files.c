@@ -68,6 +68,13 @@ const char *platform_data_root(void)
 		{
 			snprintf(root, sizeof(root), ".");
 		}
+#ifdef HALO_WIIU
+		else if (has_maps("/vol/external01/wiiu/apps/halo/data"))
+		{
+			/* the SD card: the maps converted and rebased for this window go beside the app (tools/ppc-be/convert_maps.sh, REBASE) */
+			snprintf(root, sizeof(root), "/vol/external01/wiiu/apps/halo/data");
+		}
+#endif
 		else
 		{
 			char executable[MAX_PATH];

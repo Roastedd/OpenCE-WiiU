@@ -34,7 +34,11 @@ layout: saved games of builds before it no longer load. */
 2026-10-18-probe-clang.txt), so its window is the top 128 MiB of the app's MEM2 heap, whose end is the same on every start (0x49FA0000; the window leaves a megabyte of it above, for the heap's own bookkeeping), taken
 before anything else can (port/wiiu/src/wiiu_window.c); the maps are rebased to it (tools/ppc-be/map_convert.py --rebase). Every address the
 game or the port names in the window is this plus an offset. */
-#ifdef HALO_WIIU
+#if defined(HALO_PORT_WINDOW_BASE_OVERRIDE)
+/* (a test build with another window: the big-endian Linux build run with the Wii U's, to check maps rebased for it: HALO_WINDOW_BASE in the
+environment of configure.py, tools/ppc-be/README) */
+#define HALO_PORT_WINDOW_BASE HALO_PORT_WINDOW_BASE_OVERRIDE
+#elif defined(HALO_WIIU)
 #define HALO_PORT_WINDOW_BASE 0x41EA0000UL
 #else
 #define HALO_PORT_WINDOW_BASE 0x80000000UL

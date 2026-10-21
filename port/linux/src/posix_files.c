@@ -59,6 +59,12 @@ int posix_fstat(int descriptor, struct posix_file_information *information)
 	return 0;
 }
 
+#ifndef UTIME_OMIT
+/* newlib (the Wii U's) has neither UTIME_OMIT nor utimensat: file times are not set there */
+#define UTIME_OMIT ((1L << 30) - 2L)
+#define POSIX_NO_UTIMENSAT 1
+#endif
+
 int posix_set_file_times(const char *path,
 	posix_ulong access_seconds, posix_ulong access_nanoseconds,
 	posix_ulong modification_seconds, posix_ulong modification_nanoseconds)
@@ -69,7 +75,13 @@ int posix_set_file_times(const char *path,
 	times[0].tv_nsec = access_seconds ? (long)access_nanoseconds : UTIME_OMIT;
 	times[1].tv_sec = (time_t)modification_seconds;
 	times[1].tv_nsec = modification_seconds ? (long)modification_nanoseconds : UTIME_OMIT;
+#ifdef POSIX_NO_UTIMENSAT
+	(void)times;
+	(void)path;
+	return 0;
+#else
 	return utimensat(AT_FDCWD, path, times, 0);
+#endif
 }
 
 int posix_seek(int descriptor, posix_long offset_low, posix_long offset_high, int whence,

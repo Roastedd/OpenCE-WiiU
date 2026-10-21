@@ -80,14 +80,12 @@ WIIU_EXCLUDE: Dict[str, str] = {
     "port/linux/src/touch_input.c": "touch controls on SDL 3",
     "port/linux/src/voice_audio.c": "voice chat on SDL 3 audio",
     "port/linux/src/xinput_sdl.c": "XInput on SDL 3 gamepads; VPAD/KPAD replace it",
-    "port/linux/src/port_config.c": "settings: SDL 3 for the base path and to load files",
     "port/linux/src/updater.c": "the self-updater (SDL 3); the Wii U does not update itself",
     # system headers newlib does not have
     "port/linux/src/memory_watch.c": "execinfo.h; page protection the Wii U does not have (plan 6.2: a hash watch)",
     "port/linux/src/xbox_memory.c": "sys/mman.h; the Xbox memory window (plan 6.2: waits for the probe)",
     "port/linux/src/posix_net.c": "ifaddrs.h; sockets over nsysnet",
     "port/linux/src/posix_trace_marker.c": "dlfcn.h; a Linux GPU driver's trace markers",
-    "port/linux/src/posix_files.c": "UTIME_OMIT, which newlib does not define",
     "port/linux/src/posix_update.c": "struct rlimit (and the self-updater's downloads)",
     # mbedtls's platform modules (its configuration is Linux's)
     "port/third_party/mbedtls/library/entropy_poll.c": "mbedtls: platform entropy sources only on Unix and Windows",

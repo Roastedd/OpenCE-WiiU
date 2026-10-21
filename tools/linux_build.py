@@ -164,6 +164,9 @@ def configuration_defines(sln: Any) -> List[str]:
         defines.append("-DHALO_RELEASE")
     if getattr(sln, "port_profile", False):
         defines.append("-DHALO_PROFILE")
+    # (the Xbox memory window elsewhere than 0x80000000, to run maps rebased for the Wii U's: halo_port_capacity.h)
+    if os.environ.get("HALO_WINDOW_BASE"):
+        defines.append(f"-DHALO_PORT_WINDOW_BASE_OVERRIDE={os.environ['HALO_WINDOW_BASE']}UL")
     return defines
 
 

@@ -47,6 +47,52 @@ int nanosleep(const struct timespec *request, struct timespec *remaining)
 	return 0;
 }
 
+/* pread and pwrite (newlib has neither): a seek, the transfer and the seek back, under one lock, so that two threads using the same descriptor do not
+disturb each other's place. (The file layer reads maps with them from several threads.) */
+#include <pthread.h>
+#include <sys/types.h>
+
+ssize_t pread(int descriptor, void *buffer, size_t size, off_t offset);
+ssize_t pwrite(int descriptor, const void *buffer, size_t size, off_t offset);
+
+static pthread_mutex_t positioned_lock = PTHREAD_MUTEX_INITIALIZER;
+
+ssize_t pread(int descriptor, void *buffer, size_t size, off_t offset)
+{
+	off_t before;
+	ssize_t done;
+
+	pthread_mutex_lock(&positioned_lock);
+	before = lseek(descriptor, 0, SEEK_CUR);
+	if (before < 0 || lseek(descriptor, offset, SEEK_SET) < 0)
+	{
+		pthread_mutex_unlock(&positioned_lock);
+		return -1;
+	}
+	done = read(descriptor, buffer, size);
+	lseek(descriptor, before, SEEK_SET);
+	pthread_mutex_unlock(&positioned_lock);
+	return done;
+}
+
+ssize_t pwrite(int descriptor, const void *buffer, size_t size, off_t offset)
+{
+	off_t before;
+	ssize_t done;
+
+	pthread_mutex_lock(&positioned_lock);
+	before = lseek(descriptor, 0, SEEK_CUR);
+	if (before < 0 || lseek(descriptor, offset, SEEK_SET) < 0)
+	{
+		pthread_mutex_unlock(&positioned_lock);
+		return -1;
+	}
+	done = write(descriptor, buffer, size);
+	lseek(descriptor, before, SEEK_SET);
+	pthread_mutex_unlock(&positioned_lock);
+	return done;
+}
+
 /* the 4 KiB of a page of Cafe OS's memory management (OS_PAGE_SIZE, 128 KiB, is the granularity of OSMapMemory) */
 #define PAGE_BYTES 4096
 

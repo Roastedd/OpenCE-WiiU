@@ -1,0 +1,58 @@
+/*
+SDL3/SDL.h, as the Wii U build has it: the four SDL calls port_config.c makes (the base path of the app, and loading, saving and freeing a file),
+made with stdio. The Wii U build has no SDL; the rest of the platform layer's use of it (windows, events, audio) has Wii U units of its own.
+*/
+
+#ifndef HALO_WIIU_SDL_SHIM_H
+#define HALO_WIIU_SDL_SHIM_H
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* the SD card folder the app keeps its files in, with its separator (WIIU_DATA_DIRECTORY in port/wiiu/src/wiiu_shell.h) */
+static inline const char *SDL_GetBasePath(void)
+{
+	return "/vol/external01/wiiu/apps/halo/";
+}
+
+static inline void *SDL_LoadFile(const char *path, size_t *size)
+{
+	FILE *file = fopen(path, "rb");
+	void *data = NULL;
+	long length;
+
+	if (!file)
+		return NULL;
+	if (fseek(file, 0, SEEK_END) == 0 && (length = ftell(file)) >= 0 && fseek(file, 0, SEEK_SET) == 0)
+	{
+		data = malloc((size_t)length + 1);
+		if (data && fread(data, 1, (size_t)length, file) == (size_t)length)
+			*size = (size_t)length;
+		else
+		{
+			free(data);
+			data = NULL;
+		}
+	}
+	fclose(file);
+	return data;
+}
+
+static inline int SDL_SaveFile(const char *path, const void *data, size_t size)
+{
+	FILE *file = fopen(path, "wb");
+	int written;
+
+	if (!file)
+		return 0;
+	written = fwrite(data, 1, size, file) == size;
+	return fclose(file) == 0 && written;
+}
+
+static inline void SDL_free(void *memory)
+{
+	free(memory);
+}
+
+#endif
