@@ -65,7 +65,6 @@ WIIU_TARGET_FLAGS = [flag for flag in PPC_TARGET_FLAGS if not flag.startswith("-
 WIIU_EXCLUDE: Dict[str, str] = {
     # OpenGL (gl.h includes SDL3/SDL_opengl.h): the GX2 renderer replaces it
     "port/linux/src/d3d8_gl.c": "Direct3D 8 on OpenGL; the GX2 renderer replaces it",
-    "port/linux/src/d3d8_resources.c": "Direct3D 8 resources on OpenGL",
     "port/linux/src/gl_functions.c": "OpenGL function loading",
     "port/linux/src/hud_hires.c": "the high-resolution HUD's OpenGL drawing",
     "port/linux/src/menu_files.c": "the menus' OpenGL drawing",
@@ -278,6 +277,7 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
         f"-include {prefix_header}",
         f"-include {platform_semantics_header}",
         f"-I{platform_dir}",
+        f"-I{WIIU_DIR / 'include'}",
         f"-I{port_include}",
         f"-I{TOML_DIR}",
         f"-I{EXPAT_DIR}",
@@ -305,9 +305,11 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
     wiiu_src = WIIU_DIR / "src"
     for source in sorted(wiiu_src.glob("*.c")):
         if source.name.startswith(WIIU_NATIVE_PREFIX):
-            add_object(source, f"{posix_cflags} -I{wiiu_src} -I{platform_dir}")
+            # (-ffp-contract=off: the objects are checked for fused multiply-adds whether or not they touch the simulation)
+            add_object(source, f"{posix_cflags} -ffp-contract=off -I{wiiu_src} -I{platform_dir}")
         else:
-            add_object(source, f"{platform_cflags} -I{wiiu_src}")
+            # (the platform layer's flags; the Xbox-facing units that include xgpu.h get a stand-in for SDL's OpenGL header)
+            add_object(source, f"{platform_cflags} -I{wiiu_src} -I{WIIU_DIR / 'include'}")
     for source in sorted((MBEDTLS_DIR / "library").glob("*.c")):
         if _is_excluded(source):
             continue

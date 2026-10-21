@@ -205,7 +205,7 @@ def test_the_stubs_are_written_as_functions_and_tables(tmp_path):
     text = source.read_text()
     assert "FUNCTION_STUB(CloseHandle)" in text and "FUNCTION_STUB(Sleep)" in text
     assert "DATA_STUB(D3D__RenderState)" in text and "3 of them (2 functions, 1 tables)" in text
-    assert "OSFatal(message)" in text and "OSReport" in text
+    assert "wiiu_log_text(message)" in text and "SYSLaunchMenu" in text and "OSReport" in text
     assert listing.read_text() == "CloseHandle F\nD3D__RenderState D\nSleep F\n"
 
 
@@ -282,7 +282,7 @@ def test_the_link_check_finds_an_undefined_weak_reference_and_a_wide_string_call
 def test_the_stub_generator_finds_what_the_linker_lacks(tmp_path):
     caller = tmp_path / "caller.c"
     caller.write_text("extern void missing_function(void);\nextern unsigned char missing_table[];\n"
-                      "unsigned char *pointer = missing_table;\nint main(void) { missing_function(); return 0; }\n")
+                      "unsigned char *pointer = missing_table;\nvoid wiiu_log_text(const char *text) { (void)text; }\nint main(void) { missing_function(); return 0; }\n")
     obj = tmp_path / "caller.o"
     subprocess.run(["wiiu-clang", "-c", str(caller), "-o", str(obj)], check=True)
     response = tmp_path / "objects.rsp"
