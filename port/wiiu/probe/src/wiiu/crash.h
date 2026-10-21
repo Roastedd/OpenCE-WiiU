@@ -34,5 +34,9 @@ uint32_t crash_alignment_emulated(uint32_t *refused);
 /* how many alignment exceptions the handler has taken, and where the last one was (its pc, and the address) */
 uint32_t crash_alignment_traps(void);
 void crash_alignment_last(uint32_t *pc, uint32_t *address);
+/* and the instruction there and the DSISR the exception gave */
+void crash_alignment_detail(uint32_t *instruction, uint32_t *dsisr);
+/* the bits the context held for the instruction's floating-point register when the exception came */
+void crash_alignment_register(uint64_t *bits);
 
 #endif

@@ -28,6 +28,9 @@ static volatile uint32_t alignment_refused;
 static volatile uint32_t alignment_traps;
 static volatile uint32_t alignment_pc;
 static volatile uint32_t alignment_address;
+static volatile uint32_t alignment_dsisr;
+static volatile uint32_t alignment_instruction;
+static volatile uint64_t alignment_register_bits; /* what the context held for the register of the instruction, at the exception */
 
 static char *put(char *p, const char *text)
 {
@@ -141,6 +144,13 @@ static BOOL handle(OSExceptionType type, OSContext *context)
 		/* counted, the access made or the instruction skipped, the thread resumed: no I/O, nothing that waits */
 		alignment_pc = context->srr0;
 		alignment_address = context->dar;
+		alignment_dsisr = context->dsisr;
+		alignment_instruction = *(const uint32_t *)context->srr0;
+		{
+			const double held = context->fpr[(alignment_instruction >> 21) & 31];
+
+			__builtin_memcpy((void *)&alignment_register_bits, &held, sizeof(held));
+		}
 		alignment_traps++;
 		if (recover_alignment == 2)
 		{
@@ -224,4 +234,15 @@ void crash_alignment_last(uint32_t *pc, uint32_t *address)
 {
 	*pc = alignment_pc;
 	*address = alignment_address;
+}
+
+void crash_alignment_register(uint64_t *bits)
+{
+	*bits = alignment_register_bits;
+}
+
+void crash_alignment_detail(uint32_t *instruction, uint32_t *dsisr)
+{
+	*instruction = alignment_instruction;
+	*dsisr = alignment_dsisr;
 }

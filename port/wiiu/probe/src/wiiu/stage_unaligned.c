@@ -29,6 +29,7 @@ split an unaligned access into bytes, and nothing would be measured).
 #include <coreinit/thread.h>
 #include <coreinit/time.h>
 #include <malloc.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -36,6 +37,7 @@ split an unaligned access into bytes, and nothing would be measured).
 #define PAGE 4096
 #define LINE 32
 #define CASE_COUNT 32
+#define SLOTS (CASE_COUNT * 5)
 #define STACK_BYTES (12 * 1024)
 #define PATIENCE_MS 5000
 
@@ -98,11 +100,14 @@ typedef struct case_job
 	uint64_t (*now)(void);
 	uint64_t elapsed;
 	int verify;   /* check the value of one access before timing the loop */
+	int reg;      /* and through which register: 0, 1, 13 or 31 */
 	int verified; /* and it was right */
+	uint64_t seen_bits;       /* what a load gave */
+	uint8_t seen_bytes[12];   /* what a store left, from one byte before */
 } case_job;
 
-static OSThread threads[CASE_COUNT];
-static uint8_t stacks[CASE_COUNT][STACK_BYTES] __attribute__((aligned(16)));
+static OSThread threads[SLOTS];
+static uint8_t stacks[SLOTS][STACK_BYTES] __attribute__((aligned(16)));
 static case_job job;
 
 static void run_loop(access_kind kind, uint8_t *address, uint64_t (*now)(void), uint64_t *elapsed)
@@ -151,10 +156,32 @@ static void run_loop(access_kind kind, uint8_t *address, uint64_t (*now)(void), 
 	(void)single;
 }
 
-/* One access of the kind, at the address, with a value that is known, and whether the right value came or went: the check that the
-emulation (crash.c, wiiu_align_fixup.c) did what the instruction means. Big-endian bytes written and read as integers, which work
-at every alignment. */
-static int verify_once(access_kind kind, uint8_t *address)
+/* One access of the kind, at the address, through a given floating-point register (the compiler's choice for the first run was f0,
+which came back as zero), with a value that is known, and whether the right value came or went: the check that the emulation
+(crash.c, wiiu_align_fixup.c) did what the instruction means. Big-endian bytes written and read as integers, which work at every
+alignment. */
+#define LOAD_VIA(insn, n) \
+	do \
+	{ \
+		__asm__ volatile(insn " " #n ", 0(%0)" : : "b"(address) : "memory", "fr" #n); \
+		__asm__ volatile("fmr %0, " #n : "=f"(value)); \
+	} while (0)
+#define STORE_VIA(insn, n) \
+	do \
+	{ \
+		__asm__ volatile("fmr " #n ", %0" : : "f"(value) : "fr" #n); \
+		__asm__ volatile(insn " " #n ", 0(%0)" : : "b"(address) : "memory"); \
+	} while (0)
+#define BY_REGISTER(macro, insn) \
+	switch (reg) \
+	{ \
+	case 0: macro(insn, 0); break; \
+	case 1: macro(insn, 1); break; \
+	case 13: macro(insn, 13); break; \
+	default: macro(insn, 31); break; \
+	}
+
+static int verify_once(access_kind kind, uint8_t *address, case_job *work, int reg)
 {
 	static const uint8_t one_and_a_half[4] = {0x3F, 0xC0, 0x00, 0x00};
 	static const uint8_t minus_two_and_a_quarter[8] = {0xC0, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
@@ -166,21 +193,25 @@ static int verify_once(access_kind kind, uint8_t *address)
 	{
 	case LOAD_FLOAT:
 		memcpy(address, one_and_a_half, 4);
-		__asm__ volatile("lfs %0, 0(%1)" : "=f"(value) : "b"(address) : "memory");
+		BY_REGISTER(LOAD_VIA, "lfs")
+		memcpy(&work->seen_bits, &value, 8);
 		return value == 1.5;
 	case LOAD_DOUBLE:
 		memcpy(address, minus_two_and_a_quarter, 8);
-		__asm__ volatile("lfd %0, 0(%1)" : "=f"(value) : "b"(address) : "memory");
+		BY_REGISTER(LOAD_VIA, "lfd")
+		memcpy(&work->seen_bits, &value, 8);
 		return value == -2.25;
 	case STORE_FLOAT:
 		memset(address - 1, 0xEE, 6);
 		value = 3.5;
-		__asm__ volatile("stfs %0, 0(%1)" : : "f"(value), "b"(address) : "memory");
+		BY_REGISTER(STORE_VIA, "stfs")
+		memcpy(work->seen_bytes, address - 1, 6);
 		return !memcmp(address, three_and_a_half_single, 4) && address[-1] == 0xEE && address[4] == 0xEE;
 	case STORE_DOUBLE:
 		memset(address - 1, 0xEE, 10);
 		value = 3.5;
-		__asm__ volatile("stfd %0, 0(%1)" : : "f"(value), "b"(address) : "memory");
+		BY_REGISTER(STORE_VIA, "stfd")
+		memcpy(work->seen_bytes, address - 1, 10);
 		return !memcmp(address, three_and_a_half_double, 8) && address[-1] == 0xEE && address[8] == 0xEE;
 	default:
 		return 1;
@@ -193,7 +224,7 @@ static int case_worker(int argc, const char **argv)
 
 	(void)argc;
 	if (work->verify)
-		work->verified = verify_once(work->kind, work->address);
+		work->verified = verify_once(work->kind, work->address, work, work->reg);
 	run_loop(work->kind, work->address, work->now, &work->elapsed);
 	work->done = 1;
 	return 0;
@@ -218,7 +249,8 @@ static int listed(const char *list, const char *name)
 }
 
 /* Starts the case on a core and waits. Returns 1 if it came back, 0 if it did not (that core is lost). */
-static int run_on_core(stage_context *context, size_t index, unsigned core, uint8_t *buffer, int verify)
+/* case index of cases[]; slot is the thread and stack it uses (a case is tried once for each register, each with its own) */
+static int run_on_core(stage_context *context, size_t index, size_t slot, unsigned core, uint8_t *buffer, int verify, int reg)
 {
 	uint32_t waited = 0;
 
@@ -228,12 +260,13 @@ static int run_on_core(stage_context *context, size_t index, unsigned core, uint
 	job.now = context->now_ns;
 	job.elapsed = 0;
 	job.verify = verify;
+	job.reg = reg;
 	job.verified = 0;
-	if (!OSCreateThread(&threads[index], case_worker, 0, (char *)&job, stacks[index] + STACK_BYTES, STACK_BYTES, 16,
+	if (!OSCreateThread(&threads[slot], case_worker, 0, (char *)&job, stacks[slot] + STACK_BYTES, STACK_BYTES, 16,
 			(OSThreadAttributes)((OS_THREAD_ATTRIB_AFFINITY_CPU0 << core) | OS_THREAD_ATTRIB_DETACHED)))
 		return -1;
-	OSSetThreadName(&threads[index], "unaligned case");
-	OSResumeThread(&threads[index]);
+	OSSetThreadName(&threads[slot], "unaligned case");
+	OSResumeThread(&threads[slot]);
 	while (!job.done && waited < PATIENCE_MS)
 	{
 		OSSleepTicks(OSMillisecondsToTicks(1));
@@ -314,7 +347,7 @@ void stage_unaligned(stage_context *context)
 		if (context->flush)
 			context->flush();
 		traps_before = crash_alignment_traps();
-		came_back = run_on_core(context, i, core, buffer, 0);
+		came_back = run_on_core(context, i, i, core, buffer, 0, 0);
 		if (came_back < 0)
 		{
 			report_check(r, 0, c->name, "no thread could be made to try it");
@@ -362,36 +395,60 @@ void stage_unaligned(stage_context *context)
 	crash_recover_alignment(2);
 	for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
 	{
+		static const int registers[4] = {0, 1, 13, 31};
 		const access_case *c = &cases[i];
-		unsigned core;
-		uint32_t traps_before, emulated_before, refused_before, emulated, refused;
-		int came_back;
+		unsigned slot;
 
 		if (!trapped[i])
 			continue;
-		for (core = 0; core < 3 && !usable[core]; core++)
-			;
-		if (core == 3)
-			break;
-		report_value(r, "trying", "%s, emulated, on core %u", c->name, core);
-		card_write(PROBE_UNALIGNED_PROGRESS_FILE, c->name, strlen(c->name), 0);
-		if (context->flush)
-			context->flush();
-		traps_before = crash_alignment_traps();
-		emulated_before = crash_alignment_emulated(&refused_before);
-		came_back = run_on_core(context, i, core, buffer, 1);
-		if (came_back != 1)
+		/* through four registers: f0 is the compiler's own favourite, and the first run's check came back as zero through it */
+		for (slot = 0; slot < 4; slot++)
 		{
-			report_check(r, 0, c->name, "emulated: the thread on core %u did not come back", core);
-			usable[core] = 0;
-			continue;
+			unsigned core;
+			uint32_t traps_before, emulated_before, refused_before, emulated, refused;
+			int came_back;
+			char name[64];
+
+			for (core = 0; core < 3 && !usable[core]; core++)
+				;
+			if (core == 3)
+				break;
+			snprintf(name, sizeof(name), "%s via f%d", c->name, registers[slot]);
+			report_value(r, "trying", "%s, emulated, on core %u", name, core);
+			card_write(PROBE_UNALIGNED_PROGRESS_FILE, c->name, strlen(c->name), 0);
+			if (context->flush)
+				context->flush();
+			traps_before = crash_alignment_traps();
+			emulated_before = crash_alignment_emulated(&refused_before);
+			came_back = run_on_core(context, i, CASE_COUNT * (1 + slot) + i, core, buffer, 1, registers[slot]);
+			if (came_back != 1)
+			{
+				report_check(r, 0, name, "emulated: the thread on core %u did not come back", core);
+				usable[core] = 0;
+				continue;
+			}
+			emulated = crash_alignment_emulated(&refused) - emulated_before;
+			refused -= refused_before;
+			if (!job.verified)
+			{
+				uint32_t instruction, dsisr;
+				uint64_t held;
+				unsigned b;
+				char bytes[40] = "";
+
+				crash_alignment_detail(&instruction, &dsisr);
+				crash_alignment_register(&held);
+				for (b = 0; b < 10 && (c->kind == STORE_FLOAT || c->kind == STORE_DOUBLE); b++)
+					snprintf(bytes + b * 3, sizeof(bytes) - b * 3, "%02X ", job.seen_bytes[b]);
+				report_value(r, "emulation detail",
+					"%s: instruction %08X, DSISR %08X; the context held %016llX for its register; a load gave %016llX; a store left (from one byte before) %s",
+					name, (unsigned)instruction, (unsigned)dsisr, (unsigned long long)held, (unsigned long long)job.seen_bits, bytes);
+			}
+			report_check(r, job.verified && refused == 0 && emulated > 0 && emulated == crash_alignment_traps() - traps_before, name,
+				"emulated: the value is %s; %u accesses made, %u refused; %.2f us each", job.verified ? "right" : "WRONG",
+				(unsigned)emulated, (unsigned)refused, (double)job.elapsed / ITERATIONS / 1000.0);
+			card_remove(PROBE_UNALIGNED_PROGRESS_FILE);
 		}
-		emulated = crash_alignment_emulated(&refused) - emulated_before;
-		refused -= refused_before;
-		report_check(r, job.verified && refused == 0 && emulated == crash_alignment_traps() - traps_before,
-			c->name, "emulated: the value is %s; %u accesses made, %u refused; %.2f us each", job.verified ? "right" : "WRONG",
-			(unsigned)emulated, (unsigned)refused, (double)job.elapsed / ITERATIONS / 1000.0);
-		card_remove(PROBE_UNALIGNED_PROGRESS_FILE);
 	}
 	crash_recover_alignment(0);
 	card_remove(PROBE_UNALIGNED_PROGRESS_FILE);
