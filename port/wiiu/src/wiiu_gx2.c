@@ -415,11 +415,15 @@ void host_gx2_idle(void);
 uint32_t host_gx2_visibility(uint32_t index);
 unsigned int host_gx2_output_height(void);
 
+/* the shell's (wiiu_shell.c): held here while the app is in the background */
+void wiiu_foreground_gate(int is_game_thread);
+
 void host_gx2_submit(uint32_t commands, uint32_t size)
 {
 	const unsigned char *at = (const unsigned char *)(uintptr_t)commands;
 	const unsigned char *end = at + size;
 
+	wiiu_foreground_gate(1);
 	if (!initialize())
 		return;
 	while (at + sizeof(struct dk_command_header) <= end)

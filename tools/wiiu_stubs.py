@@ -48,7 +48,7 @@ void wiiu_log_text(const char *text);
 
 /* Names itself in the log and on the debug output, then asks for the Wii U Menu: the app ends as any app does, and the console
 stays usable (OSFatal would keep its error screen until the power button). */
-static void __attribute__((noreturn)) wiiu_missing(const char *message)
+static void __attribute__((noreturn, unused)) wiiu_missing(const char *message)
 {{
 	OSReport("%s\\n", message);
 	wiiu_log_text(message);

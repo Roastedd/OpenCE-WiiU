@@ -75,7 +75,6 @@ WIIU_EXCLUDE: Dict[str, str] = {
     "port/linux/src/xgpu_post.c": "post-processing on OpenGL",
     "port/linux/src/xgpu_text.c": "text on OpenGL",
     # SDL 3: windows, audio, input
-    "port/linux/src/dsound_sdl.c": "DirectSound on SDL 3 audio; AX replaces it",
     "port/linux/src/sdl_platform.c": "the window and events on SDL 3",
     "port/linux/src/touch_input.c": "touch controls on SDL 3",
     "port/linux/src/voice_audio.c": "voice chat on SDL 3 audio",

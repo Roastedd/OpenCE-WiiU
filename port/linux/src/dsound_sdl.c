@@ -1292,7 +1292,9 @@ static void mix(float *output, unsigned long frames)
 
 /* ---------- output */
 
+#ifndef HALO_WIIU
 static SDL_AudioStream *audio_stream;
+#endif
 static BOOL audio_started = FALSE;
 /* the device it plays on (audio.output_device), and when it was looked at */
 static char audio_device_name[PLATFORM_AUDIO_DEVICE_NAME_SIZE];
@@ -1306,6 +1308,7 @@ static const char *audio_device_setting(void)
 	return name && name[0] ? name : "default";
 }
 
+#ifndef HALO_WIIU
 static void SDLCALL audio_callback(void *userdata, SDL_AudioStream *stream, int additional_amount, int total_amount)
 {
 	float buffer[MIX_CHUNK_FRAMES * OUTPUT_CHANNELS];
@@ -1326,6 +1329,8 @@ static void SDLCALL audio_callback(void *userdata, SDL_AudioStream *stream, int 
 	}
 }
 
+#endif
+
 /* without a device, drain voices in real time */
 static void *silent_clock_thread(void *parameter)
 {
@@ -1337,6 +1342,14 @@ static void *silent_clock_thread(void *parameter)
 	for (;;)
 	{
 		mix(buffer, 480);
+#ifdef HALO_WIIU
+		/* (newlib has no clock_nanosleep) */
+		{
+			struct timespec wait = { 0, 10000000L };
+
+			nanosleep(&wait, NULL);
+		}
+#else
 		next.tv_nsec += 10000000L;
 		if (next.tv_nsec >= 1000000000L)
 		{
@@ -1344,10 +1357,37 @@ static void *silent_clock_thread(void *parameter)
 			next.tv_sec++;
 		}
 		clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
+#endif
 	}
 	return NULL;
 }
 
+#ifdef HALO_WIIU
+/* wiiu_audio.c's (the console's ABI): two AX voices over a ring, filled by calling mix */
+int wiiu_audio_open(void (*mixer)(float *output, unsigned long frames));
+
+static void audio_start(void)
+{
+	if (audio_started)
+		return;
+	audio_started = TRUE;
+	master_volume = (float)config_real("audio.volume");
+	reverb_enabled = config_boolean("audio.reverb");
+	resampler_initialize();
+	resampler_phases_initialize();
+	reverb_initialize();
+
+	if (config_boolean("audio.enabled") && wiiu_audio_open(mix))
+		return;
+	{
+		pthread_t thread;
+
+		platform_log("audio: no output; sound is silent");
+		pthread_create(&thread, NULL, silent_clock_thread, NULL);
+		pthread_detach(thread);
+	}
+}
+#else
 static void audio_start(void)
 {
 	SDL_AudioSpec spec;
@@ -1398,9 +1438,16 @@ static void audio_start(void)
 	}
 }
 
+#endif
+
 /* (the event thread, each frame: sdl_platform.c) audio.output_device
 changed (Settings > Audio): the sound goes on on the new device, else the
 system's default */
+#ifdef HALO_WIIU
+void dsound_sdl_output_device_check(void)
+{
+}
+#else
 void dsound_sdl_output_device_check(void)
 {
 	SDL_AudioSpec spec;
@@ -1435,6 +1482,8 @@ void dsound_sdl_output_device_check(void)
 		pthread_detach(thread);
 	}
 }
+
+#endif
 
 /* ---------- completion */
 

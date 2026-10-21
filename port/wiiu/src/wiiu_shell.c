@@ -37,6 +37,7 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 #include <errno.h>
 #include <fcntl.h>
 #include <malloc.h>
+#include <gx2/event.h>
 #include <proc_ui/procui.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -71,6 +72,10 @@ static uint32_t base_ms;
 static int32_t main_priority = 16;
 static volatile uint32_t started;
 static volatile uint32_t exit_requested;
+static volatile uint32_t started_game;
+/* (wiiu_audio.c's: the AX voices given up in the background and made again) */
+void wiiu_audio_suspend(void);
+void wiiu_audio_resume(void);
 static volatile uint32_t foreground = 1;
 static volatile uint32_t game_done;
 static volatile uint32_t box_stopping;
@@ -201,6 +206,27 @@ int wiiu_in_foreground(void)
 	return foreground != 0;
 }
 
+/* Nothing of the game's may use the GPU, the controllers or the sound while the app is in the background (the system takes them: a call into GX2
+then ends in a fault in the system's code, and the console with it). The threads that do, the game's and the audio mixer's, call this at their
+safe points; it returns at once in the foreground, and in the background holds the caller until the foreground is back (or the app is closing). The
+release callback waits for the game thread to be held before it lets the system have the GPU. */
+static volatile uint32_t game_gate_held;
+
+void wiiu_foreground_gate(int is_game_thread);
+
+void wiiu_foreground_gate(int is_game_thread)
+{
+	if (foreground && !exit_requested)
+		return;
+	if (is_game_thread)
+		game_gate_held = 1;
+	/* (and once the app is closing, for good: the system takes the GPU and the process ends under it) */
+	while (!foreground || exit_requested)
+		sleep_ms(5);
+	if (is_game_thread)
+		game_gate_held = 0;
+}
+
 void wiiu_request_exit(void)
 {
 	exit_requested = 1;
@@ -237,6 +263,20 @@ static uint32_t on_release(void *unused)
 	foreground = 0;
 	wiiu_shell_watch_background(&shell_watch, 1, shell_ms());
 	wiiu_log("HOME pressed: the foreground is given up");
+	/* the game thread is held at its next safe point (a Present, a submission); the GPU is then drained and given up, and the sound stopped */
+	{
+		uint32_t waited = 0;
+
+		while (!game_gate_held && waited < 2000u && started_game)
+		{
+			sleep_ms(5);
+			waited += 5u;
+		}
+		wiiu_log("HOME: the game thread is %s after %u ms", game_gate_held ? "held" : "NOT held", (unsigned)waited);
+	}
+	wiiu_audio_suspend();
+	GX2DrawDone();
+	ProcUIDrawDoneRelease();
 	wiiu_phase("HOME: after our release callback, in the others' or the system's");
 	return 0;
 }
@@ -244,6 +284,7 @@ static uint32_t on_release(void *unused)
 static uint32_t on_acquire(void *unused)
 {
 	(void)unused;
+	wiiu_audio_resume();
 	foreground = 1;
 	wiiu_shell_watch_background(&shell_watch, 0, shell_ms());
 	wiiu_phase("back in the foreground");
@@ -502,6 +543,7 @@ static int start_game(void)
 	}
 	OSSetThreadName(&game_thread, "game");
 	OSResumeThread(&game_thread);
+	started_game = 1;
 	return 0;
 }
 
@@ -582,6 +624,21 @@ int wiiu_shell_run(int (*game_main)(void))
 	{
 		wiiu_shell_watch_arm_exit(&shell_watch, shell_ms(), WIIU_WATCH_CLOSE_MS);
 		sleep_ms(300);
+	}
+	/* the game thread is held at its next safe point, and the sound given up, before the process goes (the system waits for the GPU and the sound engine) */
+	{
+		uint32_t waited = 0;
+
+		while (!game_gate_held && waited < 1500u && started_game && !game_done)
+		{
+			sleep_ms(5);
+			waited += 5u;
+		}
+		wiiu_log("Closing: the game thread is %s after %u ms", game_gate_held ? "held" : "NOT held", (unsigned)waited);
+		wiiu_audio_suspend();
+		/* (in the background the GPU is the system's: waiting for it there never ends, and it was drained when it was given up) */
+		if (foreground)
+			GX2DrawDone();
 	}
 	wiiu_phase("shutting down");
 	box_stopping = 1;

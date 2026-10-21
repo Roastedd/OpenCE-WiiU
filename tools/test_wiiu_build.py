@@ -220,9 +220,10 @@ def test_the_stubs_are_compared_with_the_baseline(tmp_path, capsys):
     assert wiiu_stubs.compare(listing, baseline) == 1 and "NOW DEFINED B" in capsys.readouterr().out
 
 
-def test_the_committed_baseline_is_sorted_and_not_empty():
+def test_the_committed_baseline_is_sorted():
     names = [line for line in (ROOT / wiiu_build.STUBBED_SYMBOLS).read_text().splitlines() if not line.startswith("#")]
-    assert names and names == sorted(names) and len(set(names)) == len(names)
+    # (empty once the platform layer was complete: every symbol the link needed has a definition)
+    assert names == sorted(names) and len(set(names)) == len(names)
 
 
 def test_the_memory_map_is_read_from_the_linker_script():
