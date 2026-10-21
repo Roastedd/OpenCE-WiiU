@@ -6,6 +6,7 @@ the host ABI and _FILE_OFFSET_BITS=64.
 */
 
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <string.h>
 #include <strings.h>
@@ -84,12 +85,24 @@ int posix_set_file_times(const char *path,
 #endif
 }
 
+int posix_truncate(int descriptor, posix_ulong size_low, posix_ulong size_high);
+
 int posix_seek(int descriptor, posix_long offset_low, posix_long offset_high, int whence,
 	posix_ulong *position_low, posix_ulong *position_high)
 {
 	off_t offset = (off_t)(((unsigned long long)(posix_ulong)offset_high << 32) | (posix_ulong)offset_low);
 	off_t result = lseek(descriptor, offset, whence);
 
+	if (result == (off_t)-1 && errno == EINVAL && whence == SEEK_SET && offset > 0)
+	{
+		/* a seek past the end of a file: FAT (the Wii U's SD card) refuses it where other file systems leave a hole. The file is made that long
+		with zeros (posix_truncate) and the seek made again. */
+		struct stat st;
+
+		if (fstat(descriptor, &st) == 0 && st.st_size < offset &&
+			posix_truncate(descriptor, (posix_ulong)((unsigned long long)offset & 0xffffffffu), (posix_ulong)((unsigned long long)offset >> 32)) == 0)
+			result = lseek(descriptor, offset, whence);
+	}
 	if (result == (off_t)-1)
 		return -1;
 	split64((unsigned long long)result, position_low, position_high);
@@ -98,7 +111,30 @@ int posix_seek(int descriptor, posix_long offset_low, posix_long offset_high, in
 
 int posix_truncate(int descriptor, posix_ulong size_low, posix_ulong size_high)
 {
-	return ftruncate(descriptor, (off_t)(((unsigned long long)size_high << 32) | size_low));
+	off_t size = (off_t)(((unsigned long long)size_high << 32) | size_low);
+	struct stat st;
+	static const char zeros[65536];
+	off_t at;
+
+	if (ftruncate(descriptor, size) == 0)
+		return 0;
+	/* Some file systems (the Wii U's SD card, FAT) cannot be extended by a truncation: the file is written to its size with zeros instead, which
+	is what the extension would read as. (A file cannot be made shorter this way.) */
+	if (fstat(descriptor, &st) != 0 || st.st_size > size)
+		return -1;
+	for (at = st.st_size; at < size;)
+	{
+		off_t chunk = size - at < (off_t)sizeof(zeros) ? size - at : (off_t)sizeof(zeros);
+		ssize_t written;
+
+		if (lseek(descriptor, at, SEEK_SET) < 0)
+			return -1;
+		written = write(descriptor, zeros, (size_t)chunk);
+		if (written <= 0)
+			return -1;
+		at += written;
+	}
+	return 0;
 }
 
 int posix_disk_space(const char *path,

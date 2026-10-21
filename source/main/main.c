@@ -3122,6 +3122,15 @@ void halt_and_catch_fire(
 	char label[96];
 	#endif
 
+#ifdef HALO_WIIU
+	/* port: the Xbox's red screen is an endless loop of frames; on the Wii U it would run the game thread flat out, with nothing drawn yet and the
+	rest of the system starved. The shell logs it, asks for the Wii U Menu and waits to be closed (port/wiiu/src/wiiu_shell.c). */
+	{
+		extern void wiiu_game_halted(void);
+
+		wiiu_game_halted();
+	}
+#endif
 #ifdef HALO_WEB
 	/* port: a browser shows only what a frame of its own main loop drew, and
 	this screen never returns to it: the game stops, and the page shows the

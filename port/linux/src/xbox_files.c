@@ -321,7 +321,12 @@ HANDLE WINAPI CreateFileA(LPCSTR file_name, DWORD desired_access, DWORD share_mo
 	if ((desired_access & GENERIC_READ) && (desired_access & GENERIC_WRITE))
 		flags = O_RDWR;
 	else if (desired_access & GENERIC_WRITE)
+#ifdef HALO_WIIU
+		/* (wut's file system opens a write-only file as "w", which truncates it, or refuses it: read and write is the mode that leaves the file be) */
+		flags = O_RDWR;
+#else
 		flags = O_WRONLY;
+#endif
 	else
 		flags = O_RDONLY;
 

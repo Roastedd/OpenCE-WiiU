@@ -27,6 +27,7 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 #include "wiiu_shell_watch.h"
 
 #include <coreinit/core.h>
+#include <sysapp/launch.h>
 #include <coreinit/debug.h>
 #include <coreinit/memexpheap.h>
 #include <coreinit/memheap.h>
@@ -502,6 +503,21 @@ static int start_game(void)
 	OSSetThreadName(&game_thread, "game");
 	OSResumeThread(&game_thread);
 	return 0;
+}
+
+/* ---------- the game stopped itself */
+
+/* The game's fatal errors end in an endless red screen (halt_and_catch_fire); here that is the app ending: said in the log (with the debug.txt
+that has the reason beside it), the Wii U Menu asked for, and this thread parked until the system closes the app. */
+void wiiu_game_halted(void);
+
+void wiiu_game_halted(void)
+{
+	wiiu_log("The game halted (its reason is in debug.txt beside the maps): returning to the Wii U Menu");
+	wiiu_shell_log_flush(&shell_log, 1000);
+	SYSLaunchMenu();
+	for (;;)
+		sleep_ms(100);
 }
 
 /* ---------- the shell */
