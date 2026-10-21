@@ -228,7 +228,8 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
 
     release = getattr(sln, "port_release", False)
     # (no stack protector: newlib has no guard; no -mcpu twice: the compiler adds it)
-    abi = " ".join(wiiu_flags(LINUX_ABI_FLAGS) + [WIIU_MARCH, WIIU_TLS] + configuration_defines(sln))
+    # (HALO_WIIU: the Xbox memory window is at the top of MEM2, not at 0x80000000: halo_port_capacity.h)
+    abi = " ".join(wiiu_flags(LINUX_ABI_FLAGS) + [WIIU_MARCH, WIIU_TLS, "-DHALO_WIIU"] + configuration_defines(sln))
     port_include = LINUX_DIR / "include"
     sdk_flags = f"-idirafter {XDK_INCLUDE}"
     objects: List[Path] = []
@@ -310,6 +311,9 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
         else:
             # (the platform layer's flags; the Xbox-facing units that include xgpu.h get a stand-in for SDL's OpenGL header)
             add_object(source, f"{platform_cflags} -I{wiiu_src} -I{WIIU_DIR / 'include'}")
+    # the hash-based write watch the web build uses (no page protection to catch a write with), and the hash it needs
+    add_object(Path("port/web/src/web_memory_watch.c"), f"{platform_cflags} -Iport/android/host")
+    add_object(Path("port/android/host/host_watch_hash.c"), f"{posix_cflags} -ffp-contract=off")
     for source in sorted((MBEDTLS_DIR / "library").glob("*.c")):
         if _is_excluded(source):
             continue

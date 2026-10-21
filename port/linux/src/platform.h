@@ -113,7 +113,8 @@ The Xbox maps physical memory at virtual 0x80000000 + P. The layer reserves
 that window at start-up and hands out page-granular blocks from it, so the
 physical/virtual arithmetic the game and Direct3D rely on keeps working. */
 
-#define PLATFORM_CONTIGUOUS_BASE 0x80000000UL
+#include "halo_port_capacity.h"
+#define PLATFORM_CONTIGUOUS_BASE HALO_PORT_WINDOW_BASE
 #if defined(HALO_ARM64_GUEST) || defined(HALO_WEB) || defined(HALO_PPC)
 /* 128 MB, a development kit's (and the Wii U's, for the big-endian build): Android's guest image is linked just above
 the window (port/android/include/halo_android_abi.h), and the web build's
@@ -133,8 +134,8 @@ void *platform_contiguous_alloc(unsigned long size, unsigned long alignment,
 	unsigned long physical_address, DWORD protect);
 void platform_contiguous_free(void *address);
 BOOL platform_is_contiguous(const void *address);
-#define PLATFORM_PHYSICAL_TO_VIRTUAL(physical) ((void *)((unsigned long)(physical) | PLATFORM_CONTIGUOUS_BASE))
-#define PLATFORM_VIRTUAL_TO_PHYSICAL(address) ((unsigned long)(address) & ~PLATFORM_CONTIGUOUS_BASE)
+#define PLATFORM_PHYSICAL_TO_VIRTUAL(physical) ((void *)((unsigned long)(physical) + PLATFORM_CONTIGUOUS_BASE))
+#define PLATFORM_VIRTUAL_TO_PHYSICAL(address) ((unsigned long)(address) - PLATFORM_CONTIGUOUS_BASE)
 
 /* The window Halo Custom Edition tag data are linked to (0x40440000):
 reserved at start-up when the game.custom_edition setting is on, else NULL

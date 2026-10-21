@@ -30,7 +30,17 @@ fill 3,165,260 of its 0x305000 bytes); the GPU part holds only the decal
 vertices, as on the Xbox. A change to a pool's size changes the game state's
 layout: saved games of builds before it no longer load. */
 
-#define HALO_PORT_GAME_STATE_BASE_ADDRESS 0x81A00000 /* (0x80061000) */
+/* Where the Xbox memory window is: 0x80000000 on every build that can map it. The Wii U cannot (its apps map nothing there: reports/console/
+2026-10-18-probe-clang.txt), so its window is the top 128 MiB of the app's MEM2 heap, whose end is the same on every start (0x49FA0000; the window leaves a megabyte of it above, for the heap's own bookkeeping), taken
+before anything else can (port/wiiu/src/wiiu_window.c); the maps are rebased to it (tools/ppc-be/map_convert.py --rebase). Every address the
+game or the port names in the window is this plus an offset. */
+#ifdef HALO_WIIU
+#define HALO_PORT_WINDOW_BASE 0x41EA0000UL
+#else
+#define HALO_PORT_WINDOW_BASE 0x80000000UL
+#endif
+
+#define HALO_PORT_GAME_STATE_BASE_ADDRESS (HALO_PORT_WINDOW_BASE + 0x01A00000UL) /* (0x80061000) */
 #define HALO_PORT_GAME_STATE_CPU_SIZE 0x13C0000 /* (0x305000) */
 #define HALO_PORT_GAME_STATE_GPU_SIZE 0x40000 /* (0x40000) */
 #define HALO_PORT_GAME_STATE_SIZE (HALO_PORT_GAME_STATE_CPU_SIZE+HALO_PORT_GAME_STATE_GPU_SIZE)
