@@ -18,6 +18,8 @@ static const char *crash_beat;
 static OSExceptionCallbackFn previous[16];
 static char note[2048];
 static volatile size_t note_size;
+/* the first part of the note: the kind of fault, the thread, the phase and where (no memory of the app's read but the strings, checked) */
+static volatile size_t part_one;
 /* 0 nothing yet; 1 being filled in; 2 ready to be written; 3 written */
 static volatile int state;
 static OSThread writer_thread;
@@ -81,10 +83,10 @@ static int string_address(const void *pointer)
 	return (uintptr_t)pointer >= 0x01000000u && (uintptr_t)pointer < 0x50000000u;
 }
 
-static void write_note(const char *text, size_t size)
+static void write_note(const char *text, size_t size, int append)
 {
 	size_t done = 0;
-	int file = open(crash_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	int file = open(crash_path, O_WRONLY | O_CREAT | (append ? O_APPEND : O_TRUNC), 0644);
 
 	if (file < 0)
 		return;
@@ -111,8 +113,15 @@ static int writer_main(int argc, const char **argv)
 	{
 		if (state == 2)
 		{
-			write_note(note, note_size);
+			write_note(note, note_size, 0);
 			state = 3;
+		}
+		else if (state == 4)
+		{
+			/* the second part: where the stack and the registers were (kept apart: a fault on the way through the stack must not take
+			the first part with it) */
+			write_note(note + part_one, note_size - part_one, 1);
+			state = 5;
 		}
 		OSSleepTicks(OSMillisecondsToTicks(20));
 	}
@@ -152,7 +161,18 @@ static void fill_note(OSExceptionType type, OSContext *context)
 	p = hex(p, context->dar);
 	p = put(p, " dsisr ", 8);
 	p = hex(p, context->dsisr);
-	p = put(p, "\nstack ", 16);
+	*p++ = '\n';
+	part_one = (size_t)(p - note);
+	note_size = part_one;
+	state = 2;
+	{
+		const OSTime started = OSGetSystemTime();
+
+		while (state != 3 && OSGetSystemTime() - started < (OSTime)OSMillisecondsToTicks(WAIT_MILLISECONDS / 2))
+		{
+		}
+	}
+	p = put(p, "stack ", 16);
 	p = hex(p, context->lr);
 	for (depth = 0; depth < 12 && stack_address(frame); depth++)
 	{
@@ -236,8 +256,8 @@ static BOOL handle(OSExceptionType type, OSContext *context)
 		const OSTime started = OSGetSystemTime();
 
 		fill_note(type, context);
-		state = 2;
-		while (state != 3 && OSGetSystemTime() - started < (OSTime)OSMillisecondsToTicks(WAIT_MILLISECONDS))
+		state = 4;
+		while (state != 5 && OSGetSystemTime() - started < (OSTime)OSMillisecondsToTicks(WAIT_MILLISECONDS))
 		{
 		}
 	}

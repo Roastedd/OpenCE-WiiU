@@ -13,6 +13,7 @@ Not run on a console.
 #include <coreinit/thread.h>
 #include <coreinit/time.h>
 #include <errno.h>
+#include <time.h>
 #include <unistd.h>
 
 /* waits until a signal arrives: there are none on the Wii U, so for ever */
@@ -22,6 +23,28 @@ int pause(void)
 {
 	for (;;)
 		OSSleepTicks(OSMillisecondsToTicks(1000));
+}
+
+/* wut 1.9.1's nanosleep (wut_nanosleep.c) writes the time left through rem without asking whether there is one, so every
+nanosleep(&time, NULL) - the shell's own log thread, newlib's sleep and usleep - ends in a write to address 8: the first run of the game on a
+console crashed its log thread this way (a DSI at __wut_nanosleep, address 8). This one is the call as POSIX has it: it sleeps, and leaves
+nothing to do for rem but to say that no time is left. */
+int nanosleep(const struct timespec *request, struct timespec *remaining);
+
+int nanosleep(const struct timespec *request, struct timespec *remaining)
+{
+	if (!request || request->tv_sec < 0 || request->tv_nsec < 0 || request->tv_nsec >= 1000000000L)
+	{
+		errno = EINVAL;
+		return -1;
+	}
+	OSSleepTicks((OSTime)request->tv_sec * (OSTime)OSSecondsToTicks(1) + (OSTime)OSNanosecondsToTicks((OSTime)request->tv_nsec));
+	if (remaining)
+	{
+		remaining->tv_sec = 0;
+		remaining->tv_nsec = 0;
+	}
+	return 0;
 }
 
 /* the 4 KiB of a page of Cafe OS's memory management (OS_PAGE_SIZE, 128 KiB, is the granularity of OSMapMemory) */
