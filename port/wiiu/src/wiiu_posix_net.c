@@ -218,7 +218,12 @@ int posix_socket_listen(int socket, int backlog)
 {
 	if (unusable())
 		return -1;
-	return succeed(listen(socket, backlog));
+	{
+		int result = listen(socket, backlog);
+
+		trace("listen", socket, NULL, result);
+		return succeed(result);
+	}
 }
 
 int posix_socket_accept(int socket, void *address, int *address_length)
@@ -232,6 +237,8 @@ int posix_socket_accept(int socket, void *address, int *address_length)
 	result = accept(socket, address, address_length ? &length : NULL);
 	if (address_length)
 		*address_length = (int)length;
+	if (result >= 0 || errno != EBUSY)
+		trace("accept", socket, NULL, result);
 	if (result < 0 && errno == EBUSY)
 	{
 		last_error = WSAEWOULDBLOCK;
@@ -242,9 +249,19 @@ int posix_socket_accept(int socket, void *address, int *address_length)
 
 int posix_socket_send(int socket, const void *buffer, int length, int flags)
 {
-	if (unusable())
-		return -1;
-	return succeed((int)send(socket, buffer, (size_t)length, flags));
+	{
+		int result;
+		static unsigned int told;
+
+		if (unusable())
+			return -1;
+		result = (int)send(socket, buffer, (size_t)length, flags);
+		if (result < 0 && errno != EAGAIN && errno != EBUSY && told++ < 20u)
+			wiiu_log("Net: send socket %d, %d bytes -> %d (errno %d)", socket, length, result, errno);
+		else if (result >= 0 && result < length && told++ < 20u)
+			wiiu_log("Net: send socket %d, %d bytes -> only %d", socket, length, result);
+		return succeed(result);
+	}
 }
 
 int posix_socket_sendto(int socket, const void *buffer, int length, int flags, const void *address, int address_length)
@@ -254,16 +271,30 @@ int posix_socket_sendto(int socket, const void *buffer, int length, int flags, c
 	{
 		int result = (int)sendto(socket, buffer, (size_t)length, flags, address, (socklen_t)address_length);
 
-		trace("sendto", socket, address, result);
+		static unsigned int sends;
+
+		if (sends++ < 8u || result < 0)
+			trace("sendto", socket, address, result);
 		return succeed(result);
 	}
 }
 
 int posix_socket_recv(int socket, void *buffer, int length, int flags)
 {
-	if (unusable())
-		return -1;
-	return succeed((int)recv(socket, buffer, (size_t)length, flags));
+	{
+		int result;
+		static unsigned int told;
+
+		if (unusable())
+			return -1;
+		result = (int)recv(socket, buffer, (size_t)length, flags);
+		if ((result < 0 && errno != EAGAIN && errno != EBUSY) || result == 0)
+		{
+			if (told++ < 20u)
+				wiiu_log("Net: recv socket %d, %d bytes -> %d (errno %d)", socket, length, result, result < 0 ? errno : 0);
+		}
+		return succeed(result);
+	}
 }
 
 int posix_socket_recvfrom(int socket, void *buffer, int length, int flags, void *address, int *address_length)
@@ -457,7 +488,10 @@ int posix_socket_select(int *read, int *read_count, int *write, int *write_count
 		}
 	}
 	if (result < 0)
+	{
+		wiiu_log("Net: poll failed, errno %d", errno);
 		return fail();
+	}
 	result = 0;
 	total = 0;
 	for (list = 0; list < 3; list++)
@@ -476,6 +510,7 @@ int posix_socket_select(int *read, int *read_count, int *write, int *write_count
 			it writeable with the failure in SO_ERROR. The game takes writeable as connected (connect_endpoint). */
 			if (list == 1 && getsockopt(descriptor, SOL_SOCKET, SO_ERROR, &pending, &length) == 0 && pending)
 			{
+				wiiu_log("Net: socket %d is writeable with the error %d", descriptor, pending);
 				errno = pending;
 				fail();
 				continue;

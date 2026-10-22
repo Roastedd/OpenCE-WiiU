@@ -569,6 +569,9 @@ void wiiu_game_halted(void)
 {
 	wiiu_log("The game halted (its reason is in debug.txt beside the maps): returning to the Wii U Menu");
 	wiiu_shell_log_flush(&shell_log, 1000);
+	/* (this thread is parked for good, as the foreground gate parks it: the release callback must not wait for it to be held, as it did, 2 s a time, with the
+	console left on the Wii U's logo) */
+	game_gate_held = 1;
 	SYSLaunchMenu();
 	for (;;)
 		sleep_ms(100);

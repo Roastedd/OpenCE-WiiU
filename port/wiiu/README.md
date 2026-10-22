@@ -147,9 +147,10 @@ that skips a cinematic, Wii Remote and Nunchuk.
 network. Run on the console (the first lines of the log's `Net:` trace, up to 120): the sockets open and bind, system link's search sends its 16-byte
 broadcast to 255.255.255.255:5150 every two seconds and it reaches the LAN (seen arriving on a Mac), and internet play's STUN requests (Google's and
 Cloudflare's, UDP) go out; the System Link Play entry of the Multiplayer menu is enabled; closing with the sockets in use is clean. Calls fail as "network
-is down" while the app is in the background, closing, or told by the system to stop using the network (`wiiu_network_allowed` in the shell). Not measured:
-a game found or joined, which needs a second machine running the game, and Create Game, which stops at "a problem with the disc" because the Wii U has no
-multiplayer maps yet (only `ui.map`). `network.wiiu_sockets` turns it off.
+is down" while the app is in the background, closing, or told by the system to stop using the network (`wiiu_network_allowed` in the shell). Hosting works
+end to end over the loopback (the host's own client connects to its listening socket): System Link, Create Game, Battle Creek, Slayer, the lobby and a
+match that starts, with the HUD and the controls answering (ZR fires, the stick moves and turns). Not measured: a game found or joined from a second
+machine. `network.wiiu_sockets` turns the sockets off.
 
 ## The debug server
 
