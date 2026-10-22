@@ -24,6 +24,10 @@ and presenting go there; a draw and a visibility test do nothing yet.
 #include "dk_commands.h"
 #include "dk_shaders.h"
 #include "dk_textures.h"
+#include "shader_key_wire.h"
+
+/* gx2_shaders.c: the programs the game makes, kept by hash for the pack generator */
+void dk_shader_program_note(uint64_t program_hash, const uint32_t *words, unsigned long count);
 #include "../../linux/game/cache_file_formats.h"
 
 #include <math.h>
@@ -1474,9 +1478,8 @@ HRESULT WINAPI D3DDevice_CreateVertexShader(CONST DWORD *declaration, CONST DWOR
 		memcpy(object->instructions, function + 1, object->instruction_count * 4 * sizeof(DWORD));
 		/* the key the shader cache knows this program by, computed once,
 	here, while the words are at hand */
-		object->program_hash = dk_shader_hash_mix(
-			dk_shader_hash_mix(dk_shader_hash_init(), &object->instruction_count, sizeof(object->instruction_count)),
-			object->instructions, object->instruction_count * 4 * sizeof(DWORD));
+		object->program_hash = shader_vertex_program_hash((const uint32_t *)object->instructions, object->instruction_count);
+		dk_shader_program_note(object->program_hash, (const uint32_t *)object->instructions, object->instruction_count);
 	}
 	parse_declaration(object, declaration);
 	vertex_shader_note(object);
@@ -2351,6 +2354,19 @@ static BOOL draw_prepare(BOOL immediate)
 	return TRUE;
 }
 
+/* the tag cache's (cache/physical_memory_map.c) vertex data is the maps' own, which the converter leaves as it was on the Xbox: little-endian; the rest of what
+the GPU reads (the BSPs' vertices, which the converter swaps because the CPU reads them, and everything the CPU makes) is big-endian */
+void *physical_memory_get_tag_cache_base_address(void);
+#define TAG_CACHE_BYTES 0x1600000UL
+
+static BOOL stream_is_little_endian(unsigned long stream)
+{
+	const char *base = (const char *)physical_memory_get_tag_cache_base_address();
+	const char *data = (const char *)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data);
+
+	return base && data >= base && data < base + TAG_CACHE_BYTES;
+}
+
 static uint32_t attribute_format(const struct vertex_element *element)
 {
 	switch (element->type)
@@ -2412,6 +2428,8 @@ static void format_from_declaration(struct dk_vertex_format *format)
 		format->attributes[element->reg].offset = element->offset;
 		format->strides[element->stream] = device.streams[element->stream].stride;
 		format->stream_mask |= 1UL << element->stream;
+		if (stream_is_little_endian(element->stream))
+			format->little_endian |= 1UL << element->stream;
 	}
 }
 

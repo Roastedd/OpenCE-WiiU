@@ -463,6 +463,9 @@ struct dk_vertex_format
 	uint32_t strides[DK_STREAM_COUNT];
 	/* the streams the registers read, bit n for stream n */
 	uint32_t stream_mask;
+	/* the streams whose data is little-endian, as the Xbox had it (a model's vertices in the tag cache: the converter leaves GPU data as it is, the GPU
+	reads it with no swap); the rest is the CPU's and the converted maps' big-endian */
+	uint32_t little_endian;
 	/* the current values of the unfed registers */
 	float constants[DK_ATTRIBUTE_COUNT][4];
 };
