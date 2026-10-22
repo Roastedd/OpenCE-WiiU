@@ -81,6 +81,22 @@ int mbedtls_platform_entropy_poll(void *data, unsigned char *output, size_t leng
 
 static int last_error;
 
+/* the first calls of each kind, in the log: what the game asks of the network, and what nsysnet answers (the sockets have not run on a console before) */
+static void trace(const char *what, int socket, const void *address, int result)
+{
+	static unsigned int told;
+	const unsigned char *bytes = (const unsigned char *)address;
+
+	if (told >= 120u)
+		return;
+	told++;
+	if (address)
+		wiiu_log("Net: %s socket %d, %u.%u.%u.%u:%u -> %d (errno %d)", what, socket, bytes[4], bytes[5], bytes[6], bytes[7], (bytes[2] << 8) | bytes[3], result,
+			result < 0 ? errno : 0);
+	else
+		wiiu_log("Net: %s socket %d -> %d (errno %d)", what, socket, result, result < 0 ? errno : 0);
+}
+
 static int fail(void)
 {
 	switch (errno)
@@ -155,7 +171,12 @@ int posix_socket(int family, int type, int protocol)
 {
 	if (unusable())
 		return -1;
-	return succeed(socket(family, type, protocol));
+	{
+		int result = socket(family, type, protocol);
+
+		trace(type == SOCK_STREAM ? "socket (stream)" : "socket (datagram)", result, NULL, result);
+		return succeed(result);
+	}
 }
 
 /* (a close is always allowed: the sockets are given back when the system asks) */
@@ -168,7 +189,12 @@ int posix_socket_bind(int socket, const void *address, int address_length)
 {
 	if (unusable())
 		return -1;
-	return succeed(bind(socket, address, (socklen_t)address_length));
+	{
+		int result = bind(socket, address, (socklen_t)address_length);
+
+		trace("bind", socket, address, result);
+		return succeed(result);
+	}
 }
 
 int posix_socket_connect(int socket, const void *address, int address_length)
@@ -179,6 +205,7 @@ int posix_socket_connect(int socket, const void *address, int address_length)
 	if (unusable())
 		return -1;
 	result = connect(socket, address, (socklen_t)address_length);
+	trace("connect", socket, address, result);
 	if (result < 0 && (errno == EINPROGRESS || errno == EALREADY))
 	{
 		last_error = WSAEWOULDBLOCK;
@@ -224,7 +251,12 @@ int posix_socket_sendto(int socket, const void *buffer, int length, int flags, c
 {
 	if (unusable())
 		return -1;
-	return succeed((int)sendto(socket, buffer, (size_t)length, flags, address, (socklen_t)address_length));
+	{
+		int result = (int)sendto(socket, buffer, (size_t)length, flags, address, (socklen_t)address_length);
+
+		trace("sendto", socket, address, result);
+		return succeed(result);
+	}
 }
 
 int posix_socket_recv(int socket, void *buffer, int length, int flags)

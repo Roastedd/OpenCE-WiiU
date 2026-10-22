@@ -141,6 +141,16 @@ each. The menus are drawn at the left of the picture, not centered in its 852 co
 Controllers (none was connected), split screen play, a real finger (the calibration is the system's, to 854x480). Not done: the GamePad's gyro, a tap
 that skips a cinematic, Wii Remote and Nunchuk.
 
+## The network
+
+`src/wiiu_posix_net.c` is `posix_net.c` on wut's BSD sockets (nsysnet), under the game's Winsock layer (`xnet.c`), so system link and internet play have a
+network. Run on the console (the first lines of the log's `Net:` trace, up to 120): the sockets open and bind, system link's search sends its 16-byte
+broadcast to 255.255.255.255:5150 every two seconds and it reaches the LAN (seen arriving on a Mac), and internet play's STUN requests (Google's and
+Cloudflare's, UDP) go out; the System Link Play entry of the Multiplayer menu is enabled; closing with the sockets in use is clean. Calls fail as "network
+is down" while the app is in the background, closing, or told by the system to stop using the network (`wiiu_network_allowed` in the shell). Not measured:
+a game found or joined, which needs a second machine running the game, and Create Game, which stops at "a problem with the disc" because the Wii U has no
+multiplayer maps yet (only `ui.map`). `network.wiiu_sockets` turns it off.
+
 ## The debug server
 
 `src/wiiu_debug.c` is a small server inside the game's own shell (TCP port 4310, started once the game's thread runs) so that a change can be

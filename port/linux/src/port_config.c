@@ -231,9 +231,8 @@ static const struct config_setting config_settings[] =
 		"(jump) is the bottom button, the Wii U's B, and the prompts show the letter that is\n"
 		"there. \"label\": by letter, so that the Wii U's A (the right-hand button) is the Xbox's A.\n"
 		"\"auto\": by letter in the menus (A selects, B goes back), by place in the game." },
-	{ "network.wiiu_sockets", _config_boolean, "false", "HALO_WIIU_SOCKETS", _environment_value, _platform_wiiu,
-		"The Wii U's sockets for system link and internet play. Off until they have run on a\n"
-		"console: the network is then down, as it was before them." },
+	{ "network.wiiu_sockets", _config_boolean, "true", "HALO_WIIU_SOCKETS", _environment_value, _platform_wiiu,
+		"The Wii U's sockets for system link and internet play. false: the network is down." },
 	{ "input.wiiu_rumble", _config_boolean, "true", "HALO_WIIU_RUMBLE", _environment_value, _platform_wiiu,
 		"The GamePad and the Pro Controllers rumble as the game asks." },
 	{ "input.mouse_sensitivity", _config_real, "1.0", "HALO_MOUSE_SENSITIVITY", _environment_value, _platform_desktop,
