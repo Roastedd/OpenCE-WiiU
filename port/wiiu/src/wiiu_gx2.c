@@ -16,6 +16,7 @@ Not run on a console.
 */
 
 #include "dk_commands.h"
+#include "wiiu_debug.h"
 #include "wiiu_shell.h"
 #include "wiiu_tile.h"
 
@@ -2218,6 +2219,7 @@ static void present(const struct dk_command_present *command)
 	if (back && command->screenshot)
 		screenshot_take(back, command->screenshot);
 	/* (before the frame is drawn, as the screenshot above is: the screens' buffers then hold the frame before) */
+	wiiu_debug_present(back ? &back->color : NULL, WHBGfxGetTVColourBuffer(), WHBGfxGetDRCColourBuffer());
 	WHBGfxBeginRender();
 	WHBGfxBeginRenderTV();
 	if (back)
