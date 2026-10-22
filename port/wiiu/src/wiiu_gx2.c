@@ -124,6 +124,7 @@ static struct
 	unsigned shaders_loaded, fetch_full;
 	unsigned draws_made, skipped_target, skipped_state, skipped_shader, skipped_ring, ring_overflows;
 	unsigned textures_made, textures_unsupported, texture_short, layouts_logged;
+	unsigned texture_log;
 	unsigned sampler_levels[4];
 	int sampler_valid[4];
 	OSTime started;
@@ -133,8 +134,10 @@ static struct
 	unsigned render_height; /* the lines the game draws at (halo/render_height.txt, 720 if none): the TV's 1080 lines cost 27 ms a frame in the menu */
 	int trace_frame; /* halo/gx2_trace.txt: the frame whose draws are logged (-1: none) */
 	int debug_mode; /* and, after it, a mode: 1 draws without blending, 2 without culling */
-	int features_off; /* and a third number: bit 0 no mip levels, bit 1 no 3D and cube textures, bit 2 no mip composites */
+	int features_off; /* and a third number: bit 0 no mip levels, bit 1 no 3D and cube textures, bit 2 no mip composites, bit 3 visibility tests on, bit 4 samplers ignore mips,
+	bit 5 samplers without anisotropy (these two take effect when the file is read again) */
 	unsigned traced;
+	int trace_serial; /* the fourth number: a new one traces the frame after the file is read again (every 300 frames) */
 } gx;
 
 static void *gx_alloc_raw(uint32_t size, uint32_t alignment)
@@ -1118,6 +1121,18 @@ static void texture_make(const struct dk_command_texture *command)
 		image_surface(image, command->kind, command->format, command->width, command->height, command->depth, command->levels);
 		gx.textures_made++;
 	}
+	if (gx.texture_log < 80 && command->format == DK_TEXTURE_BGRA && command->kind == DK_TEXTURE_2D && command->source_bytes)
+	{
+		const uint8_t *texels = (const uint8_t *)(uintptr_t)command->source;
+		unsigned long i, clear = 0, count = (unsigned long)command->width * command->height;
+
+		for (i = 0; i < count; i++)
+			if (texels[i * 4 + 3] < 128)
+				clear++;
+		wiiu_log("GX2: texture %u made/updated: %ux%u, %u levels, %lu of %lu texels transparent (byte 3), first texel %02x%02x%02x%02x", (unsigned)command->id,
+			(unsigned)command->width, (unsigned)command->height, (unsigned)command->levels, clear, count, texels[0], texels[1], texels[2], texels[3]);
+		gx.texture_log++;
+	}
 	if (image->supported && command->source_bytes)
 		image_write(image, (const uint8_t *)(uintptr_t)command->source, command->source_bytes, command->face_bytes);
 	else if (!image->supported)
@@ -1171,8 +1186,8 @@ static GX2TexAnisoRatio aniso_of(float anisotropy)
 /* levels: those of the texture the sampler is used with */
 static void sampler_set(GX2Sampler *sampler, const struct dk_sampler *s, unsigned levels)
 {
-	const GX2TexMipFilterMode mip = levels > 1 && s->mip_filter == DK_MIP_LINEAR ? GX2_TEX_MIP_FILTER_MODE_LINEAR :
-		levels > 1 && s->mip_filter == DK_MIP_NEAREST ? GX2_TEX_MIP_FILTER_MODE_POINT : GX2_TEX_MIP_FILTER_MODE_NONE;
+	const GX2TexMipFilterMode mip = (gx.features_off & 16) ? GX2_TEX_MIP_FILTER_MODE_NONE : levels > 1 && s->mip_filter == DK_MIP_LINEAR ?
+		GX2_TEX_MIP_FILTER_MODE_LINEAR : levels > 1 && s->mip_filter == DK_MIP_NEAREST ? GX2_TEX_MIP_FILTER_MODE_POINT : GX2_TEX_MIP_FILTER_MODE_NONE;
 	const float maximum = mip == GX2_TEX_MIP_FILTER_MODE_NONE ? 0.0f : (float)(levels - 1);
 	float minimum = s->lod_minimum;
 
@@ -1183,7 +1198,7 @@ static void sampler_set(GX2Sampler *sampler, const struct dk_sampler *s, unsigne
 	GX2InitSampler(sampler, GX2_TEX_CLAMP_MODE_WRAP, GX2_TEX_XY_FILTER_MODE_POINT);
 	GX2InitSamplerClamping(sampler, wrap_of(s->wrap[0]), wrap_of(s->wrap[1]), wrap_of(s->wrap[2]));
 	GX2InitSamplerXYFilter(sampler, s->mag_linear ? GX2_TEX_XY_FILTER_MODE_LINEAR : GX2_TEX_XY_FILTER_MODE_POINT,
-		s->min_linear ? GX2_TEX_XY_FILTER_MODE_LINEAR : GX2_TEX_XY_FILTER_MODE_POINT, aniso_of(s->anisotropy));
+		s->min_linear ? GX2_TEX_XY_FILTER_MODE_LINEAR : GX2_TEX_XY_FILTER_MODE_POINT, (gx.features_off & 32) ? GX2_TEX_ANISO_RATIO_NONE : aniso_of(s->anisotropy));
 	GX2InitSamplerZMFilter(sampler, s->min_linear ? GX2_TEX_Z_FILTER_MODE_LINEAR : GX2_TEX_Z_FILTER_MODE_POINT, mip);
 	GX2InitSamplerLOD(sampler, minimum, maximum, mip == GX2_TEX_MIP_FILTER_MODE_NONE ? 0.0f : s->lod_bias);
 	GX2InitSamplerBorderType(sampler, s->border[3] > 0.5f && s->border[0] > 0.5f ? GX2_TEX_BORDER_TYPE_WHITE : s->border[3] > 0.5f ? GX2_TEX_BORDER_TYPE_BLACK :
@@ -1465,6 +1480,16 @@ static void draw_trace(const struct dk_command_draw *command, const struct shade
 				v[38], v[39]);
 		}
 	}
+	wiiu_log("GX2   format: stream mask %x little-endian %x static %x strides %u %u %u %u; stream bytes (second stream first 16): %s", (unsigned)f->stream_mask,
+		(unsigned)f->little_endian, (unsigned)f->static_streams, (unsigned)f->strides[0], (unsigned)f->strides[1], (unsigned)f->strides[2], (unsigned)f->strides[3],
+		command->stream_count > 1 && !command->inline_bytes ? "see below" : "-");
+	if (command->stream_count > 1 && !command->inline_bytes)
+	{
+		const unsigned char *at = (const unsigned char *)(uintptr_t)command->streams[1][0];
+
+		wiiu_log("GX2   stream 2 at %08x (%u bytes): %02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x", (unsigned)command->streams[1][0],
+			(unsigned)command->streams[1][1], at[0], at[1], at[2], at[3], at[4], at[5], at[6], at[7], at[8], at[9], at[10], at[11], at[12], at[13], at[14], at[15]);
+	}
 	wiiu_log("GX2   state: vp %d,%d %dx%d z %g..%g cull %u ccw %u depth %u/%u/%x stencil %u blend %u %x->%x mask %x; tex %u/%u %u/%u %u/%u %u/%u",
 		(int)s->viewport[0], (int)s->viewport[1], (int)s->viewport[2], (int)s->viewport[3], s->depth_range[0], s->depth_range[1], (unsigned)s->cull,
 		(unsigned)s->front_face_ccw, (unsigned)s->depth_test, (unsigned)s->depth_write, (unsigned)s->depth_function, (unsigned)s->stencil_test,
@@ -1583,7 +1608,7 @@ static void draw(const struct dk_command_draw *command)
 		gx.skipped_ring++;
 		return;
 	}
-	if (gx.trace_frame >= 0 && (int)gx.frames == gx.trace_frame && gx.traced < 48)
+	if (gx.trace_frame >= 0 && (int)gx.frames == gx.trace_frame && gx.traced < 64)
 	{
 		draw_trace(command, vs, ps);
 		gx.traced++;
@@ -1631,6 +1656,18 @@ static void draw(const struct dk_command_draw *command)
 }
 
 /* ---------- starting */
+
+/* What the app owes the GPU when it ends, in the foreground: the work done, and GX2 shut down as WHBGfxShutdown does, which official applications do. (Without it the
+console froze at the end of some runs: the log was complete, the screen stopped, FTP died.) */
+static void gx2_atexit(void)
+{
+	if (gx.ready && wiiu_in_foreground())
+	{
+		GX2DrawDone();
+		WHBGfxShutdown();
+		gx.ready = 0;
+	}
+}
 
 static int initialize(void)
 {
@@ -1710,13 +1747,14 @@ static int initialize(void)
 		file = fopen(WIIU_DATA_DIRECTORY "/gx2_trace.txt", "r");
 		if (file)
 		{
-			if (fscanf(file, "%d %d %d", &gx.trace_frame, &gx.debug_mode, &gx.features_off) < 1)
+			if (fscanf(file, "%d %d %d %d", &gx.trace_frame, &gx.debug_mode, &gx.features_off, &gx.trace_serial) < 1)
 				gx.trace_frame = -1;
 			fclose(file);
 		}
 		if (gx.exit_after > 0.0)
 			wiiu_log("GX2: the run ends %.0f seconds after its first frame (exit_after.txt)", gx.exit_after);
 	}
+	atexit(gx2_atexit);
 	gx.state_dirty = 1;
 	gx.constants_lo = 192;
 	gx.constants_hi = 0;
@@ -2192,6 +2230,25 @@ static void present(const struct dk_command_present *command)
 	WHBGfxFinishRender();
 	gx.frames++;
 	gx.window_frames++;
+	if (gx.frames % 300 == 0)
+	{
+		FILE *file = fopen(WIIU_DATA_DIRECTORY "/gx2_trace.txt", "r");
+		int frame = -1, mode = 0, features = 0, serial = 0;
+
+		if (file)
+		{
+			if (fscanf(file, "%d %d %d %d", &frame, &mode, &features, &serial) >= 1 && serial != gx.trace_serial)
+			{
+				gx.trace_serial = serial;
+				gx.trace_frame = (int)gx.frames + 2;
+				gx.traced = 0;
+				gx.debug_mode = mode;
+				gx.features_off = features;
+				memset(gx.sampler_valid, 0, sizeof(gx.sampler_valid));
+			}
+			fclose(file);
+		}
+	}
 	gx.present_ticks += OSGetSystemTime() - present_start;
 	if (gx.frames == 1)
 	{

@@ -2375,12 +2375,50 @@ the GPU reads (the BSPs' vertices, which the converter swaps because the CPU rea
 void *physical_memory_get_tag_cache_base_address(void);
 #define TAG_CACHE_BYTES 0x1600000UL
 
-static BOOL stream_is_little_endian(unsigned long stream)
+static int float_plausible(float value)
+{
+	value = fabsf(value);
+	return value == 0.0f || (value > 1e-8f && value < 1e8f);
+}
+
+static float float_from(const unsigned char *at, int little)
+{
+	uint32_t bits = little ? ((uint32_t)at[0] | (uint32_t)at[1] << 8 | (uint32_t)at[2] << 16 | (uint32_t)at[3] << 24) :
+		((uint32_t)at[3] | (uint32_t)at[2] << 8 | (uint32_t)at[1] << 16 | (uint32_t)at[0] << 24);
+	float value;
+
+	memcpy(&value, &bits, sizeof(value));
+	return value;
+}
+
+/* What is in the tag cache is the maps' vertex data: a model's, which the converter leaves as the Xbox had it, little-endian, and the BSP's (which lives in the
+tag cache as well), which it swaps. The positions of the first vertices say which: read as the wrong byte order they are not coordinates (exponents of 1e30). The
+streams of a draw that follow the first one are the same kind. */
+static BOOL stream_is_little_endian(unsigned long stream, unsigned long position_offset, BOOL has_position, BOOL *decided, BOOL *decision)
 {
 	const char *base = (const char *)physical_memory_get_tag_cache_base_address();
-	const char *data = (const char *)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data);
+	const unsigned char *data = (const unsigned char *)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data);
+	unsigned long stride = device.streams[stream].stride, vertex;
+	int little = 0, big = 0;
 
-	return base && data >= base && data < base + TAG_CACHE_BYTES;
+	if (!(base && (const char *)data >= base && (const char *)data < base + TAG_CACHE_BYTES))
+		return FALSE;
+	if (!has_position || !stride)
+		return *decided ? *decision : TRUE;
+	for (vertex = 0; vertex < 4; vertex++)
+	{
+		const unsigned char *at = data + vertex * stride + position_offset;
+		unsigned long axis;
+
+		for (axis = 0; axis < 3; axis++)
+		{
+			little += float_plausible(float_from(at + axis * 4, 1));
+			big += float_plausible(float_from(at + axis * 4, 0));
+		}
+	}
+	*decided = TRUE;
+	*decision = little >= big;
+	return *decision;
 }
 
 static uint32_t attribute_format(const struct vertex_element *element)
@@ -2418,6 +2456,19 @@ static void format_from_declaration(struct dk_vertex_format *format)
 {
 	struct vertex_shader_object *declaration = device.vertex_shader;
 	unsigned long index;
+	BOOL endian_decided = FALSE, endian_decision = TRUE;
+
+	/* (the position's stream first: it settles the byte order of the streams that are in the tag cache) */
+	for (index = 0; index < declaration->element_count; index++)
+	{
+		const struct vertex_element *element = &declaration->elements[index];
+
+		if (element->reg == 0 && element->type != D3DVSDT_NONE && device.streams[element->stream].data)
+		{
+			stream_is_little_endian(element->stream, element->offset, TRUE, &endian_decided, &endian_decision);
+			break;
+		}
+	}
 
 	memset(format, 0, sizeof(*format));
 	for (index = 0; index < XGPU_VERTEX_ATTRIBUTE_COUNT; index++)
@@ -2444,7 +2495,7 @@ static void format_from_declaration(struct dk_vertex_format *format)
 		format->attributes[element->reg].offset = element->offset;
 		format->strides[element->stream] = device.streams[element->stream].stride;
 		format->stream_mask |= 1UL << element->stream;
-		if (stream_is_little_endian(element->stream))
+		if (stream_is_little_endian(element->stream, element->offset, element->reg == 0, &endian_decided, &endian_decision))
 			format->little_endian |= 1UL << element->stream;
 		if (device.streams[element->stream].stride && platform_is_contiguous(PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[element->stream].data)))
 			format->static_streams |= 1UL << element->stream;
@@ -2828,6 +2879,8 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 	}
 	/* the startup pass, a few keys a frame (dk_shaders.c) */
 	dk_shader_frame();
+	/* the hash watch of the pages the texture cache reads from (web_memory_watch.c: no page protection here) looks again once a frame */
+	memory_watch_begin_frame();
 	if (screenshot_every < 0)
 		screenshot_every = config_integer("debug.screenshot_every");
 	if (statistics_enabled < 0)
