@@ -16,7 +16,6 @@ Not run on a console.
 */
 
 #include "dk_commands.h"
-#include "wiiu_debug.h"
 #include "wiiu_shell.h"
 #include "wiiu_tile.h"
 
@@ -127,12 +126,24 @@ static struct
 	unsigned textures_made, textures_unsupported, texture_short, layouts_logged;
 	unsigned texture_log;
 	unsigned sampler_levels[4];
+	const GX2Texture *bound_texture[4]; /* what the stages hold now (static images only: a render target is bound, and flushed, each draw) */
+	int bound_location[4];
+	int stage_dynamic;
+	int samplers_changed[4];
+	unsigned format_serial, memo_serial;
+	const struct shader *memo_vs;
+	struct fetch *memo_fetch;
+	void *constants_ring;
+	unsigned constants_frame, constants_serial;
 	int sampler_valid[4];
 	OSTime started;
+	OSTime shader_ticks;
 	OSTime submit_ticks, present_ticks, texture_ticks, draw_ticks;
 	unsigned window_frames;
+	OSTime last_present, longest_frame;
+	unsigned slow_frames; /* frames of the window that took more than 40 ms */
 	double exit_after;
-	unsigned render_height; /* the lines the game draws at (halo/render_height.txt, 720 if none): the TV's 1080 lines cost 27 ms a frame in the menu */
+	unsigned render_height; /* the lines the game draws at (halo/render_height.txt, 540 if none): the TV's 1080 lines cost 27 ms a frame in the menu */
 	int trace_frame; /* halo/gx2_trace.txt: the frame whose draws are logged (-1: none) */
 	int debug_mode; /* and, after it, a mode: 1 draws without blending, 2 without culling */
 	int features_off; /* and a third number: bit 0 no mip levels, bit 1 no 3D and cube textures, bit 2 no mip composites, bit 3 visibility tests on, bit 4 samplers ignore mips,
@@ -729,6 +740,15 @@ static void vertex_uniform(const struct shader *vs, unsigned which, const float 
 		return;
 	if (floats > vs->uniform_floats[which])
 		floats = vs->uniform_floats[which];
+	if (floats < 4)
+	{
+		/* (a register is written whole: GX2 ignores a write of fewer than four floats, which left the menus' screen offset and the alpha test's reference at zero) */
+		float whole[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+
+		memcpy(whole, values, floats * sizeof(float));
+		GX2SetVertexUniformReg((uint32_t)vs->uniform[which], 4, whole);
+		return;
+	}
 	GX2SetVertexUniformReg((uint32_t)vs->uniform[which], floats, values);
 }
 
@@ -738,6 +758,14 @@ static void pixel_uniform(const struct shader *ps, unsigned which, const float *
 		return;
 	if (floats > ps->uniform_floats[which])
 		floats = ps->uniform_floats[which];
+	if (floats < 4)
+	{
+		float whole[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+
+		memcpy(whole, values, floats * sizeof(float));
+		GX2SetPixelUniformReg((uint32_t)ps->uniform[which], 4, whole);
+		return;
+	}
 	GX2SetPixelUniformReg((uint32_t)ps->uniform[which], floats, values);
 }
 
@@ -821,8 +849,16 @@ static void uniforms_apply(const struct shader *vs, const struct shader *ps)
 	{
 		vertex_uniform(vs, VS_VIEWPORT_SCALE, gx.vertex_parameters.viewport_scale, 4);
 		vertex_uniform(vs, VS_VIEWPORT_OFFSET, gx.vertex_parameters.viewport_offset, 4);
-		vertex_uniform(vs, VS_POINT_SIZE, &gx.vertex_parameters.point_and_screen[0], 1);
-		vertex_uniform(vs, VS_SCREEN_OFFSET, &gx.vertex_parameters.point_and_screen[1], 1);
+		{
+			/* (a scalar is in a register of its own: written as the whole register, as the GPU's constants are four at a time) */
+			const float point[4] = { gx.vertex_parameters.point_and_screen[0], 0.0f, 0.0f, 0.0f };
+			const float screen[4] = { gx.vertex_parameters.point_and_screen[1], 0.0f, 0.0f, 0.0f };
+
+			if (vs->uniform[VS_POINT_SIZE] >= 0)
+				GX2SetVertexUniformReg((uint32_t)vs->uniform[VS_POINT_SIZE], 4, point);
+			if (vs->uniform[VS_SCREEN_OFFSET] >= 0)
+				GX2SetVertexUniformReg((uint32_t)vs->uniform[VS_SCREEN_OFFSET], 4, screen);
+		}
 		gx.vertex_parameters_dirty = 0;
 	}
 	if (ps != gx.regs_ps || gx.pixel_parameters_dirty)
@@ -1338,6 +1374,7 @@ static const GX2Texture *composite_sampled(uint32_t data, uint32_t levels)
 static const GX2Texture *stage_texture(const struct dk_stage_texture *stage, unsigned *levels)
 {
 	*levels = 1;
+	gx.stage_dynamic = 0;
 	if (stage->id && stage->id < DK_TEXTURE_LIMIT && images && images[stage->id].used && images[stage->id].supported)
 	{
 		*levels = images[stage->id].levels;
@@ -1347,6 +1384,7 @@ static const GX2Texture *stage_texture(const struct dk_stage_texture *stage, uns
 	{
 		const GX2Texture *texture = composite_sampled(stage->target, stage->composite);
 
+		gx.stage_dynamic = 1;
 		if (texture)
 		{
 			*levels = stage->composite;
@@ -1357,6 +1395,7 @@ static const GX2Texture *stage_texture(const struct dk_stage_texture *stage, uns
 	{
 		struct target *found = target_latest(stage->target);
 
+		gx.stage_dynamic = 1;
 		if (found)
 		{
 			GX2Invalidate((GX2InvalidateMode)(GX2_INVALIDATE_MODE_COLOR_BUFFER | GX2_INVALIDATE_MODE_TEXTURE), found->color.surface.image,
@@ -1384,9 +1423,16 @@ static void textures_bind(const struct shader *ps)
 			sampler_set(&gx.samplers[stage], &gx.stages[stage].sampler, levels);
 			gx.sampler_valid[stage] = 1;
 			gx.sampler_levels[stage] = levels;
+			gx.samplers_changed[stage] = 1;
 		}
+		if (!gx.stage_dynamic && gx.bound_texture[stage] == texture && gx.bound_location[stage] == ps->sampler[stage] && gx.sampler_valid[stage] &&
+			gx.sampler_levels[stage] == levels && !gx.samplers_changed[stage])
+			continue;
 		GX2SetPixelTexture(texture, (uint32_t)ps->sampler[stage]);
 		GX2SetPixelSampler(&gx.samplers[stage], (uint32_t)ps->sampler[stage]);
+		gx.bound_texture[stage] = gx.stage_dynamic ? NULL : texture;
+		gx.bound_location[stage] = ps->sampler[stage];
+		gx.samplers_changed[stage] = 0;
 	}
 }
 
@@ -1521,6 +1567,10 @@ static void draw_trace(const struct dk_command_draw *command, const struct shade
 					gx.constants[row][3]);
 				shown++;
 			}
+		if (vertex)
+			wiiu_log("GX2   vs %u: point_size at %d, screen_offset at %d (%u floats): point_and_screen %g %g", (unsigned)gx.vs_handle, vertex->uniform[VS_POINT_SIZE],
+				vertex->uniform[VS_SCREEN_OFFSET], (unsigned)vertex->uniform_floats[VS_SCREEN_OFFSET], gx.vertex_parameters.point_and_screen[0],
+				gx.vertex_parameters.point_and_screen[1]);
 		wiiu_log("GX2   vs %u: c at %d (%u floats), %u..%u dirty:%s", (unsigned)gx.vs_handle, vertex ? vertex->uniform[VS_C] : -2, vertex ? (unsigned)vertex->uniform_floats[VS_C] : 0u,
 			gx.constants_lo, gx.constants_hi, rows);
 	}
@@ -1552,14 +1602,27 @@ static void draw(const struct dk_command_draw *command)
 		gx.skipped_state++;
 		return;
 	}
-	vs = shader_get(gx.vs_handle);
-	ps = shader_get(gx.ps_handle);
+	{
+		const OSTime load_start = OSGetSystemTime();
+
+		vs = shader_get(gx.vs_handle);
+		ps = shader_get(gx.ps_handle);
+		gx.shader_ticks += OSGetSystemTime() - load_start;
+	}
 	if (!vs || !ps)
 	{
 		gx.skipped_shader++;
 		return;
 	}
-	fetch = fetch_get(vs);
+	if (gx.memo_vs == vs && gx.memo_serial == gx.format_serial)
+		fetch = gx.memo_fetch;
+	else
+	{
+		fetch = fetch_get(vs);
+		gx.memo_vs = vs;
+		gx.memo_serial = gx.format_serial;
+		gx.memo_fetch = fetch;
+	}
 	if (!fetch)
 	{
 		gx.skipped_shader++;
@@ -1586,7 +1649,15 @@ static void draw(const struct dk_command_draw *command)
 		}
 		slot++;
 	}
-	constants = ring_copy(gx.format.constants, sizeof(gx.format.constants));
+	if (gx.constants_ring && gx.constants_frame == gx.frames && gx.constants_serial == gx.format_serial)
+		constants = gx.constants_ring;
+	else
+	{
+		constants = ring_copy(gx.format.constants, sizeof(gx.format.constants));
+		gx.constants_ring = constants;
+		gx.constants_frame = gx.frames;
+		gx.constants_serial = gx.format_serial;
+	}
 	if (command->index_address)
 	{
 		const unsigned char *source;
@@ -1721,7 +1792,7 @@ static int initialize(void)
 			return 0;
 		}
 	}
-	gx.render_height = 720;
+	gx.render_height = 540;
 	{
 		FILE *file = fopen(WIIU_DATA_DIRECTORY "/render_height.txt", "r");
 		unsigned lines = 0;
@@ -1893,6 +1964,7 @@ static void context_resume(void)
 	gx.state_dirty = 1;
 	gx.regs_vs = gx.regs_ps = gx.cur_vs = gx.cur_ps = NULL;
 	gx.cur_fetch = NULL;
+	memset(gx.bound_texture, 0, sizeof(gx.bound_texture));
 	gx.vertex_parameters_dirty = gx.pixel_parameters_dirty = 1;
 }
 
@@ -2219,7 +2291,6 @@ static void present(const struct dk_command_present *command)
 	if (back && command->screenshot)
 		screenshot_take(back, command->screenshot);
 	/* (before the frame is drawn, as the screenshot above is: the screens' buffers then hold the frame before) */
-	wiiu_debug_present(back ? &back->color : NULL, WHBGfxGetTVColourBuffer(), WHBGfxGetDRCColourBuffer());
 	WHBGfxBeginRender();
 	WHBGfxBeginRenderTV();
 	if (back)
@@ -2232,6 +2303,16 @@ static void present(const struct dk_command_present *command)
 	WHBGfxFinishRender();
 	gx.frames++;
 	gx.window_frames++;
+	if (gx.last_present)
+	{
+		const OSTime interval = OSGetSystemTime() - gx.last_present;
+
+		if (interval > gx.longest_frame)
+			gx.longest_frame = interval;
+		if (OSTicksToMilliseconds(interval) > 40)
+			gx.slow_frames++;
+	}
+	gx.last_present = OSGetSystemTime();
 	if (gx.frames % 300 == 0)
 	{
 		FILE *file = fopen(WIIU_DATA_DIRECTORY "/gx2_trace.txt", "r");
@@ -2281,6 +2362,10 @@ static void present(const struct dk_command_present *command)
 			(double)OSTicksToMicroseconds(gx.draw_ticks) / 1000.0 / (double)gx.window_frames,
 			(double)OSTicksToMicroseconds(gx.texture_ticks) / 1000.0 / (double)gx.window_frames,
 			(double)OSTicksToMicroseconds(gx.present_ticks) / 1000.0 / (double)gx.window_frames);
+		wiiu_log("GX2:   frame times: longest %llu ms, %u over 40 ms; shaders loaded %u (%llu ms loading)", (unsigned long long)OSTicksToMilliseconds(gx.longest_frame),
+			gx.slow_frames, gx.shaders_loaded, (unsigned long long)OSTicksToMilliseconds(gx.shader_ticks));
+		gx.longest_frame = 0;
+		gx.slow_frames = 0;
 		gx.submit_ticks = gx.present_ticks = gx.texture_ticks = gx.draw_ticks = 0;
 		gx.window_frames = 0;
 		if (cache.entries || cache.full)
@@ -2376,6 +2461,7 @@ void host_gx2_submit(uint32_t commands, uint32_t size)
 		case DK_COMMAND_VERTEX_FORMAT:
 			gx.format = ((const struct dk_command_vertex_format *)header)->format;
 			gx.format_set = 1;
+			gx.format_serial++;
 			break;
 		case DK_COMMAND_TEXTURE:
 		{

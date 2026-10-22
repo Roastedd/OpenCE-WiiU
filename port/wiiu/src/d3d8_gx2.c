@@ -938,7 +938,7 @@ int wiiu_input_touch(float *x, float *y);
 /* Measured on the console (2026-10-22): the menus are drawn at the left of the picture, not centered in its 852 columns, although the game asks for the
 offset (halo_screen_ui_offset(TRUE) sets 106 while it draws them: the targets debug.touch_targets shows sit where the menus are drawn). So a touch is
 not moved by it here. When the GX2 renderer centers the menus, as d3d8_gl.c does, set this to 1. */
-#define MENUS_DRAWN_CENTERED 0
+#define MENUS_DRAWN_CENTERED 1
 
 /* a point of the GamePad's picture in the menus' coordinates (the 640x480 they are drawn in), as d3d8_gl.c's ui_point_from_window gives them */
 static void menu_point_from_gamepad(float gamepad_x, float gamepad_y, short *x, short *y)
