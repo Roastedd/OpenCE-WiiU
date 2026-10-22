@@ -47,6 +47,9 @@ int wiiu_in_foreground(void);
 /* The Wii U Menu asked for (the app then ends through ProcUI), from any thread; it returns. Under Aroma the system may then start the app again. */
 void wiiu_launch_menu(void);
 
+/* 1 while the app may use the network: in the foreground, not closing, and not told by the system to stop (ProcUI's network stop and start). */
+int wiiu_network_allowed(void);
+
 /* Quit, as the menus' Quit does (platform_request_quit): the shell leaves its loop and the app closes. */
 void wiiu_request_exit(void);
 

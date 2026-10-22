@@ -10,7 +10,9 @@ they are matched by letter (the Wii U's A selects, its B goes back, as on every 
 letters. The setting input.wiiu_face_buttons says "position" or "label" for both instead. The Xbox's black and white buttons, which later pads put on the shoulders, are the Wii U's R and L; its triggers are ZR and ZL
 (buttons, so all or nothing). The motors rumble with the game (input.wiiu_rumble).
 
-Not yet: the GamePad's gyro and touch screen.
+A tap on the GamePad's touch screen outside the menus skips a cinematic that can be skipped (it presses A, as the Android build's touch screen does).
+
+Not yet: the GamePad's gyro.
 */
 
 #include "platform.h"
@@ -121,6 +123,38 @@ static void pad_state(const struct wiiu_pad *pad, XINPUT_GAMEPAD *state)
 	state->sThumbRY = stick(pad->right_y);
 }
 
+/* a tap on the touch screen, outside the menus, skips a cinematic that can be skipped (touch_game.c: the game's own question): A is held for a few polls,
+since a tap is shorter than the game's poll */
+int touch_game_cinematic_skippable(void);
+int wiiu_input_touch(float *x, float *y);
+
+static void tap_skips_cinematic(XINPUT_GAMEPAD *state)
+{
+	static int was_down, polls_down, hold;
+	static float start_x, start_y;
+	float x, y;
+	int down = wiiu_input_touch(&x, &y);
+
+	if (down && !was_down)
+	{
+		polls_down = 0;
+		start_x = x;
+		start_y = y;
+	}
+	if (down)
+		polls_down++;
+	if (!down && was_down && polls_down <= 30 && (x - start_x) * (x - start_x) + (y - start_y) * (y - start_y) < 30.0f * 30.0f &&
+		!port_menus_active() && touch_game_cinematic_skippable())
+		hold = 6;
+	/* (x and y keep the last place of a finger that has gone) */
+	was_down = down;
+	if (hold > 0)
+	{
+		hold--;
+		state->bAnalogButtons[XINPUT_GAMEPAD_A] = 0xff;
+	}
+}
+
 VOID WINAPI XInitDevices(DWORD preallocation_type_count, PXDEVICE_PREALLOC_TYPE preallocation_types)
 {
 	(void)preallocation_type_count;
@@ -196,6 +230,8 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 		return ERROR_DEVICE_NOT_CONNECTED;
 	if (wiiu_input_read((unsigned int)port, &pad))
 		pad_state(&pad, &state->Gamepad);
+	if (port == 0)
+		tap_skips_cinematic(&state->Gamepad);
 	if (memcmp(&state->Gamepad, &controllers[port].previous, sizeof(state->Gamepad)))
 	{
 		controllers[port].packet_number++;

@@ -78,6 +78,7 @@ static volatile uint32_t started_game;
 void wiiu_audio_suspend(void);
 void wiiu_audio_resume(void);
 static volatile uint32_t foreground = 1;
+static volatile uint32_t network_stopped;
 static volatile uint32_t game_done;
 static volatile uint32_t box_stopping;
 static volatile uint32_t box_busy;
@@ -208,6 +209,11 @@ int wiiu_in_foreground(void)
 	return foreground != 0;
 }
 
+int wiiu_network_allowed(void)
+{
+	return !network_stopped && foreground && !exit_requested;
+}
+
 /* Nothing of the game's may use the GPU, the controllers or the sound while the app is in the background (the system takes them: a call into GX2
 then ends in a fault in the system's code, and the console with it). The threads that do, the game's and the audio mixer's, call this at their
 safe points; it returns at once in the foreground, and in the background holds the caller until the foreground is back (or the app is closing). The
@@ -309,6 +315,7 @@ log tells what was going on around a freeze. */
 static uint32_t on_network_stop(void *unused)
 {
 	(void)unused;
+	network_stopped = 1;
 	wiiu_debug_network(0);
 	wiiu_log("The system asks the app to stop using the network");
 	return 0;
@@ -317,6 +324,7 @@ static uint32_t on_network_stop(void *unused)
 static uint32_t on_network_start(void *unused)
 {
 	(void)unused;
+	network_stopped = 0;
 	wiiu_debug_network(1);
 	wiiu_log("The network may be used again");
 	return 0;
