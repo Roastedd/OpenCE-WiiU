@@ -53,6 +53,8 @@ enum
 	_platform_windows = 4,
 	/* (the web build, which has the desktop's settings, and these) */
 	_platform_web = 8,
+	/* (the Wii U build, which has the desktop's settings, and these) */
+	_platform_wiiu = 16,
 };
 
 struct config_setting
@@ -224,6 +226,13 @@ static const struct config_setting config_settings[] =
 		"The touch controls' swipe aiming gets a controller's aim assist: the\n"
 		"aim slows over a target and follows a moving one. false: none, as a\n"
 		"mouse (the bullets' own autoaim stays)." },
+	{ "input.wiiu_face_buttons", _config_string, "\"auto\"", "HALO_WIIU_FACE_BUTTONS", _environment_value, _platform_wiiu,
+		"How the Wii U's A B X Y match the Xbox pad's. \"position\": by place, so that the Xbox's A\n"
+		"(jump) is the bottom button, the Wii U's B, and the prompts show the letter that is\n"
+		"there. \"label\": by letter, so that the Wii U's A (the right-hand button) is the Xbox's A.\n"
+		"\"auto\": by letter in the menus (A selects, B goes back), by place in the game." },
+	{ "input.wiiu_rumble", _config_boolean, "true", "HALO_WIIU_RUMBLE", _environment_value, _platform_wiiu,
+		"The GamePad and the Pro Controllers rumble as the game asks." },
 	{ "input.mouse_sensitivity", _config_real, "1.0", "HALO_MOUSE_SENSITIVITY", _environment_value, _platform_desktop,
 		"How far the view turns for the mouse's movement." },
 	{ "input.invert_mouse", _config_boolean, "false", "HALO_MOUSE_INVERT", _environment_set_is_true, _platform_desktop,
@@ -637,6 +646,8 @@ static const struct config_setting config_settings[] =
 #define CONFIG_PLATFORM _platform_android
 #elif defined(HALO_WEB)
 #define CONFIG_PLATFORM (_platform_desktop | _platform_web)
+#elif defined(HALO_WIIU)
+#define CONFIG_PLATFORM (_platform_desktop | _platform_wiiu)
 #elif defined(_WIN32)
 #define CONFIG_PLATFORM (_platform_desktop | _platform_windows)
 #else

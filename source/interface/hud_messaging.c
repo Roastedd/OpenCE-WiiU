@@ -469,6 +469,8 @@ static void render_state_text(
 boolean hud_hires_button_draw(struct icon_hud_element_definition const *icon,
 	rectangle2d *cursor, pixel32 color);
 struct bitmap_data const *hud_hires_sprite_bitmap(struct bitmap_data const *bitmap, short sequence_index);
+/* port: the icon a platform's pad labels a button with (port/linux/game/hud_hires_tags.c) */
+short port_button_icon(short icon_index);
 
 static void render_state_bitmap(
 	rectangle2d *bounds,
@@ -1722,6 +1724,8 @@ void hud_messaging_update(
 								icon_index = remap_sticks_for_local_player(
 									icon_index,
 									local_player_index);
+								/* port: the button's name on this platform's pad */
+								icon_index = port_button_icon(icon_index);
 								icon = TAG_BLOCK_GET_ELEMENT(
 									&hud_globals->messaging.button_icons,
 									icon_index,

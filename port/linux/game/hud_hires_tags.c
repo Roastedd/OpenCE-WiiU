@@ -29,6 +29,7 @@ When the texture cannot be drawn, the sprites are drawn from their bitmap.
 #include "game/players.h"
 #include "game/game.h"
 #include "interface/hud.h"
+#include "interface/ui_widget.h"
 #include "interface/hud_definitions.h"
 #include "rasterizer/rasterizer.h"
 #include "text/draw_string.h"
@@ -326,6 +327,30 @@ long hud_hires_upscale_at(unsigned long address, long width, long height)
 			return upscale_bitmaps[index].kind;
 	}
 	return FALSE;
+}
+
+#ifdef HALO_WIIU
+/* (xinput_wiiu.c's: 1 when the Wii U's face buttons are matched to the Xbox's by their letters, not their places) */
+int wiiu_face_buttons_by_label(void);
+
+/* (for xinput_wiiu.c, which cannot see the game's types: does a menu have the screen?) */
+int port_menus_active(void);
+
+int port_menus_active(void)
+{
+	return ui_widgets_active() ? 1 : 0;
+}
+#endif
+
+/* The icon a button's prompt shows. The Wii U's face buttons are matched to the Xbox's by place (xinput_wiiu.c: the Xbox's A, at the bottom, is the
+ * Wii U's B), so a prompt for the bottom button shows the icon of the letter that is there. Elsewhere the icon is the button's own. */
+short port_button_icon(short icon_index)
+{
+#ifdef HALO_WIIU
+	if (icon_index >= 0 && icon_index < 4 && !wiiu_face_buttons_by_label())
+		return (short)(icon_index ^ 1);
+#endif
+	return icon_index;
 }
 
 /* Match the controller entry itself: weapon icons may reuse its sequence.

@@ -42,4 +42,7 @@ struct wiiu_pad
 if there is such a pad, with its state; 0 if not. */
 int wiiu_input_read(unsigned int port, struct wiiu_pad *pad);
 
+/* Rumbles the pad of a port, 0 (still) to 1 (full): the GamePad's motor for port 0 and a Pro Controller's for its channel. Does nothing in the background. */
+void wiiu_input_rumble(unsigned int port, float strength);
+
 #endif

@@ -4,14 +4,18 @@ XINPUT_WIIU.C
 Xbox controllers for the Wii U: the GamePad is the first controller (merged with a Pro Controller on channel 0, if one is connected), and Pro Controllers
 on channels 1 to 3 are the others. The debug keyboard and the memory units are not there.
 
-The Xbox pad's four face buttons are matched by position, not by name (the Wii U's B is where the Xbox's A is): the player's thumb finds the action
-where it expects it. The Xbox's black and white buttons, which later pads put on the shoulders, are the Wii U's R and L; its triggers are ZR and ZL
-(buttons, so all or nothing).
+The Xbox pad's four face buttons are matched to the Wii U's in the game by place (the Wii U's B is where the Xbox's A is): the player's thumb finds the
+action where it expects it, and the prompts on the screen show the icon of the letter that is there (hud_hires_tags.c, port_button_icon). In the menus
+they are matched by letter (the Wii U's A selects, its B goes back, as on every Nintendo console), because the menus' own prompts name the Xbox's
+letters. The setting input.wiiu_face_buttons says "position" or "label" for both instead. The Xbox's black and white buttons, which later pads put on the shoulders, are the Wii U's R and L; its triggers are ZR and ZL
+(buttons, so all or nothing). The motors rumble with the game (input.wiiu_rumble).
 
-Not yet: rumble, the GamePad's gyro and touch screen.
+Not yet: the GamePad's gyro and touch screen.
 */
 
 #include "platform.h"
+#include "port_config.h"
+#include "wiiu_shell.h"
 #include "wiiu_input.h"
 
 #include <string.h>
@@ -43,6 +47,37 @@ static SHORT stick(float value)
 	return (SHORT)result;
 }
 
+/* input.wiiu_face_buttons: "label" (matched by letter), "position" (by place), or "auto" (the default: by letter in the menus, where the prompts name the
+letter and Nintendo's A accepts, by place in the game, where the thumb knows where jump is) */
+int wiiu_face_buttons_by_label(void);
+/* (hud_hires_tags.c's: 1 while a menu has the screen) */
+int port_menus_active(void);
+
+int wiiu_face_buttons_by_label(void)
+{
+	static int mode = -1;
+
+	if (mode < 0)
+	{
+		const char *setting = config_string("input.wiiu_face_buttons");
+
+		mode = !strcmp(setting, "label") ? 1 : !strcmp(setting, "position") ? 0 : 2;
+	}
+	if (mode == 2)
+	{
+		static int last = -1;
+		int by_label = port_menus_active();
+
+		if (by_label != last)
+		{
+			last = by_label;
+			wiiu_log("Input: the face buttons are now matched by %s", by_label ? "letter (a menu has the screen)" : "place (the game)");
+		}
+		return by_label;
+	}
+	return mode;
+}
+
 static void pad_state(const struct wiiu_pad *pad, XINPUT_GAMEPAD *state)
 {
 	static const struct
@@ -72,7 +107,14 @@ static void pad_state(const struct wiiu_pad *pad, XINPUT_GAMEPAD *state)
 			state->wButtons |= digital[i].mask;
 	for (i = 0; i < sizeof(analog) / sizeof(analog[0]); i++)
 		if (pad->buttons & analog[i].source)
-			state->bAnalogButtons[analog[i].analog] = 0xff;
+		{
+			int target = analog[i].analog;
+
+			/* (by letter, the Wii U's face buttons go to the Xbox's of the same name: A with B and X with Y, as the table has them by place) */
+			if (target <= XINPUT_GAMEPAD_Y && wiiu_face_buttons_by_label())
+				target ^= 1;
+			state->bAnalogButtons[target] = 0xff;
+		}
 	state->sThumbLX = stick(pad->left_x);
 	state->sThumbLY = stick(pad->left_y);
 	state->sThumbRX = stick(pad->right_x);
@@ -172,7 +214,13 @@ DWORD WINAPI XInputSetState(HANDLE device, PXINPUT_FEEDBACK feedback)
 	feedback->Header.dwStatus = ERROR_SUCCESS;
 	if (port < 0)
 		return ERROR_DEVICE_NOT_CONNECTED;
-	/* (no rumble yet) */
+	if (config_boolean("input.wiiu_rumble"))
+	{
+		unsigned int level = feedback->Rumble.wLeftMotorSpeed > feedback->Rumble.wRightMotorSpeed ? feedback->Rumble.wLeftMotorSpeed :
+			feedback->Rumble.wRightMotorSpeed;
+
+		wiiu_input_rumble((unsigned int)port, (float)level / 65535.0f);
+	}
 	return ERROR_SUCCESS;
 }
 

@@ -4086,6 +4086,9 @@ static void render_state_bitmap(
 	return;
 }
 
+/* port: the icon a platform's pad labels a button with (port/linux/game/hud_hires_tags.c) */
+short port_button_icon(short icon_index);
+
 void draw_string_and_hack_in_icons(
 	rectangle2d *bounds,
 	rectangle2d *clip,
@@ -4190,6 +4193,8 @@ void draw_string_and_hack_in_icons(
 				icon_index = remapped_icon_type;
 			}
 
+			/* port: the button's name on this platform's pad (hud_hires_tags.c) */
+			icon_index = port_button_icon(icon_index);
 			{
 				struct icon_hud_element_definition *icon = TAG_BLOCK_GET_ELEMENT(
 					&hud_globals->messaging.button_icons,

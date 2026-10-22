@@ -105,6 +105,38 @@ every twenty milliseconds. Patterns from CoffeeFlix and CoffeeUnlocked, which ha
 The decisions and the files (the queue, the watch, the records) are plain C with pthreads, tested on the desktop under
 `tools/wiiu/shell_tests.sh`; the Cafe OS half (ProcUI, `OSThread`, the handler) has been compiled and linked, not run.
 
+## Controls
+
+The GamePad is the first controller (a Pro or Classic Controller on channel 0 joins it); Pro and Classic Controllers on channels 1 to 3 are the other
+three (split screen). `src/wiiu_input.c` reads VPAD and KPAD; `src/xinput_wiiu.c` turns them into the Xbox pad the game reads.
+
+| Game | Wii U | Menus |
+| --- | --- | --- |
+| Move / look | Left stick / right stick | Left stick or D-pad move |
+| Fire | ZR | |
+| Throw grenade | ZL | |
+| Jump | B (the bottom button) | A selects |
+| Melee | A (the right-hand button) | B goes back |
+| Action, reload | Y (the left-hand button) | Y: the screen's Y prompt (create, ...) |
+| Switch weapons | X (the top button) | X: the screen's X prompt (delete, ...) |
+| Flashlight | L | |
+| Switch grenades | R | |
+| Crouch / zoom | Click the left stick / the right stick | |
+| Pause (Start) | + | |
+| Back (Xbox's Back) | − | |
+
+In the game the face buttons are the Xbox's by **place**, so that jump is under the thumb where it is on an Xbox pad; the prompts on the screen show
+the Wii U's letter for each place (`port_button_icon` in `hud_hires_tags.c` swaps the icons: the prompt for the bottom button says B). In the menus
+they are matched by **letter** (A selects, B goes back, as on every Nintendo console), because the menus' own prompts say "A = select"; the match
+changes as a menu opens and closes (`input.wiiu_face_buttons` `"auto"`; `"position"` or `"label"` keep one match everywhere). The Xbox's black and
+white buttons are R and L, its triggers ZR and ZL (buttons on the Wii U, so all or nothing). The GamePad and the Pro Controllers rumble
+(`input.wiiu_rumble`).
+
+Measured on the console with the debug server's `press` and `stick`: the d-pad and A and B move through the menus and start a level, the right stick
+turns the view in the first level, and the face buttons change match as a menu opens (the log says "Input: the face buttons are now matched by ...").
+Not measured: rumble (it cannot be seen), the Pro and Classic Controllers (none was connected), split screen. Not done: the GamePad's gyro and touch
+screen, Wii Remote and Nunchuk.
+
 ## The debug server
 
 `src/wiiu_debug.c` is a small server inside the game's own shell (TCP port 4310, started once the game's thread runs) so that a change can be
