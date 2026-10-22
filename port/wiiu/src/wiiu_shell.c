@@ -22,6 +22,7 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 #include "wiiu_shell.h"
 
 #include "wiiu_crash.h"
+#include "wiiu_debug.h"
 #include "wiiu_shell_blackbox.h"
 #include "wiiu_shell_log.h"
 #include "wiiu_shell_watch.h"
@@ -165,6 +166,7 @@ static void setup_thread(const char *name)
 static void echo_to_system(const char *line)
 {
 	OSReport("%s\n", line);
+	wiiu_debug_log_line(line);
 }
 
 void wiiu_log_text(const char *text)
@@ -307,6 +309,7 @@ log tells what was going on around a freeze. */
 static uint32_t on_network_stop(void *unused)
 {
 	(void)unused;
+	wiiu_debug_network(0);
 	wiiu_log("The system asks the app to stop using the network");
 	return 0;
 }
@@ -314,6 +317,7 @@ static uint32_t on_network_stop(void *unused)
 static uint32_t on_network_start(void *unused)
 {
 	(void)unused;
+	wiiu_debug_network(1);
 	wiiu_log("The network may be used again");
 	return 0;
 }
@@ -562,6 +566,15 @@ void wiiu_game_halted(void)
 		sleep_ms(100);
 }
 
+/* The Wii U Menu asked for, as when the game halts (the debug server's quit): the system then closes the app through ProcUI (under Aroma it may then
+start the app again, or stay on the Wii U logo: HOME and Close software is the sure way out). */
+void wiiu_launch_menu(void)
+{
+	wiiu_log("The Wii U Menu is asked for");
+	wiiu_shell_log_flush(&shell_log, 500);
+	SYSLaunchMenu();
+}
+
 /* ---------- the shell */
 
 int wiiu_shell_run(int (*game_main)(void))
@@ -610,6 +623,8 @@ int wiiu_shell_run(int (*game_main)(void))
 	error = start_game();
 	if (error)
 		game_done = 1;
+	else
+		wiiu_debug_start(memory_line);
 
 	/* the system's loop: HOME and closing. WHBProcIsRunning does not come back while the app is in the background. */
 	while (!game_done && WHBProcIsRunning())

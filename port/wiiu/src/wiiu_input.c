@@ -6,6 +6,8 @@ The GamePad (VPAD) and the Pro Controllers (KPAD) read as wiiu_input.h's pads. C
 
 #include "wiiu_input.h"
 
+#include "wiiu_debug.h"
+
 #include <padscore/kpad.h>
 #include <padscore/wpad.h>
 #include <vpad/input.h>
@@ -119,6 +121,7 @@ int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 			pad->right_x = status.rightStick.x;
 			pad->right_y = status.rightStick.y;
 		}
+		wiiu_debug_input(pad);
 	}
 	if (read_pro(port, pad))
 		present = 1;

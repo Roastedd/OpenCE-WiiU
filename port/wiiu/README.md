@@ -105,6 +105,26 @@ every twenty milliseconds. Patterns from CoffeeFlix and CoffeeUnlocked, which ha
 The decisions and the files (the queue, the watch, the records) are plain C with pthreads, tested on the desktop under
 `tools/wiiu/shell_tests.sh`; the Cafe OS half (ProcUI, `OSThread`, the handler) has been compiled and linked, not run.
 
+## The debug server
+
+`src/wiiu_debug.c` is a small server inside the game's own shell (TCP port 4310, started once the game's thread runs) so that a change can be
+run, looked at and judged without a person at the console; its client is `tools/wiiu/wiiu_debug.py`. The lines are read by
+`wiiu_debug_protocol.c` (plain C, tested on three machines: `tests/test_debug.c`).
+
+- `hello` (frames, foreground, memory), `log N` (the last lines of the shell's log), `press BUTTONS MS` and `stick LX LY RX RY MS` (merged into
+  the GamePad's port in `wiiu_input_read`), `screenshot tv|drc|back [1|2|4]`, `quit`.
+- **A picture** is taken by the game's own thread, at the start of its next present (`wiiu_debug_present`, called from `wiiu_gx2.c`'s
+  `present`), because only it may use the GPU: the GPU copies the colour buffer into a linear surface and the server sends the pixels. The
+  console's network takes about 400 KB a second, so a 1080p picture (8 MB) takes 20 s; `--scale 2` sends every second pixel and row (5 s).
+  On the TV and GamePad it is the frame before the one being drawn; `back` is the game's own render target, as it was just drawn.
+- **The sockets** are open only in the foreground and while the system allows the network (the server closes them on HOME, on closing and on
+  the network-stop callback); in the background it touches nothing.
+- **The log mirror**: with the Mac's address in `halo/debug_log_host.txt` ("192.168.1.10"), every log line also goes to it as a UDP datagram
+  (port 4311; `wiiu_debug.py listen` prints them). Unlike the card's file, it shows the last lines before a freeze.
+- **`quit` is the one that does not work well.** It closes every socket and asks for the Wii U Menu (`SYSLaunchMenu`) from the game's thread;
+  the app does close (the release and exit callbacks run, "Closed" is logged), but under Aroma the console then started the app again once, and
+  twice stayed on the Wii U logo. HOME and Close software is the way out that has always worked.
+
 ## What it takes to run
 
 The link needs **300 stubs** (`stubbed_symbols.txt`), which are what the Wii U's platform layer still has to provide, by the
