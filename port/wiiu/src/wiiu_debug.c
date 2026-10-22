@@ -112,6 +112,19 @@ void wiiu_debug_input(struct wiiu_pad *pad)
 	}
 }
 
+static float held_tap[2];
+static volatile uint32_t held_tap_until;
+static volatile int tapping;
+
+void wiiu_debug_touch(int *down, float *x, float *y)
+{
+	if (!tapping || (int32_t)(held_tap_until - now_ms()) <= 0)
+		return;
+	*down = 1;
+	*x = held_tap[0];
+	*y = held_tap[1];
+}
+
 /* ---------- the pictures */
 
 enum
@@ -505,6 +518,14 @@ static void do_request(const wiiu_debug_request *request)
 		memcpy(held_stick, request->stick, sizeof(held_stick));
 		held_stick_until = now_ms() + request->milliseconds;
 		holding = 1;
+		send_text("ok\n");
+		break;
+	case WIIU_DEBUG_TAP:
+		held_tap[0] = request->tap[0];
+		held_tap[1] = request->tap[1];
+		held_tap_until = now_ms() + request->milliseconds;
+		tapping = 1;
+		wiiu_log("Debug: a tap at %.0f,%.0f for %u ms", request->tap[0], request->tap[1], request->milliseconds);
 		send_text("ok\n");
 		break;
 	case WIIU_DEBUG_LOG:

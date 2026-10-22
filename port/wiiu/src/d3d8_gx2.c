@@ -19,6 +19,7 @@ and presenting go there; a draw and a visibility test do nothing yet.
 #include "xgpu.h"
 #include "sdl_platform.h"
 #include "halo_ui_pointer.h"
+#include "touch_menu.h"
 #include "port_config.h"
 #include "posix.h"
 #include "dk_commands.h"
@@ -927,11 +928,95 @@ HRESULT WINAPI Direct3D_CreateDevice(UINT adapter, D3DDEVTYPE device_type, void 
 
 /* ---------- the menus' pointer */
 
+/* the GamePad's touch screen (wiiu_input.c, in the pixels of its 854x480 picture) is the menus' pointer: a tap clicks, a drag scrolls (touch_menu.c, which
+the Android build's touch screen shares). The GamePad shows the game's picture, letterboxed as blit_to (wiiu_gx2.c) does it. */
+int wiiu_input_touch(float *x, float *y);
+
+#define GAMEPAD_WIDTH 854.0f
+#define GAMEPAD_HEIGHT 480.0f
+
+/* Measured on the console (2026-10-22): the menus are drawn at the left of the picture, not centered in its 852 columns, although the game asks for the
+offset (halo_screen_ui_offset(TRUE) sets 106 while it draws them: the targets debug.touch_targets shows sit where the menus are drawn). So a touch is
+not moved by it here. When the GX2 renderer centers the menus, as d3d8_gl.c does, set this to 1. */
+#define MENUS_DRAWN_CENTERED 0
+
+/* a point of the GamePad's picture in the menus' coordinates (the 640x480 they are drawn in), as d3d8_gl.c's ui_point_from_window gives them */
+static void menu_point_from_gamepad(float gamepad_x, float gamepad_y, short *x, short *y)
+{
+	const float game_width = (float)halo_screen_width(), game_height = (float)SCREEN_HEIGHT;
+	float width = GAMEPAD_WIDTH, height = GAMEPAD_WIDTH * game_height / game_width;
+	float left, top;
+
+	if (height > GAMEPAD_HEIGHT)
+	{
+		height = GAMEPAD_HEIGHT;
+		width = GAMEPAD_HEIGHT * game_width / game_height;
+	}
+	left = (GAMEPAD_WIDTH - width) / 2.0f;
+	top = (GAMEPAD_HEIGHT - height) / 2.0f;
+	*x = (short)floorf((gamepad_x - left) * game_width / width - (MENUS_DRAWN_CENTERED ? (game_width - 640.0f) / 2.0f : 0.0f));
+	*y = (short)floorf((gamepad_y - top) * game_height / height);
+}
+
 int halo_ui_pointer_update(int menus_active, struct halo_ui_pointer *pointer)
 {
-	(void)pointer;
+	static struct touch_menu menu;
+	static int ready, was_active, finger_down;
+	static float last_x, last_y;
+	struct touch_menu_output output;
+	float x, y;
+	int down;
+
 	platform_menus_set_active(menus_active != 0);
-	return 0;
+	if (!ready)
+	{
+		struct touch_menu_settings settings;
+
+		memset(&settings, 0, sizeof(settings));
+		/* (pixels of the GamePad's screen: a tap moves at most 14, a notch of the wheel is 40) */
+		settings.slop = 14.0f;
+		settings.step = 40.0f;
+		settings.steps_per_read = 3;
+		touch_menu_init(&menu, &settings);
+		ready = 1;
+	}
+	if ((menus_active != 0) != was_active)
+	{
+		/* what a finger began before a menu opened or closed does not act in the other */
+		touch_menu_reset(&menu);
+		finger_down = 0;
+		was_active = menus_active != 0;
+	}
+	down = wiiu_input_touch(&x, &y);
+	if (!menus_active)
+		return 0;
+	if (down && !finger_down)
+		touch_menu_down(&menu, 1, x, y);
+	else if (down)
+		touch_menu_move(&menu, 1, x, y);
+	else if (finger_down)
+		touch_menu_up(&menu, 1, last_x, last_y);
+	finger_down = down;
+	last_x = x;
+	last_y = y;
+	touch_menu_read(&menu, &output);
+	if (output.clicks)
+	{
+		short tap_x, tap_y;
+
+		menu_point_from_gamepad(output.click_x, output.click_y, &tap_x, &tap_y);
+		platform_log("touch: a tap at %.0f,%.0f, the menus' %d,%d", output.click_x, output.click_y, (int)tap_x, (int)tap_y);
+	}
+	memset(pointer, 0, sizeof(*pointer));
+	menu_point_from_gamepad(output.x, output.y, &pointer->x, &pointer->y);
+	menu_point_from_gamepad(output.click_x, output.click_y, &pointer->click_x, &pointer->click_y);
+	pointer->moved = output.moved != 0;
+	pointer->left_clicks = (unsigned char)(output.clicks < 255 ? output.clicks : 255);
+	pointer->wheel_steps = (signed char)(output.wheel_steps < -8 ? -8 : output.wheel_steps > 8 ? 8 : output.wheel_steps);
+	pointer->touch = 1;
+	pointer->downs = (unsigned char)(output.downs < 255 ? output.downs : 255);
+	menu_point_from_gamepad(output.down_x, output.down_y, &pointer->down_x, &pointer->down_y);
+	return 1;
 }
 
 /* menu_files.c says when it deletes a menu picture's GL texture, for the

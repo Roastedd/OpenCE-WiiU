@@ -41,4 +41,7 @@ void wiiu_debug_present(const GX2ColorBuffer *back, const GX2ColorBuffer *tv, co
 /* wiiu_input_read, for the GamePad's port: adds what the debug client is holding */
 void wiiu_debug_input(struct wiiu_pad *pad);
 
+/* wiiu_input_read, for the GamePad's port: a finger the debug client holds on the touch screen replaces the real one (1 down, with its place in the GamePad's pixels) */
+void wiiu_debug_touch(int *down, float *x, float *y);
+
 #endif

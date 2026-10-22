@@ -134,8 +134,12 @@ white buttons are R and L, its triggers ZR and ZL (buttons on the Wii U, so all 
 
 Measured on the console with the debug server's `press` and `stick`: the d-pad and A and B move through the menus and start a level, the right stick
 turns the view in the first level, and the face buttons change match as a menu opens (the log says "Input: the face buttons are now matched by ...").
-Not measured: rumble (it cannot be seen), the Pro and Classic Controllers (none was connected), split screen. Not done: the GamePad's gyro and touch
-screen, Wii Remote and Nunchuk.
+The GamePad's touch screen is the menus' pointer (`halo_ui_pointer_update` in `d3d8_gx2.c`, with `touch_menu.c` from the Android build): a tap on an item
+or on a screen's A and B prompts clicks it, a drag scrolls a list. Measured with the debug server's `tap`: tapping Multiplayer, then Split Screen, opened
+each. The menus are drawn at the left of the picture, not centered in its 852 columns (the renderer does not apply the offset the game asks for:
+`MENUS_DRAWN_CENTERED` in `d3d8_gx2.c`), and a touch follows what is drawn. Not measured: rumble (it cannot be seen), the Pro and Classic
+Controllers (none was connected), split screen play, a real finger (the calibration is the system's, to 854x480). Not done: the GamePad's gyro, a tap
+that skips a cinematic, Wii Remote and Nunchuk.
 
 ## The debug server
 

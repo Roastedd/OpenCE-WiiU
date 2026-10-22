@@ -155,6 +155,27 @@ int wiiu_debug_parse(const char *line, wiiu_debug_request *request)
 		if (!(at = next_word(at, word, sizeof(word))) || !number(word, WIIU_DEBUG_HOLD_MAX_MS, &request->milliseconds) || !request->milliseconds)
 			return fail(request, "the time is 1 to 10000 milliseconds");
 	}
+	else if (!strcmp(word, "tap"))
+	{
+		unsigned int i;
+
+		request->command = WIIU_DEBUG_TAP;
+		request->milliseconds = WIIU_DEBUG_PRESS_DEFAULT_MS;
+		for (i = 0; i < 2; i++)
+		{
+			char *end;
+			float value;
+
+			if (!(at = next_word(at, word, sizeof(word))))
+				return fail(request, "tap X Y [milliseconds]");
+			value = strtof(word, &end);
+			if (*end || !(value >= 0.0f && value < (i ? 480.0f : 854.0f)))
+				return fail(request, "the touch screen is 854 by 480");
+			request->tap[i] = value;
+		}
+		if ((at = next_word(at, word, sizeof(word))) && (!number(word, WIIU_DEBUG_HOLD_MAX_MS, &request->milliseconds) || !request->milliseconds))
+			return fail(request, "the time is 1 to 10000 milliseconds");
+	}
 	else if (!strcmp(word, "log"))
 	{
 		request->command = WIIU_DEBUG_LOG;
@@ -164,7 +185,7 @@ int wiiu_debug_parse(const char *line, wiiu_debug_request *request)
 	}
 	else
 	{
-		return fail(request, "unknown command (hello quit screenshot press stick log)");
+		return fail(request, "unknown command (hello quit screenshot press stick tap log)");
 	}
 	return 1;
 }

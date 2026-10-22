@@ -145,6 +145,43 @@ static int read_pro(unsigned int channel, struct wiiu_pad *pad)
 	return 0;
 }
 
+static int touch_down;
+static float touch_x, touch_y;
+static unsigned int touch_logged;
+
+int wiiu_input_touch(float *x, float *y)
+{
+	int down = touch_down;
+
+	*x = touch_x;
+	*y = touch_y;
+	/* (the debug server's tap: a finger the client holds on the screen) */
+	wiiu_debug_touch(&down, x, y);
+	return down;
+}
+
+/* the GamePad's finger, from a sample (the system's own calibration, to the GamePad's 854x480) */
+static void read_touch(const VPADStatus *status)
+{
+	VPADTouchData calibrated;
+
+	VPADGetTPCalibratedPointEx(VPAD_CHAN_0, VPAD_TP_854X480, &calibrated, &status->tpNormal);
+	touch_down = calibrated.touched && calibrated.validity == VPAD_VALID;
+	if (touch_down)
+	{
+		if (!touch_logged || touch_x != (float)calibrated.x || touch_y != (float)calibrated.y)
+		{
+			/* (a few, to learn where a touch lands: the calibration is the system's) */
+			if (touch_logged < 24u && (touch_logged == 0 || touch_logged % 4 == 0))
+				wiiu_log("Input: touch at %u,%u (raw %u,%u)", (unsigned)calibrated.x, (unsigned)calibrated.y, (unsigned)status->tpNormal.x,
+					(unsigned)status->tpNormal.y);
+			touch_logged++;
+		}
+		touch_x = (float)calibrated.x;
+		touch_y = (float)calibrated.y;
+	}
+}
+
 int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 {
 	int present = 0;
@@ -164,6 +201,7 @@ int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 		if (VPADRead(VPAD_CHAN_0, &status, 1, &error) > 0 && error == VPAD_READ_SUCCESS)
 		{
 			pad->buttons |= from_vpad(status.hold);
+			read_touch(&status);
 			pad->left_x = status.leftStick.x;
 			pad->left_y = status.leftStick.y;
 			pad->right_x = status.rightStick.x;

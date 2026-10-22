@@ -42,6 +42,10 @@ struct wiiu_pad
 if there is such a pad, with its state; 0 if not. */
 int wiiu_input_read(unsigned int port, struct wiiu_pad *pad);
 
+/* The GamePad's touch screen, in pixels of the GamePad's picture (854x480), as read by the latest wiiu_input_read of port 0 (or held by the debug server's tap).
+Returns 1 while a finger is on it. */
+int wiiu_input_touch(float *x, float *y);
+
 /* Rumbles the pad of a port, 0 (still) to 1 (full): the GamePad's motor for port 0 and a Pro Controller's for its channel. Does nothing in the background. */
 void wiiu_input_rumble(unsigned int port, float strength);
 

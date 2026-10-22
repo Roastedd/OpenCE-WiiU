@@ -59,6 +59,13 @@ int main(void)
 	CHECK(!parse("stick 0 1 0 0", &r));
 	CHECK(!parse("stick 0 1 0 500", &r));
 
+	CHECK(parse("tap 427 240", &r) && r.command == WIIU_DEBUG_TAP && r.tap[0] == 427.0f && r.tap[1] == 240.0f && r.milliseconds == WIIU_DEBUG_PRESS_DEFAULT_MS);
+	CHECK(parse("tap 0 479.5 300", &r) && r.tap[1] == 479.5f && r.milliseconds == 300);
+	CHECK(!parse("tap 854 10", &r));
+	CHECK(!parse("tap 10 480", &r));
+	CHECK(!parse("tap 10", &r));
+	CHECK(!parse("tap -1 10", &r));
+
 	CHECK(parse("log", &r) && r.command == WIIU_DEBUG_LOG && r.count == WIIU_DEBUG_LOG_DEFAULT);
 	CHECK(parse("log 100", &r) && r.count == 100);
 	CHECK(!parse("log 101", &r));
