@@ -16,7 +16,6 @@ Not run on a console.
 */
 
 #include "dk_commands.h"
-#include "wiiu_debug.h"
 #include "wiiu_shell.h"
 #include "wiiu_tile.h"
 
@@ -87,7 +86,7 @@ static struct
 	OSTime told;
 	unsigned counts[32];
 	unsigned counted_draws;
-	unsigned partial_clears;
+	unsigned partial_clears, rectangle_clears;
 
 	/* what the stream has set, for the draws that follow */
 	struct dk_draw_state state;
@@ -124,11 +123,14 @@ static struct
 
 	unsigned shaders_loaded, fetch_full;
 	unsigned draws_made, skipped_target, skipped_state, skipped_shader, skipped_ring, ring_overflows;
-	unsigned textures_made, textures_unsupported;
+	unsigned textures_made, textures_unsupported, texture_short, layouts_logged;
+	unsigned sampler_levels[4];
+	int sampler_valid[4];
 	OSTime started;
 	double exit_after;
 	int trace_frame; /* halo/gx2_trace.txt: the frame whose draws are logged (-1: none) */
-	int debug_mode; /* and, after it, a mode: 1 draws without blending */
+	int debug_mode; /* and, after it, a mode: 1 draws without blending, 2 without culling */
+	int features_off; /* and a third number: bit 0 no mip levels, bit 1 no 3D and cube textures, bit 2 no mip composites */
 	unsigned traced;
 } gx;
 
@@ -674,11 +676,20 @@ static void uniforms_apply(const struct shader *vs, const struct shader *ps)
 
 /* ---------- textures */
 
+#define MIP_LIMIT 13
+
 struct image
 {
 	int used;
 	int supported;
-	uint32_t kind, format, width, height;
+	uint32_t kind, format, width, height, depth, levels, requested_levels;
+	/* a cube's six faces and a 3D texture's slices are slices of one surface */
+	uint32_t slices;
+	unsigned block_bytes;
+	int compressed;
+	uint8_t *base;
+	/* where each level is, as the surface says (its first slice), the pitch of its rows (blocks, for the compressed formats) and the size of a slice of it */
+	uint32_t level_offset[MIP_LIMIT], level_pitch[MIP_LIMIT], level_slice_bytes[MIP_LIMIT];
 	GX2Texture texture;
 };
 
@@ -715,8 +726,8 @@ static void free_later(void *memory)
 
 static void image_release(struct image *image)
 {
-	if (image->used && image->texture.surface.image)
-		free_later(image->texture.surface.image);
+	if (image->used && image->base)
+		free_later(image->base);
 	memset(image, 0, sizeof(*image));
 }
 
@@ -731,14 +742,48 @@ static int format_of(uint32_t dk, GX2SurfaceFormat *format, unsigned *block_byte
 	}
 }
 
-/* makes the texture's surface: 2D, level 0 only. BC in the 1D tiled layout (wiiu_tile.c), BGRA linear; its texels are the DDS file's bytes / a Direct3D
-color's bytes (blue first), which the compMap puts right */
-static int image_surface(struct image *image, uint32_t kind, uint32_t format, uint32_t width, uint32_t height)
+static uint32_t level_size(uint32_t size, unsigned level)
+{
+	size >>= level;
+	return size ? size : 1;
+}
+
+/* the pitch and size of a level (one slice) on its own: what the surface's calculation says of a surface that size */
+static void level_layout(const struct image *image, GX2SurfaceFormat format, GX2TileMode mode, unsigned level, uint32_t *pitch, uint32_t *bytes)
+{
+	GX2Surface surface;
+
+	memset(&surface, 0, sizeof(surface));
+	surface.dim = GX2_SURFACE_DIM_TEXTURE_2D;
+	surface.width = level_size(image->width, level);
+	surface.height = level_size(image->height, level);
+	surface.depth = 1;
+	surface.mipLevels = 1;
+	surface.format = format;
+	surface.aa = GX2_AA_MODE1X;
+	surface.use = GX2_SURFACE_USE_TEXTURE;
+	surface.tileMode = mode;
+	GX2CalcSurfaceSizeAndAlignment(&surface);
+	*pitch = surface.pitch;
+	*bytes = surface.imageSize;
+}
+
+/* where level `level`, slice `slice` is in memory */
+static uint8_t *image_level(const struct image *image, unsigned level, unsigned slice)
+{
+	return image->base + image->level_offset[level] + (size_t)slice * image->level_slice_bytes[level];
+}
+
+/* makes the texture's surface with all its levels. The compressed formats are in the 1D tiled layout (wiiu_tile.c), BGRA linear; the texels are the DDS file's bytes / a
+Direct3D color's bytes (blue first), which the component map puts right */
+static int image_surface(struct image *image, uint32_t kind, uint32_t format, uint32_t width, uint32_t height, uint32_t depth, uint32_t levels)
 {
 	GX2Surface *surface = &image->texture.surface;
 	GX2SurfaceFormat gx_format;
-	unsigned block_bytes;
-	const int compressed = format_of(format, &gx_format, &block_bytes);
+	GX2TileMode mode;
+	unsigned block_bytes, level;
+	uint32_t largest = width > height ? width : height;
+	uint32_t total;
 
 	memset(image, 0, sizeof(*image));
 	image->used = 1;
@@ -746,60 +791,149 @@ static int image_surface(struct image *image, uint32_t kind, uint32_t format, ui
 	image->format = format;
 	image->width = width;
 	image->height = height;
-	if (kind != DK_TEXTURE_2D || !width || !height)
+	image->depth = depth ? depth : 1;
+	image->requested_levels = levels;
+	image->compressed = format_of(format, &gx_format, &block_bytes);
+	image->block_bytes = block_bytes;
+	if (!width || !height || kind > DK_TEXTURE_CUBE || (kind != DK_TEXTURE_2D && (gx.features_off & 2)))
 		return 0;
-	surface->dim = GX2_SURFACE_DIM_TEXTURE_2D;
+	if (gx.features_off & 1)
+		levels = 1;
+	if (kind == DK_TEXTURE_3D && image->depth > largest)
+		largest = image->depth;
+	if (levels < 1)
+		levels = 1;
+	while (levels > 1 && (largest >> (levels - 1)) == 0)
+		levels--;
+	if (levels > MIP_LIMIT)
+		levels = MIP_LIMIT;
+	image->levels = levels;
+	image->slices = kind == DK_TEXTURE_CUBE ? 6 : kind == DK_TEXTURE_3D ? image->depth : 1;
+	mode = image->compressed ? GX2_TILE_MODE_TILED_1D_THIN1 : GX2_TILE_MODE_LINEAR_ALIGNED;
+	surface->dim = kind == DK_TEXTURE_CUBE ? GX2_SURFACE_DIM_TEXTURE_CUBE : kind == DK_TEXTURE_3D ? GX2_SURFACE_DIM_TEXTURE_3D : GX2_SURFACE_DIM_TEXTURE_2D;
 	surface->width = width;
 	surface->height = height;
-	surface->depth = 1;
-	surface->mipLevels = 1;
+	surface->depth = kind == DK_TEXTURE_CUBE ? 6 : kind == DK_TEXTURE_3D ? image->depth : 1;
+	surface->mipLevels = levels;
 	surface->format = gx_format;
 	surface->aa = GX2_AA_MODE1X;
 	surface->use = GX2_SURFACE_USE_TEXTURE;
-	surface->tileMode = compressed ? GX2_TILE_MODE_TILED_1D_THIN1 : GX2_TILE_MODE_LINEAR_ALIGNED;
+	surface->tileMode = mode;
 	GX2CalcSurfaceSizeAndAlignment(surface);
-	surface->image = gx_alloc_raw(surface->imageSize, surface->alignment ? surface->alignment : 256);
-	if (!surface->image)
+	total = surface->imageSize + (levels > 1 ? surface->mipmapSize : 0);
+	image->base = gx_alloc_raw(total, surface->alignment ? surface->alignment : 256);
+	if (!image->base)
 	{
-		wiiu_log("GX2: no memory for a %ux%u texture (%u bytes)", (unsigned)width, (unsigned)height, (unsigned)surface->imageSize);
+		wiiu_log("GX2: no memory for a %ux%u texture (%u bytes)", (unsigned)width, (unsigned)height, (unsigned)total);
 		return 0;
 	}
-	memset(surface->image, 0, surface->imageSize);
+	memset(image->base, 0, total);
+	for (level = 0; level < levels; level++)
+	{
+		level_layout(image, gx_format, mode, level, &image->level_pitch[level], &image->level_slice_bytes[level]);
+		/* (GX2's mipLevelOffset[0] is where level 1 is from the surface's start, and mipLevelOffset[n] for n > 0 where level n + 1 is from the first mip level's:
+		the console's numbers for a 64 x 64 BC1 texture are 2048 512 1024) */
+		image->level_offset[level] = level == 0 ? 0 : surface->mipLevelOffset[0] + (level == 1 ? 0 : surface->mipLevelOffset[level - 1]);
+	}
+	for (level = 0; level < levels; level++)
+		if ((uint64_t)image->level_offset[level] + (uint64_t)image->level_slice_bytes[level] * image->slices > total)
+		{
+			if (gx.layouts_logged < 12)
+				wiiu_log("GX2: texture %ux%u kind %u: level %u (%u + %u x %u) does not fit its %u bytes; the texture is its first level only", (unsigned)width,
+					(unsigned)height, (unsigned)kind, level, (unsigned)image->level_offset[level], (unsigned)image->level_slice_bytes[level],
+					(unsigned)image->slices, (unsigned)total);
+			gx.layouts_logged++;
+			if (level == 0 || kind != DK_TEXTURE_2D)
+			{
+				MEMFreeToDefaultHeap(image->base);
+				image->base = NULL;
+				return 0;
+			}
+			levels = level;
+			break;
+		}
+	image->levels = levels;
+	surface->mipLevels = levels;
+	surface->image = image->base;
+	surface->mipmaps = levels > 1 ? image->base + image->level_offset[1] : NULL;
+	if (gx.layouts_logged < 6 && (levels > 1 || kind != DK_TEXTURE_2D))
+	{
+		char text[200];
+		size_t used = 0;
+
+		for (level = 0; level < levels && used + 24 < sizeof(text); level++)
+			used += (size_t)snprintf(text + used, sizeof(text) - used, " %u:%u/%u/%u", level, (unsigned)image->level_offset[level],
+				(unsigned)image->level_pitch[level], (unsigned)image->level_slice_bytes[level]);
+		wiiu_log("GX2: texture %ux%ux%u kind %u format %u, %u levels, image %u mip %u align %u pitch %u, raw level offsets %u %u %u %u %u; level offset/pitch/slice:%s",
+			(unsigned)width, (unsigned)height, (unsigned)image->depth, (unsigned)kind, (unsigned)format, (unsigned)levels, (unsigned)surface->imageSize,
+			(unsigned)surface->mipmapSize, (unsigned)surface->alignment, (unsigned)surface->pitch, (unsigned)surface->mipLevelOffset[0],
+			(unsigned)surface->mipLevelOffset[1], (unsigned)surface->mipLevelOffset[2], (unsigned)surface->mipLevelOffset[3],
+			(unsigned)surface->mipLevelOffset[4], text);
+		gx.layouts_logged++;
+	}
 	image->texture.viewFirstMip = 0;
-	image->texture.viewNumMips = 1;
+	image->texture.viewNumMips = levels;
 	image->texture.viewFirstSlice = 0;
-	image->texture.viewNumSlices = 1;
-	image->texture.compMap = compressed ? GX2_COMP_MAP(GX2_SQ_SEL_R, GX2_SQ_SEL_G, GX2_SQ_SEL_B, GX2_SQ_SEL_A) :
+	image->texture.viewNumSlices = kind == DK_TEXTURE_CUBE ? 6 : kind == DK_TEXTURE_3D ? image->depth : 1;
+	image->texture.compMap = image->compressed ? GX2_COMP_MAP(GX2_SQ_SEL_R, GX2_SQ_SEL_G, GX2_SQ_SEL_B, GX2_SQ_SEL_A) :
 		GX2_COMP_MAP(GX2_SQ_SEL_B, GX2_SQ_SEL_G, GX2_SQ_SEL_R, GX2_SQ_SEL_A);
 	GX2InitTextureRegs(&image->texture);
 	image->supported = 1;
 	return 1;
 }
 
-static void image_write_level0(struct image *image, const uint8_t *source, uint32_t bytes)
+/* one slice of one level, from rows of texels or blocks (no padding) */
+static void image_write_slice(const struct image *image, unsigned level, unsigned slice, const uint8_t *source)
 {
-	GX2Surface *surface = &image->texture.surface;
-	GX2SurfaceFormat gx_format;
-	unsigned block_bytes;
+	const uint32_t width = level_size(image->width, level), height = level_size(image->height, level);
+	uint8_t *destination = image_level(image, level, slice);
 
-	if (format_of(image->format, &gx_format, &block_bytes))
-	{
-		const unsigned across = (image->width + 3) / 4, down = (image->height + 3) / 4;
-
-		if (bytes < (uint32_t)across * down * block_bytes || surface->pitch < across)
-			return;
-		wiiu_tile_1d(source, across, down, block_bytes, surface->pitch, (uint8_t *)surface->image);
-	}
+	if (image->compressed)
+		wiiu_tile_1d(source, (width + 3) / 4, (height + 3) / 4, image->block_bytes, image->level_pitch[level], destination);
 	else
 	{
 		unsigned y;
 
-		if (bytes < image->width * image->height * 4)
-			return;
-		for (y = 0; y < image->height; y++)
-			memcpy((uint8_t *)surface->image + (size_t)y * surface->pitch * 4, source + (size_t)y * image->width * 4, (size_t)image->width * 4);
+		for (y = 0; y < height; y++)
+			memcpy(destination + (size_t)y * image->level_pitch[level] * 4, source + (size_t)y * width * 4, (size_t)width * 4);
 	}
-	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, surface->image, surface->imageSize);
+}
+
+/* the bytes of one slice of a level in the source */
+static uint32_t level_source_bytes(const struct image *image, unsigned level)
+{
+	const uint32_t width = level_size(image->width, level), height = level_size(image->height, level);
+
+	return image->compressed ? ((width + 3) / 4) * ((height + 3) / 4) * image->block_bytes : width * height * 4;
+}
+
+/* the texels of every level (and each cube face's) as dk_command_texture lays them out */
+static void image_write(struct image *image, const uint8_t *source, uint32_t source_bytes, uint32_t face_bytes)
+{
+	const unsigned faces = image->kind == DK_TEXTURE_CUBE ? 6 : 1;
+	unsigned face, level, slice;
+
+	for (face = 0; face < faces; face++)
+	{
+		uint32_t at = face * face_bytes;
+
+		for (level = 0; level < image->levels; level++)
+		{
+			const uint32_t slices = image->kind == DK_TEXTURE_3D ? level_size(image->depth, level) : 1;
+			const uint32_t bytes = level_source_bytes(image, level);
+
+			if ((uint64_t)at + (uint64_t)bytes * slices > source_bytes)
+			{
+				gx.texture_short++;
+				goto done;
+			}
+			for (slice = 0; slice < slices; slice++)
+				image_write_slice(image, level, image->kind == DK_TEXTURE_CUBE ? face : slice, source + at + (size_t)slice * bytes);
+			at += bytes * slices;
+		}
+	}
+done:
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, image->base, image->texture.surface.imageSize + (image->levels > 1 ? image->texture.surface.mipmapSize : 0));
 }
 
 static void texture_make(const struct dk_command_texture *command)
@@ -810,14 +944,14 @@ static void texture_make(const struct dk_command_texture *command)
 		return;
 	image = &images[command->id];
 	if (!(image->used && image->supported && image->kind == command->kind && image->format == command->format && image->width == command->width &&
-		image->height == command->height))
+		image->height == command->height && image->depth == (command->depth ? command->depth : 1) && image->requested_levels == command->levels))
 	{
 		image_release(image);
-		image_surface(image, command->kind, command->format, command->width, command->height);
+		image_surface(image, command->kind, command->format, command->width, command->height, command->depth, command->levels);
 		gx.textures_made++;
 	}
 	if (image->supported && command->source_bytes)
-		image_write_level0(image, (const uint8_t *)(uintptr_t)command->source, command->source_bytes);
+		image_write(image, (const uint8_t *)(uintptr_t)command->source, command->source_bytes, command->face_bytes);
 	else if (!image->supported)
 		gx.textures_unsupported++;
 }
@@ -825,20 +959,22 @@ static void texture_make(const struct dk_command_texture *command)
 static void texture_rows(const struct dk_command_texture_rows *command)
 {
 	struct image *image;
-	GX2Surface *surface;
 	unsigned row;
+	uint32_t width, height;
 
-	if (!images || !command->id || command->id >= DK_TEXTURE_LIMIT || command->level)
+	if (!images || !command->id || command->id >= DK_TEXTURE_LIMIT)
 		return;
 	image = &images[command->id];
-	surface = &image->texture.surface;
-	if (!image->used || !image->supported || image->format != DK_TEXTURE_BGRA || command->top + command->rows > image->height ||
-		command->source_bytes < command->rows * image->width * 4)
+	if (!image->used || !image->supported || image->format != DK_TEXTURE_BGRA || image->kind != DK_TEXTURE_2D || command->level >= image->levels)
+		return;
+	width = level_size(image->width, command->level);
+	height = level_size(image->height, command->level);
+	if (command->top + command->rows > height || command->source_bytes < command->rows * width * 4)
 		return;
 	for (row = 0; row < command->rows; row++)
-		memcpy((uint8_t *)surface->image + (size_t)(command->top + row) * surface->pitch * 4,
-			(const uint8_t *)(uintptr_t)command->source + (size_t)row * image->width * 4, (size_t)image->width * 4);
-	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, surface->image, surface->imageSize);
+		memcpy(image_level(image, command->level, 0) + (size_t)(command->top + row) * image->level_pitch[command->level] * 4,
+			(const uint8_t *)(uintptr_t)command->source + (size_t)row * width * 4, (size_t)width * 4);
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, image->base, image->texture.surface.imageSize + (image->levels > 1 ? image->texture.surface.mipmapSize : 0));
 }
 
 static void texture_free(const struct dk_command_texture_free *command)
@@ -858,16 +994,32 @@ static GX2TexClampMode wrap_of(uint32_t wrap)
 	}
 }
 
-static void sampler_set(GX2Sampler *sampler, const struct dk_sampler *s)
+static GX2TexAnisoRatio aniso_of(float anisotropy)
 {
+	return anisotropy >= 16.0f ? GX2_TEX_ANISO_RATIO_16_TO_1 : anisotropy >= 8.0f ? GX2_TEX_ANISO_RATIO_8_TO_1 : anisotropy >= 4.0f ? GX2_TEX_ANISO_RATIO_4_TO_1 :
+		anisotropy >= 2.0f ? GX2_TEX_ANISO_RATIO_2_TO_1 : GX2_TEX_ANISO_RATIO_NONE;
+}
+
+/* levels: those of the texture the sampler is used with */
+static void sampler_set(GX2Sampler *sampler, const struct dk_sampler *s, unsigned levels)
+{
+	const GX2TexMipFilterMode mip = levels > 1 && s->mip_filter == DK_MIP_LINEAR ? GX2_TEX_MIP_FILTER_MODE_LINEAR :
+		levels > 1 && s->mip_filter == DK_MIP_NEAREST ? GX2_TEX_MIP_FILTER_MODE_POINT : GX2_TEX_MIP_FILTER_MODE_NONE;
+	const float maximum = mip == GX2_TEX_MIP_FILTER_MODE_NONE ? 0.0f : (float)(levels - 1);
+	float minimum = s->lod_minimum;
+
+	if (minimum > maximum)
+		minimum = maximum;
+	if (minimum < 0.0f)
+		minimum = 0.0f;
 	GX2InitSampler(sampler, GX2_TEX_CLAMP_MODE_WRAP, GX2_TEX_XY_FILTER_MODE_POINT);
 	GX2InitSamplerClamping(sampler, wrap_of(s->wrap[0]), wrap_of(s->wrap[1]), wrap_of(s->wrap[2]));
 	GX2InitSamplerXYFilter(sampler, s->mag_linear ? GX2_TEX_XY_FILTER_MODE_LINEAR : GX2_TEX_XY_FILTER_MODE_POINT,
-		s->min_linear ? GX2_TEX_XY_FILTER_MODE_LINEAR : GX2_TEX_XY_FILTER_MODE_POINT, GX2_TEX_ANISO_RATIO_NONE);
-	/* (only level 0 is uploaded so far: the mip filter is none) */
-	GX2InitSamplerZMFilter(sampler, GX2_TEX_Z_FILTER_MODE_NONE, GX2_TEX_MIP_FILTER_MODE_NONE);
-	GX2InitSamplerLOD(sampler, 0.0f, 0.0f, 0.0f);
-	GX2InitSamplerBorderType(sampler, GX2_TEX_BORDER_TYPE_TRANSPARENT_BLACK);
+		s->min_linear ? GX2_TEX_XY_FILTER_MODE_LINEAR : GX2_TEX_XY_FILTER_MODE_POINT, aniso_of(s->anisotropy));
+	GX2InitSamplerZMFilter(sampler, s->min_linear ? GX2_TEX_Z_FILTER_MODE_LINEAR : GX2_TEX_Z_FILTER_MODE_POINT, mip);
+	GX2InitSamplerLOD(sampler, minimum, maximum, mip == GX2_TEX_MIP_FILTER_MODE_NONE ? 0.0f : s->lod_bias);
+	GX2InitSamplerBorderType(sampler, s->border[3] > 0.5f && s->border[0] > 0.5f ? GX2_TEX_BORDER_TYPE_WHITE : s->border[3] > 0.5f ? GX2_TEX_BORDER_TYPE_BLACK :
+		GX2_TEX_BORDER_TYPE_TRANSPARENT_BLACK);
 }
 
 static void textures_set(const struct dk_command_textures *command)
@@ -877,24 +1029,150 @@ static void textures_set(const struct dk_command_textures *command)
 	for (stage = 0; stage < 4; stage++)
 	{
 		gx.stages[stage] = command->stages[stage];
-		sampler_set(&gx.samplers[stage], &command->stages[stage].sampler);
+		gx.sampler_valid[stage] = 0;
 	}
 }
 
-/* the texture a stage samples: its image, the render target it names, or a white texel */
-static const GX2Texture *stage_texture(const struct dk_stage_texture *stage)
-{
-	if (stage->id && stage->id < DK_TEXTURE_LIMIT && images && images[stage->id].used && images[stage->id].supported)
-		return &images[stage->id].texture;
-	if (!stage->id && stage->target)
-	{
-		struct target *found = NULL;
-		unsigned i;
+/* ---------- textures rendered a level at a time (the water's ripples): the levels' targets are copied into one texture with all its levels */
 
-		for (i = 0; i < gx.target_count; i++)
-			if (gx.targets[i].surface.kind == DK_SURFACE_COLOR && gx.targets[i].surface.data == stage->target &&
-				(!found || gx.targets[i].last_used >= found->last_used))
-				found = &gx.targets[i];
+#define COMPOSITE_LIMIT 32
+
+struct composite
+{
+	int used;
+	uint32_t data, width, height, levels;
+	uint32_t level_data[DK_COMPOSITE_LEVELS];
+	unsigned level_written[DK_COMPOSITE_LEVELS];
+	uint8_t *base;
+	GX2Texture texture;
+};
+
+static struct composite composites[COMPOSITE_LIMIT];
+
+static void composite_receive(const struct dk_command_composite *command)
+{
+	struct composite *composite = NULL;
+	unsigned i, level;
+	GX2Surface *surface;
+
+	if (!command->levels || command->levels > DK_COMPOSITE_LEVELS || (gx.features_off & 4))
+		return;
+	for (i = 0; i < COMPOSITE_LIMIT; i++)
+		if (composites[i].used && composites[i].data == command->data && composites[i].width == command->width && composites[i].height == command->height &&
+			composites[i].levels == command->levels)
+			composite = &composites[i];
+	if (composite)
+	{
+		memcpy(composite->level_data, command->level_data, sizeof(composite->level_data));
+		memset(composite->level_written, 0, sizeof(composite->level_written));
+		return;
+	}
+	for (i = 0; i < COMPOSITE_LIMIT && composites[i].used; i++)
+		;
+	if (i == COMPOSITE_LIMIT)
+	{
+		wiiu_log("GX2: more than %d mip composites", COMPOSITE_LIMIT);
+		return;
+	}
+	composite = &composites[i];
+	memset(composite, 0, sizeof(*composite));
+	composite->used = 1;
+	composite->data = command->data;
+	composite->width = command->width;
+	composite->height = command->height;
+	composite->levels = command->levels;
+	memcpy(composite->level_data, command->level_data, sizeof(composite->level_data));
+	surface = &composite->texture.surface;
+	surface->dim = GX2_SURFACE_DIM_TEXTURE_2D;
+	surface->width = command->width;
+	surface->height = command->height;
+	surface->depth = 1;
+	surface->mipLevels = command->levels;
+	surface->format = GX2_SURFACE_FORMAT_UNORM_R8_G8_B8_A8;
+	surface->aa = GX2_AA_MODE1X;
+	surface->use = GX2_SURFACE_USE_TEXTURE;
+	surface->tileMode = GX2_TILE_MODE_DEFAULT;
+	GX2CalcSurfaceSizeAndAlignment(surface);
+	composite->base = gx_alloc_raw(surface->imageSize + surface->mipmapSize, surface->alignment ? surface->alignment : 256);
+	if (!composite->base)
+	{
+		memset(composite, 0, sizeof(*composite));
+		return;
+	}
+	memset(composite->base, 0, surface->imageSize + surface->mipmapSize);
+	surface->image = composite->base;
+	surface->mipmaps = command->levels > 1 ? composite->base + surface->mipLevelOffset[0] : NULL;
+	composite->texture.viewNumMips = command->levels;
+	composite->texture.viewNumSlices = 1;
+	composite->texture.compMap = GX2_COMP_MAP(GX2_SQ_SEL_R, GX2_SQ_SEL_G, GX2_SQ_SEL_B, GX2_SQ_SEL_A);
+	GX2InitTextureRegs(&composite->texture);
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, composite->base, surface->imageSize + surface->mipmapSize);
+	(void)level;
+}
+
+static struct target *target_latest(uint32_t data)
+{
+	struct target *found = NULL;
+	unsigned i;
+
+	for (i = 0; i < gx.target_count; i++)
+		if (gx.targets[i].surface.kind == DK_SURFACE_COLOR && gx.targets[i].surface.data == data && (!found || gx.targets[i].last_used >= found->last_used))
+			found = &gx.targets[i];
+	return found;
+}
+
+/* the composite whose levels the stage samples, its levels copied again from the targets drawn into since (the levels the game did not render keep what they had) */
+static const GX2Texture *composite_sampled(uint32_t data, uint32_t levels)
+{
+	unsigned i, level;
+
+	for (i = 0; i < COMPOSITE_LIMIT; i++)
+	{
+		struct composite *composite = &composites[i];
+
+		if (!composite->used || composite->data != data || composite->levels != levels)
+			continue;
+		for (level = 0; level < composite->levels; level++)
+		{
+			struct target *target = target_latest(composite->level_data[level]);
+
+			if (!target || target->color.surface.width != level_size(composite->width, level) || target->color.surface.height != level_size(composite->height, level))
+				continue;
+			if (target->last_used == composite->level_written[level] && composite->level_written[level])
+				continue;
+			GX2Invalidate((GX2InvalidateMode)(GX2_INVALIDATE_MODE_COLOR_BUFFER | GX2_INVALIDATE_MODE_TEXTURE), target->color.surface.image,
+				target->color.surface.imageSize);
+			GX2CopySurface(&target->color.surface, 0, 0, &composite->texture.surface, level, 0);
+			composite->level_written[level] = target->last_used ? target->last_used : 1;
+		}
+		return &composite->texture;
+	}
+	return NULL;
+}
+
+/* the texture a stage samples: its image, the composite or render target it names, or a white texel */
+static const GX2Texture *stage_texture(const struct dk_stage_texture *stage, unsigned *levels)
+{
+	*levels = 1;
+	if (stage->id && stage->id < DK_TEXTURE_LIMIT && images && images[stage->id].used && images[stage->id].supported)
+	{
+		*levels = images[stage->id].levels;
+		return &images[stage->id].texture;
+	}
+	if (!stage->id && stage->composite)
+	{
+		const GX2Texture *texture = composite_sampled(stage->target, stage->composite);
+
+		if (texture)
+		{
+			*levels = stage->composite;
+			return texture;
+		}
+	}
+	else if (!stage->id && stage->target)
+	{
+		struct target *found = target_latest(stage->target);
+
 		if (found)
 		{
 			GX2Invalidate((GX2InvalidateMode)(GX2_INVALIDATE_MODE_COLOR_BUFFER | GX2_INVALIDATE_MODE_TEXTURE), found->color.surface.image,
@@ -911,9 +1189,19 @@ static void textures_bind(const struct shader *ps)
 
 	for (stage = 0; stage < 4; stage++)
 	{
+		unsigned levels;
+		const GX2Texture *texture;
+
 		if (ps->sampler[stage] < 0)
 			continue;
-		GX2SetPixelTexture(stage_texture(&gx.stages[stage]), (uint32_t)ps->sampler[stage]);
+		texture = stage_texture(&gx.stages[stage], &levels);
+		if (!gx.sampler_valid[stage] || gx.sampler_levels[stage] != levels)
+		{
+			sampler_set(&gx.samplers[stage], &gx.stages[stage].sampler, levels);
+			gx.sampler_valid[stage] = 1;
+			gx.sampler_levels[stage] = levels;
+		}
+		GX2SetPixelTexture(texture, (uint32_t)ps->sampler[stage]);
 		GX2SetPixelSampler(&gx.samplers[stage], (uint32_t)ps->sampler[stage]);
 	}
 }
@@ -1210,7 +1498,7 @@ static int initialize(void)
 		file = fopen(WIIU_DATA_DIRECTORY "/gx2_trace.txt", "r");
 		if (file)
 		{
-			if (fscanf(file, "%d %d", &gx.trace_frame, &gx.debug_mode) < 1)
+			if (fscanf(file, "%d %d %d", &gx.trace_frame, &gx.debug_mode, &gx.features_off) < 1)
 				gx.trace_frame = -1;
 			fclose(file);
 		}
@@ -1372,42 +1660,127 @@ static void targets_bind(const struct dk_command_targets *command)
 	}
 }
 
+/* A clear of part of a target (a split-screen window), of some of its channels (the fog screen's alpha only) or of the stencil with the depth kept is a draw of
+rectangles with the blit shader: the colour through the channel masks, the depth by a viewport whose near and far are the value, the stencil by replacing. */
+static void clear_draw(const struct dk_command_clear *command, int colour, int depth, int stencil)
+{
+	const struct target *size_from = gx.color ? gx.color : gx.depth;
+	const float width = (float)SURFACE_PIXEL_WIDTH(&size_from->surface), height = (float)SURFACE_PIXEL_HEIGHT(&size_from->surface);
+	const unsigned count = command->rectangle_count ? command->rectangle_count : 1;
+	struct blit_vertex *vertices;
+	unsigned rectangle, i;
+	static const unsigned corner_x[6] = { 0, 1, 0, 1, 1, 0 };
+	static const unsigned corner_y[6] = { 0, 0, 1, 0, 1, 1 };
+	const GX2StencilFunction keep = GX2_STENCIL_FUNCTION_KEEP, replace = GX2_STENCIL_FUNCTION_REPLACE;
+	const GX2ChannelMask none = (GX2ChannelMask)0;
+	const GX2ChannelMask all = GX2_CHANNEL_MASK_RGBA;
+	unsigned mask = 0;
+
+	if (count > 64)
+		return;
+	vertices = (struct blit_vertex *)ring_alloc(count * 6 * sizeof(struct blit_vertex));
+	if (!vertices)
+	{
+		gx.skipped_ring++;
+		return;
+	}
+	for (rectangle = 0; rectangle < count; rectangle++)
+	{
+		const uint32_t *r = command->rectangle_count ? command->rectangles[rectangle] : NULL;
+		const float x0 = r ? (float)r[0] : 0.0f, y0 = r ? (float)r[1] : 0.0f, x1 = r ? x0 + (float)r[2] : width, y1 = r ? y0 + (float)r[3] : height;
+
+		for (i = 0; i < 6; i++)
+		{
+			struct blit_vertex *v = &vertices[rectangle * 6 + i];
+
+			v->x = (corner_x[i] ? x1 : x0) * 2.0f / width - 1.0f;
+			v->y = 1.0f - (corner_y[i] ? y1 : y0) * 2.0f / height;
+			v->u = v->v = 0.0f;
+			v->r = command->color[0];
+			v->g = command->color[1];
+			v->b = command->color[2];
+			v->a = command->color[3];
+		}
+	}
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER, vertices, count * 6 * sizeof(struct blit_vertex));
+	if (command->flags & DK_CLEAR_RED)
+		mask |= 1;
+	if (command->flags & DK_CLEAR_GREEN)
+		mask |= 2;
+	if (command->flags & DK_CLEAR_BLUE)
+		mask |= 4;
+	if (command->flags & DK_CLEAR_ALPHA)
+		mask |= 8;
+	GX2SetShaderMode(GX2_SHADER_MODE_UNIFORM_REGISTER);
+	GX2SetRasterizerClipControlEx(TRUE, TRUE, FALSE);
+	GX2SetViewport(0.0f, 0.0f, width, height, depth ? command->depth : 0.0f, depth ? command->depth : 1.0f);
+	GX2SetScissor(0, 0, (uint32_t)width, (uint32_t)height);
+	GX2SetPolygonControl(GX2_FRONT_FACE_CCW, FALSE, FALSE, FALSE, GX2_POLYGON_MODE_TRIANGLE, GX2_POLYGON_MODE_TRIANGLE, FALSE, FALSE, FALSE);
+	GX2SetColorControl(GX2_LOGIC_OP_COPY, 0, FALSE, TRUE);
+	GX2SetTargetChannelMasks(colour ? (GX2ChannelMask)mask : none, all, all, all, all, all, all, all);
+	if (depth || stencil)
+	{
+		GX2SetDepthStencilControl(TRUE, depth ? TRUE : FALSE, GX2_COMPARE_FUNC_ALWAYS, stencil ? TRUE : FALSE, FALSE, GX2_COMPARE_FUNC_ALWAYS,
+			stencil ? replace : keep, stencil ? replace : keep, stencil ? replace : keep, GX2_COMPARE_FUNC_ALWAYS, stencil ? replace : keep,
+			stencil ? replace : keep, stencil ? replace : keep);
+		GX2SetStencilMask(0xff, 0xff, (uint8_t)command->stencil, 0xff, 0xff, (uint8_t)command->stencil);
+	}
+	else
+	{
+		GX2SetDepthStencilControl(FALSE, FALSE, GX2_COMPARE_FUNC_ALWAYS, FALSE, FALSE, GX2_COMPARE_FUNC_ALWAYS, keep, keep, keep, GX2_COMPARE_FUNC_ALWAYS, keep,
+			keep, keep);
+	}
+	GX2SetFetchShader(&gx.blit.fetchShader);
+	GX2SetVertexShader(gx.blit.vertexShader);
+	GX2SetPixelShader(gx.blit.pixelShader);
+	GX2SetAttribBuffer(0, count * 6 * sizeof(struct blit_vertex), sizeof(struct blit_vertex), vertices);
+	GX2SetPixelTexture(&gx.white, gx.sampler_location);
+	GX2SetPixelSampler(&gx.sampler, gx.sampler_location);
+	GX2DrawEx(GX2_PRIMITIVE_MODE_TRIANGLES, count * 6, 0, 1);
+	gx.rectangle_clears++;
+}
+
 static void clear(const struct dk_command_clear *command)
 {
 	const uint32_t color_flags = DK_CLEAR_RED | DK_CLEAR_GREEN | DK_CLEAR_BLUE | DK_CLEAR_ALPHA;
 	const int whole_color = (command->flags & color_flags) == color_flags;
+	const struct target *size_from = gx.color ? gx.color : gx.depth;
+	int whole_rectangle = 1;
 
-	/* GX2 clears a whole buffer: a clear of part of a target (a split-screen window), or of some channels (the fog screen's alpha only), is
-	made as a whole one for now, and counted */
-	if (command->rectangle_count)
+	if (command->rectangle_count && size_from)
 	{
-		const struct target *size_from = gx.color ? gx.color : gx.depth;
+		const uint32_t *rectangle = command->rectangles[0];
 
-		if (size_from)
-		{
-			const uint32_t *rectangle = command->rectangles[0];
-
-			if (command->rectangle_count != 1 || rectangle[0] || rectangle[1] || rectangle[2] != SURFACE_PIXEL_WIDTH(&size_from->surface) ||
-				rectangle[3] != SURFACE_PIXEL_HEIGHT(&size_from->surface))
-				gx.partial_clears++;
-		}
+		whole_rectangle = command->rectangle_count == 1 && !rectangle[0] && !rectangle[1] && rectangle[2] >= SURFACE_PIXEL_WIDTH(&size_from->surface) &&
+			rectangle[3] >= SURFACE_PIXEL_HEIGHT(&size_from->surface);
 	}
 	if (gx.color && (command->flags & color_flags))
 	{
-		if (!whole_color)
-			gx.partial_clears++;
-		else
+		if (whole_color && whole_rectangle)
 			GX2ClearColor(&gx.color->color, command->color[0], command->color[1], command->color[2], command->color[3]);
+		else
+			clear_draw(command, 1, 0, 0);
+		gx.color->last_used = ++gx.use_serial;
 	}
 	if (gx.depth && (command->flags & (DK_CLEAR_DEPTH | DK_CLEAR_STENCIL)))
 	{
-		GX2ClearFlags flags = (GX2ClearFlags)0;
+		const int both = (command->flags & (DK_CLEAR_DEPTH | DK_CLEAR_STENCIL)) == (DK_CLEAR_DEPTH | DK_CLEAR_STENCIL);
 
-		if (command->flags & DK_CLEAR_DEPTH)
-			flags = (GX2ClearFlags)(flags | GX2_CLEAR_FLAGS_DEPTH);
-		if (command->flags & DK_CLEAR_STENCIL)
-			flags = (GX2ClearFlags)(flags | GX2_CLEAR_FLAGS_STENCIL);
-		GX2ClearDepthStencilEx(&gx.depth->depth, command->depth, (uint8_t)command->stencil, flags);
+		if (whole_rectangle)
+		{
+			GX2ClearFlags flags = (GX2ClearFlags)0;
+
+			if (command->flags & DK_CLEAR_DEPTH)
+				flags = (GX2ClearFlags)(flags | GX2_CLEAR_FLAGS_DEPTH);
+			if (command->flags & DK_CLEAR_STENCIL)
+				flags = (GX2ClearFlags)(flags | GX2_CLEAR_FLAGS_STENCIL);
+			GX2ClearDepthStencilEx(&gx.depth->depth, command->depth, (uint8_t)command->stencil, flags);
+		}
+		else
+		{
+			(void)both;
+			clear_draw(command, 0, (command->flags & DK_CLEAR_DEPTH) != 0, (command->flags & DK_CLEAR_STENCIL) != 0);
+		}
 	}
 	/* (a clear is a draw of its own: the state the draws need goes back) */
 	context_resume();
@@ -1474,6 +1847,87 @@ static void blit_to(struct target *source, GX2ColorBuffer *screen, GX2ContextSta
 	GX2DrawEx(GX2_PRIMITIVE_MODE_TRIANGLES, 6, 0, 1);
 }
 
+/* ---------- visibility tests (lens flares): GX2's occlusion queries. wut's headers lack them, its library has them (the signatures are decaf's and Cemu's):
+GX2QueryBegin(type, buffer), GX2QueryEnd(type, buffer), GX2QueryGetOcclusionResult(buffer, &samples) which says when the result is there. Off unless bit 3 of the third
+number in halo/gx2_trace.txt is set: untested on a console. */
+
+void GX2QueryBegin(uint32_t type, uint64_t *buffer);
+void GX2QueryEnd(uint32_t type, uint64_t *buffer);
+BOOL GX2QueryGetOcclusionResult(uint64_t *buffer, uint64_t *samples);
+
+#define QUERY_BUFFERS 256
+#define QUERY_BUFFER_BYTES 256
+#define QUERY_OCCLUSION 0
+
+static struct
+{
+	uint8_t *memory;
+	unsigned next;
+	int open; /* the buffer the begun test uses, -1: none */
+	int slot_buffer[DK_VISIBILITY_SLOTS]; /* the buffer a slot's test is in, -1: none */
+	int buffer_slot[QUERY_BUFFERS];
+	uint8_t pending[DK_VISIBILITY_SLOTS];
+	uint32_t result[DK_VISIBILITY_SLOTS];
+	unsigned begun, ended, read_back;
+} query;
+
+static int queries_enabled(void)
+{
+	return (gx.features_off & 8) != 0;
+}
+
+static void visibility_begin(void)
+{
+	unsigned buffer, slot;
+
+	if (!queries_enabled() || !gx.color)
+		return;
+	if (!query.memory)
+	{
+		query.memory = gx_alloc(QUERY_BUFFERS * QUERY_BUFFER_BYTES, 256);
+		if (!query.memory)
+		{
+			wiiu_log("GX2: no memory for the visibility tests");
+			gx.features_off &= ~8;
+			return;
+		}
+		for (slot = 0; slot < DK_VISIBILITY_SLOTS; slot++)
+			query.slot_buffer[slot] = -1;
+		for (buffer = 0; buffer < QUERY_BUFFERS; buffer++)
+			query.buffer_slot[buffer] = -1;
+	}
+	buffer = query.next;
+	query.next = (query.next + 1) % QUERY_BUFFERS;
+	if (query.buffer_slot[buffer] >= 0)
+	{
+		query.pending[query.buffer_slot[buffer]] = 0;
+		query.slot_buffer[query.buffer_slot[buffer]] = -1;
+		query.buffer_slot[buffer] = -1;
+	}
+	memset(query.memory + buffer * QUERY_BUFFER_BYTES, 0, QUERY_BUFFER_BYTES);
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU, query.memory + buffer * QUERY_BUFFER_BYTES, QUERY_BUFFER_BYTES);
+	GX2QueryBegin(QUERY_OCCLUSION, (uint64_t *)(query.memory + buffer * QUERY_BUFFER_BYTES));
+	query.open = (int)buffer;
+	query.begun++;
+}
+
+static void visibility_end(uint32_t index)
+{
+	if (!queries_enabled() || query.open < 0)
+		return;
+	GX2QueryEnd(QUERY_OCCLUSION, (uint64_t *)(query.memory + (unsigned)query.open * QUERY_BUFFER_BYTES));
+	if (index > 0 && index < DK_VISIBILITY_SLOTS)
+	{
+		if (query.slot_buffer[index] >= 0)
+			query.buffer_slot[query.slot_buffer[index]] = -1;
+		query.slot_buffer[index] = query.open;
+		query.buffer_slot[query.open] = (int)index;
+		query.pending[index] = 1;
+	}
+	query.open = -1;
+	query.ended++;
+}
+
 /* the back buffer's pixels, R G B A in memory, for debug.screenshot_every (d3d8_gx2.c writes the file): copied by the GPU into a linear surface, which the
 CPU can read */
 static void screenshot_take(struct target *source, uint32_t address)
@@ -1513,7 +1967,6 @@ static void present(const struct dk_command_present *command)
 	if (back && command->screenshot)
 		screenshot_take(back, command->screenshot);
 	/* (before the frame is drawn, as the screenshot above is: the screens' buffers then hold the frame before) */
-	wiiu_debug_present(back ? &back->color : NULL, WHBGfxGetTVColourBuffer(), WHBGfxGetDRCColourBuffer());
 	WHBGfxBeginRender();
 	WHBGfxBeginRenderTV();
 	if (back)
@@ -1546,12 +1999,14 @@ static void present(const struct dk_command_present *command)
 			if (gx.counts[i])
 				wiiu_log("GX2:   command %u: %u", i, gx.counts[i]);
 		wiiu_log("GX2:   %u draws made; skipped: %u no target, %u no shader or format yet, %u shader not in the pack or not loaded, %u ring full; %u clears "
-			"of part of a target or of some channels made whole or skipped; %u textures made (%u not 2D), ring overflows %u", gx.draws_made,
-			gx.skipped_target, gx.skipped_state, gx.skipped_shader, gx.skipped_ring, gx.partial_clears, gx.textures_made, gx.textures_unsupported,
-			gx.ring_overflows);
+			"made as rectangles; %u textures made (%u not 2D, %u short), ring overflows %u", gx.draws_made,
+			gx.skipped_target, gx.skipped_state, gx.skipped_shader, gx.skipped_ring, gx.rectangle_clears, gx.textures_made, gx.textures_unsupported,
+			gx.texture_short, gx.ring_overflows);
+		if (query.begun)
+			wiiu_log("GX2:   visibility tests: %u begun, %u ended, %u read back", query.begun, query.ended, query.read_back);
 		memset(gx.counts, 0, sizeof(gx.counts));
 		gx.draws_made = gx.skipped_target = gx.skipped_state = gx.skipped_shader = gx.skipped_ring = 0;
-		gx.partial_clears = 0;
+		gx.rectangle_clears = 0;
 		gx.textures_made = gx.textures_unsupported = 0;
 	}
 	ring_next();
@@ -1646,8 +2101,17 @@ void host_gx2_submit(uint32_t commands, uint32_t size)
 		case DK_COMMAND_TEXTURES:
 			textures_set((const struct dk_command_textures *)header);
 			break;
+		case DK_COMMAND_COMPOSITE:
+			composite_receive((const struct dk_command_composite *)header);
+			break;
 		case DK_COMMAND_DRAW:
 			draw((const struct dk_command_draw *)header);
+			break;
+		case DK_COMMAND_VISIBILITY_BEGIN:
+			visibility_begin();
+			break;
+		case DK_COMMAND_VISIBILITY_END:
+			visibility_end(((const struct dk_command_visibility_end *)header)->index);
 			break;
 		default:
 			break;
@@ -1669,8 +2133,18 @@ void host_gx2_idle(void)
 
 uint32_t host_gx2_visibility(uint32_t index)
 {
-	(void)index;
-	return 0;
+	uint64_t samples;
+
+	if (!query.memory || index == 0 || index >= DK_VISIBILITY_SLOTS)
+		return 0;
+	if (query.pending[index] && query.slot_buffer[index] >= 0 &&
+		GX2QueryGetOcclusionResult((uint64_t *)(query.memory + (unsigned)query.slot_buffer[index] * QUERY_BUFFER_BYTES), &samples))
+	{
+		query.result[index] = samples > 0xffffffffu ? 0xffffffffu : (uint32_t)samples;
+		query.pending[index] = 0;
+		query.read_back++;
+	}
+	return query.result[index];
 }
 
 /* the lines the screen's targets are drawn at, at most: the TV's */
