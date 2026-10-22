@@ -127,6 +127,7 @@ static struct
 	OSTime started;
 	double exit_after;
 	int trace_frame; /* halo/gx2_trace.txt: the frame whose draws are logged (-1: none) */
+	int debug_mode; /* and, after it, a mode: 1 draws without blending */
 	unsigned traced;
 } gx;
 
@@ -566,7 +567,10 @@ static void state_apply(void)
 	GX2CompareFunction stencil_function = compare_of(s->stencil_function);
 
 	GX2SetRasterizerClipControlEx(TRUE, TRUE, FALSE);
-	GX2SetViewport((float)s->viewport[0], (float)s->viewport[1], (float)s->viewport[2], (float)s->viewport[3], s->depth_range[0], s->depth_range[1]);
+	/* The generated vertex shaders put the Xbox's top at clip y = -1, as the OpenGL port's: there row 0 of a framebuffer is clip y = -1, and a render target's rows
+	are the Xbox's (top first). GX2's viewport puts clip y = +1 at row 0, so it is given a negative height, which turns it over: rows and winding as OpenGL's. */
+	GX2SetViewport((float)s->viewport[0], (float)(s->viewport[1] + s->viewport[3]), (float)s->viewport[2], -(float)s->viewport[3], s->depth_range[0],
+		s->depth_range[1]);
 	GX2SetScissor((uint32_t)s->scissor[0], (uint32_t)s->scissor[1], (uint32_t)s->scissor[2], (uint32_t)s->scissor[3]);
 	GX2SetPolygonControl(front, s->cull == DK_CULL_FRONT, s->cull == DK_CULL_BACK, mode != GX2_POLYGON_MODE_TRIANGLE, mode, mode, s->offset_enable,
 		s->offset_enable, s->offset_enable);
@@ -991,6 +995,19 @@ static void draw_trace(const struct dk_command_draw *command, const struct shade
 		(unsigned)command->primitive, (unsigned)command->count, command->index_address ? "yes" : "no", (int)command->vertex_offset,
 		(unsigned)command->stream_count, command->stream_count ? (unsigned)command->streams[0][0] : 0, command->stream_count ? (unsigned)command->streams[0][1] : 0,
 		(unsigned)f->strides[0], text, first[0], first[1], first[2], bytes);
+	if (command->inline_bytes)
+	{
+		const float *vertices = (const float *)(const void *)&command->streams[command->stream_count];
+		unsigned vertex;
+
+		for (vertex = 0; vertex < command->count && vertex < 4; vertex++)
+		{
+			const float *v = vertices + vertex * 64;
+
+			wiiu_log("GX2   vertex %u: r0 %g %g %g %g | r4 %g %g %g %g | r9 %g %g %g %g", vertex, v[0], v[1], v[2], v[3], v[16], v[17], v[18], v[19], v[36], v[37],
+				v[38], v[39]);
+		}
+	}
 	wiiu_log("GX2   state: vp %d,%d %dx%d z %g..%g cull %u ccw %u depth %u/%u/%x stencil %u blend %u %x->%x mask %x; tex %u/%u %u/%u %u/%u %u/%u",
 		(int)s->viewport[0], (int)s->viewport[1], (int)s->viewport[2], (int)s->viewport[3], s->depth_range[0], s->depth_range[1], (unsigned)s->cull,
 		(unsigned)s->front_face_ccw, (unsigned)s->depth_test, (unsigned)s->depth_write, (unsigned)s->depth_function, (unsigned)s->stencil_test,
@@ -1082,6 +1099,16 @@ static void draw(const struct dk_command_draw *command)
 	{
 		draw_trace(command, vs, ps);
 		gx.traced++;
+	}
+	if (gx.debug_mode == 1 && gx.state.blend)
+	{
+		gx.state.blend = 0;
+		gx.state_dirty = 1;
+	}
+	if (gx.debug_mode == 2 && gx.state.cull)
+	{
+		gx.state.cull = 0;
+		gx.state_dirty = 1;
 	}
 	if (gx.state_dirty)
 		state_apply();
@@ -1182,7 +1209,7 @@ static int initialize(void)
 		file = fopen(WIIU_DATA_DIRECTORY "/gx2_trace.txt", "r");
 		if (file)
 		{
-			if (fscanf(file, "%d", &gx.trace_frame) != 1)
+			if (fscanf(file, "%d %d", &gx.trace_frame, &gx.debug_mode) < 1)
 				gx.trace_frame = -1;
 			fclose(file);
 		}
