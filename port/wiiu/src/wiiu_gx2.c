@@ -127,7 +127,10 @@ static struct
 	unsigned sampler_levels[4];
 	int sampler_valid[4];
 	OSTime started;
+	OSTime submit_ticks, present_ticks, texture_ticks, draw_ticks;
+	unsigned window_frames;
 	double exit_after;
+	unsigned render_height; /* the lines the game draws at (halo/render_height.txt, 720 if none): the TV's 1080 lines cost 27 ms a frame in the menu */
 	int trace_frame; /* halo/gx2_trace.txt: the frame whose draws are logged (-1: none) */
 	int debug_mode; /* and, after it, a mode: 1 draws without blending, 2 without culling */
 	int features_off; /* and a third number: bit 0 no mip levels, bit 1 no 3D and cube textures, bit 2 no mip composites */
@@ -191,6 +194,7 @@ struct shader
 	GX2PixelShader *pixel;
 	int uniform[PS_UNIFORMS]; /* the register offset (in floats) of each, -1: the shader does not use it */
 	uint32_t uniform_floats[PS_UNIFORMS]; /* and how many floats it has room for */
+	int16_t *elements[PS_UNIFORMS]; /* for an array, where each element is (-1: none): the compiler gives the elements it uses registers of their own, not always in a row */
 	int sampler[4]; /* the location of tex0..3, -1: not sampled */
 	uint32_t attribute_used; /* bit n: the vertex shader reads input location n */
 };
@@ -222,11 +226,34 @@ static void uniforms_resolve(struct shader *shader, const GX2UniformVar *vars, u
 		{
 			const char *name = vars[i].name;
 
-			if (!strncmp(name, names[n], length) && (name[length] == 0 || name[length] == '['))
+			if (strncmp(name, names[n], length) != 0)
+				continue;
+			if (name[length] == 0)
 			{
-				shader->uniform[n] = (int)vars[i].offset;
-				shader->uniform_floats[n] = vars[i].count * type_floats(vars[i].type);
-				break;
+				if (shader->uniform[n] < 0)
+				{
+					shader->uniform[n] = (int)vars[i].offset;
+					shader->uniform_floats[n] = vars[i].count * type_floats(vars[i].type);
+				}
+			}
+			else if (name[length] == '[')
+			{
+				const unsigned element = (unsigned)strtoul(name + length + 1, NULL, 10);
+
+				if (element < 192)
+				{
+					if (!shader->elements[n])
+					{
+						unsigned e;
+
+						shader->elements[n] = malloc(192 * sizeof(int16_t));
+						if (!shader->elements[n])
+							continue;
+						for (e = 0; e < 192; e++)
+							shader->elements[n][e] = -1;
+					}
+					shader->elements[n][element] = (int16_t)vars[i].offset;
+				}
 			}
 		}
 	}
@@ -503,6 +530,92 @@ static void ring_next(void)
 	gx.ring[gx.ring_current].offset = 0;
 }
 
+/* ---------- the map's own vertex and index data, copied once: it is where the Xbox window says it cannot change (dk_vertex_format.static_streams), so a draw that
+reads it again finds its copy in memory the GPU can read, aligned, instead of copying it into the ring again */
+
+static void free_later(void *memory);
+
+#define STATIC_TABLE 4096
+#define STATIC_CHUNK_BYTES (16u * 1024u * 1024u)
+#define STATIC_CHUNKS 8
+
+static struct
+{
+	struct static_entry
+	{
+		uint32_t address, size;
+		void *memory;
+	} table[STATIC_TABLE];
+	uint8_t *chunks[STATIC_CHUNKS];
+	uint32_t chunk_used;
+	unsigned chunk_count;
+	unsigned entries, hits, misses, full;
+} cache;
+
+static void cache_flush(void)
+{
+	unsigned i;
+
+	for (i = 0; i < cache.chunk_count; i++)
+		free_later(cache.chunks[i]);
+	memset(&cache, 0, sizeof(cache));
+}
+
+void host_gx2_map_changed(void);
+
+void host_gx2_map_changed(void)
+{
+	cache_flush();
+}
+
+static void *cache_get(uint32_t address, uint32_t size)
+{
+	unsigned slot = (address * 2654435761u + size) % STATIC_TABLE, probes;
+	const uint32_t aligned = (size + 63u) & ~63u;
+	uint8_t *memory;
+
+	for (probes = 0; probes < 32; probes++, slot = (slot + 1) % STATIC_TABLE)
+	{
+		struct static_entry *entry = &cache.table[slot];
+
+		if (!entry->memory)
+			break;
+		if (entry->address == address && entry->size == size)
+		{
+			cache.hits++;
+			return entry->memory;
+		}
+	}
+	if (probes == 32 || aligned > STATIC_CHUNK_BYTES)
+		return NULL;
+	if (!cache.chunk_count || cache.chunk_used + aligned > STATIC_CHUNK_BYTES)
+	{
+		if (cache.chunk_count == STATIC_CHUNKS)
+		{
+			cache.full++;
+			return NULL;
+		}
+		cache.chunks[cache.chunk_count] = gx_alloc_raw(STATIC_CHUNK_BYTES, GX2_VERTEX_BUFFER_ALIGNMENT);
+		if (!cache.chunks[cache.chunk_count])
+		{
+			cache.full++;
+			return NULL;
+		}
+		cache.chunk_count++;
+		cache.chunk_used = 0;
+	}
+	memory = cache.chunks[cache.chunk_count - 1] + cache.chunk_used;
+	cache.chunk_used += aligned;
+	memcpy(memory, (const void *)(uintptr_t)address, size);
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER, memory, size);
+	cache.table[slot].address = address;
+	cache.table[slot].size = size;
+	cache.table[slot].memory = memory;
+	cache.entries++;
+	cache.misses++;
+	return memory;
+}
+
 /* ---------- state */
 
 static GX2CompareFunction compare_of(uint32_t gl)
@@ -624,24 +737,79 @@ static void pixel_uniform(const struct shader *ps, unsigned which, const float *
 	GX2SetPixelUniformReg((uint32_t)ps->uniform[which], floats, values);
 }
 
+/* rows [first, first + rows) of an array of vec4s: each element at its own register where the compiler gave them, else in a row from the array's */
+static void vertex_array(const struct shader *vs, unsigned which, const float (*values)[4], unsigned first, unsigned rows)
+{
+	unsigned row;
+
+	if (vs->uniform[which] < 0 && !vs->elements[which])
+		return;
+	if (!vs->elements[which])
+	{
+		const uint32_t room = vs->uniform_floats[which] / 4;
+
+		if (first < room)
+			GX2SetVertexUniformReg((uint32_t)vs->uniform[which] + first * 4, (first + rows > room ? room - first : rows) * 4, values[first]);
+		return;
+	}
+	for (row = first; row < first + rows;)
+	{
+		unsigned run = 1;
+
+		if (vs->elements[which][row] < 0)
+		{
+			row++;
+			continue;
+		}
+		while (row + run < first + rows && vs->elements[which][row + run] == vs->elements[which][row] + (int)run * 4)
+			run++;
+		GX2SetVertexUniformReg((uint32_t)vs->elements[which][row], run * 4, values[row]);
+		row += run;
+	}
+}
+
+static void pixel_array(const struct shader *ps, unsigned which, const float (*values)[4], unsigned rows)
+{
+	unsigned row;
+
+	if (ps->uniform[which] < 0 && !ps->elements[which])
+		return;
+	if (!ps->elements[which])
+	{
+		const uint32_t room = ps->uniform_floats[which] / 4;
+
+		GX2SetPixelUniformReg((uint32_t)ps->uniform[which], (rows > room ? room : rows) * 4, values[0]);
+		return;
+	}
+	for (row = 0; row < rows;)
+	{
+		unsigned run = 1;
+
+		if (ps->elements[which][row] < 0)
+		{
+			row++;
+			continue;
+		}
+		while (row + run < rows && ps->elements[which][row + run] == ps->elements[which][row] + (int)run * 4)
+			run++;
+		GX2SetPixelUniformReg((uint32_t)ps->elements[which][row], run * 4, values[row]);
+		row += run;
+	}
+}
+
 static void uniforms_apply(const struct shader *vs, const struct shader *ps)
 {
 	if (vs != gx.regs_vs)
 	{
-		vertex_uniform(vs, VS_C, &gx.constants[0][0], 192 * 4);
+		vertex_array(vs, VS_C, gx.constants, 0, 192);
 		gx.constants_lo = 192;
 		gx.constants_hi = 0;
 		gx.vertex_parameters_dirty = 1;
 		gx.regs_vs = vs;
 	}
-	else if (gx.constants_lo <= gx.constants_hi && vs->uniform[VS_C] >= 0)
+	else if (gx.constants_lo <= gx.constants_hi)
 	{
-		const uint32_t floats = (gx.constants_hi - gx.constants_lo + 1) * 4;
-
-		if (gx.constants_lo * 4 < vs->uniform_floats[VS_C])
-			GX2SetVertexUniformReg((uint32_t)vs->uniform[VS_C] + gx.constants_lo * 4,
-				gx.constants_lo * 4 + floats > vs->uniform_floats[VS_C] ? vs->uniform_floats[VS_C] - gx.constants_lo * 4 : floats,
-				&gx.constants[gx.constants_lo][0]);
+		vertex_array(vs, VS_C, gx.constants, gx.constants_lo, gx.constants_hi - gx.constants_lo + 1);
 		gx.constants_lo = 192;
 		gx.constants_hi = 0;
 	}
@@ -658,16 +826,16 @@ static void uniforms_apply(const struct shader *vs, const struct shader *ps)
 		static const float zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 		const struct dk_pixel_parameters *p = &gx.pixel_parameters;
 
-		pixel_uniform(ps, PS_C0, &p->ps_c0[0][0], 32);
-		pixel_uniform(ps, PS_C1, &p->ps_c1[0][0], 32);
+		pixel_array(ps, PS_C0, p->ps_c0, 8);
+		pixel_array(ps, PS_C1, p->ps_c1, 8);
 		pixel_uniform(ps, PS_FINAL_C0, p->ps_final_c0, 4);
 		pixel_uniform(ps, PS_FINAL_C1, p->ps_final_c1, 4);
 		pixel_uniform(ps, PS_FOG_COLOR, p->fog_color, 4);
 		pixel_uniform(ps, PS_FOG_PARAMETERS, p->fog_parameters, 4);
 		pixel_uniform(ps, PS_ALPHA_REFERENCE, p->alpha_reference, 1);
-		pixel_uniform(ps, PS_BUMP_MATRIX, &p->bump_matrix[0][0], 16);
-		pixel_uniform(ps, PS_BUMP_LUMINANCE, &p->bump_luminance[0][0], 16);
-		pixel_uniform(ps, PS_TEXTURE_SCALE, &p->texture_scale[0][0], 16);
+		pixel_array(ps, PS_BUMP_MATRIX, p->bump_matrix, 4);
+		pixel_array(ps, PS_BUMP_LUMINANCE, p->bump_luminance, 4);
+		pixel_array(ps, PS_TEXTURE_SCALE, p->texture_scale, 4);
 		pixel_uniform(ps, PS_TEXTURE_LOD_BIAS, zero, 4);
 		gx.pixel_parameters_dirty = 0;
 		gx.regs_ps = ps;
@@ -1303,6 +1471,33 @@ static void draw_trace(const struct dk_command_draw *command, const struct shade
 		(unsigned)s->blend, (unsigned)s->blend_source, (unsigned)s->blend_destination, (unsigned)s->color_mask, (unsigned)gx.stages[0].id,
 		(unsigned)gx.stages[0].target, (unsigned)gx.stages[1].id, (unsigned)gx.stages[1].target, (unsigned)gx.stages[2].id, (unsigned)gx.stages[2].target,
 		(unsigned)gx.stages[3].id, (unsigned)gx.stages[3].target);
+	{
+		const struct dk_pixel_parameters *p = &gx.pixel_parameters;
+		const struct shader *pixel = shader_table[gx.ps_handle];
+
+		wiiu_log("GX2   ps %u: texture_scale at %d (%u floats): %g %g %g %g | %g %g %g %g | %g %g %g %g; ps_c0[0] %g %g %g %g; alpha_ref %g; samplers %d %d %d %d", (unsigned)gx.ps_handle,
+			pixel ? pixel->uniform[PS_TEXTURE_SCALE] : -2, pixel ? (unsigned)pixel->uniform_floats[PS_TEXTURE_SCALE] : 0u, p->texture_scale[0][0],
+			p->texture_scale[0][1], p->texture_scale[0][2], p->texture_scale[0][3], p->texture_scale[1][0], p->texture_scale[1][1], p->texture_scale[1][2],
+			p->texture_scale[1][3], p->texture_scale[2][0], p->texture_scale[2][1], p->texture_scale[2][2], p->texture_scale[2][3], p->ps_c0[0][0],
+			p->ps_c0[0][1], p->ps_c0[0][2], p->ps_c0[0][3], p->alpha_reference[0], pixel ? pixel->sampler[0] : -2, pixel ? pixel->sampler[1] : -2,
+			pixel ? pixel->sampler[2] : -2, pixel ? pixel->sampler[3] : -2);
+	}
+	{
+		unsigned row, shown = 0;
+		char rows[400];
+		size_t at = 0;
+		const struct shader *vertex = shader_table[gx.vs_handle];
+
+		for (row = 0; row < 192 && shown < 8; row++)
+			if (gx.constants[row][0] != 0.0f || gx.constants[row][1] != 0.0f || gx.constants[row][2] != 0.0f || gx.constants[row][3] != 0.0f)
+			{
+				at += (size_t)snprintf(rows + at, sizeof(rows) - at, " c%u=(%g %g %g %g)", row, gx.constants[row][0], gx.constants[row][1], gx.constants[row][2],
+					gx.constants[row][3]);
+				shown++;
+			}
+		wiiu_log("GX2   vs %u: c at %d (%u floats), %u..%u dirty:%s", (unsigned)gx.vs_handle, vertex ? vertex->uniform[VS_C] : -2, vertex ? (unsigned)vertex->uniform_floats[VS_C] : 0u,
+			gx.constants_lo, gx.constants_hi, rows);
+	}
 	wiiu_log("GX2   vp params: scale %g %g %g %g offset %g %g %g %g; c[0..3] %g %g %g %g | %g %g %g %g", gx.vertex_parameters.viewport_scale[0],
 		gx.vertex_parameters.viewport_scale[1], gx.vertex_parameters.viewport_scale[2], gx.vertex_parameters.viewport_scale[3],
 		gx.vertex_parameters.viewport_offset[0], gx.vertex_parameters.viewport_offset[1], gx.vertex_parameters.viewport_offset[2],
@@ -1355,7 +1550,9 @@ static void draw(const struct dk_command_draw *command)
 			break;
 		sizes[stream] = command->streams[slot][1];
 		source = command->inline_bytes ? inline_data : (const unsigned char *)(uintptr_t)command->streams[slot][0];
-		buffers[stream] = ring_copy(source, sizes[stream]);
+		buffers[stream] = !command->inline_bytes && ((gx.format.static_streams >> stream) & 1) ? cache_get((uint32_t)(uintptr_t)source, sizes[stream]) : NULL;
+		if (!buffers[stream])
+			buffers[stream] = ring_copy(source, sizes[stream]);
 		if (!buffers[stream])
 		{
 			gx.skipped_ring++;
@@ -1372,7 +1569,9 @@ static void draw(const struct dk_command_draw *command)
 			source = inline_data + ((command->inline_bytes + 3u) & ~3u);
 		else
 			source = (const unsigned char *)(uintptr_t)command->index_address;
-		indices = ring_copy(source, command->count * 2);
+		indices = command->index_address != DK_INDEX_INLINE ? cache_get((uint32_t)(uintptr_t)source, command->count * 2) : NULL;
+		if (!indices)
+			indices = ring_copy(source, command->count * 2);
 		if (!indices)
 		{
 			gx.skipped_ring++;
@@ -1484,6 +1683,19 @@ static int initialize(void)
 			return 0;
 		}
 	}
+	gx.render_height = 720;
+	{
+		FILE *file = fopen(WIIU_DATA_DIRECTORY "/render_height.txt", "r");
+		unsigned lines = 0;
+
+		if (file)
+		{
+			if (fscanf(file, "%u", &lines) == 1 && lines >= 240 && lines <= WHBGfxGetTVColourBuffer()->surface.height)
+				gx.render_height = lines;
+			fclose(file);
+		}
+		wiiu_log("GX2: the game draws at %u lines (halo/render_height.txt)", gx.render_height);
+	}
 	/* a note in halo/exit_after.txt (seconds) ends the run by itself that long after the first frame: for runs nobody is at the console for */
 	{
 		FILE *file = fopen(WIIU_DATA_DIRECTORY "/exit_after.txt", "r");
@@ -1525,8 +1737,8 @@ int platform_screen_mode(long *width, long *height)
 {
 	if (!initialize())
 		return 0;
-	*width = (long)WHBGfxGetTVColourBuffer()->surface.width;
-	*height = (long)WHBGfxGetTVColourBuffer()->surface.height;
+	*height = (long)gx.render_height;
+	*width = (long)((uint64_t)WHBGfxGetTVColourBuffer()->surface.width * gx.render_height / WHBGfxGetTVColourBuffer()->surface.height);
 	return 1;
 }
 
@@ -1963,6 +2175,7 @@ static void present(const struct dk_command_present *command)
 {
 	struct target *back = target_get(&command->back_buffer);
 	const OSTime now = OSGetSystemTime();
+	const OSTime present_start = now;
 
 	if (back && command->screenshot)
 		screenshot_take(back, command->screenshot);
@@ -1978,6 +2191,8 @@ static void present(const struct dk_command_present *command)
 	WHBGfxFinishRenderDRC();
 	WHBGfxFinishRender();
 	gx.frames++;
+	gx.window_frames++;
+	gx.present_ticks += OSGetSystemTime() - present_start;
 	if (gx.frames == 1)
 	{
 		wiiu_log("GX2: first frame presented");
@@ -2002,6 +2217,17 @@ static void present(const struct dk_command_present *command)
 			"made as rectangles; %u textures made (%u not 2D, %u short), ring overflows %u", gx.draws_made,
 			gx.skipped_target, gx.skipped_state, gx.skipped_shader, gx.skipped_ring, gx.rectangle_clears, gx.textures_made, gx.textures_unsupported,
 			gx.texture_short, gx.ring_overflows);
+		wiiu_log("GX2:   per frame over %u frames: %.1f ms in the stream (of which %.1f in draws, %.1f in textures), %.1f ms presenting", gx.window_frames,
+			(double)OSTicksToMicroseconds(gx.submit_ticks - gx.present_ticks) / 1000.0 / (double)gx.window_frames,
+			(double)OSTicksToMicroseconds(gx.draw_ticks) / 1000.0 / (double)gx.window_frames,
+			(double)OSTicksToMicroseconds(gx.texture_ticks) / 1000.0 / (double)gx.window_frames,
+			(double)OSTicksToMicroseconds(gx.present_ticks) / 1000.0 / (double)gx.window_frames);
+		gx.submit_ticks = gx.present_ticks = gx.texture_ticks = gx.draw_ticks = 0;
+		gx.window_frames = 0;
+		if (cache.entries || cache.full)
+			wiiu_log("GX2:   static data cache: %u copies in %u chunks, %u hits, %u misses, %u times full", cache.entries, cache.chunk_count, cache.hits, cache.misses,
+				cache.full);
+		cache.hits = cache.misses = 0;
 		if (query.begun)
 			wiiu_log("GX2:   visibility tests: %u begun, %u ended, %u read back", query.begun, query.ended, query.read_back);
 		memset(gx.counts, 0, sizeof(gx.counts));
@@ -2030,9 +2256,12 @@ void host_gx2_submit(uint32_t commands, uint32_t size)
 	const unsigned char *at = (const unsigned char *)(uintptr_t)commands;
 	const unsigned char *end = at + size;
 
+	OSTime submit_start;
+
 	wiiu_foreground_gate(1);
 	if (!initialize())
 		return;
+	submit_start = OSGetSystemTime();
 	while (at + sizeof(struct dk_command_header) <= end)
 	{
 		const struct dk_command_header *header = (const struct dk_command_header *)at;
@@ -2090,8 +2319,13 @@ void host_gx2_submit(uint32_t commands, uint32_t size)
 			gx.format_set = 1;
 			break;
 		case DK_COMMAND_TEXTURE:
+		{
+			const OSTime texture_start = OSGetSystemTime();
+
 			texture_make((const struct dk_command_texture *)header);
+			gx.texture_ticks += OSGetSystemTime() - texture_start;
 			break;
+		}
 		case DK_COMMAND_TEXTURE_ROWS:
 			texture_rows((const struct dk_command_texture_rows *)header);
 			break;
@@ -2105,8 +2339,13 @@ void host_gx2_submit(uint32_t commands, uint32_t size)
 			composite_receive((const struct dk_command_composite *)header);
 			break;
 		case DK_COMMAND_DRAW:
+		{
+			const OSTime draw_start = OSGetSystemTime();
+
 			draw((const struct dk_command_draw *)header);
+			gx.draw_ticks += OSGetSystemTime() - draw_start;
 			break;
+		}
 		case DK_COMMAND_VISIBILITY_BEGIN:
 			visibility_begin();
 			break;
@@ -2118,6 +2357,7 @@ void host_gx2_submit(uint32_t commands, uint32_t size)
 		}
 		at += header->size;
 	}
+	gx.submit_ticks += OSGetSystemTime() - submit_start;
 }
 
 /* the highest submission the GPU has finished: everything handed over is waited for at its present, so all of it */
@@ -2150,5 +2390,5 @@ uint32_t host_gx2_visibility(uint32_t index)
 /* the lines the screen's targets are drawn at, at most: the TV's */
 unsigned int host_gx2_output_height(void)
 {
-	return initialize() ? (unsigned int)WHBGfxGetTVColourBuffer()->surface.height : 480u;
+	return initialize() ? gx.render_height : 480u;
 }

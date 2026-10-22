@@ -466,6 +466,8 @@ struct dk_vertex_format
 	/* the streams whose data is little-endian, as the Xbox had it (a model's vertices in the tag cache: the converter leaves GPU data as it is, the GPU
 	reads it with no swap); the rest is the CPU's and the converted maps' big-endian */
 	uint32_t little_endian;
+	/* the streams whose data is the map's, in the Xbox window, which nothing writes while the map is loaded: the host may keep a copy of it for the draws that follow */
+	uint32_t static_streams;
 	/* the current values of the unfed registers */
 	float constants[DK_ATTRIBUTE_COUNT][4];
 };

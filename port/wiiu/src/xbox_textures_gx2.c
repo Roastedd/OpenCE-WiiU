@@ -394,6 +394,16 @@ static unsigned long convert_texel(unsigned char kind, const unsigned char *sour
 	}
 }
 
+/* The image's texels are bytes, blue first (dk_commands.h): a native 0xAARRGGBB on a big-endian machine is in memory alpha first, so it is swapped. */
+static unsigned long texel_bytes(unsigned long argb)
+{
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	return __builtin_bswap32((unsigned int)argb);
+#else
+	return argb;
+#endif
+}
+
 /* one level (or 3D slice set) of an uncompressed texture into BGRA */
 static void decode_level(const struct xgpu_texture_description *description, unsigned long level,
 	const unsigned char *source, const D3DCOLOR *palette, unsigned long *destination)
@@ -411,7 +421,7 @@ static void decode_level(const struct xgpu_texture_description *description, uns
 			const unsigned char *row = source + y * description->pitch;
 
 			for (x = 0; x < width; x++)
-				destination[y * width + x] = convert_texel(information.kind, row + x * information.bytes, palette, x, row);
+				destination[y * width + x] = texel_bytes(convert_texel(information.kind, row + x * information.bytes, palette, x, row));
 		}
 		return;
 	}
@@ -433,7 +443,7 @@ static void decode_level(const struct xgpu_texture_description *description, uns
 				{
 					const unsigned char *texel = source + (x_offsets[x] | y_offset) * information.bytes;
 
-					destination[(z * height + y) * width + x] = convert_texel(information.kind, texel, palette, x, texel);
+					destination[(z * height + y) * width + x] = texel_bytes(convert_texel(information.kind, texel, palette, x, texel));
 				}
 			}
 		}

@@ -240,9 +240,13 @@ void dk_shader_frame(void)
 {
 }
 
+/* wiiu_gx2.c: the map's data, which the backend may have kept copies of, is another map's now */
+void host_gx2_map_changed(void);
+
 void dk_shader_map_loaded(uint32_t map_hash)
 {
 	(void)map_hash;
+	host_gx2_map_changed();
 }
 
 char *nv2a_dk_vertex_shader_to_glsl(const uint32_t *instructions, unsigned long instruction_count, unsigned long packed_attribute_mask)

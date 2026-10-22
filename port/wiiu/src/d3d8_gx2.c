@@ -2272,6 +2272,22 @@ static void pixel_key_make(struct nv2a_pixel_shader_key *key, float texture_scal
 			else
 			{
 				textures->stages[stage].id = dk_texture_get((const DWORD *)texture, palette, &kind, &description);
+				{
+					static unsigned long logged;
+					static unsigned long seen[64];
+					unsigned long i;
+
+					for (i = 0; i < logged && i < 64 && seen[i] != textures->stages[stage].id; i++)
+						;
+					if (i == logged && logged < 64)
+					{
+						seen[logged++] = textures->stages[stage].id;
+						platform_log("texture %lu: format word %08lx size word %08lx: %lux%lux%lu, %lu levels, linear %d cube %d, kind %d, palette %d",
+							(unsigned long)textures->stages[stage].id, (unsigned long)((const DWORD *)texture)[3], (unsigned long)((const DWORD *)texture)[4],
+							(unsigned long)description.width, (unsigned long)description.height, (unsigned long)description.depth, (unsigned long)description.levels,
+							(int)description.linear, (int)description.cube_map, kind, palette != NULL);
+					}
+				}
 				if (description.linear)
 				{
 					texture_scale[stage][0] = 1.0f / (float)description.width;
@@ -2430,6 +2446,8 @@ static void format_from_declaration(struct dk_vertex_format *format)
 		format->stream_mask |= 1UL << element->stream;
 		if (stream_is_little_endian(element->stream))
 			format->little_endian |= 1UL << element->stream;
+		if (device.streams[element->stream].stride && platform_is_contiguous(PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[element->stream].data)))
+			format->static_streams |= 1UL << element->stream;
 	}
 }
 
