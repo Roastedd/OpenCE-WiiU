@@ -17,6 +17,7 @@ Not run on a console.
 
 #include "dk_commands.h"
 #include "wiiu_shell.h"
+#include "wiiu_indices.h"
 #include "wiiu_mip.h"
 #include "wiiu_overlay.h"
 #include "wiiu_tile.h"
@@ -131,7 +132,8 @@ static struct
 
 	unsigned long ring_bytes, ring_calls, ring_largest, index_bytes;
 	OSTime draw_started, section_now;
-	OSTime section_ticks[6]; /* of the draw's: its copies of data, state, shaders, uniforms, textures and attribute buffers, the draw call */
+	OSTime section_ticks[7];
+	unsigned long counts_state, counts_fetch, counts_vs, counts_ps, counts_vertex_regs, counts_pixel_regs, counts_texture_sets, counts_draw_calls; /* of the draw's: its copies of data, state, shaders, uniforms, textures and attribute buffers, the draw call */
 	unsigned ring_what; /* what the next ring_copy copies: 0 a stream, 1 immediate mode's vertices, 2 constants, 3 indices */
 	unsigned long ring_kind_bytes[4], ring_kind_calls[4];
 	void *ring_dirty_from, *ring_dirty_to;
@@ -566,7 +568,8 @@ static void ring_flush(void)
 static void gpu_poll(void);
 static int overlay_make(void);
 
-static void *ring_copy(const void *source, uint32_t size)
+/* room in the ring, noted as written to (the caller writes it before it is flushed, which is at the end of the stream or the present) */
+static void *ring_reserve(uint32_t size)
 {
 	void *memory = ring_alloc(size);
 
@@ -579,7 +582,6 @@ static void *ring_copy(const void *source, uint32_t size)
 	gx.ring_kind_calls[gx.ring_what]++;
 	if (size > gx.ring_largest)
 		gx.ring_largest = size;
-	memcpy(memory, source, size);
 	if (!gx.ring_dirty_from || (uint8_t *)memory < (uint8_t *)gx.ring_dirty_from || (uint8_t *)memory > (uint8_t *)gx.ring_dirty_to + 4 * 1024 * 1024)
 	{
 		ring_flush();
@@ -588,6 +590,15 @@ static void *ring_copy(const void *source, uint32_t size)
 	}
 	else if ((uint8_t *)memory + size > (uint8_t *)gx.ring_dirty_to)
 		gx.ring_dirty_to = (uint8_t *)memory + size;
+	return memory;
+}
+
+static void *ring_copy(const void *source, uint32_t size)
+{
+	void *memory = ring_reserve(size);
+
+	if (memory)
+		memcpy(memory, source, size);
 	return memory;
 }
 
@@ -746,6 +757,7 @@ static GX2BlendCombineMode combine_of(uint32_t equation)
 
 static void state_apply(void)
 {
+	gx.counts_state++;
 	const struct dk_draw_state *s = &gx.state;
 	const GX2FrontFace front = s->front_face_ccw ? GX2_FRONT_FACE_CCW : GX2_FRONT_FACE_CW;
 	const GX2PolygonMode mode = s->fill_mode == DK_FILL_LINE ? GX2_POLYGON_MODE_LINE : s->fill_mode == DK_FILL_POINT ? GX2_POLYGON_MODE_POINT :
@@ -840,6 +852,8 @@ static void vertex_array(const struct shader *vs, unsigned which, const float (*
 		const uint32_t room = vs->uniform_floats[which] / 4;
 
 		if (first < room)
+			gx.counts_vertex_regs++;
+		if (first < room)
 			GX2SetVertexUniformReg((uint32_t)vs->uniform[which] + first * 4, (first + rows > room ? room - first : rows) * 4, values[first]);
 		return;
 	}
@@ -854,6 +868,7 @@ static void vertex_array(const struct shader *vs, unsigned which, const float (*
 		}
 		while (row + run < first + rows && vs->elements[which][row + run] == vs->elements[which][row] + (int)run * 4)
 			run++;
+		gx.counts_vertex_regs++;
 		GX2SetVertexUniformReg((uint32_t)vs->elements[which][row], run * 4, values[row]);
 		row += run;
 	}
@@ -869,6 +884,7 @@ static void pixel_array(const struct shader *ps, unsigned which, const float (*v
 	{
 		const uint32_t room = ps->uniform_floats[which] / 4;
 
+		gx.counts_pixel_regs++;
 		GX2SetPixelUniformReg((uint32_t)ps->uniform[which], (rows > room ? room : rows) * 4, values[0]);
 		return;
 	}
@@ -883,6 +899,7 @@ static void pixel_array(const struct shader *ps, unsigned which, const float (*v
 		}
 		while (row + run < rows && ps->elements[which][row + run] == ps->elements[which][row] + (int)run * 4)
 			run++;
+		gx.counts_pixel_regs++;
 		GX2SetPixelUniformReg((uint32_t)ps->elements[which][row], run * 4, values[row]);
 		row += run;
 	}
@@ -1600,6 +1617,7 @@ static void textures_bind(const struct shader *ps)
 		if (!gx.stage_dynamic && gx.bound_texture[stage] == texture && gx.bound_location[stage] == ps->sampler[stage] && gx.sampler_valid[stage] &&
 			gx.sampler_levels[stage] == levels && !gx.samplers_changed[stage])
 			continue;
+		gx.counts_texture_sets++;
 		GX2SetPixelTexture(texture, (uint32_t)ps->sampler[stage]);
 		GX2SetPixelSampler(&gx.samplers[stage], (uint32_t)ps->sampler[stage]);
 		gx.bound_texture[stage] = gx.stage_dynamic ? NULL : texture;
@@ -1900,16 +1918,19 @@ static void draw(const struct dk_command_draw *command)
 	gx.section_now = OSGetSystemTime();
 	if (gx.cur_fetch != fetch)
 	{
+		gx.counts_fetch++;
 		GX2SetFetchShader(&fetch->shader);
 		gx.cur_fetch = fetch;
 	}
 	if (gx.cur_vs != vs)
 	{
+		gx.counts_vs++;
 		GX2SetVertexShader(vs->vertex);
 		gx.cur_vs = vs;
 	}
 	if (gx.cur_ps != ps)
 	{
+		gx.counts_ps++;
 		GX2SetPixelShader(ps->pixel);
 		gx.cur_ps = ps;
 	}
@@ -1928,10 +1949,12 @@ static void draw(const struct dk_command_draw *command)
 	if (gx.color)
 		gx.color->last_used = ++gx.use_serial;
 	gx.section_ticks[5] += OSGetSystemTime() - gx.section_now;
+	gx.section_now = OSGetSystemTime();
 	if (indices)
 		GX2DrawIndexedEx(primitive_of(command->primitive), command->count, GX2_INDEX_TYPE_U16, indices, (uint32_t)command->vertex_offset, 1);
 	else
 		GX2DrawEx(primitive_of(command->primitive), command->count, 0, 1);
+	gx.section_ticks[6] += OSGetSystemTime() - gx.section_now;
 	gx.draws_made++;
 	gx.draw_total++;
 	if (!(gx.draw_total & 31))
@@ -2046,6 +2069,36 @@ static int initialize(void)
 		}
 		gx.overlay_on = on != 0;
 		wiiu_log("GX2: the performance overlay is %s (halo/overlay.txt: 0 turns it off)", gx.overlay_on ? "on" : "off");
+	}
+	{
+		/* how fast the index range runs on this machine: over a buffer made as the game's index buffers are (calloc), written, then read at once, then again, then with a 1 MB sweep between
+		(the L1 holds 32 KB; the L2 the core has 0.5 to 2 MB) */
+		const uint32_t bytes = 256 * 1024;
+		uint16_t *buffer = calloc(1, bytes), *other = calloc(1, 2 * 1024 * 1024);
+		uint32_t lowest, highest, round;
+
+		if (buffer && other)
+		{
+			for (round = 0; round < bytes / 2; round++)
+				buffer[round] = (uint16_t)(round * 7);
+			for (round = 0; round < 3; round++)
+			{
+				const OSTime start = OSGetSystemTime();
+
+				if (round == 2)
+					memset(other, round, 2 * 1024 * 1024);
+				{
+					const OSTime t = OSGetSystemTime();
+
+					wiiu_index_range(buffer, bytes / 2, &lowest, &highest);
+					wiiu_log("GX2: index range over %u KB: %s %.2f ms (%u..%u)", bytes / 1024, round == 0 ? "just written" : round == 1 ? "again" : "after a 2 MB sweep",
+						(double)OSTicksToMicroseconds(OSGetSystemTime() - t) / 1000.0, (unsigned)lowest, (unsigned)highest);
+				}
+				(void)start;
+			}
+		}
+		free(buffer);
+		free(other);
 	}
 	wiiu_log("memcpy/memset self-test (wiiu_memcpy.c): %d wrong", wiiu_memcpy_selftest());
 	wiiu_profile_start();
@@ -2783,6 +2836,11 @@ static void present(const struct dk_command_present *command)
 			(double)OSTicksToMicroseconds(gx.section_ticks[0]) / 1000.0 / (double)gx.window_frames, (double)OSTicksToMicroseconds(gx.section_ticks[1]) / 1000.0 / (double)gx.window_frames,
 			(double)OSTicksToMicroseconds(gx.section_ticks[2]) / 1000.0 / (double)gx.window_frames, (double)OSTicksToMicroseconds(gx.section_ticks[3]) / 1000.0 / (double)gx.window_frames,
 			(double)OSTicksToMicroseconds(gx.section_ticks[4]) / 1000.0 / (double)gx.window_frames, (double)OSTicksToMicroseconds(gx.section_ticks[5]) / 1000.0 / (double)gx.window_frames);
+		wiiu_log("GX2:   the draw call %.2f ms a frame; calls a frame: state %lu, fetch shader %lu, vertex shader %lu, pixel shader %lu, vertex register writes %lu, pixel register writes %lu, texture binds %lu, draws %lu",
+			(double)OSTicksToMicroseconds(gx.section_ticks[6]) / 1000.0 / (double)gx.window_frames, gx.counts_state / gx.window_frames, gx.counts_fetch / gx.window_frames,
+			gx.counts_vs / gx.window_frames, gx.counts_ps / gx.window_frames, gx.counts_vertex_regs / gx.window_frames, gx.counts_pixel_regs / gx.window_frames,
+			gx.counts_texture_sets / gx.window_frames, gx.draws_made / gx.window_frames);
+		gx.counts_state = gx.counts_fetch = gx.counts_vs = gx.counts_ps = gx.counts_vertex_regs = gx.counts_pixel_regs = gx.counts_texture_sets = 0;
 		memset(gx.section_ticks, 0, sizeof(gx.section_ticks));
 		wiiu_log("GX2:   by kind a frame: streams %lu KB in %lu, immediate vertices %lu KB in %lu, constants %lu KB in %lu, indices %lu KB in %lu", gx.ring_kind_bytes[0] / 1024 / (gx.window_frames ? gx.window_frames : 1),
 			gx.ring_kind_calls[0] / (gx.window_frames ? gx.window_frames : 1), gx.ring_kind_bytes[1] / 1024 / (gx.window_frames ? gx.window_frames : 1),
