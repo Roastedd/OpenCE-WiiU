@@ -485,8 +485,6 @@ static void upload(uint32_t id, uint32_t kind, const struct xgpu_texture_descrip
 
 	if (description->compressed)
 	{
-		/* (the host reads the texels when it runs the command: a write to them before then hands the stream over first, d3d8_gx2.c) */
-		dk_stream_note_read(base, face_size * (face_count - 1) + xgpu_texture_level_offset(description, description->levels));
 		command = dk_stream_command(DK_COMMAND_TEXTURE, sizeof(*command));
 		command->format = compressed_format(information.kind);
 		command->source = (uint32_t)(uintptr_t)base;
@@ -529,6 +527,10 @@ static void upload(uint32_t id, uint32_t kind, const struct xgpu_texture_descrip
 	/* (last: it may hand the stream over, which the command is in) */
 	if (decoded)
 		dk_stream_free_after_handover(decoded, total);
+	else
+		/* the host reads a compressed texture's texels where the game keeps them when it runs the command: a write to them before then hands the stream over first (d3d8_gx2.c);
+		noted once the command is written, as noting can hand the stream over */
+		dk_stream_note_read(base, face_size * (face_count - 1) + xgpu_texture_level_offset(description, description->levels));
 }
 
 /* ---------- cache */

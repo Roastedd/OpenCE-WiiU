@@ -2731,23 +2731,24 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 
 	for (stream = 0; stream < DK_STREAM_COUNT; stream++)
 		streams += (format_told.stream_mask >> stream) & 1;
-	/* (the streams are read when the stream is handed over: noted before the command is written, as noting may hand it over) */
-	if (pending_reads.count + DK_STREAM_COUNT > PENDING_READ_LIMIT)
-		stream_flush();
-	for (stream = 0; stream < DK_STREAM_COUNT; stream++)
-	{
-		unsigned long stride = device.streams[stream].stride;
-
-		if ((format_told.stream_mask >> stream) & 1)
-			dk_stream_note_read((const char *)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data) + first * stride,
-				stride ? stride * vertex_count : STRIDELESS_STREAM_BYTES);
-	}
 	command = stream_command(DK_COMMAND_DRAW, sizeof(*command) + streams * 2 * sizeof(uint32_t) + index_bytes);
 	command->primitive = primitive_of(type);
 	command->count = (uint32_t)count;
 	command->index_address = index_bytes ? DK_INDEX_INLINE : (uint32_t)(uintptr_t)indices;
-	if (index_bytes)
-		memcpy(&command->streams[streams], indices, count * sizeof(WORD));
+	if (indices)
+	{
+		/* an indexed draw: the streams are read from the lowest vertex the indices name to the highest (index i is vertex first + i), found as the indices are copied
+		into the command, if they are, so that they are read once */
+		uint32_t lowest, highest;
+
+		if (index_bytes)
+			wiiu_index_copy_range((uint16_t *)(void *)&command->streams[streams], indices, count, &lowest, &highest);
+		else
+			wiiu_index_range(indices, count, &lowest, &highest);
+		first += lowest;
+		vertex_count = highest - lowest + 1;
+		vertex_offset = -(long)lowest;
+	}
 	command->vertex_offset = (int32_t)vertex_offset;
 	command->inline_bytes = 0;
 	command->stream_count = (uint32_t)streams;
@@ -2761,6 +2762,16 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 			(uint32_t)(first * stride);
 		command->streams[slot][1] = (uint32_t)(stride ? stride * vertex_count : STRIDELESS_STREAM_BYTES);
 		slot++;
+	}
+	/* (the memory the command reads when the stream is handed over is noted once the command is written: noting can hand the stream over when it has no room, and then the
+	command has gone with it, safely) */
+	for (stream = 0; stream < DK_STREAM_COUNT; stream++)
+	{
+		unsigned long stride = device.streams[stream].stride;
+
+		if ((format_told.stream_mask >> stream) & 1)
+			dk_stream_note_read((const char *)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data) + first * stride,
+				stride ? stride * vertex_count : STRIDELESS_STREAM_BYTES);
 	}
 	/* (after the command: writing it may have handed the stream over, and the
 	draw is in the submission it is written to) */
@@ -2791,25 +2802,14 @@ void WINAPI D3DDevice_DrawVertices(D3DPRIMITIVETYPE primitive_type, UINT start_v
 static void D3DDevice_DrawIndexedVertices_inner(D3DPRIMITIVETYPE primitive_type, UINT vertex_count, CONST WORD *index_data)
 {
 	struct dk_vertex_format format;
-	unsigned long minimum, maximum;
 
 	if (primitive_type == D3DPT_QUADLIST)
 		vertex_count &= ~3U;
 	if (!vertex_count || !index_data || !draw_prepare(FALSE))
 		return;
-	/* the streams are read from the lowest vertex the indices name, to the
-	highest (index i is vertex base + i) */
-	{
-		uint32_t lowest, highest;
-
-		wiiu_index_range(index_data, vertex_count, &lowest, &highest);
-		minimum = lowest;
-		maximum = highest;
-	}
 	format_from_declaration(&format);
 	draw_format_send(&format);
-	draw_write(primitive_type, vertex_count, device.base_vertex_index + minimum, maximum - minimum + 1, index_data,
-		-(long)minimum);
+	draw_write(primitive_type, vertex_count, device.base_vertex_index, 0, index_data, 0);
 }
 
 void WINAPI D3DDevice_DrawIndexedVertices(D3DPRIMITIVETYPE primitive_type, UINT vertex_count, CONST WORD *index_data)

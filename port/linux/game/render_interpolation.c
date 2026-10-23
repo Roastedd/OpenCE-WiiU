@@ -143,6 +143,11 @@ struct interpolated_first_person
 /* ---------- globals */
 
 static struct interpolated_object *interpolated_objects;
+/* the last tick an object was asked for while drawing (render_interpolation_object_node_matrices), by absolute index: the snapshots a tick takes are of the objects drawn lately,
+not of every object in the world (most are out of view), as the Wii U (HALO_WIIU) spent a seventh of its frames copying them. An object that comes into view is drawn
+as the game poses it for the two ticks it takes to have two snapshots */
+#define INTERPOLATION_DRAWN_TICKS 3
+static long interpolation_drawn_tick[MAXIMUM_INTERPOLATED_OBJECTS];
 static struct interpolated_camera interpolated_cameras[MAXIMUM_LOCAL_PLAYERS];
 static struct interpolated_first_person interpolated_first_person[MAXIMUM_LOCAL_PLAYERS];
 static long interpolation_tick;
@@ -426,6 +431,13 @@ void render_interpolation_tick(void)
 		if (absolute_index >= MAXIMUM_INTERPOLATED_OBJECTS)
 			continue;
 		record = &interpolated_objects[absolute_index];
+#ifdef HALO_WIIU
+		if (interpolation_tick - interpolation_drawn_tick[absolute_index] > INTERPOLATION_DRAWN_TICKS)
+		{
+			record->object_index = NONE; /* (not drawn lately: no snapshot, and none to continue from) */
+			continue;
+		}
+#endif
 		if (node_count <= 0 || node_count > MAXIMUM_INTERPOLATED_NODES)
 		{
 			record->object_index = NONE;
@@ -526,6 +538,7 @@ real_matrix4x3 *render_interpolation_object_node_matrices(long object_index)
 	absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
 	if (absolute_index >= MAXIMUM_INTERPOLATED_OBJECTS)
 		return NULL;
+	interpolation_drawn_tick[absolute_index] = interpolation_tick;
 	record = &interpolated_objects[absolute_index];
 	if (record->object_index != object_index || record->tick != interpolation_tick || !record->has_previous)
 		return NULL;
