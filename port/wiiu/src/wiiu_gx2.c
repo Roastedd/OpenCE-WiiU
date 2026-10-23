@@ -614,6 +614,46 @@ static void *ring_reserve(uint32_t size)
 	return memory;
 }
 
+/* the streams copied into the ring that are big, by address: which memory is copied each frame (in the log with the notes) */
+static struct { uint32_t address, size, count, in_window; unsigned long bytes; } big_copies[24];
+
+static void big_copy_note(uint32_t address, uint32_t size, uint32_t in_window)
+{
+	unsigned i;
+
+	for (i = 0; i < 24 && big_copies[i].address; i++)
+		if (big_copies[i].address == address)
+			break;
+	if (i == 24)
+		return;
+	big_copies[i].address = address;
+	if (size > big_copies[i].size)
+		big_copies[i].size = size;
+	big_copies[i].count++;
+	big_copies[i].in_window = in_window;
+	big_copies[i].bytes += size;
+}
+
+static void big_copies_log(void)
+{
+	unsigned i, shown, best;
+	unsigned char done[24] = { 0 };
+
+	for (shown = 0; shown < 6; shown++)
+	{
+		best = 24;
+		for (i = 0; i < 24 && big_copies[i].address; i++)
+			if (!done[i] && (best == 24 || big_copies[i].bytes > big_copies[best].bytes))
+				best = i;
+		if (best == 24)
+			break;
+		done[best] = 1;
+		wiiu_log("GX2:   big stream copy: %08x, up to %u KB, %u times (%lu KB in all), the Direct3D layer %s it static", (unsigned)big_copies[best].address, (unsigned)(big_copies[best].size / 1024),
+			(unsigned)big_copies[best].count, big_copies[best].bytes / 1024, big_copies[best].in_window ? "calls" : "does not call");
+	}
+	memset(big_copies, 0, sizeof(big_copies));
+}
+
 static void *ring_copy(const void *source, uint32_t size)
 {
 	void *memory = ring_reserve(size);
@@ -655,6 +695,22 @@ static struct
 	unsigned entries, hits, misses, full;
 } cache;
 
+/* The map's vertex streams, by block of the window: a draw reads its own range of a buffer, and the ranges differ from frame to frame as what is visible does, so a copy of each range made
+the table full (4096 of them in a few seconds in some views) and then every draw copied its vertices into the ring again, 2 MB and 20 ms a frame. Now the window is cut in blocks of 128 KB, a
+block copied whole with the 256 KB after it (any range of up to 256 KB is inside one block's copy) the first time a draw reads from it, and a draw is given a pointer into the copy. The window
+(its place and size, from the Direct3D layer) is the only memory a range may be in. */
+#define BLOCK_UNIT (128u * 1024u)
+#define BLOCK_RANGE (2u * BLOCK_UNIT)
+#define BLOCK_SPAN (BLOCK_UNIT + BLOCK_RANGE)
+#define BLOCK_SLOTS 2048 /* (a window of 256 MB) */
+
+static struct
+{
+	uint32_t window_base, window_size;
+	struct { uint8_t *memory; uint32_t length; } block[BLOCK_SLOTS];
+	unsigned copies, hits, misses_range;
+} blocks;
+
 static void cache_flush(void)
 {
 	unsigned i;
@@ -662,9 +718,87 @@ static void cache_flush(void)
 	for (i = 0; i < cache.chunk_count; i++)
 		free_later(cache.chunks[i]);
 	memset(&cache, 0, sizeof(cache));
+	memset(blocks.block, 0, sizeof(blocks.block));
+}
+
+/* for d3d8_gx2.c: the Xbox window's place and size */
+void host_gx2_window(uint32_t base, uint32_t size);
+
+void host_gx2_window(uint32_t base, uint32_t size)
+{
+	blocks.window_base = base;
+	blocks.window_size = size;
 }
 
 void host_gx2_map_changed(void);
+
+/* room in the chunks of the static cache (aligned, 16 MB chunks, up to 8): NULL when full */
+static void *cache_alloc(uint32_t bytes)
+{
+	const uint32_t aligned = (bytes + 63u) & ~63u;
+	uint8_t *memory;
+
+	if (aligned > STATIC_CHUNK_BYTES)
+		return NULL;
+	if (!cache.chunk_count || cache.chunk_used + aligned > STATIC_CHUNK_BYTES)
+	{
+		if (cache.chunk_count == STATIC_CHUNKS)
+		{
+			cache.full++;
+			return NULL;
+		}
+		cache.chunks[cache.chunk_count] = gx_alloc_raw(STATIC_CHUNK_BYTES, GX2_VERTEX_BUFFER_ALIGNMENT);
+		if (!cache.chunks[cache.chunk_count])
+		{
+			cache.full++;
+			return NULL;
+		}
+		cache.chunk_count++;
+		cache.chunk_used = 0;
+	}
+	memory = cache.chunks[cache.chunk_count - 1] + cache.chunk_used;
+	cache.chunk_used += aligned;
+	return memory;
+}
+
+/* a pointer into the copy of the block [address, address + size) is in, NULL if the range is not in the window, is more than BLOCK_RANGE, or the cache has no room. The pointer is not aligned as a
+copy made for the range would be (a draw's pointer is a vertex's): see draw() */
+static void *block_get(uint32_t address, uint32_t size)
+{
+	uint32_t relative, block, offset;
+
+	if (!blocks.window_size || address < blocks.window_base || size > BLOCK_RANGE || (uint64_t)address + size > (uint64_t)blocks.window_base + blocks.window_size)
+	{
+		blocks.misses_range++;
+		return NULL;
+	}
+	relative = address - blocks.window_base;
+	block = relative / BLOCK_UNIT;
+	offset = relative % BLOCK_UNIT;
+	if (block >= BLOCK_SLOTS)
+		return NULL;
+	if (!blocks.block[block].memory)
+	{
+		const uint32_t start = block * BLOCK_UNIT;
+		uint32_t length = BLOCK_SPAN;
+		uint8_t *memory;
+
+		if (start + length > blocks.window_size)
+			length = blocks.window_size - start;
+		memory = cache_alloc(BLOCK_SPAN);
+		if (!memory)
+			return NULL;
+		memcpy(memory, (const void *)(uintptr_t)(blocks.window_base + start), length);
+		GX2Invalidate(GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER, memory, length);
+		blocks.block[block].memory = memory;
+		blocks.block[block].length = length;
+		blocks.copies++;
+	}
+	if (offset + size > blocks.block[block].length)
+		return NULL;
+	blocks.hits++;
+	return blocks.block[block].memory + offset;
+}
 
 static void *cache_get(uint32_t address, uint32_t size)
 {
@@ -686,24 +820,9 @@ static void *cache_get(uint32_t address, uint32_t size)
 	}
 	if (probes == 32 || aligned > STATIC_CHUNK_BYTES)
 		return NULL;
-	if (!cache.chunk_count || cache.chunk_used + aligned > STATIC_CHUNK_BYTES)
-	{
-		if (cache.chunk_count == STATIC_CHUNKS)
-		{
-			cache.full++;
-			return NULL;
-		}
-		cache.chunks[cache.chunk_count] = gx_alloc_raw(STATIC_CHUNK_BYTES, GX2_VERTEX_BUFFER_ALIGNMENT);
-		if (!cache.chunks[cache.chunk_count])
-		{
-			cache.full++;
-			return NULL;
-		}
-		cache.chunk_count++;
-		cache.chunk_used = 0;
-	}
-	memory = cache.chunks[cache.chunk_count - 1] + cache.chunk_used;
-	cache.chunk_used += aligned;
+	memory = cache_alloc(aligned);
+	if (!memory)
+		return NULL;
 	memcpy(memory, (const void *)(uintptr_t)address, size);
 	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER, memory, size);
 	cache.table[slot].address = address;
@@ -1860,10 +1979,20 @@ static void draw(const struct dk_command_draw *command)
 			break;
 		sizes[stream] = command->streams[slot][1];
 		source = command->inline_bytes ? inline_data : (const unsigned char *)(uintptr_t)command->streams[slot][0];
-		buffers[stream] = !command->inline_bytes && ((gx.format.static_streams >> stream) & 1) ? cache_get((uint32_t)(uintptr_t)source, sizes[stream]) : NULL;
+		buffers[stream] = NULL;
+		if (!command->inline_bytes && ((gx.format.static_streams >> stream) & 1))
+		{
+			buffers[stream] = block_get((uint32_t)(uintptr_t)source, sizes[stream]);
+			if (!buffers[stream])
+				buffers[stream] = cache_get((uint32_t)(uintptr_t)source, sizes[stream]);
+		}
 		gx.ring_what = command->inline_bytes ? 1 : 0;
 		if (!buffers[stream])
+		{
 			buffers[stream] = ring_copy(source, sizes[stream]);
+			if (!command->inline_bytes && sizes[stream] >= 16384)
+				big_copy_note((uint32_t)(uintptr_t)source, sizes[stream], (gx.format.static_streams >> stream) & 1);
+		}
 		if (!buffers[stream])
 		{
 			gx.skipped_ring++;
@@ -2962,6 +3091,7 @@ static void present(const struct dk_command_present *command)
 			gx.counts_texture_sets / gx.window_frames, gx.draws_made / gx.window_frames);
 		gx.counts_state = gx.counts_fetch = gx.counts_vs = gx.counts_ps = gx.counts_vertex_regs = gx.counts_pixel_regs = gx.counts_texture_sets = 0;
 		memset(gx.section_ticks, 0, sizeof(gx.section_ticks));
+		big_copies_log();
 		wiiu_log("GX2:   by kind a frame: streams %lu KB in %lu, immediate vertices %lu KB in %lu, constants %lu KB in %lu, indices %lu KB in %lu", gx.ring_kind_bytes[0] / 1024 / (gx.window_frames ? gx.window_frames : 1),
 			gx.ring_kind_calls[0] / (gx.window_frames ? gx.window_frames : 1), gx.ring_kind_bytes[1] / 1024 / (gx.window_frames ? gx.window_frames : 1),
 			gx.ring_kind_calls[1] / (gx.window_frames ? gx.window_frames : 1), gx.ring_kind_bytes[2] / 1024 / (gx.window_frames ? gx.window_frames : 1),
@@ -2979,8 +3109,8 @@ static void present(const struct dk_command_present *command)
 		gx.submit_ticks = gx.present_ticks = gx.texture_ticks = gx.draw_ticks = 0;
 		gx.window_frames = 0;
 		if (cache.entries || cache.full)
-			wiiu_log("GX2:   static data cache: %u copies in %u chunks, %u hits, %u misses, %u times full", cache.entries, cache.chunk_count, cache.hits, cache.misses,
-				cache.full);
+			wiiu_log("GX2:   static data cache: %u copies in %u chunks, %u hits, %u misses, %u times full; blocks: %u copied, %u uses, %u ranges not in a block", cache.entries, cache.chunk_count,
+				cache.hits, cache.misses, cache.full, blocks.copies, blocks.hits, blocks.misses_range);
 		cache.hits = cache.misses = 0;
 		if (query.begun)
 			wiiu_log("GX2:   visibility tests: %u begun, %u ended, %u read back", query.begun, query.ended, query.read_back);

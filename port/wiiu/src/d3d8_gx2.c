@@ -554,8 +554,17 @@ void dk_stream_note_read(const void *address, unsigned long size)
 	pending_read_note(address, size);
 }
 
+void host_gx2_window(uint32_t base, uint32_t size);
+
 static void stream_flush(void)
 {
+	static int window_told;
+
+	if (!window_told)
+	{
+		window_told = 1;
+		host_gx2_window((uint32_t)PLATFORM_CONTIGUOUS_BASE, (uint32_t)PLATFORM_CONTIGUOUS_SIZE); /* (the host cuts it in blocks to keep the map's vertices) */
+	}
 	draws_since_handover = 0;
 	if (async_on())
 	{
