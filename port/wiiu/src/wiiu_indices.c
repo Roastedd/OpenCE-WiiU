@@ -18,6 +18,8 @@ void wiiu_index_range(const uint16_t *indices, size_t count, uint32_t *minimum, 
 		const uint32_t *words = (const uint32_t *)(const void *)indices;
 		unsigned i;
 
+		/* (the lines a few passes on, as the Espresso does not prefetch: it waits for each line it reads the first time) */
+		__builtin_prefetch(words + 24);
 		for (i = 0; i < 4; i++)
 		{
 			const uint32_t a = words[i] >> 16, b = words[i] & 0xffff;

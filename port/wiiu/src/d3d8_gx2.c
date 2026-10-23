@@ -23,6 +23,7 @@ and presenting go there; a draw and a visibility test do nothing yet.
 #include "port_config.h"
 #include "posix.h"
 #include "dk_commands.h"
+#include "wiiu_immediate.h"
 #include "wiiu_indices.h"
 #include "wiiu_pending_reads.h"
 #include "dk_shaders.h"
@@ -363,11 +364,8 @@ struct dk_device
 	float attributes[XGPU_VERTEX_ATTRIBUTE_COUNT][4];
 	BOOL immediate_active;
 	BOOL immediate_skipped; /* the Begin was of a visibility test's quad that nothing sees: its vertices are not kept */
-	unsigned long immediate_mask; /* the registers SetVertexData wrote since Begin */
+	struct wiiu_immediate immediate; /* the vertices since Begin, and the registers SetVertexData wrote */
 	D3DPRIMITIVETYPE immediate_type;
-	float *immediate_vertices;
-	unsigned long immediate_count;
-	unsigned long immediate_capacity;
 
 	BOOL visibility_test_active;
 
@@ -2850,40 +2848,29 @@ void WINAPI D3DDevice_Begin(D3DPRIMITIVETYPE primitive_type)
 	device.immediate_active = TRUE;
 	device.immediate_skipped = device.visibility_test_active && !host_gx2_visibility_enabled();
 	device.immediate_type = primitive_type;
-	device.immediate_count = 0;
-	device.immediate_mask = 1;
+	wiiu_immediate_begin(&device.immediate);
 }
 
 static void immediate_emit(void)
 {
-	unsigned long floats = XGPU_VERTEX_ATTRIBUTE_COUNT * 4;
-
 	if (device.immediate_skipped)
 		return;
-
-	if (device.immediate_count == device.immediate_capacity)
-	{
-		device.immediate_capacity = device.immediate_capacity ? device.immediate_capacity * 2 : 256;
-		device.immediate_vertices = realloc(device.immediate_vertices,
-			device.immediate_capacity * floats * sizeof(float));
-	}
-	memcpy(device.immediate_vertices + device.immediate_count * floats, device.attributes, floats * sizeof(float));
-	device.immediate_count++;
+	wiiu_immediate_emit(&device.immediate, (const float (*)[4])device.attributes);
 }
+
 static void D3DDevice_End_inner(void)
 {
 	/* only the registers SetVertexData wrote go in the stream (each is four floats of a vertex, at a place of its own in it); the others are the current values, as the
 	declaration's unfed registers are. Each vertex was kept with every register (immediate_emit). */
-	const unsigned long full_stride = XGPU_VERTEX_ATTRIBUTE_COUNT * 4 * sizeof(float);
-	unsigned long count = device.immediate_count, index, stride, touched = 0, vertex;
+	unsigned long count = device.immediate.count, index, stride, touched = 0;
 	D3DPRIMITIVETYPE type = device.immediate_type;
-	unsigned long mask = device.immediate_mask;
+	unsigned long mask = device.immediate.mask;
 	struct dk_vertex_format format;
 	struct dk_command_draw *command;
-	unsigned long registers[XGPU_VERTEX_ATTRIBUTE_COUNT];
+	unsigned registers[XGPU_VERTEX_ATTRIBUTE_COUNT];
 
 	device.immediate_active = FALSE;
-	device.immediate_count = 0;
+	device.immediate.count = 0;
 	if (type == D3DPT_QUADLIST)
 		count &= ~3UL;
 	if (!count)
@@ -2936,26 +2923,8 @@ static void D3DDevice_End_inner(void)
 	command->stream_count = 1;
 	command->streams[0][0] = 0;
 	command->streams[0][1] = (uint32_t)(count * stride);
-	{
-		float *out = (float *)&command->streams[1];
-
-		for (vertex = 0; vertex < count; vertex++)
-		{
-			const float *in = device.immediate_vertices + vertex * XGPU_VERTEX_ATTRIBUTE_COUNT * 4;
-
-			for (index = 0; index < touched; index++)
-			{
-				const float *from = in + registers[index] * 4;
-
-				out[0] = from[0];
-				out[1] = from[1];
-				out[2] = from[2];
-				out[3] = from[3];
-				out += 4;
-			}
-		}
-	}
-	(void)full_stride;
+	/* (count is what was kept: Begin's count is zeroed above, the pack reads the vertices, which stay) */
+	wiiu_immediate_pack(&device.immediate, count, (float *)&command->streams[1], registers);
 	draw_resources_used(FALSE, FALSE);
 }
 
@@ -2978,11 +2947,14 @@ static void set_attribute(INT reg, float a, float b, float c, float d)
 	}
 	if (reg < 0 || reg >= XGPU_VERTEX_ATTRIBUTE_COUNT)
 		return;
+	if (device.immediate_active)
+		wiiu_immediate_write(&device.immediate, (unsigned)reg, device.attributes[reg]);
+	else
+		device.immediate.mask |= 1UL << reg;
 	device.attributes[reg][0] = a;
 	device.attributes[reg][1] = b;
 	device.attributes[reg][2] = c;
 	device.attributes[reg][3] = d;
-	device.immediate_mask |= 1UL << reg;
 	/* like the hardware, writing register 0 completes a vertex */
 	if (device.immediate_active && (emit || reg == 0))
 		immediate_emit();

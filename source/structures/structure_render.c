@@ -272,9 +272,15 @@ static void structure_render_dynamic_triangles_from_bitvector(
 	struct structure_bsp *structure_bsp = global_structure_bsp_get();
 	long surface_index_index = 0;
 	long surface_index = 0;
+	/* port: (the surfaces' first element once, not a function call for each) */
+	struct structure_surface *surfaces = NULL;
 
 	if (structure_bsp->surfaces.count > 0)
 	{
+		surfaces = TAG_BLOCK_GET_ELEMENT(
+			&structure_bsp->surfaces,
+			0,
+			struct structure_surface);
 		do
 		{
 			if (*surface_flags)
@@ -292,10 +298,7 @@ static void structure_render_dynamic_triangles_from_bitvector(
 
 					if (TEST_FLAG(*surface_flags, bit_index))
 					{
-						struct structure_surface *surface = TAG_BLOCK_GET_ELEMENT(
-							&structure_bsp->surfaces,
-							surface_index,
-							struct structure_surface);
+						struct structure_surface *surface = &surfaces[surface_index];
 
 						match_assert(
 							"c:\\halo\\SOURCE\\structures\\structure_render.c",

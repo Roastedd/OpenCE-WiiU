@@ -109,20 +109,27 @@ static uint32_t caller_in_code(uint32_t pc, uint32_t lr)
 	return lr;
 }
 
-/* the return address in the frame above the one the stack pointer is in: (the stack pointer is the sampled function's own frame if it has one; if it is a leaf, the frame of its
-caller, and then this is the caller's return address) */
+/* the return address of the function the sample is in, or of its caller when the sample is in a leaf that has built a frame (memcpy does, at its first instruction): a function saves
+its return address in its caller's frame, at 4 bytes from the word the chain of frames points to, so it is two links down from the stack pointer (the first link is the frame of the
+function that called the leaf, the second that function's caller's, where the first one's return address is) */
 static uint32_t return_above(void)
 {
-	const uint32_t sp = (uint32_t)target->context.gpr[1];
 	const uint32_t low = (uint32_t)(uintptr_t)target->stackEnd, high = (uint32_t)(uintptr_t)target->stackStart;
-	uint32_t chain;
+	uint32_t sp = (uint32_t)target->context.gpr[1], link;
+	unsigned depth;
 
+	for (depth = 0; depth < 2; depth++)
+	{
+		if (sp < low || sp + 8 > high || (sp & 7))
+			return 0;
+		link = *(const uint32_t *)(uintptr_t)sp;
+		if (link <= sp)
+			return 0;
+		sp = link;
+	}
 	if (sp < low || sp + 8 > high || (sp & 7))
 		return 0;
-	chain = *(const uint32_t *)(uintptr_t)sp;
-	if (chain <= sp || chain + 8 > high || (chain & 7))
-		return 0;
-	return *(const uint32_t *)(uintptr_t)(chain + 4);
+	return *(const uint32_t *)(uintptr_t)(sp + 4);
 }
 
 static int sampler(int argc, const char **argv)

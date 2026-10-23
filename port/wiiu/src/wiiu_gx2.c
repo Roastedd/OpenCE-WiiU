@@ -129,6 +129,8 @@ static struct
 	unsigned deferred_count;
 
 	unsigned long ring_bytes, ring_calls, ring_largest, index_bytes;
+	OSTime draw_started, section_now;
+	OSTime section_ticks[6]; /* of the draw's: its copies of data, state, shaders, uniforms, textures and attribute buffers, the draw call */
 	unsigned ring_what; /* what the next ring_copy copies: 0 a stream, 1 immediate mode's vertices, 2 constants, 3 indices */
 	unsigned long ring_kind_bytes[4], ring_kind_calls[4];
 	void *ring_dirty_from, *ring_dirty_to;
@@ -137,6 +139,7 @@ static struct
 	unsigned textures_made, textures_unsupported, texture_short, layouts_logged;
 	unsigned texture_log;
 	unsigned sampler_levels[4];
+	struct { const void *buffer; uint32_t size, stride; } attrib[16]; /* what the attribute buffer registers hold now */
 	const GX2Texture *bound_texture[4]; /* what the stages hold now (static images only: a render target is bound, and flushed, each draw) */
 	int bound_location[4];
 	int stage_dynamic;
@@ -1732,10 +1735,22 @@ static void draw_trace(const struct dk_command_draw *command, const struct shade
 		gx.constants[1][1], gx.constants[1][2], gx.constants[1][3]);
 }
 
+/* an attribute buffer register, written only if it holds something else (the constants' buffer is the same for every draw that has the same format) */
+static void attrib_set(unsigned index, uint32_t size, uint32_t stride, void *buffer)
+{
+	if (gx.attrib[index].buffer == buffer && gx.attrib[index].size == size && gx.attrib[index].stride == stride)
+		return;
+	GX2SetAttribBuffer(index, size, stride, buffer);
+	gx.attrib[index].buffer = buffer;
+	gx.attrib[index].size = size;
+	gx.attrib[index].stride = stride;
+}
+
 static void draw(const struct dk_command_draw *command)
 {
 	/* (HOME can come between two draws: the game thread is held here, before the next call into GX2, not at the end of the stream) */
 	wiiu_foreground_gate(1);
+	gx.draw_started = OSGetSystemTime();
 	struct shader *vs, *ps;
 	struct fetch *fetch;
 	const unsigned char *inline_data = (const unsigned char *)&command->streams[command->stream_count];
@@ -1855,8 +1870,16 @@ static void draw(const struct dk_command_draw *command)
 		gx.state.cull = 0;
 		gx.state_dirty = 1;
 	}
+	{
+		const OSTime t0 = OSGetSystemTime();
+
+		gx.section_ticks[0] += t0 - gx.draw_started;
+		gx.section_now = t0;
+	}
 	if (gx.state_dirty)
 		state_apply();
+	gx.section_ticks[1] += OSGetSystemTime() - gx.section_now;
+	gx.section_now = OSGetSystemTime();
 	if (gx.cur_fetch != fetch)
 	{
 		GX2SetFetchShader(&fetch->shader);
@@ -1872,14 +1895,21 @@ static void draw(const struct dk_command_draw *command)
 		GX2SetPixelShader(ps->pixel);
 		gx.cur_ps = ps;
 	}
+	gx.section_ticks[2] += OSGetSystemTime() - gx.section_now;
+	gx.section_now = OSGetSystemTime();
 	uniforms_apply(vs, ps);
+	gx.section_ticks[3] += OSGetSystemTime() - gx.section_now;
+	gx.section_now = OSGetSystemTime();
 	textures_bind(ps);
+	gx.section_ticks[4] += OSGetSystemTime() - gx.section_now;
+	gx.section_now = OSGetSystemTime();
 	for (stream = 0; stream < DK_STREAM_COUNT; stream++)
 		if (buffers[stream])
-			GX2SetAttribBuffer(stream, sizes[stream], gx.format.strides[stream], buffers[stream]);
-	GX2SetAttribBuffer(CONSTANTS_BUFFER, sizeof(gx.format.constants), 0, constants);
+			attrib_set(stream, sizes[stream], gx.format.strides[stream], buffers[stream]);
+	attrib_set(CONSTANTS_BUFFER, sizeof(gx.format.constants), 0, constants);
 	if (gx.color)
 		gx.color->last_used = ++gx.use_serial;
+	gx.section_ticks[5] += OSGetSystemTime() - gx.section_now;
 	if (indices)
 		GX2DrawIndexedEx(primitive_of(command->primitive), command->count, GX2_INDEX_TYPE_U16, indices, (uint32_t)command->vertex_offset, 1);
 	else
@@ -2122,6 +2152,7 @@ static void context_resume(void)
 	gx.regs_vs = gx.regs_ps = gx.cur_vs = gx.cur_ps = NULL;
 	gx.cur_fetch = NULL;
 	memset(gx.bound_texture, 0, sizeof(gx.bound_texture));
+	memset(gx.attrib, 0, sizeof(gx.attrib));
 	gx.vertex_parameters_dirty = gx.pixel_parameters_dirty = 1;
 }
 
@@ -2214,6 +2245,7 @@ static void clear_draw(const struct dk_command_clear *command, int colour, int d
 	GX2SetVertexShader(gx.blit.vertexShader);
 	GX2SetPixelShader(gx.blit.pixelShader);
 	GX2SetAttribBuffer(0, count * 6 * sizeof(struct blit_vertex), sizeof(struct blit_vertex), vertices);
+	gx.attrib[0].buffer = NULL;
 	GX2SetPixelTexture(&gx.white, gx.sampler_location);
 	GX2SetPixelSampler(&gx.sampler, gx.sampler_location);
 	GX2DrawEx(GX2_PRIMITIVE_MODE_TRIANGLES, count * 6, 0, 1);
@@ -2326,6 +2358,7 @@ static void blit_to(struct target *source, GX2ColorBuffer *screen, GX2ContextSta
 	GX2SetPixelShader(gx.blit.pixelShader);
 	GX2SetShaderMode(GX2_SHADER_MODE_UNIFORM_REGISTER);
 	GX2SetAttribBuffer(0, 6 * sizeof(struct blit_vertex), sizeof(struct blit_vertex), gx.quad);
+	gx.attrib[0].buffer = NULL;
 	GX2SetPixelTexture(&source->texture, gx.sampler_location);
 	GX2SetPixelSampler(&gx.sampler, gx.sampler_location);
 	GX2DrawEx(GX2_PRIMITIVE_MODE_TRIANGLES, 6, 0, 1);
@@ -2559,6 +2592,11 @@ static void present(const struct dk_command_present *command)
 			(double)OSTicksToMicroseconds(gx.present_ticks) / 1000.0 / (double)gx.window_frames);
 		wiiu_log("GX2:   copied into the ring: %lu KB a frame in %lu copies (largest %lu KB); index data read %lu KB a frame", gx.ring_bytes / 1024 / (gx.window_frames ? gx.window_frames : 1),
 			gx.ring_calls / (gx.window_frames ? gx.window_frames : 1), gx.ring_largest / 1024, gx.index_bytes / 1024 / (gx.window_frames ? gx.window_frames : 1));
+		wiiu_log("GX2:   a draw's time, ms a frame: copies of its data %.2f, state %.2f, shaders %.2f, uniforms %.2f, textures %.2f, attribute buffers %.2f",
+			(double)OSTicksToMicroseconds(gx.section_ticks[0]) / 1000.0 / (double)gx.window_frames, (double)OSTicksToMicroseconds(gx.section_ticks[1]) / 1000.0 / (double)gx.window_frames,
+			(double)OSTicksToMicroseconds(gx.section_ticks[2]) / 1000.0 / (double)gx.window_frames, (double)OSTicksToMicroseconds(gx.section_ticks[3]) / 1000.0 / (double)gx.window_frames,
+			(double)OSTicksToMicroseconds(gx.section_ticks[4]) / 1000.0 / (double)gx.window_frames, (double)OSTicksToMicroseconds(gx.section_ticks[5]) / 1000.0 / (double)gx.window_frames);
+		memset(gx.section_ticks, 0, sizeof(gx.section_ticks));
 		wiiu_log("GX2:   by kind a frame: streams %lu KB in %lu, immediate vertices %lu KB in %lu, constants %lu KB in %lu, indices %lu KB in %lu", gx.ring_kind_bytes[0] / 1024 / (gx.window_frames ? gx.window_frames : 1),
 			gx.ring_kind_calls[0] / (gx.window_frames ? gx.window_frames : 1), gx.ring_kind_bytes[1] / 1024 / (gx.window_frames ? gx.window_frames : 1),
 			gx.ring_kind_calls[1] / (gx.window_frames ? gx.window_frames : 1), gx.ring_kind_bytes[2] / 1024 / (gx.window_frames ? gx.window_frames : 1),
