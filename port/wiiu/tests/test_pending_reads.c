@@ -102,13 +102,38 @@ int main(void)
 		pending_reads_add(&reads, buffer + i * 8, 8);
 	CHECK(reads.count == 1 && pending_reads_overlap(&reads, buffer + 79, 1) && !pending_reads_overlap(&reads, buffer + 80, 1));
 
-	/* too many separate ranges: the table says so, and the stream is handed over rather than a range lost */
-	pending_reads_clear(&reads);
-	for (i = 0; i < PENDING_READ_LIMIT; i++)
-		CHECK(pending_reads_add(&reads, buffer + i * 4, 2));
-	CHECK(reads.count == PENDING_READ_LIMIT);
-	CHECK(!pending_reads_add(&reads, buffer + 200, 2));
-	CHECK(pending_reads_add(&reads, buffer + 1, 4)); /* (joins the first three) */
+	/* more separate ranges than the table holds: the nearest are joined, and nothing is forgotten: every range added is inside some entry afterwards */
+	{
+		static unsigned char big[100000];
+		unsigned long k;
+
+		pending_reads_clear(&reads);
+		for (k = 0; k < 5000; k++)
+		{
+			const unsigned long where = (k * 7919ul) % 99000ul;
+
+			CHECK(pending_reads_add(&reads, big + where, 16));
+			CHECK(reads.count <= PENDING_READ_LIMIT);
+			CHECK(pending_reads_overlap(&reads, big + where, 16));
+			CHECK(pending_reads_overlap(&reads, big + where + 15, 1));
+		}
+		/* (and every earlier one is still covered) */
+		for (k = 0; k < 5000; k++)
+		{
+			const unsigned long where = (k * 7919ul) % 99000ul;
+
+			if (!pending_reads_overlap(&reads, big + where, 16))
+			{
+				CHECK(0);
+				break;
+			}
+		}
+		/* a place nothing was added near stays clear when the table is spread out */
+		pending_reads_clear(&reads);
+		for (k = 0; k < 40; k++)
+			CHECK(pending_reads_add(&reads, big + 100 + k * 1000, 8));
+		CHECK(!pending_reads_overlap(&reads, big + 60000, 8));
+	}
 
 	printf(failures ? "%d failures\n" : "pending reads: all passed\n", failures);
 	return failures != 0;

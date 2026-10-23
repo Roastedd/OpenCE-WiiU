@@ -433,12 +433,18 @@ one of these ranges hands the stream over first, as the Xbox's runtime does for 
 static struct pending_reads pending_reads;
 
 static void stream_flush(void);
+/* why the stream was handed over, counted (in the log with the draw statistics): 0 a present, 1 the table of read ranges full, 2 a write into a range a draw reads, 3 the stream full, 4 too much
+waiting to be freed, 5 a resource in use asked for, 6 IsBusy, 7 KickPushBuffer */
+static unsigned long flush_reasons[9];
+#define DRAWS_PER_HANDOVER 40
+static unsigned draws_since_handover;
+#define flush_because(reason) (flush_reasons[reason]++, stream_flush())
 
 static void pending_read_note(const void *address, unsigned long size)
 {
 	if (!pending_reads_add(&pending_reads, address, size))
 	{
-		stream_flush();
+		flush_because(1);
 		pending_reads_add(&pending_reads, address, size);
 	}
 }
@@ -449,7 +455,7 @@ void halo_stream_before_write(const void *address, unsigned long size);
 void halo_stream_before_write(const void *address, unsigned long size)
 {
 	if (pending_reads_overlap(&pending_reads, address, size))
-		stream_flush();
+		flush_because(2);
 }
 
 /* for xbox_textures_gx2.c: a command in the stream reads these bytes of the game's memory */
@@ -460,6 +466,7 @@ void dk_stream_note_read(const void *address, unsigned long size)
 
 static void stream_flush(void)
 {
+	draws_since_handover = 0;
 	pending_reads_clear(&pending_reads);
 	if (!stream_used)
 		return;
@@ -478,7 +485,7 @@ static void *stream_command(uint32_t type, unsigned long size)
 
 	size = (size + 3) & ~3UL;
 	if (stream_used + size > STREAM_SIZE)
-		stream_flush();
+		flush_because(3);
 	header = (struct dk_command_header *)((unsigned char *)stream + stream_used);
 	header->type = type;
 	header->size = (uint32_t)size;
@@ -496,7 +503,7 @@ void dk_stream_free_after_handover(void *buffer, unsigned long size)
 	pending_frees[pending_free_count++] = buffer;
 	pending_free_bytes += size;
 	if (pending_free_count == PENDING_FREE_LIMIT || pending_free_bytes >= PENDING_FREE_BYTES)
-		stream_flush();
+		flush_because(4);
 }
 
 static void color_to_vec4(D3DCOLOR color, float *out)
@@ -1279,7 +1286,7 @@ BOOL halo_resource_busy(D3DResource *resource)
 	Xbox's runtime kicks off its push buffer, or a caller spinning on IsBusy
 	would wait for a submission that never comes */
 	if (last == submission)
-		stream_flush();
+		flush_because(5);
 	return host_gx2_retired() < last;
 }
 
@@ -1300,13 +1307,13 @@ void halo_resource_wait(D3DResource *resource)
 
 BOOL WINAPI D3DDevice_IsBusy(void)
 {
-	stream_flush();
+	flush_because(6);
 	return host_gx2_retired() < submission - 1;
 }
 
 void WINAPI D3DDevice_KickPushBuffer(void)
 {
-	stream_flush();
+	flush_because(7);
 }
 
 void WINAPI D3DDevice_InsertCallback(D3DCALLBACKTYPE type, D3DCALLBACK callback, DWORD context)
@@ -2782,6 +2789,10 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 	/* (after the command: writing it may have handed the stream over, and the
 	draw is in the submission it is written to) */
 	draw_resources_used(indices != NULL, TRUE);
+	/* handed over every so many draws, not all at the present: the GPU starts on the frame's first draws while the CPU makes the rest (when the stream went only at the present the frame took the CPU's
+	time and then the GPU's: 38 frames a second instead of 43) */
+	if (++draws_since_handover >= DRAWS_PER_HANDOVER)
+		flush_because(8);
 }
 
 static void D3DDevice_DrawVertices_inner(D3DPRIMITIVETYPE primitive_type, UINT start_vertex, UINT vertex_count)
@@ -3112,6 +3123,9 @@ static void draw_statistics_log(void)
 		"%lu too big", device.frame, stats.draws, stats.immediate_draws, stats.skipped_no_program,
 		stats.skipped_no_target, stats.skipped_shader, stats.skipped_size);
 	memset(&stats, 0, sizeof(stats));
+	platform_log("stream hand-overs since the last note: present %lu, read table full %lu, a write into a range a draw reads %lu, stream full %lu, frees %lu, resource in use %lu, IsBusy %lu, Kick %lu, every 40 draws %lu",
+		flush_reasons[0], flush_reasons[1], flush_reasons[2], flush_reasons[3], flush_reasons[4], flush_reasons[5], flush_reasons[6], flush_reasons[7], flush_reasons[8]);
+	memset(flush_reasons, 0, sizeof(flush_reasons));
 	{
 		unsigned index, shown = 0;
 
@@ -3205,7 +3219,7 @@ static void D3DDevice_Present_inner(CONST RECT *source_rectangle, CONST RECT *de
 			command->screenshot = (uint32_t)(uintptr_t)screenshot_pixels;
 		}
 	}
-	stream_flush();
+	flush_because(0);
 	if (screenshot_pixels)
 	{
 		screenshot_write();

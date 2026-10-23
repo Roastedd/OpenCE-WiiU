@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define PENDING_READ_LIMIT 32
+#define PENDING_READ_LIMIT 64
 
 struct pending_reads
 {
@@ -14,7 +14,8 @@ struct pending_reads
 };
 
 void pending_reads_clear(struct pending_reads *reads);
-/* records [address, address + size); a range that touches one recorded joins it. Returns 0 if the table is full (nothing recorded: hand the stream over, clear, record again) */
+/* records [address, address + size); a range that touches one recorded joins it. When the table is full the nearest ranges are joined (a range then covers a little more than was
+read: a write into the gap hands the stream over when it need not, and that is all it costs); returns 0 only if nothing could be done (it cannot happen with a limit of 2 or more) */
 int pending_reads_add(struct pending_reads *reads, const void *address, unsigned long size);
 /* whether a write to [address, address + size) changes something recorded */
 int pending_reads_overlap(const struct pending_reads *reads, const void *address, unsigned long size);

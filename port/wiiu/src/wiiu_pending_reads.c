@@ -5,6 +5,41 @@ void pending_reads_clear(struct pending_reads *reads)
 	reads->count = 0;
 }
 
+/* half of the table's ranges are joined to their neighbours: sorted by start, those closer than a gap are made one, the gap growing until half are gone (each range stays inside one of the
+results: no read is forgotten) */
+static void coalesce(struct pending_reads *reads)
+{
+	unsigned i, j;
+	uintptr_t gap = 256;
+
+	for (i = 1; i < reads->count; i++)
+	{
+		const uintptr_t start = reads->range[i].start, end = reads->range[i].end;
+
+		for (j = i; j > 0 && reads->range[j - 1].start > start; j--)
+			reads->range[j] = reads->range[j - 1];
+		reads->range[j].start = start;
+		reads->range[j].end = end;
+	}
+	while (reads->count > PENDING_READ_LIMIT / 2 && gap)
+	{
+		unsigned out = 0;
+
+		for (i = 0; i < reads->count; i++)
+		{
+			if (out && reads->range[i].start <= reads->range[out - 1].end + gap)
+			{
+				if (reads->range[i].end > reads->range[out - 1].end)
+					reads->range[out - 1].end = reads->range[i].end;
+			}
+			else
+				reads->range[out++] = reads->range[i];
+		}
+		reads->count = out;
+		gap *= 4;
+	}
+}
+
 int pending_reads_add(struct pending_reads *reads, const void *address, unsigned long size)
 {
 	const uintptr_t start = (uintptr_t)address, end = start + size;
@@ -25,7 +60,11 @@ int pending_reads_add(struct pending_reads *reads, const void *address, unsigned
 		}
 	}
 	if (reads->count == PENDING_READ_LIMIT)
-		return 0;
+	{
+		coalesce(reads);
+		if (reads->count == PENDING_READ_LIMIT)
+			return 0;
+	}
 	reads->range[reads->count].start = start;
 	reads->range[reads->count].end = end;
 	reads->count++;
