@@ -46,7 +46,7 @@ void wiiu_index_range(const uint16_t *indices, size_t count, uint32_t *minimum, 
 		const uint32_t *words = (const uint32_t *)(const void *)indices;
 		unsigned i;
 
-		touch(words + 32);
+		touch(words + 128);
 		for (i = 0; i < 4; i++)
 		{
 			const uint32_t a = words[i] >> 16, b = words[i] & 0xffff;
@@ -101,7 +101,7 @@ void wiiu_index_copy_range(uint16_t *destination, const uint16_t *source, size_t
 		uint32_t *out = (uint32_t *)(void *)(destination + i);
 		unsigned j;
 
-		touch(in + 32);
+		touch(in + 128);
 		for (j = 0; j < 4; j++)
 		{
 			const uint32_t word = in[j], a = word >> 16, b = word & 0xffff;
