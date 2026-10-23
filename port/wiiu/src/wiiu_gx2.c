@@ -622,8 +622,8 @@ static void ring_next(void)
 {
 	gx.ring[gx.ring_current].stamp = GX2GetLastSubmittedTimeStamp();
 	gx.ring_current = (gx.ring_current + 1) % RING_SEGMENTS;
-	if (gx.ring[gx.ring_current].stamp)
-		GX2WaitTimeStamp(gx.ring[gx.ring_current].stamp);
+	if (gx.ring[gx.ring_current].stamp && wiiu_in_foreground() && !wiiu_exit_requested())
+		GX2WaitTimeStamp(gx.ring[gx.ring_current].stamp); /* (not once HOME is pressed: the GPU may be taken, and the wait never ends) */
 	gx.ring[gx.ring_current].offset = 0;
 }
 
@@ -3166,7 +3166,8 @@ static uint32_t visibility_job(uint32_t index)
 
 Every GX2 call is made by one thread of its own, on core 2: it makes the GX2 context (initialize) and runs what the game thread hands it, one job at a time, the game thread waiting for each to
 be done (so nothing is faster yet: the game thread and the stream's memory behave as they did, and everything that can go wrong with a second thread - starting GX2 on it, HOME, closing,
-quitting, the foreground gates - can be tested before anything runs at the same time). halo/gx2_thread.txt (0) keeps the old way: the game thread does it all. */
+quitting, the foreground gates - can be tested before anything runs at the same time). halo/gx2_thread.txt (0) keeps the old way, and is the default: the game thread does it all (1: core 2, 2: core 1, 3: core 0, 4 and 5 as 1 and 3 with GX2 made on the game's thread: see the notes in
+reports/research/2026-10-23/two-core-render-plan.md, section 8, for what each did on the console). */
 #define GX2_THREAD_STACK_BYTES (512 * 1024)
 
 enum { JOB_SUBMIT = 1, JOB_IDLE, JOB_MAP_CHANGED, JOB_VISIBILITY };
@@ -3179,6 +3180,8 @@ static struct
 	volatile int state; /* 0 not started, 1 starting, 2 running, 3 failed, 4 off (halo/gx2_thread.txt) */
 	volatile uint32_t job, a, b, result;
 	volatile int release_request, release_done, busy;
+	int affinity, spin, init_here; /* init_here: GX2 is made by the game's thread (core 1, ProcUI's), the GX2 thread only drives it */ /* spin: jobs and answers are words the threads watch (cores other than the game's), not semaphores: a thread asleep on another core did not wake while the HOME callback ran */
+	volatile uint32_t posted, finished;
 	OSTime waited;
 	unsigned long jobs;
 } gt;
@@ -3201,9 +3204,12 @@ static void gt_release_here(void)
 {
 	if (!gt.release_request)
 		return;
+	wiiu_log("HOME: the GX2 thread (core %u) is draining the GPU", (unsigned)OSGetCoreId());
 	ring_flush();
 	GX2Flush();
+	wiiu_log("HOME: the GX2 thread flushed");
 	GX2DrawDone();
+	wiiu_log("HOME: the GX2 thread's GX2DrawDone returned");
 	gt.release_request = 0;
 	gt.release_done = 1;
 }
@@ -3252,12 +3258,38 @@ static int gx2_thread_main(int argc, const char **argv)
 	wiiu_tag_thread("gx2");
 	wiiu_log("The GX2 thread starts on core %u", (unsigned)OSGetCoreId());
 	wiiu_gate_poll = gt_gate_poll;
-	ok = initialize();
+	ok = gt.init_here ? gx.ready : initialize();
+	if (ok && gt.init_here)
+		context_resume(); /* (the context is set for this core's command buffer) */
 	gt_barrier();
 	gt.state = ok ? 2 : 3;
 	OSSignalSemaphore(&gt.done);
 	if (!ok)
 		return 0;
+	if (gt.spin)
+	{
+		uint32_t seen = gt.posted;
+
+		for (;;)
+		{
+			while (gt.posted == seen && !gt.release_request)
+				OSYieldThread();
+			if (gt.release_request)
+			{
+				gt_release_here();
+				continue;
+			}
+			seen = gt.posted;
+			gt_barrier();
+			gt.busy = 1;
+			gt.result = run_job(gt.job, gt.a, gt.b);
+			/* (every job ends with its commands handed to the GPU: the threads of the other cores are not run while the HOME callback is, so what this core has not flushed by then cannot be) */
+			GX2Flush();
+			gt.busy = 0;
+			gt_barrier();
+			gt.finished = seen;
+		}
+	}
 	for (;;)
 	{
 		OSWaitSemaphore(&gt.ready);
@@ -3287,25 +3319,39 @@ static int gt_start(void)
 	if (gt.state == 0)
 	{
 		FILE *file = fopen(WIIU_DATA_DIRECTORY "/gx2_thread.txt", "r");
-		int on = 1;
+		int on = 0; /* (off unless asked for: the second core does not work yet, see the plan's phase 1 notes) */
 
 		if (file)
 		{
 			if (fscanf(file, "%d", &on) != 1)
-				on = 1;
+				on = 0;
 			fclose(file);
 		}
+		/* 1: core 2; 2: core 1, the game's; 3: core 0 */
+		gt.affinity = on == 2 ? OS_THREAD_ATTRIB_AFFINITY_CPU1 : on == 3 ? OS_THREAD_ATTRIB_AFFINITY_CPU0 : OS_THREAD_ATTRIB_AFFINITY_CPU2;
+		gt.spin = on != 2;
+		/* a value of 4 and over: as 1 and 3 but GX2 is made on the game's thread (halo/gx2_thread.txt 4: core 2, 5: core 0) */
+		gt.init_here = on >= 4;
+		if (on == 4)
+			gt.affinity = OS_THREAD_ATTRIB_AFFINITY_CPU2;
+		else if (on == 5)
+			gt.affinity = OS_THREAD_ATTRIB_AFFINITY_CPU0;
 		if (!on)
 		{
 			gt.state = 4;
 			wiiu_log("GX2: no GX2 thread (halo/gx2_thread.txt is 0): the game thread makes the calls");
 			return initialize();
 		}
+		if (gt.init_here && !initialize())
+		{
+			gt.state = 3;
+			return 0;
+		}
 		gt.stack = memalign(32, GX2_THREAD_STACK_BYTES);
 		OSInitSemaphore(&gt.ready, 0);
 		OSInitSemaphore(&gt.done, 0);
 		if (!gt.stack || !OSCreateThread(&gt.thread, gx2_thread_main, 0, NULL, gt.stack + GX2_THREAD_STACK_BYTES, GX2_THREAD_STACK_BYTES,
-			OSGetThreadPriority(OSGetCurrentThread()), OS_THREAD_ATTRIB_AFFINITY_CPU2))
+			OSGetThreadPriority(OSGetCurrentThread()), (OSThreadAttributes)gt.affinity))
 		{
 			wiiu_log("GX2: no GX2 thread could be made (%s): the game thread makes the calls", gt.stack ? "OSCreateThread" : "no memory for the stack");
 			gt.state = 4;
@@ -3335,8 +3381,19 @@ static uint32_t gt_job(uint32_t job, uint32_t a, uint32_t b)
 	gt.a = a;
 	gt.b = b;
 	gt_barrier();
-	OSSignalSemaphore(&gt.ready);
-	OSWaitSemaphore(&gt.done);
+	if (gt.spin)
+	{
+		const uint32_t id = gt.posted + 1;
+
+		gt.posted = id;
+		while (gt.finished != id)
+			OSYieldThread();
+	}
+	else
+	{
+		OSSignalSemaphore(&gt.ready);
+		OSWaitSemaphore(&gt.done);
+	}
 	gt_barrier();
 	result = gt.result;
 	gt.waited += OSGetSystemTime() - start;
@@ -3357,15 +3414,17 @@ void wiiu_gx2_release_drain(void)
 {
 	OSTime start;
 
-	if (gt.state != 2)
+	if (gt.state != 2 || gt.spin)
 	{
+		/* (a thread of another core is not run during this callback; its work was handed to the GPU at the end of its job) */
 		GX2DrawDone();
 		return;
 	}
+	wiiu_log("HOME: asking the GX2 thread to drain the GPU (it is %s; main is on core %u)", gt.busy ? "inside a job" : "idle", (unsigned)OSGetCoreId());
 	gt.release_done = 0;
 	gt_barrier();
 	gt.release_request = 1;
-	if (!gt.busy)
+	if (!gt.busy && !gt.spin)
 		OSSignalSemaphore(&gt.ready); /* (wakes the thread if it is idle; one held at the gate in a job sees the request there) */
 	start = OSGetSystemTime();
 	while (!gt.release_done && OSGetSystemTime() - start < OSMillisecondsToTicks(3000))

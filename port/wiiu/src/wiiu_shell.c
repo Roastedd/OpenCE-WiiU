@@ -557,8 +557,21 @@ static int start_game(void)
 		wiiu_log("No memory for the game's stack (%u KB)", (unsigned)(GAME_STACK_BYTES / 1024u));
 		return ENOMEM;
 	}
+	/* the core the game runs on (halo/game_core.txt: 0, 1 or 2; 1 if none). GX2 must be driven from the core ProcUI's callbacks run on (1): the system does not run the app's threads on the
+	other cores while its HOME callback does, and the GPU's release then never completes: so with the GX2 thread on core 1 the game itself can be on 0 or 2 (wiiu_gx2.c) */
+	unsigned game_core = 1;
+	{
+		FILE *file = fopen(WIIU_DATA_DIRECTORY "/game_core.txt", "r");
+
+		if (file)
+		{
+			if (fscanf(file, "%u", &game_core) != 1 || game_core > 2)
+				game_core = 1;
+			fclose(file);
+		}
+	}
 	if (!OSCreateThread(&game_thread, game_entry, 0, NULL, game_stack + GAME_STACK_BYTES, GAME_STACK_BYTES, main_priority,
-			OS_THREAD_ATTRIB_AFFINITY_CPU1))
+			(OSThreadAttributes)(game_core == 0 ? OS_THREAD_ATTRIB_AFFINITY_CPU0 : game_core == 2 ? OS_THREAD_ATTRIB_AFFINITY_CPU2 : OS_THREAD_ATTRIB_AFFINITY_CPU1)))
 	{
 		wiiu_log("OSCreateThread failed for the game");
 		return EAGAIN;
