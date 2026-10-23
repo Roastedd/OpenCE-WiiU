@@ -9,6 +9,7 @@ What the Wii U does need (input, audio, files, sockets) is in units of its own.
 
 #include "platform.h"
 #include "sdl_platform.h"
+#include "port_config.h"
 #include "hud_hires.h"
 #include "text_hires.h"
 #include "menu_files.h"
@@ -43,10 +44,19 @@ int platform_window_sizes(long *widths, long *heights, int maximum)
 	return 0;
 }
 
-/* the TV's refresh is 60 Hz and the game's ticks 30 Hz: two frames to a tick */
+/* the TV's refresh is 60 Hz and the game's ticks 30 Hz: with display.interpolation, two frames to a tick (the frames between ticks drawn from the blend of the last two); without,
+the game's own frame throttle holds it to 30 frames a second, a frame to a tick, each drawn as the tick left the world */
 int halo_interpolation_enabled(void)
 {
-	return 1;
+	static int enabled = 1;
+	static unsigned long read_at = (unsigned long)-1;
+
+	if (read_at != config_changes())
+	{
+		read_at = config_changes();
+		enabled = config_boolean("display.interpolation");
+	}
+	return enabled;
 }
 
 int platform_audio_devices(int recording, char (*names)[PLATFORM_AUDIO_DEVICE_NAME_SIZE], int maximum)

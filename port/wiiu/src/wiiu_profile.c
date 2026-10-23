@@ -168,9 +168,13 @@ void wiiu_profile_start(void)
 
 	if (!file || target)
 		return;
-	if (fscanf(file, "%u", &seconds) == 1 && seconds >= 2)
-		report_seconds = seconds;
+	const int read = fscanf(file, "%u", &seconds);
+
 	fclose(file);
+	if (read == 1 && seconds == 0)
+		return; /* (a 0 in the file is the profiler off: the file cannot be deleted from the Mac) */
+	if (read == 1 && seconds >= 2)
+		report_seconds = seconds;
 	target = OSGetCurrentThread();
 	stack = MEMAllocFromDefaultHeapEx(stack_size, 16);
 	if (!stack)

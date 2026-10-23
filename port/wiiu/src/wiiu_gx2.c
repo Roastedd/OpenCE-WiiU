@@ -2410,6 +2410,13 @@ static void overlay_draw(GX2ColorBuffer *screen, GX2ContextState *context)
 	const float screen_width = (float)screen->surface.width, screen_height = (float)screen->surface.height;
 	const unsigned scale = (unsigned)(screen_width * 0.9f / OVERLAY_WIDTH) ? (unsigned)(screen_width * 0.9f / OVERLAY_WIDTH) : 1;
 	const float margin_x = screen_width * 0.02f, margin_y = screen_height * 0.02f;
+	static unsigned told;
+
+	if (told < 2)
+	{
+		told++;
+		wiiu_log("GX2: the overlay on a %ux%u screen, %u pixels to a texel", (unsigned)screen_width, (unsigned)screen_height, scale);
+	}
 	const float x0 = -1.0f + 2.0f * margin_x / screen_width, x1 = x0 + 2.0f * (float)(OVERLAY_WIDTH * scale) / screen_width;
 	const float y1 = 1.0f - 2.0f * margin_y / screen_height, y0 = y1 - 2.0f * (float)(OVERLAY_HEIGHT * scale) / screen_height;
 	static const unsigned corner_x[6] = { 0, 1, 0, 1, 1, 0 };

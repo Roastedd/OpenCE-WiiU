@@ -2721,6 +2721,9 @@ static BOOL indices_fixed(const WORD *indices, unsigned long count)
 	return custom && start >= custom && end <= custom + CUSTOM_EDITION_TAG_CACHE_BYTES;
 }
 
+/* what finding the range of the indices took (in the log with the draw statistics) */
+static double index_range_ms, index_range_kb;
+
 static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long first, unsigned long vertex_count,
 	const WORD *indices, long vertex_offset)
 {
@@ -2741,10 +2744,14 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 		into the command, if they are, so that they are read once */
 		uint32_t lowest, highest;
 
+		const double range_start = profile_now_ms();
+
 		if (index_bytes)
 			wiiu_index_copy_range((uint16_t *)(void *)&command->streams[streams], indices, count, &lowest, &highest);
 		else
 			wiiu_index_range(indices, count, &lowest, &highest);
+		index_range_ms += profile_now_ms() - range_start;
+		index_range_kb += (double)(count * 2) / 1024.0;
 		first += lowest;
 		vertex_count = highest - lowest + 1;
 		vertex_offset = -(long)lowest;
@@ -3106,6 +3113,8 @@ static void draw_statistics_log(void)
 		"%lu too big", device.frame, stats.draws, stats.immediate_draws, stats.skipped_no_program,
 		stats.skipped_no_target, stats.skipped_shader, stats.skipped_size);
 	memset(&stats, 0, sizeof(stats));
+	platform_log("index ranges: %.2f ms over %.0f KB since the last note", index_range_ms, index_range_kb);
+	index_range_ms = index_range_kb = 0.0;
 	{
 		unsigned index, shown = 0;
 
