@@ -1990,6 +1990,9 @@ void wiiu_profile_start(void);
 /* (There is no GX2 shutdown at exit: the shell drains the GPU before the app is let go, and any GX2 call after ProcUI has been shut down - which is where atexit handlers run - freezes the console
 with the last picture on the TV. One was here, and froze every run that ended with a map loaded.) */
 
+/* set when a GX2 thread makes the context: the profiler then follows the game's thread (gt_start starts it) */
+static int profile_by_game_thread;
+
 static int initialize(void)
 {
 	uint32_t i;
@@ -2141,7 +2144,8 @@ static int initialize(void)
 		}
 	}
 	wiiu_log("memcpy/memset self-test (wiiu_memcpy.c): %d wrong", wiiu_memcpy_selftest());
-	wiiu_profile_start();
+	if (!profile_by_game_thread)
+		wiiu_profile_start(); /* (with a GX2 thread the game's thread is the one to sample: gt_start does it) */
 	gx.state_dirty = 1;
 	gx.constants_lo = 192;
 	gx.constants_hi = 0;
@@ -3456,10 +3460,13 @@ static int gt_start(void)
 				wiiu_log("GX2: no ProcUI thread for core 2");
 		}
 		gt.state = 1;
+		profile_by_game_thread = 1;
 		OSSetThreadName(&gt.thread, "gx2");
 		OSResumeThread(&gt.thread);
 		OSWaitSemaphore(&gt.done);
 		wiiu_log("GX2: the GX2 thread says it is %s", gt.state == 2 ? "ready" : "NOT ready (GX2 could not be made on it)");
+		if (gt.state == 2)
+			wiiu_profile_start(); /* (the sampler follows the thread that calls this: the game's) */
 	}
 	return gt.state == 2;
 }
