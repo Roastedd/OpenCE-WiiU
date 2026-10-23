@@ -21,7 +21,6 @@ int main(int argc, char **argv)
 {
 	static struct overlay overlay;
 	static uint8_t pixels[OVERLAY_WIDTH * OVERLAY_HEIGHT * 4];
-	char line1[OVERLAY_LINE], line2[OVERLAY_LINE];
 	unsigned i;
 
 	overlay_reset(&overlay);
@@ -31,40 +30,64 @@ int main(int argc, char **argv)
 		overlay_push(&overlay, 16.667f, 10.0f, 2.0f, 1.0f, 8.0f, 300, 250);
 	CHECK(overlay_fps(&overlay) > 59.9f && overlay_fps(&overlay) < 60.1f);
 	CHECK(overlay_longest(&overlay, 120) < 16.7f);
-	/* a hitch shows in the longest, and the rate a little */
+	overlay_update_view(&overlay);
+	CHECK(overlay.view.fps > 59.9f && overlay.view.low_fps > 59.0f);
+	CHECK(overlay.view.cpu_percent > 59.0f && overlay.view.cpu_percent < 61.0f); /* 10 of 16.7 ms */
+	CHECK(overlay.view.gpu_percent > 47.0f && overlay.view.gpu_percent < 49.0f); /* 8 of 16.7 */
+	/* a hitch shows in the longest and the low, hardly in the rate */
 	overlay_push(&overlay, 120.0f, 30.0f, 2.0f, 1.0f, 8.0f, 300, 250);
 	CHECK(overlay_longest(&overlay, 120) > 119.0f);
 	CHECK(overlay_longest(&overlay, 1) > 119.0f);
-	CHECK(overlay_longest(&overlay, 120) > overlay_longest(&overlay, 0));
-	for (i = 0; i < 40; i++)
-		overlay_push(&overlay, 33.333f, 25.0f, 4.0f, 2.0f, 0.0f, 300, 250); /* (gpu 0: not known, keeps the last average) */
-	CHECK(overlay_fps(&overlay) > 29.9f && overlay_fps(&overlay) < 30.1f);
-	CHECK(overlay.gpu_average > 7.9f && overlay.gpu_average < 8.1f);
+	for (i = 0; i < 150; i++)
+		overlay_push(&overlay, i % 3 ? 16.667f : 33.333f, 25.0f, 4.0f, 2.0f, 0.0f, 372, 289); /* (gpu 0: not known, keeps the last average) */
 	overlay.render_width = 960;
 	overlay.render_height = 540;
 	overlay.interpolation = 1;
-	overlay_text(&overlay, line1, line2);
-	printf("%s\n%s\n", line1, line2);
-	CHECK(strstr(line1, "FPS 30.0") != NULL && strstr(line2, "960x540") != NULL && strstr(line2, "INTERP ON") != NULL);
-	CHECK(strlen(line1) < OVERLAY_LINE / 4 * 4 && strlen(line1) <= OVERLAY_WIDTH / 4 && strlen(line2) <= OVERLAY_WIDTH / 4);
-	/* rendered: a ground, lit text, bars */
+	overlay_update_view(&overlay);
+	CHECK(overlay.view.fps > 44.0f && overlay.view.fps < 46.0f);
+	CHECK(overlay.view.low_fps < 31.0f && overlay.view.low_fps > 29.0f); /* the 99th percentile frame is a 33 ms one */
+	CHECK(overlay.view.cpu_percent == 100.0f); /* 25 ms of 22 */
+	CHECK(overlay.gpu_average > 7.9f && overlay.gpu_average < 8.1f);
+	/* rendered: the ground over the whole panel, lit text, bars and graph; and nothing outside the panel's buffer (the guard bytes) */
 	overlay_render(&overlay, pixels);
 	{
 		unsigned lit = 0, ground = 0, bars = 0;
 
 		for (i = 0; i < OVERLAY_WIDTH * OVERLAY_HEIGHT; i++)
 		{
-			if (pixels[i * 4 + 3] == 255 && i / OVERLAY_WIDTH < 12)
+			const unsigned alpha = pixels[i * 4 + 3];
+
+			if (alpha == 0)
+			{
+				printf("FAIL a pixel with no alpha at %u\n", i);
+				failures++;
+				break;
+			}
+			if (alpha == 255 && i / OVERLAY_WIDTH < 17)
 				lit++;
-			if (pixels[i * 4 + 3] == 176)
+			if (alpha == 0xb8)
 				ground++;
-			if (pixels[i * 4 + 3] == 255 && i / OVERLAY_WIDTH >= 12)
+			if (alpha == 255 && i / OVERLAY_WIDTH >= 17)
 				bars++;
 		}
-		CHECK(lit > 100 && ground > 1000 && bars > 1000);
+		CHECK(lit > 150 && ground > 3000 && bars > 1000);
 	}
-	/* the newest frame is the rightmost bar: red for the hitch's neighbours is not there, the last 40 are 33 ms: yellow */
-	CHECK(pixels[((size_t)23 * OVERLAY_WIDTH + OVERLAY_WIDTH - 1) * 4 + 0] == 0xe0 && pixels[((size_t)23 * OVERLAY_WIDTH + OVERLAY_WIDTH - 1) * 4 + 1] == 0xc0);
+	/* the panel is the same size whatever the numbers: the rendering of two very different views touches the same rows and columns of the ground */
+	{
+		static uint8_t other[OVERLAY_WIDTH * OVERLAY_HEIGHT * 4];
+		struct overlay empty;
+
+		overlay_reset(&empty);
+		overlay_update_view(&empty);
+		overlay_render(&empty, other);
+		for (i = 0; i < OVERLAY_WIDTH * OVERLAY_HEIGHT; i++)
+			if ((pixels[i * 4 + 3] != 0) != (other[i * 4 + 3] != 0))
+			{
+				printf("FAIL the panels differ in size\n");
+				failures++;
+				break;
+			}
+	}
 	if (argc > 1)
 	{
 		FILE *file = fopen(argv[1], "wb");

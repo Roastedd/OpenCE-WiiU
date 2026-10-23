@@ -27,6 +27,7 @@ Not run on a console.
 #include <coreinit/core.h>
 #include <coreinit/memdefaultheap.h>
 #include <coreinit/semaphore.h>
+#include <proc_ui/procui.h>
 #include <coreinit/thread.h>
 #include <coreinit/time.h>
 #include <gx2/clear.h>
@@ -167,7 +168,7 @@ static struct
 	GX2Texture overlay_texture;
 	GX2Sampler overlay_sampler;
 	struct blit_vertex *overlay_quad;
-	OSTime overlay_previous_end;
+	OSTime overlay_previous_end, overlay_view_time;
 	unsigned long ring_total, draw_total, overlay_ring_previous, overlay_draw_previous;
 	OSTime gpu_stamp, gpu_submitted;
 	int gpu_pending;
@@ -2494,10 +2495,9 @@ static void overlay_refresh(void)
 }
 
 /* the overlay over the top left of a screen's picture, in the context blit_to has just drawn it in (a scale of whole pixels per texel, so that the text is sharp) */
-static void overlay_draw(GX2ColorBuffer *screen, GX2ContextState *context)
+static void overlay_draw(GX2ColorBuffer *screen, GX2ContextState *context, unsigned scale)
 {
 	const float screen_width = (float)screen->surface.width, screen_height = (float)screen->surface.height;
-	const unsigned scale = (unsigned)(screen_width * 0.9f / OVERLAY_WIDTH) ? (unsigned)(screen_width * 0.9f / OVERLAY_WIDTH) : 1;
 	const float margin_x = screen_width * 0.02f, margin_y = screen_height * 0.02f;
 	static unsigned told;
 
@@ -2782,8 +2782,17 @@ static void present(const struct dk_command_present *command)
 	const OSTime cpu_ticks = gx.overlay_previous_end ? present_start - gx.overlay_previous_end : 0;
 
 	gpu_poll();
-	if (gx.overlay_on && !(gx.overlay_frame++ & 1))
-		overlay_refresh();
+	if (gx.overlay_on)
+	{
+		/* (the panel's numbers are taken four times a second so that they can be read; the graph is drawn again every other frame) */
+		if (now - gx.overlay_view_time >= OSMillisecondsToTicks(250))
+		{
+			overlay_update_view(&gx.overlay);
+			gx.overlay_view_time = now;
+		}
+		if (!(gx.overlay_frame++ & 1))
+			overlay_refresh();
+	}
 	if (gx.test_armed == 2)
 	{
 		gx.test_armed = 3;
@@ -2799,14 +2808,14 @@ static void present(const struct dk_command_present *command)
 	{
 		blit_to(back, WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState());
 		if (gx.overlay_on)
-			overlay_draw(WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState());
+			overlay_draw(WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState(), 3); /* (768 pixels of the TV's 1920) */
 	}
 	GX2CopyColorBufferToScanBuffer(WHBGfxGetTVColourBuffer(), GX2_SCAN_TARGET_TV);
 	if (back)
 	{
 		blit_to(back, WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState());
 		if (gx.overlay_on)
-			overlay_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState());
+			overlay_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState(), 2); /* (512 of the GamePad's 854) */
 	}
 	GX2CopyColorBufferToScanBuffer(WHBGfxGetDRCColourBuffer(), GX2_SCAN_TARGET_DRC);
 	/* (the frame's work is handed to the GPU before the swap, whose wait for the display is then not in the time the work is said to have taken) */
@@ -3180,7 +3189,10 @@ static struct
 	volatile int state; /* 0 not started, 1 starting, 2 running, 3 failed, 4 off (halo/gx2_thread.txt) */
 	volatile uint32_t job, a, b, result;
 	volatile int release_request, release_done, busy;
-	int affinity, spin, init_here; /* init_here: GX2 is made by the game's thread (core 1, ProcUI's), the GX2 thread only drives it */ /* spin: jobs and answers are words the threads watch (cores other than the game's), not semaphores: a thread asleep on another core did not wake while the HOME callback ran */
+	int affinity, spin, init_here, core_callbacks; /* core_callbacks: the release is handled by a ProcUI callback registered for the GX2 thread's core, run by a thread of that core (ProcUISubProcessMessages) */
+	OSThread procui_thread;
+	uint8_t *procui_stack;
+	int affinity_core; /* init_here: GX2 is made by the game's thread (core 1, ProcUI's), the GX2 thread only drives it */ /* spin: jobs and answers are words the threads watch (cores other than the game's), not semaphores: a thread asleep on another core did not wake while the HOME callback ran */
 	volatile uint32_t posted, finished;
 	OSTime waited;
 	unsigned long jobs;
@@ -3273,7 +3285,13 @@ static int gx2_thread_main(int argc, const char **argv)
 		for (;;)
 		{
 			while (gt.posted == seen && !gt.release_request)
-				OSYieldThread();
+			{
+				/* (in the background the app gets a little of core 2 and the system's own threads need the rest: a thread that spins there froze the console when the app was closed from the HOME menu) */
+				if (wiiu_in_foreground() && !wiiu_exit_requested())
+					OSYieldThread();
+				else
+					OSSleepTicks(OSMillisecondsToTicks(2));
+			}
 			if (gt.release_request)
 			{
 				gt_release_here();
@@ -3309,6 +3327,52 @@ static int gx2_thread_main(int argc, const char **argv)
 	return 0;
 }
 
+int wiiu_game_gate_is_held(void);
+
+/* The release callback registered for the GX2 thread's core (gx2_thread.txt 6): ProcUI runs it on a thread of core 2 that calls ProcUISubProcessMessages, at HOME, when the
+system wants the GPU. It waits for the game thread to be held, drains the GPU from the core GX2 was made on, and says the GPU is released. */
+static uint32_t core_release(void *unused)
+{
+	uint32_t waited = 0;
+
+	(void)unused;
+	wiiu_log("HOME: the release callback of core %u (the GX2 thread's) runs", (unsigned)OSGetCoreId());
+	while (!wiiu_game_gate_is_held() && waited < 2000u)
+	{
+		OSSleepTicks(OSMillisecondsToTicks(2));
+		waited += 2u;
+	}
+	wiiu_log("HOME: on core %u the game thread is %s after %u ms", (unsigned)OSGetCoreId(), wiiu_game_gate_is_held() ? "held" : "NOT held", (unsigned)waited);
+	ring_flush();
+	GX2Flush();
+	GX2DrawDone();
+	wiiu_log("HOME: the GX2 thread's core drained the GPU");
+	ProcUIDrawDoneRelease();
+	return 0;
+}
+
+/* a thread of the GX2 thread's core that does what the main thread does on core 1: takes ProcUI's messages (the callbacks registered for its core run on it) */
+static int procui_core_main(int argc, const char **argv)
+{
+	(void)argc;
+	(void)argv;
+	wiiu_fpu_setup();
+	wiiu_tag_thread("procui core");
+	wiiu_log("The ProcUI thread of core %u starts", (unsigned)OSGetCoreId());
+	OSSetThreadPriority(OSGetCurrentThread(), 31); /* (the lowest: it must never take the core from the GX2 thread) */
+	for (;;)
+	{
+		const OSTime start = OSGetSystemTime();
+		const ProcUIStatus status = ProcUISubProcessMessages(TRUE);
+
+		if (status == PROCUI_STATUS_EXITING)
+			break;
+		if (OSGetSystemTime() - start < OSMillisecondsToTicks(1))
+			OSSleepTicks(OSMillisecondsToTicks(2)); /* (it returned at once: it is not blocking here, and must not spin) */
+	}
+	return 0;
+}
+
 /* starts the thread (or, with halo/gx2_thread.txt 0, only makes the context here) and waits for GX2 to be made: whether it was */
 static int gt_start(void)
 {
@@ -3331,8 +3395,11 @@ static int gt_start(void)
 		gt.affinity = on == 2 ? OS_THREAD_ATTRIB_AFFINITY_CPU1 : on == 3 ? OS_THREAD_ATTRIB_AFFINITY_CPU0 : OS_THREAD_ATTRIB_AFFINITY_CPU2;
 		gt.spin = on != 2;
 		/* a value of 4 and over: as 1 and 3 but GX2 is made on the game's thread (halo/gx2_thread.txt 4: core 2, 5: core 0) */
-		gt.init_here = on >= 4;
-		if (on == 4)
+		gt.init_here = on == 4 || on == 5;
+		gt.core_callbacks = on == 6;
+		if (on == 6)
+			gt.affinity = OS_THREAD_ATTRIB_AFFINITY_CPU2;
+		else if (on == 4)
 			gt.affinity = OS_THREAD_ATTRIB_AFFINITY_CPU2;
 		else if (on == 5)
 			gt.affinity = OS_THREAD_ATTRIB_AFFINITY_CPU0;
@@ -3356,6 +3423,19 @@ static int gt_start(void)
 			wiiu_log("GX2: no GX2 thread could be made (%s): the game thread makes the calls", gt.stack ? "OSCreateThread" : "no memory for the stack");
 			gt.state = 4;
 			return initialize();
+		}
+		if (gt.core_callbacks)
+		{
+			gt.procui_stack = memalign(32, 64 * 1024);
+			ProcUIRegisterCallbackCore(PROCUI_CALLBACK_RELEASE, core_release, NULL, 100, 2);
+			if (gt.procui_stack && OSCreateThread(&gt.procui_thread, procui_core_main, 0, NULL, gt.procui_stack + 64 * 1024, 64 * 1024, OSGetThreadPriority(OSGetCurrentThread()),
+				OS_THREAD_ATTRIB_AFFINITY_CPU2))
+			{
+				OSSetThreadName(&gt.procui_thread, "procui core");
+				OSResumeThread(&gt.procui_thread);
+			}
+			else
+				wiiu_log("GX2: no ProcUI thread for core 2");
 		}
 		gt.state = 1;
 		OSSetThreadName(&gt.thread, "gx2");
@@ -3408,17 +3488,20 @@ void host_gx2_submit(uint32_t commands, uint32_t size)
 }
 
 /* for the release callback (wiiu_shell.c): the GPU drained by the GX2 thread (a wait of up to 3 s for it, then by the caller, as before) */
-void wiiu_gx2_release_drain(void);
+int wiiu_gx2_release_drain(void);
 
-void wiiu_gx2_release_drain(void)
+/* returns 1 if the GPU is given back by another callback (the GX2 thread's, on its own core: gt.core_callbacks), 0 if the caller does it (ProcUIDrawDoneRelease) */
+int wiiu_gx2_release_drain(void)
 {
 	OSTime start;
 
+	if (gt.core_callbacks)
+		return 1;
 	if (gt.state != 2 || gt.spin)
 	{
 		/* (a thread of another core is not run during this callback; its work was handed to the GPU at the end of its job) */
 		GX2DrawDone();
-		return;
+		return 0;
 	}
 	wiiu_log("HOME: asking the GX2 thread to drain the GPU (it is %s; main is on core %u)", gt.busy ? "inside a job" : "idle", (unsigned)OSGetCoreId());
 	gt.release_done = 0;
@@ -3433,6 +3516,7 @@ void wiiu_gx2_release_drain(void)
 		(unsigned)OSTicksToMilliseconds(OSGetSystemTime() - start));
 	if (!gt.release_done)
 		GX2DrawDone();
+	return 0;
 }
 
 void host_gx2_idle(void)

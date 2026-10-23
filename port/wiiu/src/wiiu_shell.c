@@ -271,7 +271,15 @@ void wiiu_untag_thread(void)
 
 /* ---------- ProcUI: HOME and closing, called by ProcUIProcessMessages on the main thread */
 
-void wiiu_gx2_release_drain(void);
+int wiiu_gx2_release_drain(void);
+
+/* whether the game thread is held at the foreground gate (for the other cores' release callbacks) */
+int wiiu_game_gate_is_held(void);
+
+int wiiu_game_gate_is_held(void)
+{
+	return game_gate_held != 0;
+}
 
 static uint32_t on_release(void *unused)
 {
@@ -293,8 +301,10 @@ static uint32_t on_release(void *unused)
 	}
 	wiiu_audio_suspend();
 	/* (the GPU is drained by the thread that makes the GX2 calls, wiiu_gx2.c: the system waits for the work of the core that made it) */
-	wiiu_gx2_release_drain();
-	ProcUIDrawDoneRelease();
+	if (!wiiu_gx2_release_drain())
+		ProcUIDrawDoneRelease();
+	else
+		wiiu_log("HOME: the GX2 thread's own release callback (core 2) gives the GPU back");
 	wiiu_phase("HOME: after our release callback, in the others' or the system's");
 	return 0;
 }
