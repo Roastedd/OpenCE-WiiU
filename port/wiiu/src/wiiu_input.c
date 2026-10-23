@@ -112,37 +112,74 @@ static void merge_stick(float *x, float *y, float other_x, float other_y)
 /* the Pro Controller or the Classic Controller on a KPAD channel, if there is one */
 static unsigned int pro_present;
 
+/* What each controller last said. A read with no new sample (the game asks faster than the pads sample, about 200 times a second; the menus and the
+loops that wait for a frame do) leaves the pad as it was, as the system's own examples keep it: reporting it released made the sticks fall to the centre and
+the buttons let go between samples, a stutter in every look and a flicker in every held button. Only an error says the pad is gone. */
+static struct
+{
+	int present;
+	struct wiiu_pad pad;
+} last_pro[WIIU_PAD_PORTS];
+static struct wiiu_pad last_vpad;
+
+/* the Pro Controller or the Classic Controller on a KPAD channel, if there is one */
 static int read_pro(unsigned int channel, struct wiiu_pad *pad)
 {
 	KPADStatus status;
 	KPADError error = KPAD_ERROR_OK;
+	int got;
 
 	memset(&status, 0, sizeof(status));
-	if (KPADReadEx((KPADChan)channel, &status, 1, &error) < 1 || error != KPAD_ERROR_OK)
-		return 0;
-	if (status.extensionType == WPAD_EXT_PRO_CONTROLLER)
+	got = KPADReadEx((KPADChan)channel, &status, 1, &error);
+	if (got >= 1 && error == KPAD_ERROR_OK)
 	{
-		pad->buttons |= from_pro(status.pro.hold);
-		merge_stick(&pad->left_x, &pad->left_y, status.pro.leftStick.x, status.pro.leftStick.y);
-		merge_stick(&pad->right_x, &pad->right_y, status.pro.rightStick.x, status.pro.rightStick.y);
-		pro_present |= 1u << channel;
-		return 1;
+		struct wiiu_pad now;
+
+		memset(&now, 0, sizeof(now));
+		if (status.extensionType == WPAD_EXT_PRO_CONTROLLER)
+		{
+			now.buttons = from_pro(status.pro.hold);
+			now.left_x = status.pro.leftStick.x;
+			now.left_y = status.pro.leftStick.y;
+			now.right_x = status.pro.rightStick.x;
+			now.right_y = status.pro.rightStick.y;
+			pro_present |= 1u << channel;
+			last_pro[channel].present = 1;
+		}
+		else if (status.extensionType == WPAD_EXT_CLASSIC || status.extensionType == WPAD_EXT_MPLUS_CLASSIC)
+		{
+			now.buttons = from_classic(status.classic.hold);
+			/* (the triggers are analog on this pad: a full press also sets L or R, a half one is enough for the Xbox's trigger) */
+			if (status.classic.leftTrigger > 0.5f)
+				now.buttons |= WIIU_PAD_ZL;
+			if (status.classic.rightTrigger > 0.5f)
+				now.buttons |= WIIU_PAD_ZR;
+			now.left_x = status.classic.leftStick.x;
+			now.left_y = status.classic.leftStick.y;
+			now.right_x = status.classic.rightStick.x;
+			now.right_y = status.classic.rightStick.y;
+			pro_present &= ~(1u << channel);
+			last_pro[channel].present = 1;
+		}
+		else
+		{
+			pro_present &= ~(1u << channel);
+			last_pro[channel].present = 0;
+		}
+		last_pro[channel].pad = now;
 	}
-	if (status.extensionType == WPAD_EXT_CLASSIC || status.extensionType == WPAD_EXT_MPLUS_CLASSIC)
+	else if (error != KPAD_ERROR_NO_SAMPLES && error != KPAD_ERROR_BUSY)
 	{
-		pad->buttons |= from_classic(status.classic.hold);
-		/* (the triggers are analog on this pad: a full press also sets L or R, a half one is enough for the Xbox's trigger) */
-		if (status.classic.leftTrigger > 0.5f)
-			pad->buttons |= WIIU_PAD_ZL;
-		if (status.classic.rightTrigger > 0.5f)
-			pad->buttons |= WIIU_PAD_ZR;
-		merge_stick(&pad->left_x, &pad->left_y, status.classic.leftStick.x, status.classic.leftStick.y);
-		merge_stick(&pad->right_x, &pad->right_y, status.classic.rightStick.x, status.classic.rightStick.y);
 		pro_present &= ~(1u << channel);
-		return 1;
+		last_pro[channel].present = 0;
+		memset(&last_pro[channel].pad, 0, sizeof(last_pro[channel].pad));
 	}
-	pro_present &= ~(1u << channel);
-	return 0;
+	if (!last_pro[channel].present)
+		return 0;
+	pad->buttons |= last_pro[channel].pad.buttons;
+	merge_stick(&pad->left_x, &pad->left_y, last_pro[channel].pad.left_x, last_pro[channel].pad.left_y);
+	merge_stick(&pad->right_x, &pad->right_y, last_pro[channel].pad.right_x, last_pro[channel].pad.right_y);
+	return 1;
 }
 
 static int touch_down;
@@ -196,17 +233,23 @@ int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 		VPADReadError error = VPAD_READ_SUCCESS;
 
 		memset(&status, 0, sizeof(status));
-		/* (the GamePad is always there; a read with no new sample leaves the pad as it was: released) */
+		/* (the GamePad is always there) */
 		present = 1;
 		if (VPADRead(VPAD_CHAN_0, &status, 1, &error) > 0 && error == VPAD_READ_SUCCESS)
 		{
-			pad->buttons |= from_vpad(status.hold);
+			memset(&last_vpad, 0, sizeof(last_vpad));
+			last_vpad.buttons = from_vpad(status.hold);
+			last_vpad.left_x = status.leftStick.x;
+			last_vpad.left_y = status.leftStick.y;
+			last_vpad.right_x = status.rightStick.x;
+			last_vpad.right_y = status.rightStick.y;
 			read_touch(&status);
-			pad->left_x = status.leftStick.x;
-			pad->left_y = status.leftStick.y;
-			pad->right_x = status.rightStick.x;
-			pad->right_y = status.rightStick.y;
 		}
+		else if (error != VPAD_READ_NO_SAMPLES && error != VPAD_READ_BUSY)
+		{
+			memset(&last_vpad, 0, sizeof(last_vpad));
+		}
+		*pad = last_vpad;
 		wiiu_debug_input(pad);
 	}
 	if (read_pro(port, pad))
