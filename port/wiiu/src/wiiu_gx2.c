@@ -21,6 +21,11 @@ Not run on a console.
 #include "wiiu_indices.h"
 #include "wiiu_mip.h"
 #include "wiiu_overlay.h"
+#include "wiiu_stream_queue.h"
+
+/* d3d8_gx2.c: the queue of streams and its buffers (halo/gx2_thread.txt 7) */
+extern struct stream_queue dk_stream_queue;
+uint32_t *dk_stream_buffer(unsigned slot);
 #include "wiiu_tile.h"
 
 #include <coreinit/cache.h>
@@ -3150,10 +3155,7 @@ static void submit_job(uint32_t commands, uint32_t size)
 }
 
 /* the highest submission the GPU has finished: everything handed over is waited for at its present, so all of it */
-uint32_t host_gx2_retired(void)
-{
-	return 0xffffffffu;
-}
+/* (host_gx2_retired is below, with the GX2 thread's state) */
 
 static uint32_t visibility_job(uint32_t index)
 {
@@ -3189,6 +3191,7 @@ static struct
 	volatile int state; /* 0 not started, 1 starting, 2 running, 3 failed, 4 off (halo/gx2_thread.txt) */
 	volatile uint32_t job, a, b, result;
 	volatile int release_request, release_done, busy;
+	int async; /* streams are posted to the queue (d3d8_gx2.c) and run while the game goes on */
 	int affinity, spin, init_here, core_callbacks; /* core_callbacks: the release is handled by a ProcUI callback registered for the GX2 thread's core, run by a thread of that core (ProcUISubProcessMessages) */
 	OSThread procui_thread;
 	uint8_t *procui_stack;
@@ -3284,7 +3287,19 @@ static int gx2_thread_main(int argc, const char **argv)
 
 		for (;;)
 		{
-			while (gt.posted == seen && !gt.release_request)
+			unsigned slot;
+			uint32_t used, number;
+
+			/* the queue first (with gx2_thread.txt 7: the streams the game thread posts while it goes on) */
+			if (gt.async && stream_queue_take(&dk_stream_queue, &slot, &used, &number))
+			{
+				gt.busy = 1;
+				submit_job((uint32_t)(uintptr_t)dk_stream_buffer(slot), used);
+				gt.busy = 0;
+				stream_queue_retire(&dk_stream_queue);
+				continue;
+			}
+			while (gt.posted == seen && !gt.release_request && !(gt.async && __atomic_load_n(&dk_stream_queue.posted, __ATOMIC_ACQUIRE) != dk_stream_queue.taken))
 			{
 				/* (in the background the app gets a little of core 2 and the system's own threads need the rest: a thread that spins there froze the console when the app was closed from the HOME menu) */
 				if (wiiu_in_foreground() && !wiiu_exit_requested())
@@ -3297,6 +3312,8 @@ static int gx2_thread_main(int argc, const char **argv)
 				gt_release_here();
 				continue;
 			}
+			if (gt.posted == seen)
+				continue; /* (a stream was posted: taken at the top) */
 			seen = gt.posted;
 			gt_barrier();
 			gt.busy = 1;
@@ -3396,8 +3413,9 @@ static int gt_start(void)
 		gt.spin = on != 2;
 		/* a value of 4 and over: as 1 and 3 but GX2 is made on the game's thread (halo/gx2_thread.txt 4: core 2, 5: core 0) */
 		gt.init_here = on == 4 || on == 5;
-		gt.core_callbacks = on == 6;
-		if (on == 6)
+		gt.core_callbacks = on == 6 || on == 7;
+		gt.async = on == 7;
+		if (on == 6 || on == 7)
 			gt.affinity = OS_THREAD_ATTRIB_AFFINITY_CPU2;
 		else if (on == 4)
 			gt.affinity = OS_THREAD_ATTRIB_AFFINITY_CPU2;
@@ -3456,6 +3474,12 @@ static uint32_t gt_job(uint32_t job, uint32_t a, uint32_t b)
 		return 0;
 	if (gt.state == 4)
 		return run_job(job, a, b);
+	if (gt.async)
+	{
+		/* (the jobs of this mailbox are about what the streams before them did: the queue is emptied first) */
+		while (stream_queue_retired(&dk_stream_queue) < __atomic_load_n(&dk_stream_queue.posted, __ATOMIC_ACQUIRE))
+			OSYieldThread();
+	}
 	start = OSGetSystemTime();
 	gt.job = job;
 	gt.a = a;
@@ -3522,6 +3546,28 @@ int wiiu_gx2_release_drain(void)
 void host_gx2_idle(void)
 {
 	gt_job(JOB_IDLE, 0, 0);
+}
+
+/* the highest submission the GPU has finished: with a queue, the last stream the GX2 thread has run; without, everything handed over is waited for at its present, so all of it */
+uint32_t host_gx2_retired(void)
+{
+	return gt.async && gt.state == 2 ? stream_queue_retired(&dk_stream_queue) : 0xffffffffu;
+}
+
+/* for d3d8_gx2.c: whether the streams are posted to a queue and run while the game goes on (gx2_thread.txt 7); asked once, at the first stream, so the thread is started by then */
+int host_gx2_async(void);
+
+int host_gx2_async(void)
+{
+	return gt_start() && gt.state == 2 && gt.async;
+}
+
+/* a wait of the game thread for the GX2 thread: gives the core up for a moment */
+void host_gx2_pause(void);
+
+void host_gx2_pause(void)
+{
+	OSYieldThread();
 }
 
 void host_gx2_map_changed(void)

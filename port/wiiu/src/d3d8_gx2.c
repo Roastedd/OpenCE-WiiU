@@ -24,8 +24,10 @@ and presenting go there; a draw and a visibility test do nothing yet.
 #include "posix.h"
 #include "dk_commands.h"
 #include "wiiu_immediate.h"
+#include "wiiu_inflight.h"
 #include "wiiu_indices.h"
 #include "wiiu_pending_reads.h"
+#include "wiiu_stream_queue.h"
 #include "dk_shaders.h"
 #include "dk_textures.h"
 #include "shader_key_wire.h"
@@ -400,18 +402,26 @@ unsigned int host_gx2_retired(void);
 /* the queue drained (host_dk.c) */
 void host_gx2_idle(void);
 
-void halo_switch_renderer_idle(void)
-{
-	host_gx2_idle();
-}
+/* (halo_switch_renderer_idle is below, after the stream's functions) */
 /* a visibility test slot's latest count (host_dk.c) */
 unsigned int host_gx2_visibility(unsigned int index);
 int host_gx2_visibility_enabled(void);
 
 #define STREAM_SIZE (1024 * 1024)
 
-static uint32_t stream[STREAM_SIZE / 4];
+/* the buffers the stream is written into: one when the host runs a stream as it is handed over, STREAM_SLOTS when the GX2 thread runs them while the game goes on (host_gx2_async) */
+#define STREAM_SLOTS 3
+static uint32_t stream_buffers[STREAM_SLOTS][STREAM_SIZE / 4];
+static uint32_t *stream = stream_buffers[0];
 static unsigned long stream_used;
+
+/* the queue of streams to the GX2 thread, and its buffers: the host (wiiu_gx2.c) takes from them */
+struct stream_queue dk_stream_queue;
+
+uint32_t *dk_stream_buffer(unsigned slot)
+{
+	return stream_buffers[slot];
+}
 /* Each handing over of the stream is one submission, numbered from 1 as the
 host numbers them: this is the number of the one being written. */
 static unsigned long submission = 1;
@@ -421,9 +431,72 @@ host reads them when it runs the stream, so they are freed once it has */
 #define PENDING_FREE_LIMIT 256
 #define PENDING_FREE_BYTES (8 * 1024 * 1024)
 
-static void *pending_frees[PENDING_FREE_LIMIT];
+static struct { void *buffer; unsigned long submission; } pending_frees[PENDING_FREE_LIMIT];
 static unsigned long pending_free_count;
 static unsigned long pending_free_bytes;
+
+/* ---------- the GX2 thread running streams while the game goes on (halo/gx2_thread.txt 7)
+
+A stream is posted to the queue and the game goes on writing the next, in another buffer; the host's thread runs them in order and counts them retired. What a stream reads of the game's memory
+is read late, so the ranges are kept with the stream's number (`inflight`), and a write the game announces into one waits for the stream that reads it (after handing it over, if it is still being
+written); buffers a command names are freed once its stream is retired. */
+int host_gx2_async(void);
+void host_gx2_pause(void);
+void wiiu_foreground_gate(int is_game_thread);
+
+static double profile_now_ms(void);
+static int dk_async = -1;
+static struct inflight inflight;
+
+static int async_on(void)
+{
+	if (dk_async < 0)
+	{
+		dk_async = host_gx2_async();
+		if (dk_async)
+			stream_queue_init(&dk_stream_queue, STREAM_SLOTS);
+	}
+	return dk_async;
+}
+
+/* waits until the stream numbered `submission` is retired; a wait of more than three seconds in the foreground is said (once), and goes on */
+static void async_wait_retired(uint32_t number)
+{
+	static int said;
+	const double start = profile_now_ms();
+
+	while (stream_queue_retired(&dk_stream_queue) < number)
+	{
+		host_gx2_pause();
+		if (!said && profile_now_ms() - start > 3000.0)
+		{
+			said = 1;
+			platform_log("GX2 thread: waiting 3 s for stream %lu (%lu retired, %lu posted)", (unsigned long)number, (unsigned long)stream_queue_retired(&dk_stream_queue),
+				(unsigned long)(stream_queue_submission(&dk_stream_queue) - 1));
+		}
+	}
+}
+
+/* frees what the retired streams' commands named */
+static void async_frees(int all_for_room)
+{
+	unsigned long kept = 0, i;
+
+	for (i = 0; i < pending_free_count; i++)
+	{
+		if (pending_frees[i].submission <= stream_queue_retired(&dk_stream_queue))
+			free(pending_frees[i].buffer);
+		else
+			pending_frees[kept++] = pending_frees[i];
+	}
+	pending_free_count = kept;
+	if (all_for_room && pending_free_count == PENDING_FREE_LIMIT)
+	{
+		/* (no room for another: the oldest is waited for) */
+		async_wait_retired((uint32_t)pending_frees[0].submission);
+		async_frees(0);
+	}
+}
 
 /* The memory the commands being written read when they are handed over, not when they are written: vertex streams, the texels of compressed textures (the host reads them
 where the game keeps them). The game remakes a dynamic buffer after a draw has named it - split screen draws the second view into the first's, a locked buffer is rewritten
@@ -442,6 +515,11 @@ static unsigned draws_since_handover;
 
 static void pending_read_note(const void *address, unsigned long size)
 {
+	if (dk_async > 0)
+	{
+		inflight_add(&inflight, address, size, (uint32_t)submission, stream_queue_retired(&dk_stream_queue));
+		return;
+	}
 	if (!pending_reads_add(&pending_reads, address, size))
 	{
 		flush_because(1);
@@ -454,6 +532,18 @@ void halo_stream_before_write(const void *address, unsigned long size);
 
 void halo_stream_before_write(const void *address, unsigned long size)
 {
+	if (dk_async > 0)
+	{
+		const uint32_t hazard = inflight_hazard(&inflight, address, size, stream_queue_retired(&dk_stream_queue));
+
+		if (hazard)
+		{
+			if (hazard >= (uint32_t)submission)
+				flush_because(2); /* (the stream still being written is handed over first) */
+			async_wait_retired(hazard);
+		}
+		return;
+	}
 	if (pending_reads_overlap(&pending_reads, address, size))
 		flush_because(2);
 }
@@ -467,6 +557,22 @@ void dk_stream_note_read(const void *address, unsigned long size)
 static void stream_flush(void)
 {
 	draws_since_handover = 0;
+	if (async_on())
+	{
+		if (!stream_used)
+			return;
+		wiiu_foreground_gate(1);
+		stream_queue_post(&dk_stream_queue, (uint32_t)stream_used);
+		stream_used = 0;
+		submission++;
+		stream = stream_buffers[stream_queue_slot(&dk_stream_queue)];
+		/* (the slot to write next must be free: the stream that used it is retired) */
+		while (!stream_queue_slot_free(&dk_stream_queue))
+			host_gx2_pause();
+		async_frees(0);
+		pending_free_bytes = 0;
+		return;
+	}
 	pending_reads_clear(&pending_reads);
 	if (!stream_used)
 		return;
@@ -474,8 +580,19 @@ static void stream_flush(void)
 	stream_used = 0;
 	submission++;
 	while (pending_free_count)
-		free(pending_frees[--pending_free_count]);
+		free(pending_frees[--pending_free_count].buffer);
 	pending_free_bytes = 0;
+}
+
+/* everything written is handed over, the GX2 thread's queue emptied, and the GPU waited for (host_dk.c's name, as the game's code asks for it) */
+void halo_switch_renderer_idle(void);
+
+void halo_switch_renderer_idle(void)
+{
+	stream_flush();
+	if (dk_async > 0)
+		async_wait_retired((uint32_t)(submission - 1));
+	host_gx2_idle();
 }
 
 /* room for a command of size bytes, its header filled in */
@@ -500,7 +617,11 @@ void *dk_stream_command(uint32_t type, unsigned long size)
 
 void dk_stream_free_after_handover(void *buffer, unsigned long size)
 {
-	pending_frees[pending_free_count++] = buffer;
+	if (dk_async > 0 && pending_free_count == PENDING_FREE_LIMIT)
+		async_frees(1);
+	pending_frees[pending_free_count].buffer = buffer;
+	pending_frees[pending_free_count].submission = submission;
+	pending_free_count++;
 	pending_free_bytes += size;
 	if (pending_free_count == PENDING_FREE_LIMIT || pending_free_bytes >= PENDING_FREE_BYTES)
 		flush_because(4);
@@ -3222,6 +3343,8 @@ static void D3DDevice_Present_inner(CONST RECT *source_rectangle, CONST RECT *de
 	flush_because(0);
 	if (screenshot_pixels)
 	{
+		if (dk_async > 0)
+			async_wait_retired((uint32_t)(submission - 1)); /* (the host writes the pixels as it runs the present) */
 		screenshot_write();
 		free(screenshot_pixels);
 		screenshot_pixels = NULL;
