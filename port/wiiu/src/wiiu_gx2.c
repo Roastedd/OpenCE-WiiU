@@ -170,6 +170,13 @@ static struct
 	int gpu_pending;
 	float gpu_ms;
 	unsigned overlay_frame;
+	/* the GPU test (halo/gpu_test.txt: 1): a frame's streams kept (test_armed 2), run again at its present, timed */
+	int test_armed, replaying;
+	uint8_t *test_log;
+	uint32_t test_log_used;
+	uint32_t test_ring_start;
+	unsigned last_frame_draws;
+	unsigned long test_draw_mark;
 	OSTime submit_ticks, present_ticks, texture_ticks, draw_ticks;
 	unsigned window_frames;
 	OSTime last_present, longest_frame;
@@ -566,6 +573,9 @@ static void ring_flush(void)
 	gx.ring_dirty_from = gx.ring_dirty_to = NULL;
 }
 
+#define TEST_LOG_BYTES (8 * 1024 * 1024)
+
+static void run_stream(const unsigned char *at, const unsigned char *end);
 static void gpu_poll(void);
 static int overlay_make(void);
 
@@ -1964,6 +1974,9 @@ static void draw(const struct dk_command_draw *command)
 
 int wiiu_memcpy_selftest(void);
 
+/* wiiu_core_probe.c: what the other core sees of this one's writes, if halo/probe_core.txt is there */
+void wiiu_core_probe(void);
+
 /* wiiu_profile.c: a sampling profiler of this thread, if halo/profile.txt is there */
 void wiiu_profile_start(void);
 
@@ -2107,6 +2120,20 @@ static int initialize(void)
 		}
 		free(buffer);
 		free(other);
+	}
+	{
+		FILE *file = fopen(WIIU_DATA_DIRECTORY "/probe_core.txt", "r");
+
+		int asked = 0;
+
+		if (file)
+		{
+			if (fscanf(file, "%d", &asked) != 1)
+				asked = 0;
+			fclose(file);
+			if (asked == 1)
+				wiiu_core_probe();
+		}
 	}
 	wiiu_log("memcpy/memset self-test (wiiu_memcpy.c): %d wrong", wiiu_memcpy_selftest());
 	wiiu_profile_start();
@@ -2688,6 +2715,63 @@ static void screenshot_take(struct target *source, uint32_t address)
 	context_resume();
 }
 
+/* The GPU test. The commands of one frame, kept as they were handed over, are run again and again without the game (30 frames' worth, or what the ring has room for), then waited for:
+the time for each is the GPU's if it is more than the CPU's side of a frame (the commands need 2-4 ms of the GX2 thread), which is the question - could the GPU draw this frame in the time a 60 Hz display
+gives it, whatever is done to the CPU? Three runs: the frame as it is, with no pixels drawn (a scissor of one pixel: the cost of the draws without their fill), and with blending off. Asked for with a 1 in
+halo/gpu_test.txt (read every 120 frames, once a run). The picture of the frame is drawn 90 more times: no harm. */
+static void gpu_test_run(void)
+{
+	static const struct { const char *name; int mode; } variants[3] = { { "the frame", 0 }, { "no pixels (scissor 1x1)", 4 }, { "no blending", 1 } };
+	const struct ring_segment *segment = &gx.ring[gx.ring_current];
+	const uint32_t per_frame = segment->offset > gx.test_ring_start ? segment->offset - gx.test_ring_start : 0;
+	const uint32_t room = RING_SEGMENT_BYTES - segment->offset;
+	unsigned runs = per_frame ? (unsigned)(room / (per_frame + 64u * 1024u)) : 30;
+	const int saved_mode = gx.debug_mode;
+	unsigned variant, k;
+
+	if (runs > 30)
+		runs = 30;
+	if (!gx.test_log_used || runs < 4)
+	{
+		wiiu_log("GPU test: not run (%u bytes kept, %u KB of the ring a frame, room for %u)", (unsigned)gx.test_log_used, (unsigned)(per_frame / 1024), runs);
+		return;
+	}
+	ring_flush();
+	GX2Flush();
+	GX2DrawDone();
+	for (variant = 0; variant < 3; variant++)
+	{
+		OSTime start, submitted, done;
+		const unsigned char *log;
+
+		gx.debug_mode = variants[variant].mode;
+		gx.state_dirty = 1;
+		gx.replaying = 1;
+		start = OSGetSystemTime();
+		for (k = 0; k < runs; k++)
+		{
+			for (log = gx.test_log; log < gx.test_log + gx.test_log_used;)
+			{
+				const uint32_t size = *(const uint32_t *)(const void *)log;
+
+				run_stream(log + 4, log + 4 + size);
+				log += 4 + ((size + 3u) & ~3u);
+			}
+			ring_flush();
+		}
+		GX2Flush();
+		submitted = OSGetSystemTime();
+		GX2DrawDone();
+		done = OSGetSystemTime();
+		gx.replaying = 0;
+		wiiu_log("GPU test: %s, %u runs of a frame: handed over in %.2f ms each, done in %.2f ms each (%u KB of the ring a frame)", variants[variant].name, runs,
+			(double)OSTicksToMicroseconds(submitted - start) / 1000.0 / (double)runs, (double)OSTicksToMicroseconds(done - start) / 1000.0 / (double)runs, (unsigned)(per_frame / 1024));
+	}
+	gx.debug_mode = saved_mode;
+	gx.state_dirty = 1;
+	gx.test_log_used = 0;
+}
+
 static void present(const struct dk_command_present *command)
 {
 	struct target *back = target_get(&command->back_buffer);
@@ -2699,6 +2783,11 @@ static void present(const struct dk_command_present *command)
 	gpu_poll();
 	if (gx.overlay_on && !(gx.overlay_frame++ & 1))
 		overlay_refresh();
+	if (gx.test_armed == 2)
+	{
+		gx.test_armed = 3;
+		gpu_test_run();
+	}
 	ring_flush();
 	if (back && command->screenshot)
 		screenshot_take(back, command->screenshot);
@@ -2772,6 +2861,8 @@ static void present(const struct dk_command_present *command)
 		gx.overlay_ring_previous = gx.ring_total;
 		gx.overlay_draw_previous = gx.draw_total;
 	}
+	gx.last_frame_draws = (unsigned)(gx.draw_total - gx.test_draw_mark);
+	gx.test_draw_mark = gx.draw_total;
 	gx.frames++;
 	gx.window_frames++;
 	if (gx.last_present)
@@ -2880,6 +2971,32 @@ static void present(const struct dk_command_present *command)
 	ring_next();
 	deferred_flush(0);
 	context_resume();
+	if (gx.test_armed == 3)
+		gx.test_armed = 4; /* (done: once a run) */
+	if (!gx.test_armed && gx.frames % 120 == 0 && gx.frames > 300 && gx.last_frame_draws >= 250)
+	{
+		FILE *file = fopen(WIIU_DATA_DIRECTORY "/gpu_test.txt", "r");
+		int asked = 0;
+
+		if (file)
+		{
+			if (fscanf(file, "%d", &asked) != 1)
+				asked = 0;
+			fclose(file);
+		}
+		if (asked == 1)
+		{
+			if (!gx.test_log)
+				gx.test_log = malloc(TEST_LOG_BYTES);
+			if (gx.test_log)
+			{
+				gx.test_armed = 2;
+				gx.test_log_used = 0;
+				gx.test_ring_start = gx.ring[gx.ring_current].offset;
+				wiiu_log("GPU test: the next frame is kept and run again at its present");
+			}
+		}
+	}
 }
 
 /* ---------- the stream */
@@ -2891,17 +3008,9 @@ uint32_t host_gx2_visibility(uint32_t index);
 unsigned int host_gx2_output_height(void);
 
 
-void host_gx2_submit(uint32_t commands, uint32_t size)
+/* runs the commands of a stream; replaying (the GPU test) leaves out those that make or free resources and the present */
+static void run_stream(const unsigned char *at, const unsigned char *end)
 {
-	const unsigned char *at = (const unsigned char *)(uintptr_t)commands;
-	const unsigned char *end = at + size;
-
-	OSTime submit_start;
-
-	wiiu_foreground_gate(1);
-	if (!initialize())
-		return;
-	submit_start = OSGetSystemTime();
 	while (at + sizeof(struct dk_command_header) <= end)
 	{
 		const struct dk_command_header *header = (const struct dk_command_header *)at;
@@ -2913,6 +3022,13 @@ void host_gx2_submit(uint32_t commands, uint32_t size)
 		}
 		if (header->type < 32)
 			gx.counts[header->type]++;
+		if (gx.replaying && (header->type == DK_COMMAND_PRESENT || header->type == DK_COMMAND_TEXTURE || header->type == DK_COMMAND_TEXTURE_ROWS ||
+			header->type == DK_COMMAND_TEXTURE_FREE || header->type == DK_COMMAND_COMPOSITE || header->type == DK_COMMAND_VISIBILITY_BEGIN ||
+			header->type == DK_COMMAND_VISIBILITY_END))
+		{
+			at += header->size;
+			continue;
+		}
 		switch (header->type)
 		{
 		case DK_COMMAND_TARGETS:
@@ -2998,6 +3114,25 @@ void host_gx2_submit(uint32_t commands, uint32_t size)
 		}
 		at += header->size;
 	}
+}
+
+void host_gx2_submit(uint32_t commands, uint32_t size)
+{
+	const unsigned char *at = (const unsigned char *)(uintptr_t)commands;
+	OSTime submit_start;
+
+	wiiu_foreground_gate(1);
+	if (!initialize())
+		return;
+	submit_start = OSGetSystemTime();
+	if (gx.test_armed == 2 && gx.test_log_used + 4 + ((size + 3u) & ~3u) <= TEST_LOG_BYTES)
+	{
+		/* (the GPU test: this frame's streams are kept, each with its size, to be run again at the frame's present) */
+		*(uint32_t *)(void *)(gx.test_log + gx.test_log_used) = size;
+		memcpy(gx.test_log + gx.test_log_used + 4, at, size);
+		gx.test_log_used += 4 + ((size + 3u) & ~3u);
+	}
+	run_stream(at, at + size);
 	ring_flush();
 	gx.submit_ticks += OSGetSystemTime() - submit_start;
 }
