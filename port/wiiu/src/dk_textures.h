@@ -27,5 +27,7 @@ freed once the stream has been handed to the host, which reads it then. A
 great deal of it waiting hands the stream over. Call after the command is
 written: it may do that. */
 void dk_stream_free_after_handover(void *buffer, unsigned long size);
+/* a command being written reads these bytes of the game's memory when the stream is handed over: a write to them first hands it over */
+void dk_stream_note_read(const void *address, unsigned long size);
 
 #endif

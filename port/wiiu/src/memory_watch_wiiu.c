@@ -58,6 +58,9 @@ unsigned long memory_watch_serial(void)
 	return current_generation;
 }
 
+/* d3d8_gx2.c: hands the stream of commands over if one of them reads this memory: the game is about to change it */
+void halo_stream_before_write(const void *address, unsigned long size);
+
 static void mark(unsigned long address, unsigned long size)
 {
 	unsigned long first, last, page;
@@ -65,6 +68,7 @@ static void mark(unsigned long address, unsigned long size)
 
 	if (!watch_pages(address, size, &first, &last))
 		return;
+	halo_stream_before_write((const void *)address, size);
 	generation = __sync_add_and_fetch(&current_generation, 1);
 	for (page = first; page <= last; page++)
 		page_generation[page] = generation;

@@ -17,6 +17,7 @@ Not run on a console.
 
 #include "dk_commands.h"
 #include "wiiu_shell.h"
+#include "wiiu_mip.h"
 #include "wiiu_tile.h"
 
 #include <coreinit/cache.h>
@@ -156,7 +157,7 @@ static struct
 	int trace_frame; /* halo/gx2_trace.txt: the frame whose draws are logged (-1: none) */
 	int debug_mode; /* and, after it, a mode: 1 draws without blending, 2 without culling */
 	int features_off; /* and a third number: bit 0 no mip levels, bit 1 no 3D and cube textures, bit 2 no mip composites, bit 3 visibility tests on, bit 4 samplers ignore mips,
-	bit 5 samplers without anisotropy (these two take effect when the file is read again) */
+	bit 5 samplers without anisotropy (these two take effect when the file is read again), bit 6 no mip levels made for composites' unrendered levels */
 	unsigned traced;
 	int trace_serial; /* the fourth number: a new one traces the frame after the file is read again (every 300 frames) */
 } gx;
@@ -1296,6 +1297,7 @@ struct composite
 	uint32_t data, width, height, levels;
 	uint32_t level_data[DK_COMPOSITE_LEVELS];
 	unsigned level_written[DK_COMPOSITE_LEVELS];
+	unsigned level_derived[DK_COMPOSITE_LEVELS]; /* for a level the game did not render: the stamp of the level it was made from */
 	uint8_t *base;
 	GX2Texture texture;
 };
@@ -1318,6 +1320,7 @@ static void composite_receive(const struct dk_command_composite *command)
 	{
 		memcpy(composite->level_data, command->level_data, sizeof(composite->level_data));
 		memset(composite->level_written, 0, sizeof(composite->level_written));
+		memset(composite->level_derived, 0, sizeof(composite->level_derived));
 		return;
 	}
 	for (i = 0; i < COMPOSITE_LIMIT && composites[i].used; i++)
@@ -1374,33 +1377,144 @@ static struct target *target_latest(uint32_t data)
 	return found;
 }
 
-/* the composite whose levels the stage samples, its levels copied again from the targets drawn into since (the levels the game did not render keep what they had) */
-static const GX2Texture *composite_sampled(uint32_t data, uint32_t levels)
+/* a level the game did not render, made from the level before it (the Switch's renderer does the same): copied by the GPU to a linear surface, averaged by the CPU and copied back.
+It waits for the GPU (once, and again only when the level before it changes), which a texture that is mostly rendered at every level never has to. */
+static void *mip_scratch[2];
+static uint32_t mip_scratch_bytes;
+
+static int composite_derive(struct composite *composite, unsigned level)
 {
-	unsigned i, level;
+	const uint32_t source_width = level_size(composite->width, level - 1), source_height = level_size(composite->height, level - 1);
+	const uint32_t width = level_size(composite->width, level), height = level_size(composite->height, level);
+	GX2Surface linear[2];
+	unsigned i;
+
+	for (i = 0; i < 2; i++)
+	{
+		memset(&linear[i], 0, sizeof(linear[i]));
+		linear[i].dim = GX2_SURFACE_DIM_TEXTURE_2D;
+		linear[i].width = i ? width : source_width;
+		linear[i].height = i ? height : source_height;
+		linear[i].depth = 1;
+		linear[i].mipLevels = 1;
+		linear[i].format = GX2_SURFACE_FORMAT_UNORM_R8_G8_B8_A8;
+		linear[i].aa = GX2_AA_MODE1X;
+		linear[i].use = GX2_SURFACE_USE_TEXTURE;
+		linear[i].tileMode = GX2_TILE_MODE_LINEAR_ALIGNED;
+		GX2CalcSurfaceSizeAndAlignment(&linear[i]);
+		if (linear[i].imageSize > mip_scratch_bytes)
+		{
+			for (unsigned j = 0; j < 2; j++)
+			{
+				if (mip_scratch[j])
+					MEMFreeToDefaultHeap(mip_scratch[j]);
+				mip_scratch[j] = NULL;
+			}
+			mip_scratch_bytes = 0;
+		}
+	}
+	if (!mip_scratch[0])
+	{
+		const uint32_t bytes = linear[0].imageSize > linear[1].imageSize ? linear[0].imageSize : linear[1].imageSize;
+
+		mip_scratch[0] = gx_alloc_raw(bytes, 256);
+		mip_scratch[1] = gx_alloc_raw(bytes, 256);
+		if (!mip_scratch[0] || !mip_scratch[1])
+		{
+			if (mip_scratch[0])
+				MEMFreeToDefaultHeap(mip_scratch[0]);
+			if (mip_scratch[1])
+				MEMFreeToDefaultHeap(mip_scratch[1]);
+			mip_scratch[0] = mip_scratch[1] = NULL;
+			return 0;
+		}
+		mip_scratch_bytes = bytes;
+	}
+	linear[0].image = mip_scratch[0];
+	linear[1].image = mip_scratch[1];
+	GX2Invalidate((GX2InvalidateMode)(GX2_INVALIDATE_MODE_COLOR_BUFFER | GX2_INVALIDATE_MODE_TEXTURE), composite->base,
+		composite->texture.surface.imageSize + composite->texture.surface.mipmapSize);
+	GX2CopySurface(&composite->texture.surface, level - 1, 0, &linear[0], 0, 0);
+	GX2DrawDone();
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU, linear[0].image, linear[0].imageSize);
+	wiiu_mip_next((const uint8_t *)linear[0].image, source_width, source_height, linear[0].pitch, (uint8_t *)linear[1].image, linear[1].pitch);
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, linear[1].image, linear[1].imageSize);
+	GX2CopySurface(&linear[1], 0, 0, &composite->texture.surface, level, 0);
+	return 1;
+}
+
+/* brings the composite up to date: its levels the game rendered copied again from the targets drawn into since, the others made from the level before (a level that was never
+made from anything stays empty). Returns whether it waited for the GPU (and so left the context for the caller to set up again). */
+static void context_resume(void);
+
+static int composite_refresh(struct composite *composite, int may_derive)
+{
+	unsigned level;
+	int derived = 0;
+
+	for (level = 0; level < composite->levels; level++)
+	{
+		struct target *target = target_latest(composite->level_data[level]);
+
+		if (!target || target->color.surface.width != level_size(composite->width, level) || target->color.surface.height != level_size(composite->height, level))
+		{
+			if (level && composite->level_written[level - 1] && may_derive && composite->level_derived[level] != composite->level_written[level - 1] && !(gx.features_off & 64) &&
+				composite_derive(composite, level))
+			{
+				composite->level_derived[level] = composite->level_written[level - 1];
+				composite->level_written[level] = composite->level_written[level - 1] + 1; /* (so that a level after it follows) */
+				derived = 1;
+			}
+			continue;
+		}
+		if (target->last_used == composite->level_written[level] && composite->level_written[level])
+			continue;
+		GX2Invalidate((GX2InvalidateMode)(GX2_INVALIDATE_MODE_COLOR_BUFFER | GX2_INVALIDATE_MODE_TEXTURE), target->color.surface.image,
+			target->color.surface.imageSize);
+		GX2CopySurface(&target->color.surface, 0, 0, &composite->texture.surface, level, 0);
+		composite->level_written[level] = target->last_used ? target->last_used : 1;
+	}
+	return derived;
+}
+
+static struct composite *composite_find(uint32_t data, uint32_t levels)
+{
+	unsigned i;
 
 	for (i = 0; i < COMPOSITE_LIMIT; i++)
-	{
-		struct composite *composite = &composites[i];
-
-		if (!composite->used || composite->data != data || composite->levels != levels)
-			continue;
-		for (level = 0; level < composite->levels; level++)
-		{
-			struct target *target = target_latest(composite->level_data[level]);
-
-			if (!target || target->color.surface.width != level_size(composite->width, level) || target->color.surface.height != level_size(composite->height, level))
-				continue;
-			if (target->last_used == composite->level_written[level] && composite->level_written[level])
-				continue;
-			GX2Invalidate((GX2InvalidateMode)(GX2_INVALIDATE_MODE_COLOR_BUFFER | GX2_INVALIDATE_MODE_TEXTURE), target->color.surface.image,
-				target->color.surface.imageSize);
-			GX2CopySurface(&target->color.surface, 0, 0, &composite->texture.surface, level, 0);
-			composite->level_written[level] = target->last_used ? target->last_used : 1;
-		}
-		return &composite->texture;
-	}
+		if (composites[i].used && composites[i].data == data && composites[i].levels == levels)
+			return &composites[i];
 	return NULL;
+}
+
+/* before a draw sets its state up: the composites its stages sample are brought up to date, which can mean waiting for the GPU */
+static void composites_prepare(void)
+{
+	unsigned stage;
+	int derived = 0;
+
+	for (stage = 0; stage < 4; stage++)
+	{
+		const struct dk_stage_texture *entry = &gx.stages[stage];
+		struct composite *composite;
+
+		if (entry->id || !entry->composite || !(composite = composite_find(entry->target, entry->composite)))
+			continue;
+		derived |= composite_refresh(composite, 1);
+	}
+	if (derived)
+		context_resume();
+}
+
+/* the composite whose levels the stage samples */
+static const GX2Texture *composite_sampled(uint32_t data, uint32_t levels)
+{
+	struct composite *composite = composite_find(data, levels);
+
+	if (!composite)
+		return NULL;
+	composite_refresh(composite, 0); /* (nearly a no-op after composites_prepare: a level rendered since is copied, none made, as that waits for the GPU) */
+	return &composite->texture;
 }
 
 /* the texture a stage samples: its image, the composite or render target it names, or a white texel */
@@ -1640,6 +1754,7 @@ static void draw(const struct dk_command_draw *command)
 	{
 		const OSTime load_start = OSGetSystemTime();
 
+		composites_prepare();
 		vs = shader_get(gx.vs_handle);
 		ps = shader_get(gx.ps_handle);
 		gx.shader_ticks += OSGetSystemTime() - load_start;

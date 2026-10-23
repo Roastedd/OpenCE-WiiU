@@ -23,6 +23,7 @@ and presenting go there; a draw and a visibility test do nothing yet.
 #include "port_config.h"
 #include "posix.h"
 #include "dk_commands.h"
+#include "wiiu_pending_reads.h"
 #include "dk_shaders.h"
 #include "dk_textures.h"
 #include "shader_key_wire.h"
@@ -423,8 +424,42 @@ static void *pending_frees[PENDING_FREE_LIMIT];
 static unsigned long pending_free_count;
 static unsigned long pending_free_bytes;
 
+/* The memory the commands being written read when they are handed over, not when they are written: vertex streams, the texels of compressed textures (the host reads them
+where the game keeps them). The game remakes a dynamic buffer after a draw has named it - split screen draws the second view into the first's, a locked buffer is rewritten
+- and the host would then draw the new bytes for both. A write the game announces (memory_watch_prepare_write: Lock, a file read; memory_watch_forget: memory freed) into
+one of these ranges hands the stream over first, as the Xbox's runtime does for a busy resource, so each draw reads what the game had made when it drew. The ranges are few
+(a draw's streams follow the last's); if there are too many the stream is handed over, as it is at a present. */
+static struct pending_reads pending_reads;
+
+static void stream_flush(void);
+
+static void pending_read_note(const void *address, unsigned long size)
+{
+	if (!pending_reads_add(&pending_reads, address, size))
+	{
+		stream_flush();
+		pending_reads_add(&pending_reads, address, size);
+	}
+}
+
+/* called by the memory watch (memory_watch_wiiu.c) before the game's write is announced */
+void halo_stream_before_write(const void *address, unsigned long size);
+
+void halo_stream_before_write(const void *address, unsigned long size)
+{
+	if (pending_reads_overlap(&pending_reads, address, size))
+		stream_flush();
+}
+
+/* for xbox_textures_gx2.c: a command in the stream reads these bytes of the game's memory */
+void dk_stream_note_read(const void *address, unsigned long size)
+{
+	pending_read_note(address, size);
+}
+
 static void stream_flush(void)
 {
+	pending_reads_clear(&pending_reads);
 	if (!stream_used)
 		return;
 	host_gx2_submit((unsigned int)(uintptr_t)stream, (unsigned int)stream_used);
@@ -2695,6 +2730,17 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 
 	for (stream = 0; stream < DK_STREAM_COUNT; stream++)
 		streams += (format_told.stream_mask >> stream) & 1;
+	/* (the streams are read when the stream is handed over: noted before the command is written, as noting may hand it over) */
+	if (pending_reads.count + DK_STREAM_COUNT > PENDING_READ_LIMIT)
+		stream_flush();
+	for (stream = 0; stream < DK_STREAM_COUNT; stream++)
+	{
+		unsigned long stride = device.streams[stream].stride;
+
+		if ((format_told.stream_mask >> stream) & 1)
+			dk_stream_note_read((const char *)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data) + first * stride,
+				stride ? stride * vertex_count : STRIDELESS_STREAM_BYTES);
+	}
 	command = stream_command(DK_COMMAND_DRAW, sizeof(*command) + streams * 2 * sizeof(uint32_t) + index_bytes);
 	command->primitive = primitive_of(type);
 	command->count = (uint32_t)count;
