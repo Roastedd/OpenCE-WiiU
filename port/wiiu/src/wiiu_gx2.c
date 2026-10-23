@@ -17,6 +17,7 @@ Not run on a console.
 
 #include "dk_commands.h"
 #include "wiiu_shell.h"
+#include "port_config.h"
 #include "wiiu_indices.h"
 #include "wiiu_mip.h"
 #include "wiiu_overlay.h"
@@ -1984,6 +1985,13 @@ static int initialize(void)
 	{
 		wiiu_log("GX2: WHBGfxInit failed");
 		return 0;
+	}
+	/* display.vsync off: the display shows a frame as soon as it is swapped (it can tear), not at the next refresh: frames of 21 ms are then 47 a second, not 40 (a frame is one refresh
+	or two) */
+	if (!config_boolean("display.vsync"))
+	{
+		GX2SetSwapInterval(0);
+		wiiu_log("GX2: no vsync (display.vsync is false): frames are shown as soon as they are swapped");
 	}
 	if (!WHBGfxLoadGFDShaderGroup(&gx.blit, 0, wiiu_gx2_blit_gsh))
 	{

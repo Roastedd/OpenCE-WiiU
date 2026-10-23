@@ -677,11 +677,17 @@ thread in a match's profile). The structs compared are words throughout. */
 static int words_equal(const void *a, const void *b, size_t size)
 {
 	const uint32_t *x = a, *y = b;
-	size_t index;
+	size_t words = size / 4;
 
-	for (index = 0; index < size / 4; index++)
+	/* (four words a pass, one branch: these compare every state a draw sends against the last, and nearly always find them equal) */
+	for (; words >= 4; words -= 4, x += 4, y += 4)
 	{
-		if (x[index] != y[index])
+		if ((x[0] ^ y[0]) | (x[1] ^ y[1]) | (x[2] ^ y[2]) | (x[3] ^ y[3]))
+			return 0;
+	}
+	for (; words; words--, x++, y++)
+	{
+		if (*x != *y)
 			return 0;
 	}
 	return size % 4 ? !memcmp((const char *)a + size - size % 4, (const char *)b + size - size % 4, size % 4) : 1;

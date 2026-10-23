@@ -41,15 +41,31 @@ void memory_watch_protect(unsigned long address, unsigned long size)
 	(void)size;
 }
 
+/* what was asked a moment ago (the same texture, buffer or palette is asked about at every draw that uses it) is answered as it was while no write has been announced since: any write
+moves current_generation */
+static struct
+{
+	unsigned long address, size, result;
+	uint32_t serial;
+} generation_memo[32];
+
 unsigned long memory_watch_generation(unsigned long address, unsigned long size)
 {
 	unsigned long first, last, page, newest = 0;
+	const unsigned slot = (unsigned)(((address >> 6) ^ (size >> 4)) & 31);
+	const uint32_t serial = current_generation;
 
+	if (generation_memo[slot].serial == serial && generation_memo[slot].address == address && generation_memo[slot].size == size)
+		return generation_memo[slot].result;
 	if (!watch_pages(address, size, &first, &last))
 		return 0;
 	for (page = first; page <= last; page++)
 		if (page_generation[page] > newest)
 			newest = page_generation[page];
+	generation_memo[slot].serial = serial;
+	generation_memo[slot].address = address;
+	generation_memo[slot].size = size;
+	generation_memo[slot].result = newest;
 	return newest;
 }
 

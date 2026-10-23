@@ -283,43 +283,39 @@ static void structure_render_dynamic_triangles_from_bitvector(
 			struct structure_surface);
 		do
 		{
-			if (*surface_flags)
+			unsigned long flags = *surface_flags & 0xffffffffUL; /* (LONG_BITS bits, whatever width a long has) */
+
+			if (flags)
 			{
-				short bit_index;
+				/* port: (the set bits of the word, lowest first, rather than all thirty-two tested one at a time; those past the last surface are not looked at) */
+				long valid = structure_bsp->surfaces.count - surface_index;
 
-				for (bit_index = 0;
-					bit_index < LONG_BITS;
-					bit_index++, surface_index++)
+				if (valid < LONG_BITS)
 				{
-					if (surface_index >= structure_bsp->surfaces.count)
-					{
-						break;
-					}
+					flags &= (1UL << valid) - 1;
+				}
+				while (flags)
+				{
+					long bit_index = (long)__builtin_ctzl(flags);
+					struct structure_surface *surface = &surfaces[surface_index + bit_index];
 
-					if (TEST_FLAG(*surface_flags, bit_index))
-					{
-						struct structure_surface *surface = &surfaces[surface_index];
+					flags &= flags - 1;
+					match_assert(
+						"c:\\halo\\SOURCE\\structures\\structure_render.c",
+						421,
+						surface_index_index>=0 && surface_index_index<surface_count);
 
-						match_assert(
-							"c:\\halo\\SOURCE\\structures\\structure_render.c",
-							421,
-							surface_index_index>=0 && surface_index_index<surface_count);
-
-						*surface_indices++ = surface_index;
-						triangles[surface_index_index * NUMBER_OF_VERTICES_PER_TRIANGLE + 0] =
-							surface->vertex_indices[0];
-						triangles[surface_index_index * NUMBER_OF_VERTICES_PER_TRIANGLE + 1] =
-							surface->vertex_indices[1];
-						triangles[surface_index_index * NUMBER_OF_VERTICES_PER_TRIANGLE + 2] =
-							surface->vertex_indices[2];
-						surface_index_index++;
-					}
+					*surface_indices++ = surface_index + bit_index;
+					triangles[surface_index_index * NUMBER_OF_VERTICES_PER_TRIANGLE + 0] =
+						surface->vertex_indices[0];
+					triangles[surface_index_index * NUMBER_OF_VERTICES_PER_TRIANGLE + 1] =
+						surface->vertex_indices[1];
+					triangles[surface_index_index * NUMBER_OF_VERTICES_PER_TRIANGLE + 2] =
+						surface->vertex_indices[2];
+					surface_index_index++;
 				}
 			}
-			else
-			{
-				surface_index += LONG_BITS;
-			}
+			surface_index += LONG_BITS;
 
 			surface_flags++;
 		}

@@ -599,15 +599,38 @@ static unsigned long bucket_index(DWORD data, DWORD format_word, DWORD size_word
 
 /* palettized textures are cached per palette contents: the game rewrites
 palettes freely, and often cycles a texture through a few of them */
-static unsigned long palette_hash(const D3DCOLOR *palette)
+static unsigned long palette_hash_compute(const D3DCOLOR *palette)
 {
 	unsigned long hash = 2166136261UL, index;
 
-	if (!palette)
-		return 0;
 	for (index = 0; index < 256; index++)
 		hash = (hash ^ palette[index]) * 16777619UL;
 	return hash ? hash : 1;
+}
+
+/* a palette's hash is asked for at every draw that uses it (256 multiplications, over a microsecond): remembered while the memory watch says the palette has not been written (a
+D3DPalette_Lock announces its writes) */
+static unsigned long palette_hash(const D3DCOLOR *palette)
+{
+	static struct
+	{
+		const D3DCOLOR *palette;
+		unsigned long generation, hash;
+	} remembered[8];
+	const unsigned slot = (unsigned)(((uintptr_t)palette >> 10) & 7);
+	unsigned long generation;
+
+	if (!palette)
+		return 0;
+	if (!platform_is_contiguous(palette))
+		return palette_hash_compute(palette); /* (writes outside the window are not watched) */
+	generation = memory_watch_generation((unsigned long)(uintptr_t)palette, 256 * sizeof(D3DCOLOR));
+	if (remembered[slot].palette == palette && remembered[slot].generation == generation && remembered[slot].hash)
+		return remembered[slot].hash;
+	remembered[slot].palette = palette;
+	remembered[slot].generation = generation;
+	remembered[slot].hash = palette_hash_compute(palette);
+	return remembered[slot].hash;
 }
 
 /* ---------- high-res replacements */
