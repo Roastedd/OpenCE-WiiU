@@ -18,6 +18,7 @@ Not run on a console.
 #include "dk_commands.h"
 #include "wiiu_shell.h"
 #include "wiiu_mip.h"
+#include "wiiu_overlay.h"
 #include "wiiu_tile.h"
 
 #include <coreinit/cache.h>
@@ -153,6 +154,19 @@ static struct
 	OSTime started;
 	OSTime shader_ticks, blit_ticks, finish_ticks, wait_ticks;
 	int screens_enabled;
+	/* the performance overlay (halo/overlay.txt: 0 is off): its numbers, the texture of its text and graph, and the GPU's time of a frame, found by when the timestamp of the work
+	submitted for it is retired */
+	struct overlay overlay;
+	int overlay_on;
+	GX2Texture overlay_texture;
+	GX2Sampler overlay_sampler;
+	struct blit_vertex *overlay_quad;
+	OSTime overlay_previous_end;
+	unsigned long ring_total, draw_total, overlay_ring_previous, overlay_draw_previous;
+	OSTime gpu_stamp, gpu_submitted;
+	int gpu_pending;
+	float gpu_ms;
+	unsigned overlay_frame;
 	OSTime submit_ticks, present_ticks, texture_ticks, draw_ticks;
 	unsigned window_frames;
 	OSTime last_present, longest_frame;
@@ -549,6 +563,9 @@ static void ring_flush(void)
 	gx.ring_dirty_from = gx.ring_dirty_to = NULL;
 }
 
+static void gpu_poll(void);
+static int overlay_make(void);
+
 static void *ring_copy(const void *source, uint32_t size)
 {
 	void *memory = ring_alloc(size);
@@ -556,6 +573,7 @@ static void *ring_copy(const void *source, uint32_t size)
 	if (!memory)
 		return NULL;
 	gx.ring_bytes += size;
+	gx.ring_total += size;
 	gx.ring_calls++;
 	gx.ring_kind_bytes[gx.ring_what] += size;
 	gx.ring_kind_calls[gx.ring_what]++;
@@ -1915,6 +1933,9 @@ static void draw(const struct dk_command_draw *command)
 	else
 		GX2DrawEx(primitive_of(command->primitive), command->count, 0, 1);
 	gx.draws_made++;
+	gx.draw_total++;
+	if (!(gx.draw_total & 31))
+		gpu_poll();
 }
 
 int wiiu_memcpy_selftest(void);
@@ -2011,6 +2032,20 @@ static int initialize(void)
 		}
 		if (gx.exit_after > 0.0)
 			wiiu_log("GX2: the run ends %.0f seconds after its first frame (exit_after.txt)", gx.exit_after);
+	}
+	if (overlay_make())
+	{
+		FILE *file = fopen(WIIU_DATA_DIRECTORY "/overlay.txt", "r");
+		int on = 1;
+
+		if (file)
+		{
+			if (fscanf(file, "%d", &on) != 1)
+				on = 1;
+			fclose(file);
+		}
+		gx.overlay_on = on != 0;
+		wiiu_log("GX2: the performance overlay is %s (halo/overlay.txt: 0 turns it off)", gx.overlay_on ? "on" : "off");
 	}
 	wiiu_log("memcpy/memset self-test (wiiu_memcpy.c): %d wrong", wiiu_memcpy_selftest());
 	wiiu_profile_start();
@@ -2310,6 +2345,106 @@ static void blit_state(void)
 }
 
 /* the back buffer, letterboxed, onto the screen whose color buffer and context state are given */
+/* ---------- the performance overlay */
+
+/* the game's configuration (platform code): a boolean setting by name */
+int config_boolean(const char *name);
+
+/* when the GPU has finished the work submitted for the last frame (its timestamp is retired): the time from the submit, which is the GPU's if it was idle until then, so it is
+only a little over what it took. Polled between draws and while waiting for the flip. */
+static void gpu_poll(void)
+{
+	if (!gx.gpu_pending)
+		return;
+	if (GX2GetRetiredTimeStamp() >= gx.gpu_stamp)
+	{
+		gx.gpu_ms = (float)OSTicksToMicroseconds(OSGetSystemTime() - gx.gpu_submitted) / 1000.0f;
+		gx.gpu_pending = 0;
+	}
+}
+
+static int overlay_make(void)
+{
+	GX2Surface *surface = &gx.overlay_texture.surface;
+
+	surface->dim = GX2_SURFACE_DIM_TEXTURE_2D;
+	surface->width = OVERLAY_WIDTH;
+	surface->height = OVERLAY_HEIGHT;
+	surface->depth = 1;
+	surface->mipLevels = 1;
+	surface->format = GX2_SURFACE_FORMAT_UNORM_R8_G8_B8_A8;
+	surface->aa = GX2_AA_MODE1X;
+	surface->use = GX2_SURFACE_USE_TEXTURE;
+	surface->tileMode = GX2_TILE_MODE_LINEAR_ALIGNED;
+	GX2CalcSurfaceSizeAndAlignment(surface);
+	surface->image = gx_alloc_raw(surface->imageSize, surface->alignment ? surface->alignment : 256);
+	gx.overlay_quad = gx_alloc(6 * sizeof(struct blit_vertex), GX2_VERTEX_BUFFER_ALIGNMENT);
+	if (!surface->image || !gx.overlay_quad)
+		return 0;
+	memset(surface->image, 0, surface->imageSize);
+	gx.overlay_texture.viewNumMips = 1;
+	gx.overlay_texture.viewNumSlices = 1;
+	gx.overlay_texture.compMap = GX2_COMP_MAP(GX2_SQ_SEL_R, GX2_SQ_SEL_G, GX2_SQ_SEL_B, GX2_SQ_SEL_A);
+	GX2InitTextureRegs(&gx.overlay_texture);
+	GX2InitSampler(&gx.overlay_sampler, GX2_TEX_CLAMP_MODE_CLAMP, GX2_TEX_XY_FILTER_MODE_POINT);
+	overlay_reset(&gx.overlay);
+	return 1;
+}
+
+/* the text and graph drawn again into the texture */
+static void overlay_refresh(void)
+{
+	static uint8_t pixels[OVERLAY_WIDTH * OVERLAY_HEIGHT * 4];
+	GX2Surface *surface = &gx.overlay_texture.surface;
+	unsigned y;
+
+	overlay_render(&gx.overlay, pixels);
+	for (y = 0; y < OVERLAY_HEIGHT; y++)
+		memcpy((uint8_t *)surface->image + (size_t)y * surface->pitch * 4, pixels + (size_t)y * OVERLAY_WIDTH * 4, OVERLAY_WIDTH * 4);
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, surface->image, surface->imageSize);
+}
+
+/* the overlay over the top left of a screen's picture, in the context blit_to has just drawn it in (a scale of whole pixels per texel, so that the text is sharp) */
+static void overlay_draw(GX2ColorBuffer *screen, GX2ContextState *context)
+{
+	const float screen_width = (float)screen->surface.width, screen_height = (float)screen->surface.height;
+	const unsigned scale = (unsigned)(screen_width * 0.9f / OVERLAY_WIDTH) ? (unsigned)(screen_width * 0.9f / OVERLAY_WIDTH) : 1;
+	const float margin_x = screen_width * 0.02f, margin_y = screen_height * 0.02f;
+	const float x0 = -1.0f + 2.0f * margin_x / screen_width, x1 = x0 + 2.0f * (float)(OVERLAY_WIDTH * scale) / screen_width;
+	const float y1 = 1.0f - 2.0f * margin_y / screen_height, y0 = y1 - 2.0f * (float)(OVERLAY_HEIGHT * scale) / screen_height;
+	static const unsigned corner_x[6] = { 0, 1, 0, 1, 1, 0 };
+	static const unsigned corner_y[6] = { 0, 0, 1, 0, 1, 1 };
+	unsigned i;
+
+	for (i = 0; i < 6; i++)
+	{
+		struct blit_vertex *v = &gx.overlay_quad[i];
+
+		v->x = corner_x[i] ? x1 : x0;
+		v->y = corner_y[i] ? y0 : y1;
+		v->u = (float)corner_x[i];
+		v->v = (float)corner_y[i];
+		v->r = v->g = v->b = v->a = 1.0f;
+	}
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER, gx.overlay_quad, 6 * sizeof(struct blit_vertex));
+	GX2SetContextState(context);
+	GX2SetColorBuffer(screen, GX2_RENDER_TARGET_0);
+	GX2SetViewport(0.0f, 0.0f, screen_width, screen_height, 0.0f, 1.0f);
+	GX2SetScissor(0, 0, (uint32_t)screen_width, (uint32_t)screen_height);
+	blit_state();
+	GX2SetColorControl(GX2_LOGIC_OP_COPY, 1, FALSE, TRUE);
+	GX2SetBlendControl(GX2_RENDER_TARGET_0, GX2_BLEND_MODE_SRC_ALPHA, GX2_BLEND_MODE_INV_SRC_ALPHA, GX2_BLEND_COMBINE_MODE_ADD, TRUE, GX2_BLEND_MODE_ONE,
+		GX2_BLEND_MODE_INV_SRC_ALPHA, GX2_BLEND_COMBINE_MODE_ADD);
+	GX2SetFetchShader(&gx.blit.fetchShader);
+	GX2SetVertexShader(gx.blit.vertexShader);
+	GX2SetPixelShader(gx.blit.pixelShader);
+	GX2SetShaderMode(GX2_SHADER_MODE_UNIFORM_REGISTER);
+	GX2SetAttribBuffer(0, 6 * sizeof(struct blit_vertex), sizeof(struct blit_vertex), gx.overlay_quad);
+	GX2SetPixelTexture(&gx.overlay_texture, gx.sampler_location);
+	GX2SetPixelSampler(&gx.overlay_sampler, gx.sampler_location);
+	GX2DrawEx(GX2_PRIMITIVE_MODE_TRIANGLES, 6, 0, 1);
+}
+
 static void blit_to(struct target *source, GX2ColorBuffer *screen, GX2ContextState *context)
 {
 	const float source_width = (float)source->color.surface.width, source_height = (float)source->color.surface.height;
@@ -2490,7 +2625,12 @@ static void present(const struct dk_command_present *command)
 	struct target *back = target_get(&command->back_buffer);
 	const OSTime now = OSGetSystemTime();
 	const OSTime present_start = now;
+	OSTime wait_ticks = 0;
+	const OSTime cpu_ticks = gx.overlay_previous_end ? present_start - gx.overlay_previous_end : 0;
 
+	gpu_poll();
+	if (gx.overlay_on && !(gx.overlay_frame++ & 1))
+		overlay_refresh();
 	ring_flush();
 	if (back && command->screenshot)
 		screenshot_take(back, command->screenshot);
@@ -2498,11 +2638,27 @@ static void present(const struct dk_command_present *command)
 	the GPU drew one: they are done here without the waits (the commands run in order; what the CPU writes for the GPU is protected by timestamps) and, as they did, the
 	screens' buffers are copied to the scan buffers and swapped. At most one swap is queued. */
 	if (back)
+	{
 		blit_to(back, WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState());
+		if (gx.overlay_on)
+			overlay_draw(WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState());
+	}
 	GX2CopyColorBufferToScanBuffer(WHBGfxGetTVColourBuffer(), GX2_SCAN_TARGET_TV);
 	if (back)
+	{
 		blit_to(back, WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState());
+		if (gx.overlay_on)
+			overlay_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState());
+	}
 	GX2CopyColorBufferToScanBuffer(WHBGfxGetDRCColourBuffer(), GX2_SCAN_TARGET_DRC);
+	/* (the frame's work is handed to the GPU before the swap, whose wait for the display is then not in the time the work is said to have taken) */
+	GX2Flush();
+	if (!gx.gpu_pending)
+	{
+		gx.gpu_stamp = GX2GetLastSubmittedTimeStamp();
+		gx.gpu_submitted = OSGetSystemTime();
+		gx.gpu_pending = 1;
+	}
 	GX2SwapScanBuffers();
 	GX2Flush();
 	if (!gx.screens_enabled)
@@ -2524,9 +2680,29 @@ static void present(const struct dk_command_present *command)
 			/* (the flip does not come in the background, nor when the system is closing the app: no waiting for it then) */
 			if (!wiiu_in_foreground() || wiiu_exit_requested() || OSGetSystemTime() - wait_start > OSMillisecondsToTicks(250))
 				break;
+			gpu_poll();
 			OSSleepTicks(OSMicrosecondsToTicks(200));
 		}
 		gx.wait_ticks += OSGetSystemTime() - wait_start;
+		wait_ticks = OSGetSystemTime() - wait_start;
+	}
+	if (gx.overlay_on)
+	{
+		const OSTime end = OSGetSystemTime();
+		unsigned long ring = gx.ring_total - gx.overlay_ring_previous, draws = gx.draw_total - gx.overlay_draw_previous;
+
+		if (gx.overlay_previous_end)
+		{
+			gx.overlay.render_width = (unsigned)((float)gx.render_height * 16.0f / 9.0f + 0.5f);
+			gx.overlay.render_height = gx.render_height;
+			gx.overlay.interpolation = config_boolean("display.interpolation");
+			overlay_push(&gx.overlay, (float)OSTicksToMicroseconds(end - gx.overlay_previous_end) / 1000.0f, (float)OSTicksToMicroseconds(cpu_ticks) / 1000.0f,
+				(float)OSTicksToMicroseconds(end - present_start) / 1000.0f, (float)OSTicksToMicroseconds(wait_ticks) / 1000.0f, gx.gpu_ms, (unsigned)draws,
+				(unsigned)(ring / 1024));
+		}
+		gx.overlay_previous_end = end;
+		gx.overlay_ring_previous = gx.ring_total;
+		gx.overlay_draw_previous = gx.draw_total;
 	}
 	gx.frames++;
 	gx.window_frames++;
