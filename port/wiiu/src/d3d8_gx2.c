@@ -23,6 +23,7 @@ and presenting go there; a draw and a visibility test do nothing yet.
 #include "port_config.h"
 #include "posix.h"
 #include "dk_commands.h"
+#include "wiiu_indices.h"
 #include "wiiu_pending_reads.h"
 #include "dk_shaders.h"
 #include "dk_textures.h"
@@ -361,6 +362,7 @@ struct dk_device
 	/* the current value of each input register (SetVertexData) */
 	float attributes[XGPU_VERTEX_ATTRIBUTE_COUNT][4];
 	BOOL immediate_active;
+	BOOL immediate_skipped; /* the Begin was of a visibility test's quad that nothing sees: its vertices are not kept */
 	unsigned long immediate_mask; /* the registers SetVertexData wrote since Begin */
 	D3DPRIMITIVETYPE immediate_type;
 	float *immediate_vertices;
@@ -406,6 +408,7 @@ void halo_switch_renderer_idle(void)
 }
 /* a visibility test slot's latest count (host_dk.c) */
 unsigned int host_gx2_visibility(unsigned int index);
+int host_gx2_visibility_enabled(void);
 
 #define STREAM_SIZE (1024 * 1024)
 
@@ -2790,7 +2793,7 @@ void WINAPI D3DDevice_DrawVertices(D3DPRIMITIVETYPE primitive_type, UINT start_v
 static void D3DDevice_DrawIndexedVertices_inner(D3DPRIMITIVETYPE primitive_type, UINT vertex_count, CONST WORD *index_data)
 {
 	struct dk_vertex_format format;
-	unsigned long index, minimum = 0xffff, maximum = 0;
+	unsigned long minimum, maximum;
 
 	if (primitive_type == D3DPT_QUADLIST)
 		vertex_count &= ~3U;
@@ -2798,12 +2801,12 @@ static void D3DDevice_DrawIndexedVertices_inner(D3DPRIMITIVETYPE primitive_type,
 		return;
 	/* the streams are read from the lowest vertex the indices name, to the
 	highest (index i is vertex base + i) */
-	for (index = 0; index < vertex_count; index++)
 	{
-		if (index_data[index] < minimum)
-			minimum = index_data[index];
-		if (index_data[index] > maximum)
-			maximum = index_data[index];
+		uint32_t lowest, highest;
+
+		wiiu_index_range(index_data, vertex_count, &lowest, &highest);
+		minimum = lowest;
+		maximum = highest;
 	}
 	format_from_declaration(&format);
 	draw_format_send(&format);
@@ -2845,6 +2848,7 @@ void WINAPI D3DDevice_Begin(D3DPRIMITIVETYPE primitive_type)
 {
 	immediate_site_count((uintptr_t)__builtin_return_address(0));
 	device.immediate_active = TRUE;
+	device.immediate_skipped = device.visibility_test_active && !host_gx2_visibility_enabled();
 	device.immediate_type = primitive_type;
 	device.immediate_count = 0;
 	device.immediate_mask = 1;
@@ -2853,6 +2857,9 @@ void WINAPI D3DDevice_Begin(D3DPRIMITIVETYPE primitive_type)
 static void immediate_emit(void)
 {
 	unsigned long floats = XGPU_VERTEX_ATTRIBUTE_COUNT * 4;
+
+	if (device.immediate_skipped)
+		return;
 
 	if (device.immediate_count == device.immediate_capacity)
 	{
@@ -2880,6 +2887,10 @@ static void D3DDevice_End_inner(void)
 	if (type == D3DPT_QUADLIST)
 		count &= ~3UL;
 	if (!count)
+		return;
+	/* a lens flare's occlusion test draws a quad between its Begin and End: with the backend's queries off the quad is counted by nothing (the result is 0 whatever is drawn), and
+	there were hundreds of them a frame, each a draw */
+	if (device.visibility_test_active && !host_gx2_visibility_enabled())
 		return;
 	for (index = 0; index < XGPU_VERTEX_ATTRIBUTE_COUNT; index++)
 		if (mask & (1UL << index))

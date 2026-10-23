@@ -129,6 +129,8 @@ static struct
 	unsigned deferred_count;
 
 	unsigned long ring_bytes, ring_calls, ring_largest, index_bytes;
+	unsigned ring_what; /* what the next ring_copy copies: 0 a stream, 1 immediate mode's vertices, 2 constants, 3 indices */
+	unsigned long ring_kind_bytes[4], ring_kind_calls[4];
 	void *ring_dirty_from, *ring_dirty_to;
 	unsigned shaders_loaded, fetch_full;
 	unsigned draws_made, skipped_target, skipped_state, skipped_shader, skipped_ring, ring_overflows;
@@ -552,6 +554,8 @@ static void *ring_copy(const void *source, uint32_t size)
 		return NULL;
 	gx.ring_bytes += size;
 	gx.ring_calls++;
+	gx.ring_kind_bytes[gx.ring_what] += size;
+	gx.ring_kind_calls[gx.ring_what]++;
 	if (size > gx.ring_largest)
 		gx.ring_largest = size;
 	memcpy(memory, source, size);
@@ -1790,6 +1794,7 @@ static void draw(const struct dk_command_draw *command)
 		sizes[stream] = command->streams[slot][1];
 		source = command->inline_bytes ? inline_data : (const unsigned char *)(uintptr_t)command->streams[slot][0];
 		buffers[stream] = !command->inline_bytes && ((gx.format.static_streams >> stream) & 1) ? cache_get((uint32_t)(uintptr_t)source, sizes[stream]) : NULL;
+		gx.ring_what = command->inline_bytes ? 1 : 0;
 		if (!buffers[stream])
 			buffers[stream] = ring_copy(source, sizes[stream]);
 		if (!buffers[stream])
@@ -1803,6 +1808,7 @@ static void draw(const struct dk_command_draw *command)
 		constants = gx.constants_ring;
 	else
 	{
+		gx.ring_what = 2;
 		constants = ring_copy(gx.format.constants, sizeof(gx.format.constants));
 		gx.constants_ring = constants;
 		gx.constants_frame = gx.frames;
@@ -1818,6 +1824,7 @@ static void draw(const struct dk_command_draw *command)
 			source = (const unsigned char *)(uintptr_t)command->index_address;
 		gx.index_bytes += command->count * 2;
 		indices = command->index_address != DK_INDEX_INLINE ? cache_get((uint32_t)(uintptr_t)source, command->count * 2) : NULL;
+		gx.ring_what = 3;
 		if (!indices)
 			indices = ring_copy(source, command->count * 2);
 		if (!indices)
@@ -2353,6 +2360,14 @@ static int queries_enabled(void)
 	return (gx.features_off & 8) != 0;
 }
 
+/* d3d8_gx2.c: whether a visibility test's draws are seen by anything (with the queries off, their result is 0 whatever they draw) */
+int host_gx2_visibility_enabled(void);
+
+int host_gx2_visibility_enabled(void)
+{
+	return queries_enabled();
+}
+
 static void visibility_begin(void)
 {
 	unsigned buffer, slot;
@@ -2544,6 +2559,13 @@ static void present(const struct dk_command_present *command)
 			(double)OSTicksToMicroseconds(gx.present_ticks) / 1000.0 / (double)gx.window_frames);
 		wiiu_log("GX2:   copied into the ring: %lu KB a frame in %lu copies (largest %lu KB); index data read %lu KB a frame", gx.ring_bytes / 1024 / (gx.window_frames ? gx.window_frames : 1),
 			gx.ring_calls / (gx.window_frames ? gx.window_frames : 1), gx.ring_largest / 1024, gx.index_bytes / 1024 / (gx.window_frames ? gx.window_frames : 1));
+		wiiu_log("GX2:   by kind a frame: streams %lu KB in %lu, immediate vertices %lu KB in %lu, constants %lu KB in %lu, indices %lu KB in %lu", gx.ring_kind_bytes[0] / 1024 / (gx.window_frames ? gx.window_frames : 1),
+			gx.ring_kind_calls[0] / (gx.window_frames ? gx.window_frames : 1), gx.ring_kind_bytes[1] / 1024 / (gx.window_frames ? gx.window_frames : 1),
+			gx.ring_kind_calls[1] / (gx.window_frames ? gx.window_frames : 1), gx.ring_kind_bytes[2] / 1024 / (gx.window_frames ? gx.window_frames : 1),
+			gx.ring_kind_calls[2] / (gx.window_frames ? gx.window_frames : 1), gx.ring_kind_bytes[3] / 1024 / (gx.window_frames ? gx.window_frames : 1),
+			gx.ring_kind_calls[3] / (gx.window_frames ? gx.window_frames : 1));
+		memset(gx.ring_kind_bytes, 0, sizeof(gx.ring_kind_bytes));
+		memset(gx.ring_kind_calls, 0, sizeof(gx.ring_kind_calls));
 		gx.ring_bytes = gx.ring_calls = gx.ring_largest = gx.index_bytes = 0;
 		wiiu_log("GX2:   waiting for the display's flip: %.1f ms a frame", (double)OSTicksToMicroseconds(gx.wait_ticks) / 1000.0 / (double)gx.window_frames);
 		gx.wait_ticks = 0;
