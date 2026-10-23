@@ -489,7 +489,25 @@ int posix_socket_select(int *read, int *read_count, int *write, int *write_count
 	}
 	if (result < 0)
 	{
-		wiiu_log("Net: poll failed, errno %d", errno);
+		/* nsysnet fails a whole poll with its own errors when its sockets have been taken (ECANCELED, EBADFD: seen after about 20 minutes in a level with
+		internet play's socket open): Winsock's "network is down" or "not a socket", told once a second with a count, and after a short wait: a thread that
+		polls again at once spun here, hundreds of calls a second, and filled the log with 58 MB */
+		static OSTime last_told;
+		static unsigned int failures;
+		const OSTime now = OSGetSystemTime();
+
+		failures++;
+		if (now - last_told >= OSSecondsToTicks(1))
+		{
+			wiiu_log("Net: poll failed, errno %d (%u times since the last note)", errno, failures);
+			last_told = now;
+			failures = 0;
+		}
+		OSSleepTicks(OSMillisecondsToTicks(infinite || milliseconds > 20 ? 20 : milliseconds < 0 ? 0 : (uint32_t)milliseconds));
+		if (errno == ECANCELED)
+			errno = ENETDOWN;
+		else if (errno == 81 /* EBADFD */)
+			errno = EBADF;
 		return fail();
 	}
 	result = 0;
