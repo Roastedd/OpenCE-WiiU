@@ -222,6 +222,9 @@ static volatile uint32_t game_gate_held;
 
 void wiiu_foreground_gate(int is_game_thread);
 
+/* called every few milliseconds by a thread held at the gate: the GX2 thread drains the GPU here when the release callback asks it to (wiiu_gx2.c) */
+void (*wiiu_gate_poll)(void);
+
 void wiiu_foreground_gate(int is_game_thread)
 {
 	if (foreground && !exit_requested)
@@ -230,7 +233,11 @@ void wiiu_foreground_gate(int is_game_thread)
 		game_gate_held = 1;
 	/* (and once the app is closing, for good: the system takes the GPU and the process ends under it) */
 	while (!foreground || exit_requested)
+	{
+		if (wiiu_gate_poll)
+			wiiu_gate_poll();
 		sleep_ms(5);
+	}
 	if (is_game_thread)
 		game_gate_held = 0;
 }
@@ -264,6 +271,8 @@ void wiiu_untag_thread(void)
 
 /* ---------- ProcUI: HOME and closing, called by ProcUIProcessMessages on the main thread */
 
+void wiiu_gx2_release_drain(void);
+
 static uint32_t on_release(void *unused)
 {
 	(void)unused;
@@ -283,7 +292,8 @@ static uint32_t on_release(void *unused)
 		wiiu_log("HOME: the game thread is %s after %u ms", game_gate_held ? "held" : "NOT held", (unsigned)waited);
 	}
 	wiiu_audio_suspend();
-	GX2DrawDone();
+	/* (the GPU is drained by the thread that makes the GX2 calls, wiiu_gx2.c: the system waits for the work of the core that made it) */
+	wiiu_gx2_release_drain();
 	ProcUIDrawDoneRelease();
 	wiiu_phase("HOME: after our release callback, in the others' or the system's");
 	return 0;
