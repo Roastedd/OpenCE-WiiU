@@ -3327,6 +3327,7 @@ static struct
 	volatile int release_request, release_done, busy;
 	int async; /* streams are posted to the queue (d3d8_gx2.c) and run while the game goes on */
 	int affinity, spin, init_here, core_callbacks; /* core_callbacks: the release is handled by a ProcUI callback registered for the GX2 thread's core, run by a thread of that core (ProcUISubProcessMessages) */
+	OSTime parked_at; /* when the GX2 thread last waited at the foreground gate */
 	OSThread procui_thread;
 	uint8_t *procui_stack;
 	int affinity_core; /* init_here: GX2 is made by the game's thread (core 1, ProcUI's), the GX2 thread only drives it */ /* spin: jobs and answers are words the threads watch (cores other than the game's), not semaphores: a thread asleep on another core did not wake while the HOME callback ran */
@@ -3366,6 +3367,8 @@ static void gt_release_here(void)
 /* the foreground gate's poll, run by whichever thread is held there: only the GX2 thread acts */
 static void gt_gate_poll(void)
 {
+	if (OSGetCurrentThread() == &gt.thread)
+		gt.parked_at = OSGetSystemTime(); /* (the GX2 thread is held at the gate between two commands: it is in no GX2 call) */
 	if (gt.release_request && OSGetCurrentThread() == &gt.thread)
 		gt_release_here();
 }
@@ -3488,11 +3491,14 @@ static uint32_t core_release(void *unused)
 
 	(void)unused;
 	wiiu_log("HOME: the release callback of core %u (the GX2 thread's) runs", (unsigned)OSGetCoreId());
-	while (!wiiu_game_gate_is_held() && waited < 2000u)
+	/* the game thread held, and the GX2 thread either idle or held at the gate (not in a GX2 call: GX2 is not safe to call from two threads, and the soak's last quit left the console
+	hung with this callback calling it while the thread was in the middle of a stream) */
+	while ((!wiiu_game_gate_is_held() || (gt.busy && OSGetSystemTime() - gt.parked_at > OSMillisecondsToTicks(30))) && waited < 3000u)
 	{
 		OSSleepTicks(OSMillisecondsToTicks(2));
 		waited += 2u;
 	}
+	wiiu_log("HOME: the GX2 thread is %s", gt.busy ? (OSGetSystemTime() - gt.parked_at <= OSMillisecondsToTicks(30) ? "held at the gate" : "STILL IN A JOB") : "idle");
 	wiiu_log("HOME: on core %u the game thread is %s after %u ms", (unsigned)OSGetCoreId(), wiiu_game_gate_is_held() ? "held" : "NOT held", (unsigned)waited);
 	ring_flush();
 	GX2Flush();
