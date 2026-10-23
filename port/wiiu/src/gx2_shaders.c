@@ -162,33 +162,26 @@ static void missing_note(uint32_t stage, uint64_t hash, const void *key_data)
 	misses++;
 }
 
-/* the handle of the shader (1 on, 0: none, skip the draw) */
-uint32_t dk_shader_for_draw(uint32_t stage, const void *key_data)
+/* the keys of the last draws, with what they found: a draw of the same state (nearly all of them) is a compare of the key, not a hash of its 256 bytes and a search of the
+pack */
+#define MEMO_SIZE 128
+
+static struct
 {
-	uint64_t hash;
-	uint32_t low, high, count;
+	struct nv2a_pixel_shader_key key;
+	uint32_t handle;
+	int used;
+} pixel_memo[MEMO_SIZE];
+
+static uint32_t lookup(uint32_t stage, uint64_t hash, const void *key_data)
+{
+	uint32_t low = (uint32_t)hash, high = (uint32_t)(hash >> 32);
 	uint32_t first = 0, last;
 	const unsigned char *entries;
 
-	if (stage == DK_SHADER_STAGE_VERTEX)
-	{
-		const struct dk_vertex_key *key = (const struct dk_vertex_key *)key_data;
-
-		hash = shader_vertex_key(key->program_hash, key->packed_mask);
-	}
-	else
-	{
-		unsigned char wire[SHADER_KEY_WIRE_BYTES];
-
-		shader_key_write((const struct nv2a_pixel_shader_key *)key_data, wire);
-		hash = shader_key_hash(SHADER_KEY_HASH_INIT, wire, sizeof(wire));
-	}
 	pack_load();
-	high = (uint32_t)(hash >> 32);
-	low = (uint32_t)hash;
-	count = pack ? pack_count : 0;
 	entries = pack ? pack + 16 : NULL;
-	last = count;
+	last = pack ? pack_count : 0;
 	while (first < last)
 	{
 		uint32_t middle = (first + last) / 2;
@@ -204,6 +197,41 @@ uint32_t dk_shader_for_draw(uint32_t stage, const void *key_data)
 	}
 	missing_note(stage, hash, key_data);
 	return 0;
+}
+
+/* the handle of the shader (1 on, 0: none, skip the draw) */
+uint32_t dk_shader_for_draw(uint32_t stage, const void *key_data)
+{
+	if (stage == DK_SHADER_STAGE_VERTEX)
+	{
+		const struct dk_vertex_key *key = (const struct dk_vertex_key *)key_data;
+
+		return lookup(stage, shader_vertex_key(key->program_hash, key->packed_mask), key_data);
+	}
+	else
+	{
+		const struct nv2a_pixel_shader_key *key = (const struct nv2a_pixel_shader_key *)key_data;
+		const uint32_t *words = (const uint32_t *)key_data;
+		uint32_t mix = 2166136261u, slot, i;
+		unsigned char wire[SHADER_KEY_WIRE_BYTES];
+		uint32_t handle;
+
+		for (i = 0; i < sizeof(*key) / 4; i++)
+			mix = (mix ^ words[i]) * 16777619u;
+		slot = mix % MEMO_SIZE;
+		if (pixel_memo[slot].used && !memcmp(&pixel_memo[slot].key, key, sizeof(*key)))
+			return pixel_memo[slot].handle;
+		shader_key_write(key, wire);
+		handle = lookup(stage, shader_key_hash(SHADER_KEY_HASH_INIT, wire, sizeof(wire)), key_data);
+		if (handle)
+		{
+			/* (not a miss: it is looked for, and written down, each time) */
+			memcpy(&pixel_memo[slot].key, key, sizeof(*key));
+			pixel_memo[slot].handle = handle;
+			pixel_memo[slot].used = 1;
+		}
+		return handle;
+	}
 }
 
 /* a shader's GFD file, for the backend: where it is in the pack, its size and its stage (NULL for a handle that is none) */
@@ -243,10 +271,13 @@ void dk_shader_frame(void)
 /* wiiu_gx2.c: the map's data, which the backend may have kept copies of, is another map's now */
 void host_gx2_map_changed(void);
 
+void halo_stream_endian_forget(void);
+
 void dk_shader_map_loaded(uint32_t map_hash)
 {
 	(void)map_hash;
 	host_gx2_map_changed();
+	halo_stream_endian_forget();
 }
 
 char *nv2a_dk_vertex_shader_to_glsl(const uint32_t *instructions, unsigned long instruction_count, unsigned long packed_attribute_mask)

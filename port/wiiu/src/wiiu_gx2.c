@@ -21,12 +21,15 @@ Not run on a console.
 
 #include <coreinit/cache.h>
 #include <coreinit/memdefaultheap.h>
+#include <coreinit/thread.h>
 #include <coreinit/time.h>
 #include <gx2/clear.h>
 #include <gx2/context.h>
 #include <gx2/enum.h>
 #include <gx2/draw.h>
+#include <gx2/display.h>
 #include <gx2/event.h>
+#include <gx2/swap.h>
 #include <gx2/mem.h>
 #include <gx2/registers.h>
 #include <gx2/sampler.h>
@@ -44,6 +47,9 @@ Not run on a console.
 
 extern const unsigned char wiiu_gx2_blit_gsh[];
 extern const unsigned long wiiu_gx2_blit_gsh_size;
+
+/* the shell's (wiiu_shell.c): holds the game thread while the app is in the background */
+void wiiu_foreground_gate(int is_game_thread);
 
 #define TARGET_LIMIT 64
 #define SHADER_LIMIT 8192
@@ -121,6 +127,8 @@ static struct
 	} deferred[DEFERRED_LIMIT];
 	unsigned deferred_count;
 
+	unsigned long ring_bytes, ring_calls, ring_largest, index_bytes;
+	void *ring_dirty_from, *ring_dirty_to;
 	unsigned shaders_loaded, fetch_full;
 	unsigned draws_made, skipped_target, skipped_state, skipped_shader, skipped_ring, ring_overflows;
 	unsigned textures_made, textures_unsupported, texture_short, layouts_logged;
@@ -137,7 +145,8 @@ static struct
 	unsigned constants_frame, constants_serial;
 	int sampler_valid[4];
 	OSTime started;
-	OSTime shader_ticks;
+	OSTime shader_ticks, blit_ticks, finish_ticks, wait_ticks;
+	int screens_enabled;
 	OSTime submit_ticks, present_ticks, texture_ticks, draw_ticks;
 	unsigned window_frames;
 	OSTime last_present, longest_frame;
@@ -524,14 +533,35 @@ static void *ring_alloc(uint32_t size)
 	return segment->base + segment->offset - aligned;
 }
 
+/* What the CPU wrote into the ring is flushed from its cache for the GPU once for a whole run of copies (ring_flush: at the end of each stream and before anything waits for the
+GPU), not for each: a flush of 300 small ranges a frame was a fifth of the frame in the system's code. The commands are not run by the GPU before the frame's end (GX2Flush in
+the present), so it reads the data after the flush. */
+static void ring_flush(void)
+{
+	if (gx.ring_dirty_to > gx.ring_dirty_from)
+		GX2Invalidate(GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER, gx.ring_dirty_from, (uint32_t)((uint8_t *)gx.ring_dirty_to - (uint8_t *)gx.ring_dirty_from));
+	gx.ring_dirty_from = gx.ring_dirty_to = NULL;
+}
+
 static void *ring_copy(const void *source, uint32_t size)
 {
 	void *memory = ring_alloc(size);
 
 	if (!memory)
 		return NULL;
+	gx.ring_bytes += size;
+	gx.ring_calls++;
+	if (size > gx.ring_largest)
+		gx.ring_largest = size;
 	memcpy(memory, source, size);
-	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER, memory, size);
+	if (!gx.ring_dirty_from || (uint8_t *)memory < (uint8_t *)gx.ring_dirty_from || (uint8_t *)memory > (uint8_t *)gx.ring_dirty_to + 4 * 1024 * 1024)
+	{
+		ring_flush();
+		gx.ring_dirty_from = memory;
+		gx.ring_dirty_to = (uint8_t *)memory + size;
+	}
+	else if ((uint8_t *)memory + size > (uint8_t *)gx.ring_dirty_to)
+		gx.ring_dirty_to = (uint8_t *)memory + size;
 	return memory;
 }
 
@@ -702,7 +732,10 @@ static void state_apply(void)
 	are the Xbox's (top first). GX2's viewport puts clip y = +1 at row 0, so it is given a negative height, which turns it over: rows and winding as OpenGL's. */
 	GX2SetViewport((float)s->viewport[0], (float)(s->viewport[1] + s->viewport[3]), (float)s->viewport[2], -(float)s->viewport[3], s->depth_range[0],
 		s->depth_range[1]);
-	GX2SetScissor((uint32_t)s->scissor[0], (uint32_t)s->scissor[1], (uint32_t)s->scissor[2], (uint32_t)s->scissor[3]);
+	if (gx.debug_mode == 4)
+		GX2SetScissor(0, 0, 1, 1); /* (no pixels: what the frame costs without filling any) */
+	else
+		GX2SetScissor((uint32_t)s->scissor[0], (uint32_t)s->scissor[1], (uint32_t)s->scissor[2], (uint32_t)s->scissor[3]);
 	GX2SetPolygonControl(front, s->cull == DK_CULL_FRONT, s->cull == DK_CULL_BACK, mode != GX2_POLYGON_MODE_TRIANGLE, mode, mode, s->offset_enable,
 		s->offset_enable, s->offset_enable);
 	if (s->offset_enable)
@@ -1583,6 +1616,8 @@ static void draw_trace(const struct dk_command_draw *command, const struct shade
 
 static void draw(const struct dk_command_draw *command)
 {
+	/* (HOME can come between two draws: the game thread is held here, before the next call into GX2, not at the end of the stream) */
+	wiiu_foreground_gate(1);
 	struct shader *vs, *ps;
 	struct fetch *fetch;
 	const unsigned char *inline_data = (const unsigned char *)&command->streams[command->stream_count];
@@ -1666,6 +1701,7 @@ static void draw(const struct dk_command_draw *command)
 			source = inline_data + ((command->inline_bytes + 3u) & ~3u);
 		else
 			source = (const unsigned char *)(uintptr_t)command->index_address;
+		gx.index_bytes += command->count * 2;
 		indices = command->index_address != DK_INDEX_INLINE ? cache_get((uint32_t)(uintptr_t)source, command->count * 2) : NULL;
 		if (!indices)
 			indices = ring_copy(source, command->count * 2);
@@ -1685,6 +1721,8 @@ static void draw(const struct dk_command_draw *command)
 		draw_trace(command, vs, ps);
 		gx.traced++;
 	}
+	if (gx.debug_mode == 3)
+		return; /* (no draws at all: what the frame costs without the GPU's part) */
 	if (gx.debug_mode == 1 && gx.state.blend)
 	{
 		gx.state.blend = 0;
@@ -1727,19 +1765,15 @@ static void draw(const struct dk_command_draw *command)
 	gx.draws_made++;
 }
 
+int wiiu_memcpy_selftest(void);
+
+/* wiiu_profile.c: a sampling profiler of this thread, if halo/profile.txt is there */
+void wiiu_profile_start(void);
+
 /* ---------- starting */
 
-/* What the app owes the GPU when it ends, in the foreground: the work done, and GX2 shut down as WHBGfxShutdown does, which official applications do. (Without it the
-console froze at the end of some runs: the log was complete, the screen stopped, FTP died.) */
-static void gx2_atexit(void)
-{
-	if (gx.ready && wiiu_in_foreground())
-	{
-		GX2DrawDone();
-		WHBGfxShutdown();
-		gx.ready = 0;
-	}
-}
+/* (There is no GX2 shutdown at exit: the shell drains the GPU before the app is let go, and any GX2 call after ProcUI has been shut down - which is where atexit handlers run - freezes the console
+with the last picture on the TV. One was here, and froze every run that ended with a map loaded.) */
 
 static int initialize(void)
 {
@@ -1826,7 +1860,8 @@ static int initialize(void)
 		if (gx.exit_after > 0.0)
 			wiiu_log("GX2: the run ends %.0f seconds after its first frame (exit_after.txt)", gx.exit_after);
 	}
-	atexit(gx2_atexit);
+	wiiu_log("memcpy/memset self-test (wiiu_memcpy.c): %d wrong", wiiu_memcpy_selftest());
+	wiiu_profile_start();
 	gx.state_dirty = 1;
 	gx.constants_lo = 192;
 	gx.constants_hi = 0;
@@ -2154,8 +2189,12 @@ static void blit_to(struct target *source, GX2ColorBuffer *screen, GX2ContextSta
 	GX2Invalidate((GX2InvalidateMode)(GX2_INVALIDATE_MODE_COLOR_BUFFER | GX2_INVALIDATE_MODE_TEXTURE), source->color.surface.image,
 		source->color.surface.imageSize);
 	GX2SetContextState(context);
-	GX2ClearColor(screen, 0.0f, 0.0f, 0.0f, 1.0f);
-	GX2SetContextState(context);
+	/* (the bars of a letterbox are black; a picture that fills the screen needs no clear of it) */
+	if (width < screen_width - 6.0f || height < screen_height - 6.0f)
+	{
+		GX2ClearColor(screen, 0.0f, 0.0f, 0.0f, 1.0f);
+		GX2SetContextState(context);
+	}
 	GX2SetColorBuffer(screen, GX2_RENDER_TARGET_0);
 	GX2SetViewport(0.0f, 0.0f, screen_width, screen_height, 0.0f, 1.0f);
 	GX2SetScissor(0, 0, (uint32_t)screen_width, (uint32_t)screen_height);
@@ -2255,6 +2294,7 @@ static void visibility_end(uint32_t index)
 CPU can read */
 static void screenshot_take(struct target *source, uint32_t address)
 {
+	ring_flush();
 	GX2Surface linear = source->color.surface;
 	uint8_t *out = (uint8_t *)(uintptr_t)address;
 	unsigned y;
@@ -2288,19 +2328,43 @@ static void present(const struct dk_command_present *command)
 	const OSTime now = OSGetSystemTime();
 	const OSTime present_start = now;
 
+	ring_flush();
 	if (back && command->screenshot)
 		screenshot_take(back, command->screenshot);
-	/* (before the frame is drawn, as the screenshot above is: the screens' buffers then hold the frame before) */
-	WHBGfxBeginRender();
-	WHBGfxBeginRenderTV();
+	/* WHBGfx's own Begin/FinishRender wait for the vsync before the frame and for the GPU to finish (GX2DrawDone) after it, so that the CPU could never build a frame while
+	the GPU drew one: they are done here without the waits (the commands run in order; what the CPU writes for the GPU is protected by timestamps) and, as they did, the
+	screens' buffers are copied to the scan buffers and swapped. At most one swap is queued. */
 	if (back)
 		blit_to(back, WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState());
-	WHBGfxFinishRenderTV();
-	WHBGfxBeginRenderDRC();
+	GX2CopyColorBufferToScanBuffer(WHBGfxGetTVColourBuffer(), GX2_SCAN_TARGET_TV);
 	if (back)
 		blit_to(back, WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState());
-	WHBGfxFinishRenderDRC();
-	WHBGfxFinishRender();
+	GX2CopyColorBufferToScanBuffer(WHBGfxGetDRCColourBuffer(), GX2_SCAN_TARGET_DRC);
+	GX2SwapScanBuffers();
+	GX2Flush();
+	if (!gx.screens_enabled)
+	{
+		GX2SetTVEnable(TRUE);
+		GX2SetDRCEnable(TRUE);
+		gx.screens_enabled = 1;
+	}
+	{
+		const OSTime wait_start = OSGetSystemTime();
+		uint32_t swaps, flips;
+		OSTime last_flip, last_vsync;
+
+		for (;;)
+		{
+			GX2GetSwapStatus(&swaps, &flips, &last_flip, &last_vsync);
+			if (swaps - flips <= 1)
+				break;
+			/* (the flip does not come in the background, nor when the system is closing the app: no waiting for it then) */
+			if (!wiiu_in_foreground() || wiiu_exit_requested() || OSGetSystemTime() - wait_start > OSMillisecondsToTicks(250))
+				break;
+			OSSleepTicks(OSMicrosecondsToTicks(200));
+		}
+		gx.wait_ticks += OSGetSystemTime() - wait_start;
+	}
 	gx.frames++;
 	gx.window_frames++;
 	if (gx.last_present)
@@ -2327,6 +2391,7 @@ static void present(const struct dk_command_present *command)
 				gx.traced = 0;
 				gx.debug_mode = mode;
 				gx.features_off = features;
+				gx.state_dirty = 1;
 				memset(gx.sampler_valid, 0, sizeof(gx.sampler_valid));
 			}
 			fclose(file);
@@ -2362,6 +2427,11 @@ static void present(const struct dk_command_present *command)
 			(double)OSTicksToMicroseconds(gx.draw_ticks) / 1000.0 / (double)gx.window_frames,
 			(double)OSTicksToMicroseconds(gx.texture_ticks) / 1000.0 / (double)gx.window_frames,
 			(double)OSTicksToMicroseconds(gx.present_ticks) / 1000.0 / (double)gx.window_frames);
+		wiiu_log("GX2:   copied into the ring: %lu KB a frame in %lu copies (largest %lu KB); index data read %lu KB a frame", gx.ring_bytes / 1024 / (gx.window_frames ? gx.window_frames : 1),
+			gx.ring_calls / (gx.window_frames ? gx.window_frames : 1), gx.ring_largest / 1024, gx.index_bytes / 1024 / (gx.window_frames ? gx.window_frames : 1));
+		gx.ring_bytes = gx.ring_calls = gx.ring_largest = gx.index_bytes = 0;
+		wiiu_log("GX2:   waiting for the display's flip: %.1f ms a frame", (double)OSTicksToMicroseconds(gx.wait_ticks) / 1000.0 / (double)gx.window_frames);
+		gx.wait_ticks = 0;
 		wiiu_log("GX2:   frame times: longest %llu ms, %u over 40 ms; shaders loaded %u (%llu ms loading)", (unsigned long long)OSTicksToMilliseconds(gx.longest_frame),
 			gx.slow_frames, gx.shaders_loaded, (unsigned long long)OSTicksToMilliseconds(gx.shader_ticks));
 		gx.longest_frame = 0;
@@ -2392,8 +2462,6 @@ void host_gx2_idle(void);
 uint32_t host_gx2_visibility(uint32_t index);
 unsigned int host_gx2_output_height(void);
 
-/* the shell's (wiiu_shell.c): held here while the app is in the background */
-void wiiu_foreground_gate(int is_game_thread);
 
 void host_gx2_submit(uint32_t commands, uint32_t size)
 {
@@ -2502,6 +2570,7 @@ void host_gx2_submit(uint32_t commands, uint32_t size)
 		}
 		at += header->size;
 	}
+	ring_flush();
 	gx.submit_ticks += OSGetSystemTime() - submit_start;
 }
 

@@ -52,6 +52,24 @@ int main(void)
 		rows[i] = (uint8_t)(i * 7 + i / 256);
 	wiiu_tile_1d(rows, 16, 16, 16, 16, tiled);
 	CHECK(!memcmp(tiled + wiiu_tile_1d_offset(5, 9, 16, 16), rows + (9 * 16 + 5) * 16, 16));
+	/* the fast path against the one-block-at-a-time offset, for sizes that are not whole tiles */
+	{
+		static uint8_t source[40 * 27 * 16], fast[48 * 32 * 16], slow[48 * 32 * 16];
+		unsigned bytes, x, y;
+
+		for (i = 0; i < sizeof(source); i++)
+			source[i] = (uint8_t)(i * 13 + i / 7);
+		for (bytes = 8; bytes <= 16; bytes += 8)
+		{
+			memset(fast, 0, sizeof(fast));
+			memset(slow, 0, sizeof(slow));
+			wiiu_tile_1d(source, 37, 27, bytes, 40, fast);
+			for (y = 0; y < 27; y++)
+				for (x = 0; x < 37; x++)
+					memcpy(slow + wiiu_tile_1d_offset(x, y, 40, bytes), source + ((size_t)y * 37 + x) * bytes, bytes);
+			CHECK(!memcmp(fast, slow, sizeof(fast)));
+		}
+	}
 	if (failures)
 		return 1;
 	printf("all checks passed\n");

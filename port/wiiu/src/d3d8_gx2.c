@@ -360,6 +360,7 @@ struct dk_device
 	/* the current value of each input register (SetVertexData) */
 	float attributes[XGPU_VERTEX_ATTRIBUTE_COUNT][4];
 	BOOL immediate_active;
+	unsigned long immediate_mask; /* the registers SetVertexData wrote since Begin */
 	D3DPRIMITIVETYPE immediate_type;
 	float *immediate_vertices;
 	unsigned long immediate_count;
@@ -1927,6 +1928,22 @@ void WINAPI D3DDevice_SetIndices(D3DIndexBuffer *index_data, UINT base_vertex_in
 	CreateIndexBuffer ordinary memory, which the move leaves alone */
 	D3D__IndexData = index_data ? (WORD *)PORT_WINDOW_REBASE(index_data->Data) : NULL;
 }
+/* where a frame's time goes on this CPU (debug.gpu_stats): the Direct3D layer's draws, the present (the stream's hand-over, the GPU's wait and the display's), and the rest */
+static struct
+{
+	double draw_ms, present_ms, work_ms, longest_work_ms, longest_present_ms;
+	double last_exit_ms;
+	unsigned long frames, over_17, over_34;
+} profile;
+
+static double profile_now_ms(void)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (double)now.tv_sec * 1000.0 + (double)now.tv_nsec / 1e6;
+}
+
 /* ---------- drawing (DEKO3D.md, phase 6)
 
 The device reads Direct3D's state at each draw as d3d8_gl.c's prepare_draw
@@ -2479,6 +2496,21 @@ static float float_from(const unsigned char *at, int little)
 /* What is in the tag cache is the maps' vertex data: a model's, which the converter leaves as the Xbox had it, little-endian, and the BSP's (which lives in the
 tag cache as well), which it swaps. The positions of the first vertices say which: read as the wrong byte order they are not coordinates (exponents of 1e30). The
 streams of a draw that follow the first one are the same kind. */
+static struct
+{
+	const unsigned char *data;
+	unsigned long stride, offset;
+	BOOL little;
+} sniffed[64];
+
+/* (gx2_shaders.c, when a map has loaded: what was at an address is another map's now) */
+void halo_stream_endian_forget(void);
+
+void halo_stream_endian_forget(void)
+{
+	memset(sniffed, 0, sizeof(sniffed));
+}
+
 static BOOL stream_is_little_endian(unsigned long stream, unsigned long position_offset, BOOL has_position, BOOL *decided, BOOL *decision)
 {
 	const char *base = (const char *)physical_memory_get_tag_cache_base_address();
@@ -2490,6 +2522,16 @@ static BOOL stream_is_little_endian(unsigned long stream, unsigned long position
 		return FALSE;
 	if (!has_position || !stride)
 		return *decided ? *decision : TRUE;
+	{
+		const unsigned long slot = (((unsigned long)data >> 4) ^ stride) % 64;
+
+		if (sniffed[slot].data == data && sniffed[slot].stride == stride && sniffed[slot].offset == position_offset)
+		{
+			*decided = TRUE;
+			*decision = sniffed[slot].little;
+			return *decision;
+		}
+	}
 	for (vertex = 0; vertex < 4; vertex++)
 	{
 		const unsigned char *at = data + vertex * stride + position_offset;
@@ -2503,6 +2545,14 @@ static BOOL stream_is_little_endian(unsigned long stream, unsigned long position
 	}
 	*decided = TRUE;
 	*decision = little >= big;
+	{
+		const unsigned long slot = (((unsigned long)data >> 4) ^ stride) % 64;
+
+		sniffed[slot].data = data;
+		sniffed[slot].stride = stride;
+		sniffed[slot].offset = position_offset;
+		sniffed[slot].little = *decision;
+	}
 	return *decision;
 }
 
@@ -2670,7 +2720,7 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 	draw_resources_used(indices != NULL, TRUE);
 }
 
-void WINAPI D3DDevice_DrawVertices(D3DPRIMITIVETYPE primitive_type, UINT start_vertex, UINT vertex_count)
+static void D3DDevice_DrawVertices_inner(D3DPRIMITIVETYPE primitive_type, UINT start_vertex, UINT vertex_count)
 {
 	struct dk_vertex_format format;
 
@@ -2683,7 +2733,15 @@ void WINAPI D3DDevice_DrawVertices(D3DPRIMITIVETYPE primitive_type, UINT start_v
 	draw_write(primitive_type, vertex_count, start_vertex, vertex_count, NULL, 0);
 }
 
-void WINAPI D3DDevice_DrawIndexedVertices(D3DPRIMITIVETYPE primitive_type, UINT vertex_count, CONST WORD *index_data)
+void WINAPI D3DDevice_DrawVertices(D3DPRIMITIVETYPE primitive_type, UINT start_vertex, UINT vertex_count)
+{
+	const double start = profile_now_ms();
+
+	D3DDevice_DrawVertices_inner(primitive_type, start_vertex, vertex_count);
+	profile.draw_ms += profile_now_ms() - start;
+}
+
+static void D3DDevice_DrawIndexedVertices_inner(D3DPRIMITIVETYPE primitive_type, UINT vertex_count, CONST WORD *index_data)
 {
 	struct dk_vertex_format format;
 	unsigned long index, minimum = 0xffff, maximum = 0;
@@ -2707,13 +2765,43 @@ void WINAPI D3DDevice_DrawIndexedVertices(D3DPRIMITIVETYPE primitive_type, UINT 
 		-(long)minimum);
 }
 
+void WINAPI D3DDevice_DrawIndexedVertices(D3DPRIMITIVETYPE primitive_type, UINT vertex_count, CONST WORD *index_data)
+{
+	const double start = profile_now_ms();
+
+	D3DDevice_DrawIndexedVertices_inner(primitive_type, vertex_count, index_data);
+	profile.draw_ms += profile_now_ms() - start;
+}
+
 /* ---------- immediate mode */
+
+/* which code the immediate-mode draws come from: the place Begin was called from, counted, and logged with the draw statistics (the addresses are the code's own in the log's
+terms: tools/wiiu/profile_report.py resolves them as it does the profile's) */
+#define IMMEDIATE_SITES 48
+static struct { uintptr_t site; unsigned long draws; } immediate_sites[IMMEDIATE_SITES];
+
+static void immediate_site_count(uintptr_t site)
+{
+	unsigned index;
+
+	for (index = 0; index < IMMEDIATE_SITES; index++)
+	{
+		if (immediate_sites[index].site == site || !immediate_sites[index].site)
+		{
+			immediate_sites[index].site = site;
+			immediate_sites[index].draws++;
+			return;
+		}
+	}
+}
 
 void WINAPI D3DDevice_Begin(D3DPRIMITIVETYPE primitive_type)
 {
+	immediate_site_count((uintptr_t)__builtin_return_address(0));
 	device.immediate_active = TRUE;
 	device.immediate_type = primitive_type;
 	device.immediate_count = 0;
+	device.immediate_mask = 1;
 }
 
 static void immediate_emit(void)
@@ -2729,15 +2817,17 @@ static void immediate_emit(void)
 	memcpy(device.immediate_vertices + device.immediate_count * floats, device.attributes, floats * sizeof(float));
 	device.immediate_count++;
 }
-void WINAPI D3DDevice_End(void)
+static void D3DDevice_End_inner(void)
 {
-	/* every register's four floats, a vertex at a time, as immediate_emit
-	keeps them */
-	unsigned long stride = XGPU_VERTEX_ATTRIBUTE_COUNT * 4 * sizeof(float);
-	unsigned long count = device.immediate_count, index;
+	/* only the registers SetVertexData wrote go in the stream (each is four floats of a vertex, at a place of its own in it); the others are the current values, as the
+	declaration's unfed registers are. Each vertex was kept with every register (immediate_emit). */
+	const unsigned long full_stride = XGPU_VERTEX_ATTRIBUTE_COUNT * 4 * sizeof(float);
+	unsigned long count = device.immediate_count, index, stride, touched = 0, vertex;
 	D3DPRIMITIVETYPE type = device.immediate_type;
+	unsigned long mask = device.immediate_mask;
 	struct dk_vertex_format format;
 	struct dk_command_draw *command;
+	unsigned long registers[XGPU_VERTEX_ATTRIBUTE_COUNT];
 
 	device.immediate_active = FALSE;
 	device.immediate_count = 0;
@@ -2745,6 +2835,10 @@ void WINAPI D3DDevice_End(void)
 		count &= ~3UL;
 	if (!count)
 		return;
+	for (index = 0; index < XGPU_VERTEX_ATTRIBUTE_COUNT; index++)
+		if (mask & (1UL << index))
+			registers[touched++] = index;
+	stride = touched * 4 * sizeof(float);
 	/* the vertices go in the stream with the draw: the next Begin reuses
 	the buffer they are in before the stream is handed over */
 	if (count * stride + 4096 > STREAM_SIZE)
@@ -2755,11 +2849,23 @@ void WINAPI D3DDevice_End(void)
 	if (!draw_prepare(TRUE))
 		return;
 	memset(&format, 0, sizeof(format));
-	for (index = 0; index < XGPU_VERTEX_ATTRIBUTE_COUNT; index++)
 	{
-		format.attributes[index].format = DK_ATTRIBUTE_FLOAT4;
-		format.attributes[index].stream = 0;
-		format.attributes[index].offset = (uint32_t)(index * 4 * sizeof(float));
+		unsigned long place = 0;
+
+		for (index = 0; index < XGPU_VERTEX_ATTRIBUTE_COUNT; index++)
+		{
+			if (mask & (1UL << index))
+			{
+				format.attributes[index].format = DK_ATTRIBUTE_FLOAT4;
+				format.attributes[index].stream = 0;
+				format.attributes[index].offset = (uint32_t)(place++ * 4 * sizeof(float));
+			}
+			else
+			{
+				format.attributes[index].format = DK_ATTRIBUTE_UNFED;
+				memcpy(format.constants[index], device.attributes[index], sizeof(format.constants[index]));
+			}
+		}
 	}
 	format.strides[0] = (uint32_t)stride;
 	format.stream_mask = 1;
@@ -2773,8 +2879,35 @@ void WINAPI D3DDevice_End(void)
 	command->stream_count = 1;
 	command->streams[0][0] = 0;
 	command->streams[0][1] = (uint32_t)(count * stride);
-	memcpy(&command->streams[1], device.immediate_vertices, count * stride);
+	{
+		float *out = (float *)&command->streams[1];
+
+		for (vertex = 0; vertex < count; vertex++)
+		{
+			const float *in = device.immediate_vertices + vertex * XGPU_VERTEX_ATTRIBUTE_COUNT * 4;
+
+			for (index = 0; index < touched; index++)
+			{
+				const float *from = in + registers[index] * 4;
+
+				out[0] = from[0];
+				out[1] = from[1];
+				out[2] = from[2];
+				out[3] = from[3];
+				out += 4;
+			}
+		}
+	}
+	(void)full_stride;
 	draw_resources_used(FALSE, FALSE);
+}
+
+void WINAPI D3DDevice_End(void)
+{
+	const double start = profile_now_ms();
+
+	D3DDevice_End_inner();
+	profile.draw_ms += profile_now_ms() - start;
 }
 
 static void set_attribute(INT reg, float a, float b, float c, float d)
@@ -2792,6 +2925,7 @@ static void set_attribute(INT reg, float a, float b, float c, float d)
 	device.attributes[reg][1] = b;
 	device.attributes[reg][2] = c;
 	device.attributes[reg][3] = d;
+	device.immediate_mask |= 1UL << reg;
 	/* like the hardware, writing register 0 completes a vertex */
 	if (device.immediate_active && (emit || reg == 0))
 		immediate_emit();
@@ -2943,10 +3077,58 @@ static void draw_statistics_log(void)
 		"%lu too big", device.frame, stats.draws, stats.immediate_draws, stats.skipped_no_program,
 		stats.skipped_no_target, stats.skipped_shader, stats.skipped_size);
 	memset(&stats, 0, sizeof(stats));
+	{
+		unsigned index, shown = 0;
+
+		/* (the five most used, most first) */
+		for (; shown < 5; shown++)
+		{
+			unsigned best = IMMEDIATE_SITES;
+
+			for (index = 0; index < IMMEDIATE_SITES; index++)
+				if (immediate_sites[index].draws && (best == IMMEDIATE_SITES || immediate_sites[index].draws > immediate_sites[best].draws))
+					best = index;
+			if (best == IMMEDIATE_SITES)
+				break;
+			platform_log("immediate draws from %p: %lu", (void *)immediate_sites[best].site, immediate_sites[best].draws);
+			immediate_sites[best].draws = 0;
+		}
+		memset(immediate_sites, 0, sizeof(immediate_sites));
+	}
+	if (profile.frames)
+	{
+		platform_log("frame time: %.1f ms of game and rendering work, of which %.1f in the Direct3D layer's draws, %.1f in Present; longest work %.0f, longest present %.0f; "
+			"%lu of %lu frames over 17 ms, %lu over 34", profile.work_ms / (double)profile.frames, profile.draw_ms / (double)profile.frames,
+			profile.present_ms / (double)profile.frames, profile.longest_work_ms, profile.longest_present_ms, profile.over_17, profile.frames, profile.over_34);
+		memset(&profile, 0, sizeof(profile));
+	}
 }
+
+static void D3DDevice_Present_inner(CONST RECT *source_rectangle, CONST RECT *destination_rectangle, void *unused, void *unused2);
 
 void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destination_rectangle,
 	void *unused, void *unused2)
+{
+	const double start = profile_now_ms();
+	double work = profile.last_exit_ms ? start - profile.last_exit_ms : 0.0, present;
+
+	D3DDevice_Present_inner(source_rectangle, destination_rectangle, unused, unused2);
+	present = profile_now_ms() - start;
+	profile.last_exit_ms = profile_now_ms();
+	profile.present_ms += present;
+	profile.work_ms += work;
+	if (work > profile.longest_work_ms)
+		profile.longest_work_ms = work;
+	if (present > profile.longest_present_ms)
+		profile.longest_present_ms = present;
+	profile.frames++;
+	if (work + present > 17.5)
+		profile.over_17++;
+	if (work + present > 34.0)
+		profile.over_34++;
+}
+
+static void D3DDevice_Present_inner(CONST RECT *source_rectangle, CONST RECT *destination_rectangle, void *unused, void *unused2)
 {
 	(void)source_rectangle;
 	(void)destination_rectangle;
