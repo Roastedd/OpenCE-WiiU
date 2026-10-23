@@ -2768,6 +2768,10 @@ static void present(const struct dk_command_present *command)
 			(double)OSTicksToMicroseconds(gx.present_ticks) / 1000.0 / (double)gx.window_frames);
 		wiiu_log("GX2:   copied into the ring: %lu KB a frame in %lu copies (largest %lu KB); index data read %lu KB a frame", gx.ring_bytes / 1024 / (gx.window_frames ? gx.window_frames : 1),
 			gx.ring_calls / (gx.window_frames ? gx.window_frames : 1), gx.ring_largest / 1024, gx.index_bytes / 1024 / (gx.window_frames ? gx.window_frames : 1));
+		if (gx.overlay_on)
+			wiiu_log("GX2:   overlay: %.1f frames a second, longest of 120 %.1f ms, cpu %.1f gpu %.1f wait %.1f ms, %ux%u, interpolation %d", (double)overlay_fps(&gx.overlay),
+				(double)overlay_longest(&gx.overlay, 120), (double)gx.overlay.cpu_average, (double)gx.overlay.gpu_average, (double)gx.overlay.wait_average,
+				gx.overlay.render_width, gx.overlay.render_height, gx.overlay.interpolation);
 		wiiu_log("GX2:   a draw's time, ms a frame: copies of its data %.2f, state %.2f, shaders %.2f, uniforms %.2f, textures %.2f, attribute buffers %.2f",
 			(double)OSTicksToMicroseconds(gx.section_ticks[0]) / 1000.0 / (double)gx.window_frames, (double)OSTicksToMicroseconds(gx.section_ticks[1]) / 1000.0 / (double)gx.window_frames,
 			(double)OSTicksToMicroseconds(gx.section_ticks[2]) / 1000.0 / (double)gx.window_frames, (double)OSTicksToMicroseconds(gx.section_ticks[3]) / 1000.0 / (double)gx.window_frames,
