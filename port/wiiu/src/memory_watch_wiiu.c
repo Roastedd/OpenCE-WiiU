@@ -69,6 +69,21 @@ unsigned long memory_watch_generation(unsigned long address, unsigned long size)
 	return newest;
 }
 
+/* the same without the memo, for the GX2 thread (the memo is the game thread's: two threads would tear it) */
+unsigned long memory_watch_generation_raw(unsigned long address, unsigned long size);
+
+unsigned long memory_watch_generation_raw(unsigned long address, unsigned long size)
+{
+	unsigned long first, last, page, newest = 0;
+
+	if (!watch_pages(address, size, &first, &last))
+		return 0;
+	for (page = first; page <= last; page++)
+		if (page_generation[page] > newest)
+			newest = page_generation[page];
+	return newest;
+}
+
 unsigned long memory_watch_serial(void)
 {
 	return current_generation;

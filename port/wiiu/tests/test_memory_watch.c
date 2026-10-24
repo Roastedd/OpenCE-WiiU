@@ -65,6 +65,18 @@ int main(void)
 	memory_watch_forget((void *)(BASE + 4096), 4096);
 	CHECK(memory_watch_generation(BASE + 4096, 1) > before);
 
+	/* the unmemoed query (the GX2 thread's) agrees, and is how a range written after the map loaded is told from the map's */
+	{
+		unsigned long memory_watch_generation_raw(unsigned long, unsigned long);
+		const unsigned long epoch = memory_watch_serial();
+
+		CHECK(memory_watch_generation_raw(BASE + 4096, 1) == memory_watch_generation(BASE + 4096, 1));
+		CHECK(memory_watch_generation_raw(BASE + 20 * 4096, 4096) <= epoch);
+		memory_watch_prepare_write((void *)(BASE + 21 * 4096), 8);
+		CHECK(memory_watch_generation_raw(BASE + 21 * 4096, 4096) > epoch);
+		CHECK(memory_watch_generation_raw(BASE + 20 * 4096, 4096) <= epoch);
+	}
+
 	/* a range partly outside the window is clipped to it; wholly outside is ignored (and the stream is not told) */
 	memory_watch_prepare_write((void *)(BASE - 100), 200);
 	CHECK(memory_watch_generation(BASE, 1) == memory_watch_serial());

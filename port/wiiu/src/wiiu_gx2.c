@@ -140,7 +140,7 @@ static struct
 	} deferred[DEFERRED_LIMIT];
 	unsigned deferred_count;
 
-	unsigned long ring_bytes, ring_calls, ring_largest, index_bytes;
+	unsigned long ring_bytes, ring_calls, ring_largest, index_bytes, dynamic_streams;
 	OSTime draw_started, section_now;
 	OSTime section_ticks[7];
 	unsigned long counts_state, counts_fetch, counts_vs, counts_ps, counts_vertex_regs, counts_pixel_regs, counts_texture_sets, counts_draw_calls; /* of the draw's: its copies of data, state, shaders, uniforms, textures and attribute buffers, the draw call */
@@ -711,10 +711,22 @@ static struct
 	unsigned copies, hits, misses_range;
 } blocks;
 
+/* the memory watch (memory_watch_wiiu.c): a range of the window written since the map was loaded (a Lock, a file read after the load) is not the map's: its copy is not kept, the draw
+copies it into the ring (dynamic vertex buffers are in the window too: a cached copy of one would be shown for ever) */
+unsigned long memory_watch_generation_raw(unsigned long address, unsigned long size);
+unsigned long memory_watch_serial(void);
+static unsigned long cache_epoch;
+
+static int cacheable(uint32_t address, uint32_t size)
+{
+	return memory_watch_generation_raw(address, size) <= cache_epoch;
+}
+
 static void cache_flush(void)
 {
 	unsigned i;
 
+	cache_epoch = memory_watch_serial(); /* (what is written from now on is not the map's) */
 	for (i = 0; i < cache.chunk_count; i++)
 		free_later(cache.chunks[i]);
 	memset(&cache, 0, sizeof(cache));
@@ -1982,9 +1994,14 @@ static void draw(const struct dk_command_draw *command)
 		buffers[stream] = NULL;
 		if (!command->inline_bytes && ((gx.format.static_streams >> stream) & 1))
 		{
-			buffers[stream] = block_get((uint32_t)(uintptr_t)source, sizes[stream]);
-			if (!buffers[stream])
-				buffers[stream] = cache_get((uint32_t)(uintptr_t)source, sizes[stream]);
+			if (cacheable((uint32_t)(uintptr_t)source, sizes[stream]))
+			{
+				buffers[stream] = block_get((uint32_t)(uintptr_t)source, sizes[stream]);
+				if (!buffers[stream])
+					buffers[stream] = cache_get((uint32_t)(uintptr_t)source, sizes[stream]);
+			}
+			else
+				gx.dynamic_streams++;
 		}
 		gx.ring_what = command->inline_bytes ? 1 : 0;
 		if (!buffers[stream])
@@ -2019,7 +2036,7 @@ static void draw(const struct dk_command_draw *command)
 		else
 			source = (const unsigned char *)(uintptr_t)command->index_address;
 		gx.index_bytes += command->count * 2;
-		indices = command->index_address != DK_INDEX_INLINE ? cache_get((uint32_t)(uintptr_t)source, command->count * 2) : NULL;
+		indices = command->index_address != DK_INDEX_INLINE && cacheable((uint32_t)(uintptr_t)source, command->count * 2) ? cache_get((uint32_t)(uintptr_t)source, command->count * 2) : NULL;
 		gx.ring_what = 3;
 		if (!indices)
 			indices = ring_copy(source, command->count * 2);
@@ -2253,6 +2270,29 @@ static int initialize(void)
 						(double)OSTicksToMicroseconds(OSGetSystemTime() - t) / 1000.0, (unsigned)lowest, (unsigned)highest);
 				}
 				(void)start;
+			}
+		}
+		/* the copy, as a draw makes it: into a buffer the size of the stream's (the command's index area), from the list just read, and again with the source pushed out of the cache */
+		if (buffer && other)
+		{
+			uint16_t *destination = (uint16_t *)other;
+			unsigned pass;
+
+			for (pass = 0; pass < 4; pass++)
+			{
+				OSTime t;
+
+				if (pass == 2)
+					memset(other + 262144 / 2, 0x55, 1536 * 1024); /* (a 1.5 MB sweep: the source leaves the L1 and most of the L2) */
+				if (pass == 3)
+					memset(other + 262144 / 2, 0x66, 1536 * 1024);
+				t = OSGetSystemTime();
+				if (pass == 1 || pass == 3)
+					memcpy(destination, buffer, bytes);
+				else
+					wiiu_index_copy_range(destination, buffer, bytes / 2, &lowest, &highest);
+				wiiu_log("GX2: %s of %u KB: %s %.2f ms", pass == 1 || pass == 3 ? "memcpy" : "index copy and range", bytes / 1024, pass < 2 ? "source just read" : "source pushed out of the cache",
+					(double)OSTicksToMicroseconds(OSGetSystemTime() - t) / 1000.0);
 			}
 		}
 		free(buffer);
@@ -3092,6 +3132,8 @@ static void present(const struct dk_command_present *command)
 		gx.counts_state = gx.counts_fetch = gx.counts_vs = gx.counts_ps = gx.counts_vertex_regs = gx.counts_pixel_regs = gx.counts_texture_sets = 0;
 		memset(gx.section_ticks, 0, sizeof(gx.section_ticks));
 		big_copies_log();
+		wiiu_log("GX2:   %lu streams of the window were written since the map loaded, so copied into the ring", gx.dynamic_streams);
+		gx.dynamic_streams = 0;
 		wiiu_log("GX2:   by kind a frame: streams %lu KB in %lu, immediate vertices %lu KB in %lu, constants %lu KB in %lu, indices %lu KB in %lu", gx.ring_kind_bytes[0] / 1024 / (gx.window_frames ? gx.window_frames : 1),
 			gx.ring_kind_calls[0] / (gx.window_frames ? gx.window_frames : 1), gx.ring_kind_bytes[1] / 1024 / (gx.window_frames ? gx.window_frames : 1),
 			gx.ring_kind_calls[1] / (gx.window_frames ? gx.window_frames : 1), gx.ring_kind_bytes[2] / 1024 / (gx.window_frames ? gx.window_frames : 1),
