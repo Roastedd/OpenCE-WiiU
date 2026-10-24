@@ -138,8 +138,9 @@ The GamePad's touch screen is the menus' pointer (`halo_ui_pointer_update` in `d
 or on a screen's A and B prompts clicks it, a drag scrolls a list. Measured with the debug server's `tap`: tapping Multiplayer, then Split Screen, opened
 each. The menus are drawn at the left of the picture, not centered in its 852 columns (the renderer does not apply the offset the game asks for:
 `MENUS_DRAWN_CENTERED` in `d3d8_gx2.c`), and a touch follows what is drawn. Not measured: rumble (it cannot be seen), the Pro and Classic
-Controllers (none was connected), split screen play, a real finger (the calibration is the system's, to 854x480). Not done: the GamePad's gyro, a tap
-that skips a cinematic, Wii Remote and Nunchuk.
+Controllers (none was connected), split screen play, a real finger (the calibration is the system's, to 854x480). Also written, not run on a
+console: the GamePad's gyro aiming (`input.wiiu_gyro_aim` "always" or "zoom"; off by default; the axes' signs and scale are unmeasured), a tap outside the
+menus that skips a cinematic, and Classic Controllers. Not done: Wii Remote and Nunchuk.
 
 ## The network
 
@@ -171,6 +172,14 @@ run, looked at and judged without a person at the console; its client is `tools/
 - **`quit` is the one that does not work well.** It closes every socket and asks for the Wii U Menu (`SYSLaunchMenu`) from the game's thread;
   the app does close (the release and exit callbacks run, "Closed" is logged), but under Aroma the console then started the app again once, and
   twice stayed on the Wii U logo. HOME and Close software is the way out that has always worked.
+
+## What is written and not run on a console
+
+Compiled, linked and tested on the build machine where it can be, not run on the Wii U: the high-res text (`text_hires.c`: the fonts in the maps' tags replaced by
+Overpass at the display's resolution; `tools/wiiu/shell_tests.sh` rasterizes glyphs from the big-endian embedded fonts under qemu), UPnP (miniupnpc built with
+`include/wiiu_net_compat.h`; a router's port forwarding for internet play, and `posix_upnp.c`'s port and address byte order fixed for big-endian), the GamePad's
+gyro aim (`input.wiiu_gyro_aim`), tap-to-skip and Classic Controllers. The high-res HUD and menu pictures (`hud_hires.c`, `menu_files.c`) are not ported: they
+draw meters through shader variants that are not in the shader pack, which is made from what a console run asked for (`halo/shaders_missing.txt`).
 
 ## What it takes to run
 

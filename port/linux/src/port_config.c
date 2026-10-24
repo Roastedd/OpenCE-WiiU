@@ -233,6 +233,16 @@ static const struct config_setting config_settings[] =
 		"\"auto\": by letter in the menus (A selects, B goes back), by place in the game." },
 	{ "network.wiiu_sockets", _config_boolean, "true", "HALO_WIIU_SOCKETS", _environment_value, _platform_wiiu,
 		"The Wii U's sockets for system link and internet play. false: the network is down." },
+	{ "input.wiiu_gyro_aim", _config_string, "\"off\"", "HALO_WIIU_GYRO_AIM", _environment_value, _platform_wiiu,
+		"The GamePad's gyro aims: the pad's turning is added to the right stick in the game\n"
+		"(not in the menus). \"off\"; \"always\"; \"zoom\": only while zoomed in (for fine aim\n"
+		"through a scope). Not tried with a hand on the pad: the axes' signs and the scale\n"
+		"are the system's own and not measured." },
+	{ "input.wiiu_gyro_sensitivity", _config_real, "1.0", "HALO_WIIU_GYRO_SENSITIVITY", _environment_value, _platform_wiiu,
+		"How far the gyro turns the view: 1 is the stick's full push for a quarter turn of\n"
+		"the GamePad a second." },
+	{ "input.wiiu_gyro_invert_y", _config_boolean, "false", "HALO_WIIU_GYRO_INVERT_Y", _environment_value, _platform_wiiu,
+		"Tilting the top of the GamePad away looks down, not up." },
 	{ "input.wiiu_rumble", _config_boolean, "true", "HALO_WIIU_RUMBLE", _environment_value, _platform_wiiu,
 		"The GamePad and the Pro Controllers rumble as the game asks." },
 	{ "input.mouse_sensitivity", _config_real, "1.0", "HALO_MOUSE_SENSITIVITY", _environment_value, _platform_desktop,

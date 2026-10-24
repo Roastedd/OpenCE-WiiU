@@ -34,6 +34,9 @@ struct wiiu_pad
 	unsigned int buttons;
 	/* -1 to 1, up and right positive */
 	float left_x, left_y, right_x, right_y;
+	/* the GamePad's gyro, port 0 only: turn rates in rotations a second, about the pad's own horizontal axis (pitch: top away from the player positive) and its
+	vertical axis (yaw: turning right positive); 0 where there is none */
+	float gyro_pitch, gyro_yaw;
 };
 
 #define WIIU_PAD_PORTS 4

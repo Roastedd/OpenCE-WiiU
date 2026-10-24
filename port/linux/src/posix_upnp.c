@@ -37,6 +37,11 @@ time.
 
 #include "posix.h"
 
+#ifdef HALO_WIIU
+/* (wiiu_shell.c: not in the background, closing, or when the system has taken the network: miniupnpc's own socket calls are not gated as posix_net's are) */
+int wiiu_network_allowed(void);
+#endif
+
 #include "miniupnpc.h"
 #include "upnpcommands.h"
 #include "upnperrors.h"
@@ -65,9 +70,24 @@ static struct
 	int permanent_only;
 } upnp;
 
+/* (a port in network byte order is the number itself on a big-endian machine, as the Wii U: nothing to swap) */
 static unsigned short swap_short(unsigned short value)
 {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	return value;
+#else
 	return (unsigned short)(value << 8 | value >> 8);
+#endif
+}
+
+/* an IPv4 address in network byte order, as the bytes lie in memory, in an unsigned long of the machine's order */
+static posix_ulong ipv4_in_memory_order(unsigned int a, unsigned int b, unsigned int c, unsigned int d)
+{
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	return (posix_ulong)(a << 24 | b << 16 | c << 8 | d);
+#else
+	return (posix_ulong)(a | b << 8 | c << 16 | (posix_ulong)d << 24);
+#endif
 }
 
 /* whether no socket here has this UDP port (network byte order): a
@@ -200,6 +220,13 @@ int posix_upnp_forward_udp(unsigned short port, unsigned short preferred_port, p
 	that closes one as it is written to must not end the game */
 	signal(SIGPIPE, SIG_IGN);
 #endif
+#ifdef HALO_WIIU
+	if (!wiiu_network_allowed())
+	{
+		snprintf(error, (size_t)error_size, "the network is not the app's to use now");
+		return 0;
+	}
+#endif
 	if (!upnp_find_router(error, error_size))
 		return 0;
 	address_text[0] = 0;
@@ -228,7 +255,7 @@ int posix_upnp_forward_udp(unsigned short port, unsigned short preferred_port, p
 			strupnperror(result) ? strupnperror(result) : "unknown");
 		return 0;
 	}
-	*external_address = (posix_ulong)(parts[0] | parts[1] << 8 | parts[2] << 16 | (posix_ulong)parts[3] << 24);
+	*external_address = ipv4_in_memory_order(parts[0], parts[1], parts[2], parts[3]);
 	*external_port = swap_short(try_port);
 	return 1;
 }
@@ -237,6 +264,10 @@ void posix_upnp_stop_forwarding_udp(unsigned short external_port)
 {
 	char external_text[8];
 
+#ifdef HALO_WIIU
+	if (!wiiu_network_allowed())
+		return;
+#endif
 	if (!upnp.found)
 		return;
 	snprintf(external_text, sizeof(external_text), "%u", (unsigned int)swap_short(external_port));

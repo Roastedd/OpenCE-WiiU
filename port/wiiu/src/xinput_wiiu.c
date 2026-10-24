@@ -12,7 +12,8 @@ letters. The setting input.wiiu_face_buttons says "position" or "label" for both
 
 A tap on the GamePad's touch screen outside the menus skips a cinematic that can be skipped (it presses A, as the Android build's touch screen does).
 
-Not yet: the GamePad's gyro.
+The GamePad's gyro can aim (input.wiiu_gyro_aim, "off" by default; "always", or "zoom" for only while zoomed in): its turn rates are added to the right stick
+while no menu has the screen.
 */
 
 #include "platform.h"
@@ -123,6 +124,40 @@ static void pad_state(const struct wiiu_pad *pad, XINPUT_GAMEPAD *state)
 	state->sThumbRY = stick(pad->right_y);
 }
 
+/* (the game's: NONE, -1, while the first player is not zoomed in) */
+short player_control_get_zoom_level(short local_player_index);
+
+/* the gyro's turn rates, added to the right stick: input.wiiu_gyro_aim ("off", "always" or "zoom": only while zoomed in), input.wiiu_gyro_sensitivity (1: a quarter turn a second is the stick's full push) and
+input.wiiu_gyro_invert_y; a rate under 2% of a turn a second is the sensor's noise */
+static void add_gyro(const struct wiiu_pad *pad, XINPUT_GAMEPAD *state)
+{
+	static int mode = -1; /* 0 off, 1 always, 2 only zoomed in */
+	static float sensitivity, invert;
+	float yaw, pitch;
+	int x, y;
+
+	if (mode < 0)
+	{
+		const char *setting = config_string("input.wiiu_gyro_aim");
+
+		mode = !strcmp(setting, "always") ? 1 : !strcmp(setting, "zoom") ? 2 : 0;
+		sensitivity = (float)config_real("input.wiiu_gyro_sensitivity");
+		invert = config_boolean("input.wiiu_gyro_invert_y") ? -1.0f : 1.0f;
+	}
+	if (!mode || port_menus_active() || (mode == 2 && player_control_get_zoom_level(0) < 0))
+		return;
+	yaw = pad->gyro_yaw;
+	pitch = pad->gyro_pitch;
+	if (yaw > -0.02f && yaw < 0.02f)
+		yaw = 0.0f;
+	if (pitch > -0.02f && pitch < 0.02f)
+		pitch = 0.0f;
+	x = state->sThumbRX + (int)(yaw * 4.0f * sensitivity * 32767.0f);
+	y = state->sThumbRY + (int)(pitch * 4.0f * sensitivity * invert * 32767.0f);
+	state->sThumbRX = (SHORT)(x < -32768 ? -32768 : x > 32767 ? 32767 : x);
+	state->sThumbRY = (SHORT)(y < -32768 ? -32768 : y > 32767 ? 32767 : y);
+}
+
 /* a tap on the touch screen, outside the menus, skips a cinematic that can be skipped (touch_game.c: the game's own question): A is held for a few polls,
 since a tap is shorter than the game's poll */
 int touch_game_cinematic_skippable(void);
@@ -231,7 +266,10 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 	if (wiiu_input_read((unsigned int)port, &pad))
 		pad_state(&pad, &state->Gamepad);
 	if (port == 0)
+	{
 		tap_skips_cinematic(&state->Gamepad);
+		add_gyro(&pad, &state->Gamepad);
+	}
 	if (memcmp(&state->Gamepad, &controllers[port].previous, sizeof(state->Gamepad)))
 	{
 		controllers[port].packet_number++;

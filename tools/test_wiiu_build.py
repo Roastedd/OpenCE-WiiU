@@ -113,7 +113,9 @@ def test_what_is_left_out_is_listed_with_its_reason(monkeypatch):
     for source in sorted((ROOT / "port/linux/src").glob("*.c")) + sorted((ROOT / "port/third_party/mbedtls/library").glob("*.c")):
         path = source.relative_to(ROOT).as_posix()
         assert is_compiled(text, path) == (path not in wiiu_build.WIIU_EXCLUDE), path
-    assert "miniupnpc/src" not in text
+    # internet play's UPnP is built, with the compatibility header (wiiu_net_compat.h)
+    assert is_compiled(text, "port/third_party/miniupnpc/src/miniupnpc.c")
+    assert is_compiled(text, "port/third_party/miniupnpc/src/minissdpc.c")
 
 
 def test_every_game_source_is_compiled(monkeypatch):

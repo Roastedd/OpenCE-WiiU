@@ -33,10 +33,10 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from .linux_build import (EXPAT_DIR, EXPAT_SOURCES, GAME_FLAGS, KCP_DIR, LINUX_ABI_FLAGS, MBEDTLS_DIR, MINIUPNPC_DIR,
+from .linux_build import (EXPAT_DIR, EXPAT_SOURCES, GAME_FLAGS, KCP_DIR, LINUX_ABI_FLAGS, MBEDTLS_DIR, MINIUPNPC_DEFINES, MINIUPNPC_DIR,
                           MONOCYPHER_DIR, PLATFORM_FLAGS, POSIX_FLAGS, PPC_TARGET_FLAGS, STB_VORBIS_SOURCE,
                           TOML_DIR, X86_ONLY_FLAGS, X86_TARGET, XDK_INCLUDE, ZLIB_DEFINES, ZLIB_DIR, ZLIB_SOURCES,
-                          compile_launcher, configuration_defines, game_defines_and_includes, game_sources,
+                          compile_launcher, configuration_defines, game_defines_and_includes, game_sources, miniupnpc_sources,
                           linux_configure_inputs, musl_math_cflags, musl_math_sources, opus_cflags,
                           opus_sources, updater_defines, xdk_headers)
 from .ninja_syntax import Writer
@@ -92,10 +92,8 @@ WIIU_EXCLUDE: Dict[str, str] = {
     "port/third_party/mbedtls/library/timing.c": "mbedtls: the timing module only on Unix and Windows",
 }
 
-# Not compiled at all, as a library: internet play's UPnP (port/third_party/miniupnpc) needs the BSD socket headers
-# (AF_INET6, SO_RCVTIMEO, struct sockaddr_in6) that newlib does not have; the Wii U's sockets are nsysnet's. Its callers
-# in the platform layer (posix_upnp.c) compile and call stubs.
-MINIUPNPC_SKIPPED = "port/third_party/miniupnpc"
+# Internet play's UPnP (port/third_party/miniupnpc) is built with port/wiiu/include/wiiu_net_compat.h (AF_INET6, AF_UNIX, SO_RCVTIMEO and struct
+# sockaddr_in6, which wut's nsysnet headers lack); wiiu_upnp.c has the few symbols that leaves.
 
 # the units of port/wiiu/src that are the C library's side of the platform layer, as posix_*.c are (the host's ABI, no
 # 16-bit wchar_t, no XDK headers: wut's and newlib's structures have their real layout)
@@ -293,7 +291,7 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
         if source.name == "posix_dtls.c":
             add_object(source, f"{posix_cflags} {mbedtls_include}")
         elif source.name == "posix_upnp.c":
-            add_object(source, f"{posix_cflags} -I{MINIUPNPC_DIR / 'include'} -DMINIUPNP_STATICLIB")
+            add_object(source, f"{posix_cflags} -I{MINIUPNPC_DIR / 'include'} -DMINIUPNP_STATICLIB -DHALO_WIIU")
         elif source.name.startswith("posix_"):
             add_object(source, posix_cflags)
         else:
@@ -317,6 +315,10 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
             continue
         add_object(source, " ".join(posix_flags + [WIIU_MARCH, mbedtls_include, f"-I{MBEDTLS_DIR / 'library'}",
                                                    "-fno-builtin-wcslen", "-w"]))
+    # internet play's UPnP, with the C library's ABI as posix_upnp.c, which uses it
+    for source in miniupnpc_sources():
+        add_object(source, " ".join(posix_flags + [WIIU_MARCH, *MINIUPNPC_DEFINES, f"-include {WIIU_DIR / 'include' / 'wiiu_net_compat.h'}",
+                                                   f"-I{WIIU_DIR / 'include'}", f"-I{MINIUPNPC_DIR / 'include'}", f"-I{MINIUPNPC_DIR / 'src'}", "-w"]))
     add_object(TOML_DIR / "tomlc17.c", " ".join([abi, "-std=gnu11", "-w"]))
     for name in EXPAT_SOURCES:
         add_object(EXPAT_DIR / name, " ".join([abi, "-std=gnu11", f"-I{EXPAT_DIR}", "-w"]))

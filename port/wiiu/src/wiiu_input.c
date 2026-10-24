@@ -243,6 +243,8 @@ int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 			last_vpad.left_y = status.leftStick.y;
 			last_vpad.right_x = status.rightStick.x;
 			last_vpad.right_y = status.rightStick.y;
+			last_vpad.gyro_pitch = status.gyro.x;
+			last_vpad.gyro_yaw = status.gyro.y;
 			read_touch(&status);
 		}
 		else if (error != VPAD_READ_NO_SAMPLES && error != VPAD_READ_BUSY)
