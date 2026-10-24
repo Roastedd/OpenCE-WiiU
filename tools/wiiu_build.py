@@ -70,7 +70,6 @@ WIIU_EXCLUDE: Dict[str, str] = {
     "port/linux/src/menu_files.c": "the menus' OpenGL drawing",
     "port/linux/src/nv2a_psh.c": "NV2A pixel shaders to GLSL",
     "port/linux/src/nv2a_vsh.c": "NV2A vertex shaders to GLSL",
-    "port/linux/src/text_hires.c": "the high-resolution text's OpenGL drawing",
     "port/linux/src/xbox_textures.c": "Xbox textures on OpenGL",
     "port/linux/src/xgpu_post.c": "post-processing on OpenGL",
     "port/linux/src/xgpu_text.c": "text on OpenGL",
@@ -308,6 +307,11 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
         else:
             # (the platform layer's flags; the Xbox-facing units that include xgpu.h get a stand-in for SDL's OpenGL header)
             add_object(source, f"{platform_cflags} -I{wiiu_src} -I{WIIU_DIR / 'include'}")
+    # the high-res text's fonts (the HUD's and the menus' pictures are not in this build): big-endian words, from tools/embed_assets.py --fonts-only
+    fonts_source = build_dir / "generated" / "text_hires_fonts.c"
+    n.rule(name="wiiu_embed_fonts", command="$python tools/embed_assets.py --fonts-only $out", description="WIIU EMBED $out")
+    n.build(outputs=fonts_source, rule="wiiu_embed_fonts", implicit=[Path("tools/embed_assets.py"), Path("port/assets/fonts/fonts.json")])
+    add_object(fonts_source, f"{platform_cflags} -I{platform_dir}")
     for source in sorted((MBEDTLS_DIR / "library").glob("*.c")):
         if _is_excluded(source):
             continue

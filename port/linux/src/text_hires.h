@@ -61,6 +61,12 @@ void text_hires_register_atlas(const unsigned long *texture, unsigned long width
 placeholder's, its rasterized glyphs uploaded; 0 otherwise */
 unsigned int text_hires_atlas_texture(unsigned long data);
 
+#ifdef HALO_WIIU
+/* the atlas's coverage (ATLAS_SIZE squared, a byte each) and its rows that changed since the last call (every row when first), when data is its
+placeholder's; NULL otherwise (text_hires.c; xbox_textures_gx2.c sends them to the host) */
+const unsigned char *text_hires_atlas_rows(unsigned long data, long *size, int first, long *top, long *bottom);
+#endif
+
 /* a function called before the atlas is emptied, which draws what has been
 batched from it (rasterizer_xbox_text.c's rasterizer_text_flush) */
 void text_hires_set_reset_hook(void (*hook)(void));

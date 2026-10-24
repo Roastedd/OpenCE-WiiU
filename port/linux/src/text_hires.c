@@ -17,9 +17,12 @@ scale (a window made fullscreen) or a full atlas starts it over.
 */
 
 #include "text_hires.h"
-#include "platform.h"
+/* (platform.h, which brings the whole Xbox SDK with it, is for platform_log alone) */
+void platform_log(const char *format, ...);
 #include "port_config.h"
+#ifndef HALO_WIIU
 #include "xgpu.h"
+#endif
 
 #include <math.h>
 #include <stdio.h>
@@ -69,7 +72,9 @@ static float atlas_scale;   /* the pixels per unit its glyphs have */
 static int pack_x, pack_y, pack_row_height;
 static int dirty_top = ATLAS_SIZE, dirty_bottom;
 static unsigned long placeholder_data, placeholder_width, placeholder_height;
+#ifndef HALO_WIIU
 static GLuint atlas_texture;
+#endif
 
 /* tag names compared as the game does, ignoring case (and without the POSIX
 strcasecmp, which the Windows build has not) */
@@ -303,6 +308,30 @@ void text_hires_register_atlas(const unsigned long *texture, unsigned long width
 	placeholder_height = height;
 }
 
+#ifdef HALO_WIIU
+/* The Wii U's renderer has no OpenGL: its texture cache (port/wiiu/src/xbox_textures_gx2.c) asks for the atlas's coverage and the rows that changed since it
+asked last, when the texture it binds is the placeholder's, and sends them to the host as an image of its own. first: it has no image yet, so every row. */
+const unsigned char *text_hires_atlas_rows(unsigned long data, long *size, int first, long *top, long *bottom)
+{
+	if (!data || data != placeholder_data || !atlas)
+		return NULL;
+	*size = ATLAS_SIZE;
+	if (first)
+	{
+		*top = 0;
+		*bottom = ATLAS_SIZE;
+	}
+	else
+	{
+		*top = dirty_top;
+		*bottom = dirty_bottom;
+	}
+	/* (what is handed over is told as handed over: the rows are sent from here) */
+	dirty_top = ATLAS_SIZE;
+	dirty_bottom = 0;
+	return atlas;
+}
+#else
 unsigned int text_hires_atlas_texture(unsigned long data)
 {
 	if (!data || data != placeholder_data || !atlas)
@@ -345,3 +374,4 @@ unsigned int text_hires_atlas_texture(unsigned long data)
 	}
 	return atlas_texture;
 }
+#endif
