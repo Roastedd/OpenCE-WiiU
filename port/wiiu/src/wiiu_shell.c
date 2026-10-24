@@ -242,11 +242,17 @@ void wiiu_foreground_gate(int is_game_thread)
 		game_gate_held = 0;
 }
 
+/* The game quits (its Quit, or a timed run that is over): the Wii U Menu is asked for, and the system ends the app through ProcUI, as it does for HOME's Close
+software (the release and exit callbacks above run). Stopping the loop and returning from main left the console on the last picture with its network dead;
+the debug server's quit, which asks this way, closed the app cleanly each time it was run. */
 void wiiu_request_exit(void)
 {
-	exit_requested = 1;
-	/* the main thread's loop ends; the app closes */
-	WHBProcStopRunning();
+	static volatile uint32_t asked;
+
+	if (asked)
+		return;
+	asked = 1;
+	wiiu_launch_menu();
 }
 
 void platform_request_quit(void)

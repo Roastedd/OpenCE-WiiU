@@ -2,7 +2,7 @@
 XINPUT_WIIU.C
 
 Xbox controllers for the Wii U: the GamePad is the first controller (merged with a Pro Controller on channel 0, if one is connected), and Pro Controllers
-on channels 1 to 3 are the others. The debug keyboard and the memory units are not there.
+on channels 1 to 3 are the others (input.wiiu_controller_layout "separate": the GamePad alone is the first, and the controllers are the players after it). The debug keyboard and the memory units are not there.
 
 The Xbox pad's four face buttons are matched to the Wii U's in the game by place (the Wii U's B is where the Xbox's A is): the player's thumb finds the
 action where it expects it, and the prompts on the screen show the icon of the letter that is there (hud_hires_tags.c, port_button_icon). In the menus
@@ -196,12 +196,25 @@ VOID WINAPI XInitDevices(DWORD preallocation_type_count, PXDEVICE_PREALLOC_TYPE 
 	(void)preallocation_types;
 }
 
+/* input.wiiu_controller_layout: "merged" or "separate" (wiiu_input.h) */
+static void layout_apply(void)
+{
+	static int applied;
+
+	if (!applied)
+	{
+		applied = 1;
+		wiiu_input_set_layout(!strcmp(config_string("input.wiiu_controller_layout"), "separate"));
+	}
+}
+
 static DWORD connected_gamepads(void)
 {
 	DWORD mask = 0;
 	unsigned int port;
 	struct wiiu_pad pad;
 
+	layout_apply();
 	for (port = 0; port < PORT_COUNT; port++)
 		if (wiiu_input_read(port, &pad))
 			mask |= 1UL << port;
@@ -263,6 +276,7 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 	memset(state, 0, sizeof(*state));
 	if (port < 0)
 		return ERROR_DEVICE_NOT_CONNECTED;
+	layout_apply();
 	if (wiiu_input_read((unsigned int)port, &pad))
 		pad_state(&pad, &state->Gamepad);
 	if (port == 0)

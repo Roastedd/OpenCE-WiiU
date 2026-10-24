@@ -121,6 +121,12 @@ static struct
 	struct wiiu_pad pad;
 } last_pro[WIIU_PAD_PORTS];
 static struct wiiu_pad last_vpad;
+static int controllers_separate;
+
+void wiiu_input_set_layout(int separate)
+{
+	controllers_separate = separate != 0;
+}
 
 /* the Pro Controller or the Classic Controller on a KPAD channel, if there is one */
 static int read_pro(unsigned int channel, struct wiiu_pad *pad)
@@ -254,8 +260,16 @@ int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 		*pad = last_vpad;
 		wiiu_debug_input(pad);
 	}
-	if (read_pro(port, pad))
+	/* (merged: the controller of KPAD channel port joins this port; separate: the GamePad is port 0 alone and channel n-1 is port n) */
+	if (controllers_separate)
+	{
+		if (port > 0 && read_pro(port - 1, pad))
+			present = 1;
+	}
+	else if (read_pro(port, pad))
+	{
 		present = 1;
+	}
 	return present;
 }
 
@@ -300,6 +314,10 @@ void wiiu_input_rumble(unsigned int port, float strength)
 			VPADStopMotor(VPAD_CHAN_0);
 		}
 	}
-	if (pro_present & (1u << port))
-		WPADControlMotor((WPADChan)port, step >= 2 ? TRUE : FALSE);
+	{
+		const unsigned int channel = controllers_separate ? port - 1 : port;
+
+		if ((controllers_separate ? port > 0 : 1) && (pro_present & (1u << channel)))
+			WPADControlMotor((WPADChan)channel, step >= 2 ? TRUE : FALSE);
+	}
 }

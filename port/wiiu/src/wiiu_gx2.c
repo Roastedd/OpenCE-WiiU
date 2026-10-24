@@ -2197,18 +2197,22 @@ static int initialize(void)
 			return 0;
 		}
 	}
+	/* display.render_lines (480, 540, 720, 900 or 1080); a note in halo/render_height.txt overrides it, for a run that tries another */
 	gx.render_height = 540;
 	{
+		const long setting = config_integer("display.render_lines");
 		FILE *file = fopen(WIIU_DATA_DIRECTORY "/render_height.txt", "r");
 		unsigned lines = 0;
 
+		if (setting >= 240 && setting <= (long)WHBGfxGetTVColourBuffer()->surface.height)
+			gx.render_height = (unsigned)setting;
 		if (file)
 		{
 			if (fscanf(file, "%u", &lines) == 1 && lines >= 240 && lines <= WHBGfxGetTVColourBuffer()->surface.height)
 				gx.render_height = lines;
 			fclose(file);
 		}
-		wiiu_log("GX2: the game draws at %u lines (halo/render_height.txt)", gx.render_height);
+		wiiu_log("GX2: the game draws at %u lines (display.render_lines, or halo/render_height.txt)", gx.render_height);
 	}
 	/* a note in halo/exit_after.txt (seconds) ends the run by itself that long after the first frame: for runs nobody is at the console for */
 	{

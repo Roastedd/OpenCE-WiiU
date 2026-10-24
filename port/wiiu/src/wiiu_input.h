@@ -41,6 +41,11 @@ struct wiiu_pad
 
 #define WIIU_PAD_PORTS 4
 
+/* How the controllers take the ports: 0 (the default), the Pro and Classic Controllers merge with the GamePad (the first of them with port 0's, the others
+on ports 1 to 3 by their KPAD channel); 1, "separate": port 0 is the GamePad alone, and the controllers are the players after it, in the order their channels
+have (for split screen with the GamePad and a Pro Controller). */
+void wiiu_input_set_layout(int separate);
+
 /* Reads the pad of a port (0: the GamePad, with the Pro Controller of channel 0 if one is there; 1 to 3: the Pro Controllers of channels 1 to 3). Returns 1
 if there is such a pad, with its state; 0 if not. */
 int wiiu_input_read(unsigned int port, struct wiiu_pad *pad);

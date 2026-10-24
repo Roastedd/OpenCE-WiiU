@@ -153,6 +153,22 @@ static int sockets_enabled(void)
 	return enabled;
 }
 
+/* A listening socket that nsysnet's poll calls readable, and that has nothing to accept (seen every poll, fifty times a second, while a game was hosted: the
+game then logged "accept_endpoint() returned NULL" into debug.txt each time, a write to the card on the game's thread): a connection is waited for, but not
+told of again for a short while after an accept that found none, a longer one each time, to 200 ms. */
+#define LISTENERS 256
+static struct
+{
+	unsigned char listening;
+	unsigned short quiet_ms;
+	uint32_t quiet_until;
+} listeners[LISTENERS];
+
+static uint32_t clock_ms(void)
+{
+	return (uint32_t)OSTicksToMilliseconds(OSGetSystemTime());
+}
+
 /* the network is not the app's to use now: Winsock's "network is down" */
 static int unusable(void)
 {
@@ -182,6 +198,8 @@ int posix_socket(int family, int type, int protocol)
 /* (a close is always allowed: the sockets are given back when the system asks) */
 int posix_socket_close(int socket)
 {
+	if (socket >= 0 && socket < LISTENERS)
+		memset(&listeners[socket], 0, sizeof(listeners[socket]));
 	return succeed(close(socket));
 }
 
@@ -221,6 +239,8 @@ int posix_socket_listen(int socket, int backlog)
 	{
 		int result = listen(socket, backlog);
 
+		if (result >= 0 && socket >= 0 && socket < LISTENERS)
+			memset(&listeners[socket], 0, sizeof(listeners[socket])), listeners[socket].listening = 1;
 		trace("listen", socket, NULL, result);
 		return succeed(result);
 	}
@@ -239,6 +259,18 @@ int posix_socket_accept(int socket, void *address, int *address_length)
 		*address_length = (int)length;
 	if (result >= 0 || errno != EBUSY)
 		trace("accept", socket, NULL, result);
+	if (socket >= 0 && socket < LISTENERS && listeners[socket].listening)
+	{
+		if (result >= 0)
+		{
+			listeners[socket].quiet_ms = 0;
+		}
+		else if (errno == EBUSY || errno == EAGAIN)
+		{
+			listeners[socket].quiet_ms = listeners[socket].quiet_ms ? (listeners[socket].quiet_ms * 2 > 200 ? 200 : listeners[socket].quiet_ms * 2) : 10;
+			listeners[socket].quiet_until = clock_ms() + listeners[socket].quiet_ms;
+		}
+	}
 	if (result < 0 && errno == EBUSY)
 	{
 		last_error = WSAEWOULDBLOCK;
@@ -442,6 +474,7 @@ int posix_socket_select(int *read, int *read_count, int *write, int *write_count
 	int total = 0;
 	int list, index;
 	int result;
+	int quieted = 0;
 
 	if (!sockets_enabled() || !wiiu_network_allowed())
 	{
@@ -524,6 +557,13 @@ int posix_socket_select(int *read, int *read_count, int *write, int *write_count
 
 			if (!(descriptors[total].revents & ready[list]))
 				continue;
+			/* (a listening socket that had nothing to accept a moment ago) */
+			if (list == 0 && descriptor >= 0 && descriptor < LISTENERS && listeners[descriptor].listening && listeners[descriptor].quiet_ms &&
+				(int32_t)(listeners[descriptor].quiet_until - clock_ms()) > 0)
+			{
+				quieted = 1;
+				continue;
+			}
 			/* Winsock reports a socket writeable once its connect has succeeded; one whose connect failed is in the error set, where POSIX reports
 			it writeable with the failure in SO_ERROR. The game takes writeable as connected (connect_endpoint). */
 			if (list == 1 && getsockopt(descriptor, SOL_SOCKET, SO_ERROR, &pending, &length) == 0 && pending)
@@ -539,6 +579,9 @@ int posix_socket_select(int *read, int *read_count, int *write, int *write_count
 			*counts[list] = kept;
 		result += kept;
 	}
+	/* (everything that was ready was a listening socket kept quiet: a short wait, or the caller's loop would spin on this) */
+	if (quieted && result == 0)
+		OSSleepTicks(OSMillisecondsToTicks(5));
 	/* like Winsock, a select with nothing ready leaves the last error as it was */
 	if (result > 0)
 		last_error = 0;

@@ -106,6 +106,11 @@ static const struct config_setting config_settings[] =
 	{ "display.screen_width", _config_integer, "0", "HALO_SCREEN_WIDTH", _environment_value, _platform_android,
 		"Columns of the 480-line picture: 0 for the display's shape, 640 for the\n"
 		"Xbox's 4:3." },
+	{ "display.render_lines", _config_integer, "540", "HALO_WIIU_RENDER_LINES", _environment_value, _platform_wiiu,
+		"The lines the game draws at: 480, 540, 720, 900 or 1080 (the TV's picture and the\n"
+		"GamePad's are scaled from it; 1080 is the TV's own). More lines cost more of the\n"
+		"GPU's time: the menu at 1080 took 27 ms a frame. A note in halo/render_height.txt\n"
+		"overrides it for one run." },
 	{ "display.vsync", _config_boolean, "true", "HALO_NO_VSYNC", _environment_set_is_false, _platform_all,
 		"Wait for the display between frames; false draws as fast as possible." },
 	{ "display.max_fps", _config_integer, "0", "HALO_MAX_FPS", _environment_value, _platform_desktop,
@@ -243,6 +248,11 @@ static const struct config_setting config_settings[] =
 		"the GamePad a second." },
 	{ "input.wiiu_gyro_invert_y", _config_boolean, "false", "HALO_WIIU_GYRO_INVERT_Y", _environment_value, _platform_wiiu,
 		"Tilting the top of the GamePad away looks down, not up." },
+	{ "input.wiiu_controller_layout", _config_string, "\"merged\"", "HALO_WIIU_CONTROLLER_LAYOUT", _environment_value, _platform_wiiu,
+		"How the Pro and Classic Controllers take the players' places. \"merged\": the first\n"
+		"joins the GamePad as player 1 (so a Pro Controller can play alone). \"separate\": the\n"
+		"GamePad is player 1 alone and the controllers are players 2 to 4, in the order the\n"
+		"system numbered them: for split screen with the GamePad and a Pro Controller." },
 	{ "input.wiiu_rumble", _config_boolean, "true", "HALO_WIIU_RUMBLE", _environment_value, _platform_wiiu,
 		"The GamePad and the Pro Controllers rumble as the game asks." },
 	{ "input.mouse_sensitivity", _config_real, "1.0", "HALO_MOUSE_SENSITIVITY", _environment_value, _platform_desktop,
