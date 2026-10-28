@@ -57,6 +57,7 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 /* ProcUI runs the callbacks of the higher priority first; ours runs before SDL's (100) and the like */
 #define RELEASE_PRIORITY 2000
 #define ACQUIRE_PRIORITY 50
+#define ACQUIRE_LATE_PRIORITY 3000
 #define EXIT_PRIORITY 50
 #define LOG_FILE WIIU_DATA_DIRECTORY "/log.txt"
 #define LOG_PREVIOUS_FILE WIIU_DATA_DIRECTORY "/log-previous.txt"
@@ -323,6 +324,16 @@ static uint32_t on_acquire(void *unused)
 	wiiu_shell_watch_background(&shell_watch, 0, shell_ms());
 	wiiu_phase("back in the foreground");
 	wiiu_log("Back in the foreground");
+	return 0;
+}
+
+/* after libwhb's own acquire callback (priority 100) has made its buffers: the game's render targets in the eDRAM are made again (wiiu_gx2.c) */
+void wiiu_gx2_mem1_restore(void);
+
+static uint32_t on_acquire_late(void *unused)
+{
+	(void)unused;
+	wiiu_gx2_mem1_restore();
 	return 0;
 }
 
@@ -642,6 +653,7 @@ int wiiu_shell_run(int (*game_main)(void))
 	WHBProcInit();
 	ProcUIRegisterCallback(PROCUI_CALLBACK_RELEASE, on_release, NULL, RELEASE_PRIORITY);
 	ProcUIRegisterCallback(PROCUI_CALLBACK_ACQUIRE, on_acquire, NULL, ACQUIRE_PRIORITY);
+	ProcUIRegisterCallback(PROCUI_CALLBACK_ACQUIRE, on_acquire_late, NULL, ACQUIRE_LATE_PRIORITY);
 	ProcUIRegisterCallback(PROCUI_CALLBACK_EXIT, on_close, NULL, EXIT_PRIORITY);
 	ProcUIRegisterCallback(PROCUI_CALLBACK_NET_IO_STOP, on_network_stop, NULL, ACQUIRE_PRIORITY);
 	ProcUIRegisterCallback(PROCUI_CALLBACK_NET_IO_START, on_network_start, NULL, ACQUIRE_PRIORITY);

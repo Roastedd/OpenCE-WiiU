@@ -48,6 +48,7 @@ uint32_t *dk_stream_buffer(unsigned slot);
 #include <gx2/shaders.h>
 #include <gx2/state.h>
 #include <gx2/surface.h>
+#include <gx2r/surface.h>
 #include <gx2/texture.h>
 #include <gx2/utils.h>
 #include <whb/gfx.h>
@@ -82,6 +83,7 @@ struct target
 	GX2DepthBuffer depth;
 	GX2Texture texture; /* a color target as the blit samples it */
 	unsigned last_used;
+	int in_mem1; /* its image is in the eDRAM (MEM1), which the system takes while the app is in the background: made again by mem1_restore */
 };
 
 struct blit_vertex
@@ -191,6 +193,10 @@ static struct
 	OSTime last_present, longest_frame;
 	unsigned slow_frames; /* frames of the window that took more than 40 ms */
 	double exit_after;
+	int hiz; /* halo/hiz.txt: 1, the big depth target has hierarchical Z */
+	int mem1; /* halo/mem1.txt: 1, the big render targets are made in the eDRAM (MEM1) instead of the DDR3 */
+	volatile int mem1_lost; /* HOME: the eDRAM's targets are gone until mem1_restore */
+	volatile int resume_needed;
 	unsigned render_height; /* the lines the game draws at (halo/render_height.txt, 540 if none): the TV's 1080 lines cost 27 ms a frame in the menu */
 	int trace_frame; /* halo/gx2_trace.txt: the frame whose draws are logged (-1: none) */
 	int debug_mode; /* and, after it, a mode: 1 draws without blending, 2 without culling */
@@ -2227,6 +2233,30 @@ static int initialize(void)
 		}
 		wiiu_log("GX2: the game draws at %u lines (display.render_lines, or halo/render_height.txt)", gx.render_height);
 	}
+	/* halo/mem1.txt: 1, the game's render targets (the big ones) are made in the eDRAM */
+	{
+		FILE *file = fopen(WIIU_DATA_DIRECTORY "/mem1.txt", "r");
+		int on = 0;
+
+		if (file)
+		{
+			if (fscanf(file, "%d", &on) != 1)
+				on = 0;
+			fclose(file);
+		}
+		gx.mem1 = on;
+		wiiu_log("GX2: render targets in the eDRAM (halo/mem1.txt): %s", on ? "yes" : "no");
+		on = 0;
+		file = fopen(WIIU_DATA_DIRECTORY "/hiz.txt", "r");
+		if (file)
+		{
+			if (fscanf(file, "%d", &on) != 1)
+				on = 0;
+			fclose(file);
+		}
+		gx.hiz = on;
+		wiiu_log("GX2: hierarchical Z (halo/hiz.txt): %s", on ? "yes" : "no");
+	}
 	/* a note in halo/exit_after.txt (seconds) ends the run by itself that long after the first frame: for runs nobody is at the console for */
 	{
 		FILE *file = fopen(WIIU_DATA_DIRECTORY "/exit_after.txt", "r");
@@ -2392,6 +2422,85 @@ void platform_menus_set_active(int active)
 
 /* ---------- render targets */
 
+/* The surface's image: in the eDRAM (MEM1) if halo/mem1.txt says so and it is big, as libwhb does for the TV's and the GamePad's buffers (the DDR3 the colors and depths of every pixel drawn
+would go to is shared with the CPU: the frame's fill is what the GPU spends its time on); WHBGfx's allocator (GX2RSetAllocator) gives MEM1 for colour and depth buffers. The DDR3 if there is no room. */
+#define MEM1_MIN_BYTES (512u * 1024u)
+
+static void target_image(struct target *target, GX2Surface *s, int depth)
+{
+	if (gx.mem1)
+	{
+		const uint32_t imageSize = s->imageSize;
+
+		GX2CalcSurfaceSizeAndAlignment(s);
+		if (s->imageSize >= MEM1_MIN_BYTES &&
+			GX2RCreateSurface(s, (GX2RResourceFlags)((depth ? GX2R_RESOURCE_BIND_DEPTH_BUFFER : GX2R_RESOURCE_BIND_COLOR_BUFFER) | GX2R_RESOURCE_BIND_TEXTURE |
+				GX2R_RESOURCE_USAGE_GPU_READ | GX2R_RESOURCE_USAGE_GPU_WRITE)))
+		{
+			memset(s->image, 0, s->imageSize);
+			target->in_mem1 = 1;
+			return;
+		}
+		s->imageSize = imageSize;
+	}
+	s->image = gx_alloc(s->imageSize, s->alignment ? s->alignment : 256);
+}
+
+/* HOME (the shell's release callback): the system takes the eDRAM, and libwhb makes its own heap and buffers again when the app is back */
+void wiiu_gx2_mem1_lost(void);
+void wiiu_gx2_mem1_restore(void);
+
+void wiiu_gx2_mem1_lost(void)
+{
+	unsigned i;
+
+	if (!gx.mem1)
+		return;
+	gx.mem1_lost = 1;
+	for (i = 0; i < gx.target_count; i++)
+		if (gx.targets[i].in_mem1)
+		{
+			GX2Surface *s = gx.targets[i].surface.kind == DK_SURFACE_DEPTH ? &gx.targets[i].depth.surface : &gx.targets[i].color.surface;
+
+			s->image = NULL; /* (not freed: the heap it is in is destroyed) */
+		}
+	wiiu_log("GX2: HOME: the eDRAM's render targets are given up");
+}
+
+/* the targets again (in the eDRAM if libwhb has its heap back, else in the DDR3), and their registers; the shell's late acquire callback (the priority after libwhb's) */
+void wiiu_gx2_mem1_restore(void)
+{
+	unsigned i, again = 0;
+
+	if (!gx.mem1_lost)
+		return;
+	for (i = 0; i < gx.target_count; i++)
+	{
+		struct target *target = &gx.targets[i];
+		const int depth = target->surface.kind == DK_SURFACE_DEPTH;
+		GX2Surface *s = depth ? &target->depth.surface : &target->color.surface;
+
+		if (!target->in_mem1)
+			continue;
+		target->in_mem1 = 0;
+		target_image(target, s, depth);
+		if (!s->image)
+			continue;
+		if (depth)
+			GX2InitDepthBufferRegs(&target->depth);
+		else
+		{
+			GX2InitColorBufferRegs(&target->color);
+			target->texture.surface = target->color.surface;
+			GX2InitTextureRegs(&target->texture);
+		}
+		again += target->in_mem1;
+	}
+	gx.mem1_lost = 0;
+	gx.resume_needed = 1;
+	wiiu_log("GX2: back: %u render targets are in the eDRAM again", again);
+}
+
 static struct target *target_get(const struct dk_surface *surface)
 {
 	struct target *target;
@@ -2422,7 +2531,8 @@ static struct target *target_get(const struct dk_surface *surface)
 	s->use = (GX2SurfaceUse)((depth ? GX2_SURFACE_USE_DEPTH_BUFFER : GX2_SURFACE_USE_COLOR_BUFFER) | GX2_SURFACE_USE_TEXTURE);
 	s->tileMode = GX2_TILE_MODE_DEFAULT;
 	GX2CalcSurfaceSizeAndAlignment(s);
-	s->image = gx_alloc(s->imageSize, s->alignment ? s->alignment : 256);
+	target->in_mem1 = 0;
+	target_image(target, s, depth);
 	if (!s->image)
 	{
 		wiiu_log("GX2: no memory for the %ux%u %s target at %08x", (unsigned)s->width, (unsigned)s->height, depth ? "depth" : "color",
@@ -2433,6 +2543,20 @@ static struct target *target_get(const struct dk_surface *surface)
 	{
 		target->depth.viewNumSlices = 1;
 		target->depth.depthClear = 1.0f;
+		if (gx.hiz && s->imageSize >= MEM1_MIN_BYTES)
+		{
+			/* hierarchical Z (halo/hiz.txt): the GPU keeps a coarse depth per tile and rejects hidden tiles before shading them (a buffer of its own, set before the registers) */
+			uint32_t size = 0, alignment = 0;
+
+			GX2CalcDepthBufferHiZInfo(&target->depth, &size, &alignment);
+			target->depth.hiZPtr = size ? gx_alloc(size, alignment ? alignment : 256) : NULL;
+			target->depth.hiZSize = size;
+			if (target->depth.hiZPtr)
+			{
+				GX2InitDepthBufferHiZEnable(&target->depth, TRUE);
+				wiiu_log("GX2: hierarchical Z on for the %ux%u depth target (%u bytes)", (unsigned)s->width, (unsigned)s->height, (unsigned)size);
+			}
+		}
 		GX2InitDepthBufferRegs(&target->depth);
 	}
 	else
@@ -3221,6 +3345,21 @@ unsigned int host_gx2_output_height(void);
 /* runs the commands of a stream; replaying (the GPU test) leaves out those that make or free resources and the present */
 static void run_stream(const unsigned char *at, const unsigned char *end)
 {
+	if (gx.mem1_lost)
+	{
+		/* (the app is back and libwhb is making its buffers again: the shell's late acquire callback makes ours; if it does not come, the targets are made here) */
+		const OSTime start = OSGetSystemTime();
+
+		while (gx.mem1_lost && OSGetSystemTime() - start < OSMillisecondsToTicks(3000))
+			OSSleepTicks(OSMillisecondsToTicks(2));
+		if (gx.mem1_lost)
+			wiiu_gx2_mem1_restore();
+	}
+	if (gx.resume_needed)
+	{
+		gx.resume_needed = 0;
+		context_resume();
+	}
 	while (at + sizeof(struct dk_command_header) <= end)
 	{
 		const struct dk_command_header *header = (const struct dk_command_header *)at;
@@ -3721,6 +3860,7 @@ int wiiu_gx2_release_drain(void)
 {
 	OSTime start;
 
+	wiiu_gx2_mem1_lost();
 	if (gt.core_callbacks)
 		return 1;
 	if (gt.state != 2 || gt.spin)
