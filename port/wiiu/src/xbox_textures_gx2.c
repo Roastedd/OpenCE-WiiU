@@ -874,6 +874,19 @@ static uint32_t texture_entry_result(struct texture_entry *entry, int *kind, str
 		description->hires = TRUE;
 		return id;
 	}
+	/* (a placeholder the game draws some sprites of a bitmap from: a button icon in a prompt, hud_hires_tags.c) */
+	{
+		const long asset = hud_hires_placeholder_asset(entry->data);
+
+		if (asset >= 0 && (id = hud_image(asset, &levels)) != 0)
+		{
+			*kind = DK_TEXTURE_2D;
+			description->levels = levels;
+			description->hires = TRUE;
+			description->hires_coverage = hud_hires_override_coverage(asset);
+			return id;
+		}
+	}
 	if (entry->override >= 0 && (id = hud_image(entry->override, &levels)) != 0)
 	{
 		*kind = DK_TEXTURE_2D;

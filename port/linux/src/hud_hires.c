@@ -169,17 +169,6 @@ int hud_hires_sprites_drawable(long asset, unsigned long address, unsigned long 
 	static unsigned long read_at = (unsigned long)-1;
 	unsigned long levels;
 
-#ifdef HALO_WIIU
-	/* (the Wii U's texture cache draws no texture for a placeholder: the sprites are drawn from the bitmap as they are) */
-	(void)levels;
-	(void)address;
-	(void)level0_size;
-	(void)asset;
-	(void)hud_enabled;
-	(void)titles_enabled;
-	(void)read_at;
-	return 0;
-#else
 	if (read_at != config_changes())
 	{
 		read_at = config_changes();
@@ -202,6 +191,11 @@ int hud_hires_sprites_drawable(long asset, unsigned long address, unsigned long 
 		}
 		return 0;
 	}
+#ifdef HALO_WIIU
+	/* (the Wii U's texture cache makes the image when the placeholder is drawn: hud_hires_placeholder_asset) */
+	(void)levels;
+	return 1;
+#else
 	return hud_hires_override_texture(asset, &levels) != 0;
 #endif
 }
@@ -221,6 +215,18 @@ void hud_hires_register_placeholder(long asset, const unsigned long *texture)
 		placeholders[index].data = texture ? texture[1] : 0;
 		placeholders[index].asset = asset;
 	}
+}
+
+long hud_hires_placeholder_asset(unsigned long data)
+{
+	long index;
+
+	for (index = 0; data && index < placeholder_count; index++)
+	{
+		if (placeholders[index].data == data)
+			return placeholders[index].asset;
+	}
+	return -1;
 }
 
 #ifndef HALO_WIIU

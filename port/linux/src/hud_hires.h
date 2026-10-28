@@ -80,6 +80,8 @@ int hud_hires_override_coverage(long asset);
 placeholder's D3D texture has this Data, and the number of its mip levels;
 0 if data is no placeholder's */
 unsigned int hud_hires_placeholder_texture(unsigned long data, unsigned long *levels);
+/* the texture (its asset) drawn for the placeholder whose D3D texture has this Data, or -1 */
+long hud_hires_placeholder_asset(unsigned long data);
 /* whether its red holds exact segment thresholds, read unfiltered (d3d8_gl.c,
 nv2a_psh.c: point_threshold) */
 int hud_hires_override_point_threshold(long asset);
