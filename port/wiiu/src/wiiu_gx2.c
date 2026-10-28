@@ -16,6 +16,7 @@ Not run on a console.
 */
 
 #include "dk_commands.h"
+#include "wiiu_debug.h"
 #include "wiiu_shell.h"
 #include "port_config.h"
 #include "wiiu_indices.h"
@@ -3275,6 +3276,8 @@ static void present(const struct dk_command_present *command)
 	ring_flush();
 	if (back && command->screenshot)
 		screenshot_take(back, command->screenshot);
+	/* (before the frame is drawn, as the screenshot above is: the screens' buffers then hold the frame before) */
+	wiiu_debug_present(back ? &back->color : NULL, WHBGfxGetTVColourBuffer(), WHBGfxGetDRCColourBuffer());
 	/* WHBGfx's own Begin/FinishRender wait for the vsync before the frame and for the GPU to finish (GX2DrawDone) after it, so that the CPU could never build a frame while
 	the GPU drew one: they are done here without the waits (the commands run in order; what the CPU writes for the GPU is protected by timestamps) and, as they did, the
 	screens' buffers are copied to the scan buffers and swapped. At most one swap is queued. */
