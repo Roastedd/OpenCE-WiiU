@@ -144,9 +144,8 @@ static struct
 	OSTime last;
 	float turn, pitch; /* rotations not yet taken */
 	OSTime told;
-	/* (for the log: the system's own angle against the rates added up here, each axis, since the last line) */
 	int angle_known;
-	float last_angle[3], by_angle[3], by_rates[3];
+	float last_angle[3]; /* VPADStatus.angle at the last sample */
 } gyro_mouse;
 
 void wiiu_input_set_gyro_space(int space)
@@ -174,7 +173,7 @@ static void gyro_mouse_note(const VPADStatus *status, float pitch_rate, float ya
 	/* the accelerometer measures the push that holds the pad up, opposite to gravity */
 	float down[3] = { -status->accelorometer.acc.x, -status->accelorometer.acc.y, -status->accelorometer.acc.z };
 	float length = sqrtf(down[0] * down[0] + down[1] * down[1] + down[2] * down[2]);
-	float turn_rate, magnitude, scale;
+	float turned[3], turn, magnitude, scale;
 	int i;
 
 	gyro_mouse.last = now;
@@ -201,61 +200,62 @@ static void gyro_mouse_note(const VPADStatus *status, float pitch_rate, float ya
 		}
 	}
 	{
+		/* how far the pad turned since the last sample, each axis in rotations: the difference of the system's own angle (VPADStatus.angle, the gyro added
+		up at the pad's own rate, so every sample between the game's reads counts; on the console it agrees with the rates added up here, same axes and signs),
+		or the rates times the time between reads when the angle cannot be had (the first read, a jump) or the debug server holds the rates */
 		const float angle[3] = { status->angle.x, status->angle.y, status->angle.z };
-		const float rate[3] = { status->gyro.x, status->gyro.y, status->gyro.z };
+		const float rate[3] = { pitch_rate, yaw_rate, roll_rate };
+		const int held = pitch_rate != status->gyro.x || yaw_rate != status->gyro.y;
 
 		for (i = 0; i < 3; i++)
 		{
-			if (gyro_mouse.angle_known)
-				gyro_mouse.by_angle[i] += angle[i] - gyro_mouse.last_angle[i];
+			float step = angle[i] - gyro_mouse.last_angle[i];
+
+			if (!gyro_mouse.angle_known || held || step > 0.25f || step < -0.25f)
+				step = rate[i] * seconds;
 			gyro_mouse.last_angle[i] = angle[i];
-			gyro_mouse.by_rates[i] += rate[i] * seconds;
+			turned[i] = step;
 		}
 		gyro_mouse.angle_known = 1;
 	}
 	if (gyro_mouse.space == WIIU_GYRO_SPACE_TURN)
 	{
-		turn_rate = yaw_rate;
+		turn = turned[1];
 	}
 	else if (gyro_mouse.space == WIIU_GYRO_SPACE_LEAN)
 	{
-		turn_rate = roll_rate;
+		turn = turned[2];
 	}
 	else
 	{
 		/* player space (GyroWiki, "Player Space Gyro (and Alternatives) Explained"): the direction from gravity, the size from the pad's yaw and roll together;
-		with the pad held upright gravity pulls along +y (measured: 0.99) and this is the pad's own yaw, positive to the right */
-		const float world = yaw_rate * gyro_mouse.gravity[1] + roll_rate * gyro_mouse.gravity[2];
-		const float joined = sqrtf(yaw_rate * yaw_rate + roll_rate * roll_rate);
+		with the pad held upright gravity pulls along +y (measured: 0.99) and this is the pad's own yaw, positive to the left */
+		const float world = turned[1] * gyro_mouse.gravity[1] + turned[2] * gyro_mouse.gravity[2];
+		const float joined = sqrtf(turned[1] * turned[1] + turned[2] * turned[2]);
 		float size = fabsf(world) * 1.41f;
 
 		if (!gyro_mouse.gravity_known)
 		{
-			turn_rate = yaw_rate;
+			turn = turned[1];
 		}
 		else
 		{
 			if (size > joined)
 				size = joined;
-			turn_rate = world < 0.0f ? -size : size;
+			turn = world < 0.0f ? -size : size;
 		}
 	}
-	magnitude = sqrtf(turn_rate * turn_rate + pitch_rate * pitch_rate);
+	/* (tightening by the speed of the turn, in rotations a second) */
+	magnitude = seconds > 0.0f ? sqrtf(turn * turn + turned[0] * turned[0]) / seconds : 0.0f;
 	scale = magnitude < GYRO_TIGHTENING ? magnitude / GYRO_TIGHTENING : 1.0f;
-	gyro_mouse.turn += turn_rate * scale * seconds;
-	gyro_mouse.pitch += pitch_rate * scale * seconds;
+	gyro_mouse.turn += turn * scale;
+	gyro_mouse.pitch += turned[0] * scale;
 	/* (the gravity the pad is held against, in the log now and then: which way the axes point is the system's) */
 	if (now - gyro_mouse.told >= OSSecondsToTicks(10))
 	{
 		gyro_mouse.told = now;
 		wiiu_log("Input: GamePad gravity %.2f %.2f %.2f (accelerometer %.2f %.2f %.2f)", gyro_mouse.gravity[0], gyro_mouse.gravity[1], gyro_mouse.gravity[2],
 			status->accelorometer.acc.x, status->accelorometer.acc.y, status->accelorometer.acc.z);
-		/* (whether the system's angle, a turn added up at the pad's own rate, can stand for the rates added up at the game's: x, y, z in rotations) */
-		wiiu_log("Input: GamePad turned by its angle %.3f %.3f %.3f, by the rates %.3f %.3f %.3f (angle now %.3f %.3f %.3f)", gyro_mouse.by_angle[0],
-			gyro_mouse.by_angle[1], gyro_mouse.by_angle[2], gyro_mouse.by_rates[0], gyro_mouse.by_rates[1], gyro_mouse.by_rates[2], status->angle.x, status->angle.y,
-			status->angle.z);
-		memset(gyro_mouse.by_angle, 0, sizeof(gyro_mouse.by_angle));
-		memset(gyro_mouse.by_rates, 0, sizeof(gyro_mouse.by_rates));
 	}
 }
 

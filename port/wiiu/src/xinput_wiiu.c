@@ -137,7 +137,10 @@ short player_control_get_zoom_level(short local_player_index);
 asked becomes how far the view turns, sensitivity times as far (1: the view turns as far as the pad), through the game's path for the PC's mouse (player_control.c,
 halo_linux_mouse_look: after the stick's look curve and the aim assist's magnetism, which would slow the view over a target and pull it after one, as GyroWiki
 warns; only the zoom divides it). input.wiiu_gyro_aim "off", "always" or "zoom" (only while zoomed in); input.wiiu_gyro_space "player" (turn the pad left and
-right however it is held), "turn" or "lean"; input.wiiu_gyro_invert_y. Nothing in the menus. */
+right however it is held), "turn" or "lean"; input.wiiu_gyro_invert_y; input.wiiu_gyro_pause "touch" (a thumb on the GamePad's screen holds the view still while the
+pad is brought back to a comfortable hold, GyroWiki's "lifting the mouse", Steam Input's held R3 on a pad whose R3 the game does not use), "stick" (while the right
+stick is pushed) or "none". Nothing in the menus. */
+int wiiu_input_touch(float *x, float *y);
 int halo_linux_mouse_look(short gamepad_index, float *yaw, float *pitch);
 int halo_linux_mouse_aiming(short gamepad_index);
 
@@ -147,10 +150,11 @@ static unsigned long aim_polls, gyro_aimed_at, stick_aimed_at;
 int halo_linux_mouse_look(short gamepad_index, float *yaw, float *pitch)
 {
 	static int mode; /* 0 off, 1 always, 2 only zoomed in */
+	static int pause; /* 0 none, 1 a touch, 2 the right stick */
 	static float sensitivity, invert;
 	static unsigned long read_at = (unsigned long)-1;
 	const float full_turn = 6.2831853f;
-	float turn, tilt;
+	float turn, tilt, x, y;
 
 	*yaw = *pitch = 0.0f;
 	if (gamepad_index != 0)
@@ -160,8 +164,10 @@ int halo_linux_mouse_look(short gamepad_index, float *yaw, float *pitch)
 	{
 		const char *setting = config_string("input.wiiu_gyro_aim");
 		const char *space = config_string("input.wiiu_gyro_space");
+		const char *paused_by = config_string("input.wiiu_gyro_pause");
 
 		read_at = config_changes();
+		pause = !strcmp(paused_by, "touch") ? 1 : !strcmp(paused_by, "stick") ? 2 : 0;
 		mode = !strcmp(setting, "always") ? 1 : !strcmp(setting, "zoom") ? 2 : 0;
 		sensitivity = (float)config_real("input.wiiu_gyro_sensitivity");
 		if (!(sensitivity > 0.0f && sensitivity <= 10.0f))
@@ -173,14 +179,18 @@ int halo_linux_mouse_look(short gamepad_index, float *yaw, float *pitch)
 	wiiu_input_gyro_take(&turn, &tilt);
 	if (!mode || port_menus_active() || (mode == 2 && player_control_get_zoom_level(0) < 0))
 		return 0;
+	/* (the stick's: XInputGetState of this poll, which comes first) */
+	if ((pause == 1 && wiiu_input_touch(&x, &y)) || (pause == 2 && stick_aimed_at == aim_polls))
+		return 0;
 	if (turn == 0.0f && tilt == 0.0f)
 		return 0;
 	/* (a turn of more than about a fifth of a degree since the last poll, 5 to 10 degrees a second, is aiming, not the hand's tremor) */
 	if (turn * turn + tilt * tilt > 0.0005f * 0.0005f)
 		gyro_aimed_at = aim_polls;
-	/* (the game's yaw turns left positive; the pad's turn is right positive) */
-	*yaw = -turn * full_turn * sensitivity;
-	*pitch = tilt * full_turn * sensitivity * invert;
+	/* (the game's yaw and the pad's turn are both left positive, and the game's pitch up positive against the pad's tilt: tried by hand, the pad points the
+	view, its top tilted away looking down, unless input.wiiu_gyro_invert_y) */
+	*yaw = turn * full_turn * sensitivity;
+	*pitch = -tilt * full_turn * sensitivity * invert;
 	return 1;
 }
 
@@ -197,7 +207,6 @@ touch screen (port 0's) are kept from the game; held for SKIP_HOLD_MS, A is give
 #define SKIP_PRESS_POLLS 6
 
 int touch_game_cinematic_skippable(void);
-int wiiu_input_touch(float *x, float *y);
 
 static struct
 {

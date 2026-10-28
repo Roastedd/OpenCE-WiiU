@@ -247,11 +247,15 @@ static const struct config_setting config_settings[] =
 		"and right however it is held, flat, upright or between (its yaw and roll joined,\n"
 		"told apart by gravity); \"turn\": its own yaw only; \"lean\": its own roll only\n"
 		"(leaning it like a steering wheel)." },
+	{ "input.wiiu_gyro_pause", _config_string, "\"touch\"", "HALO_WIIU_GYRO_PAUSE", _environment_value, _platform_wiiu,
+		"What holds the view still while the GamePad is brought back to a comfortable hold\n"
+		"(as lifting a mouse). \"touch\": a thumb on the GamePad's screen; \"stick\": while the\n"
+		"right stick is pushed; \"none\"." },
 	{ "input.wiiu_gyro_sensitivity", _config_real, "2.0", "HALO_WIIU_GYRO_SENSITIVITY", _environment_value, _platform_wiiu,
 		"How far the view turns for the GamePad's turn: 1 turns it as far as the pad,\n"
 		"2 twice as far." },
 	{ "input.wiiu_gyro_invert_y", _config_boolean, "false", "HALO_WIIU_GYRO_INVERT_Y", _environment_value, _platform_wiiu,
-		"Tilting the top of the GamePad away looks down, not up." },
+		"Tilting the top of the GamePad away looks up (as a flight stick), not down." },
 	{ "input.wiiu_controller_layout", _config_string, "\"merged\"", "HALO_WIIU_CONTROLLER_LAYOUT", _environment_value, _platform_wiiu,
 		"How the Pro and Classic Controllers take the players' places. \"merged\": the first\n"
 		"joins the GamePad as player 1 (so a Pro Controller can play alone). \"separate\": the\n"
