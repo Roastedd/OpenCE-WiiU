@@ -4108,6 +4108,15 @@ uint32_t host_gx2_retired(void)
 }
 
 /* for d3d8_gx2.c: whether the streams are posted to a queue and run while the game goes on (gx2_thread.txt 7); asked once, at the first stream, so the thread is started by then */
+/* the GX2 thread's priority (the game thread's, which makes it), for a thread that shares its core (wiiu_shell.c, wiiu_thread_beside_gx2): it waits for work
+yielding (OSYieldThread), which lets only threads of its priority or above run */
+int wiiu_gx2_thread_priority(void);
+
+int wiiu_gx2_thread_priority(void)
+{
+	return gt.state == 2 ? OSGetThreadPriority(&gt.thread) : OSGetThreadPriority(OSGetDefaultThread(1));
+}
+
 int host_gx2_async(void);
 
 int host_gx2_async(void)

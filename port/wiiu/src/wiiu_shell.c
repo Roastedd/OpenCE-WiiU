@@ -335,14 +335,17 @@ void wiiu_thread_off_game_core(void)
 	OSSetThreadAffinity(OSGetCurrentThread(), OS_THREAD_ATTRIB_AFFINITY_CPU0);
 }
 
-/* DirectSound's packet decoder (dsound_sdl.c): on core 2, which the GX2 thread leaves mostly idle, below it and the game thread */
+/* DirectSound's packet decoder (dsound_sdl.c): on core 2, which the GX2 thread leaves mostly idle, at the GX2 thread's priority: that thread waits for
+work yielding, which gives the core only to threads of its priority or above (at 20, below it, the decoder hardly ran: the sound stuttered, came late or not at all) */
 void wiiu_thread_beside_gx2(void)
 {
+	int wiiu_gx2_thread_priority(void);
 	OSThread *self = OSGetCurrentThread();
+	const int priority = wiiu_gx2_thread_priority();
 
 	OSSetThreadAffinity(self, OS_THREAD_ATTRIB_AFFINITY_CPU2);
-	OSSetThreadPriority(self, 20);
-	wiiu_log("audio: the packet decoder runs on core 2 at priority 20 (the main thread's default %d)", OSGetThreadPriority(OSGetDefaultThread(1)));
+	OSSetThreadPriority(self, priority);
+	wiiu_log("audio: the packet decoder runs on core 2 at priority %d (the GX2 thread's)", priority);
 }
 
 void wiiu_fpu_setup(void)
