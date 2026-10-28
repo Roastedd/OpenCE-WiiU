@@ -201,7 +201,8 @@ static struct
 	int hiz; /* halo/hiz.txt: 1, the big depth target has hierarchical Z */
 	unsigned fail_allocations; /* halo/mem1_fail.txt: that many allocations of targets made again after HOME fail (a test) */
 	int gpu_test_wanted; /* halo/gpu_test.txt 1, read at the start: the GPU test runs once the game draws 250 or more a frame */
-	int mem1_ddr3_only; /* the targets are made again by the GX2 thread, not the acquire callback: not in libwhb's heap, which another thread may be making */
+	volatile uint32_t mem1_restoring; /* a thread is making the targets again (the acquire callback, or the GX2 thread after 3 s): one at a time */
+	volatile int target_missing; /* target_get answered NULL for a target that has no memory (targets_bind then binds neither) */
 	int mem1; /* halo/mem1.txt: 1, the big render targets are made in the eDRAM (MEM1) instead of the DDR3 */
 	volatile int mem1_lost; /* HOME: the eDRAM's targets are gone until mem1_restore */
 	volatile int resume_needed;
@@ -844,6 +845,11 @@ static void *cache_get(uint32_t address, uint32_t size)
 	unsigned slot = (address * 2654435761u + size) % STATIC_TABLE, probes;
 	const uint32_t aligned = (size + 63u) & ~63u;
 	uint8_t *memory;
+
+	/* (only the Xbox window's memory, whose writes the memory watch sees: a list in the C heap - a copy d3d8_gx2.c made of a long dynamic index list, freed once its stream
+	is retired - may be another at the same address and size the next time) */
+	if (!blocks.window_size || address < blocks.window_base || (uint64_t)address + size > (uint64_t)blocks.window_base + blocks.window_size)
+		return NULL;
 
 	for (probes = 0; probes < 32; probes++, slot = (slot + 1) % STATIC_TABLE)
 	{
@@ -2246,17 +2252,19 @@ static int initialize(void)
 	/* halo/mem1.txt: 1, the game's render targets (the big ones) are made in the eDRAM */
 	{
 		FILE *file = fopen(WIIU_DATA_DIRECTORY "/mem1.txt", "r");
-		int on = 1; /* (on unless the file says 0: HOME, return and closing were tried on the console with it on) */
+		int on = 1; /* (on unless the file says 0: HOME, return and closing were tried on the console with it on; a file without a number is the default) */
 
 		if (file)
 		{
 			if (fscanf(file, "%d", &on) != 1)
-				on = 0;
+				on = 1;
 			fclose(file);
 		}
 		gx.mem1 = on;
 		wiiu_log("GX2: render targets in the eDRAM (halo/mem1.txt): %s", on ? "yes" : "no");
-		on = 1;
+		/* (off unless the file says 1: it gained nothing measurable in the first room at 720 lines, and enemies were seen drawn without their bodies with it on,
+		2026-10-28 - not shown to be its doing) */
+		on = 0;
 		file = fopen(WIIU_DATA_DIRECTORY "/hiz.txt", "r");
 		if (file)
 		{
@@ -2455,16 +2463,9 @@ void platform_menus_set_active(int active)
 would go to is shared with the CPU: the frame's fill is what the GPU spends its time on); WHBGfx's allocator (GX2RSetAllocator) gives MEM1 for colour and depth buffers. The DDR3 if there is no room. */
 #define MEM1_MIN_BYTES (512u * 1024u)
 
-static void target_image(struct target *target, GX2Surface *s, int depth)
+static void target_image(struct target *target, GX2Surface *s, int depth, int eDRAM_allowed)
 {
-	if (gx.fail_allocations && gx.mem1_lost)
-	{
-		/* (halo/mem1_fail.txt: a test of what happens when there is no memory for a target after HOME) */
-		gx.fail_allocations--;
-		s->image = NULL;
-		return;
-	}
-	if (gx.mem1 && !gx.mem1_ddr3_only)
+	if (gx.mem1 && eDRAM_allowed)
 	{
 		const uint32_t imageSize = s->imageSize;
 
@@ -2510,13 +2511,20 @@ void wiiu_gx2_mem1_lost(void)
 }
 
 /* a target's image made again (after HOME) and its registers set for it; unusable if there is no memory (target_get tries again, once a second) */
-static void target_remake(struct target *target)
+static void target_remake(struct target *target, int eDRAM_allowed)
 {
 	const int depth = target->surface.kind == DK_SURFACE_DEPTH;
 	GX2Surface *s = depth ? &target->depth.surface : &target->color.surface;
 
 	target->in_mem1 = 0;
-	target_image(target, s, depth);
+	if (gx.fail_allocations)
+	{
+		/* (halo/mem1_fail.txt N: the next N makings after HOME fail, the retries of target_get included: 1, a single failure; a large N, one that lasts) */
+		gx.fail_allocations--;
+		s->image = NULL;
+	}
+	else
+		target_image(target, s, depth, eDRAM_allowed);
 	target->unusable = !s->image;
 	target->remade_at = OSGetSystemTime();
 	if (target->unusable)
@@ -2536,19 +2544,25 @@ static void target_remake(struct target *target)
 
 /* the targets again (in the eDRAM if libwhb has its heap back, else in the DDR3), and their registers; the shell's late acquire callback (the priority after libwhb's), or the GX2 thread
 if that does not come (mem1_wait) */
-void wiiu_gx2_mem1_restore(void)
+static void mem1_restore(int eDRAM_allowed)
 {
 	unsigned i, again = 0, unusable = 0;
 
+	/* (one thread at a time: the acquire callback and the GX2 thread's fallback could both come here) */
+	while (__sync_lock_test_and_set(&gx.mem1_restoring, 1))
+		OSSleepTicks(OSMillisecondsToTicks(1));
 	if (!gx.mem1_lost)
+	{
+		__sync_lock_release(&gx.mem1_restoring);
 		return;
+	}
 	for (i = 0; i < gx.target_count; i++)
 	{
 		struct target *target = &gx.targets[i];
 
 		if (!target->in_mem1)
 			continue;
-		target_remake(target);
+		target_remake(target, eDRAM_allowed);
 		again += target->in_mem1;
 		unusable += target->unusable;
 	}
@@ -2559,6 +2573,12 @@ void wiiu_gx2_mem1_restore(void)
 	__sync_synchronize(); /* (what was made is seen before the flag is) */
 	gx.mem1_lost = 0;
 	wiiu_log("GX2: back: %u render targets are in the eDRAM again, %u have no memory", again, unusable);
+	__sync_lock_release(&gx.mem1_restoring);
+}
+
+void wiiu_gx2_mem1_restore(void)
+{
+	mem1_restore(1);
 }
 
 /* where the GX2 calls may go on after HOME: the app in the foreground and the targets made again. A thread held at the foreground gate in the middle of a stream (a draw, a submit)
@@ -2573,17 +2593,23 @@ static void mem1_wait(void)
 	if (gx.mem1_lost && wiiu_in_foreground())
 	{
 		wiiu_log("GX2: the targets were not made again by the acquire callback in 3 s: made here, in the DDR3");
-		gx.mem1_ddr3_only = 1;
-		wiiu_gx2_mem1_restore();
-		gx.mem1_ddr3_only = 0;
+		mem1_restore(0);
 	}
 }
 
+static int gate_is_game_thread(void);
+
 static void gx_gate(void)
 {
-	wiiu_foreground_gate(1);
-	if (gx.mem1_lost)
-		mem1_wait();
+	/* (held again if the foreground goes while the targets are waited for: no GX2 call in the background) */
+	for (;;)
+	{
+		wiiu_foreground_gate(gate_is_game_thread());
+		if (gx.mem1_lost)
+			mem1_wait();
+		if (!gx.mem1_lost && wiiu_in_foreground())
+			break;
+	}
 	if (gx.resume_needed)
 	{
 		gx.resume_needed = 0;
@@ -2604,8 +2630,13 @@ static struct target *target_get(const struct dk_surface *surface)
 		if (!memcmp(&gx.targets[i].surface, surface, sizeof(*surface)))
 		{
 			if (gx.targets[i].unusable && OSGetSystemTime() - gx.targets[i].remade_at > OSMillisecondsToTicks(1000))
-				target_remake(&gx.targets[i]);
-			return gx.targets[i].unusable ? NULL : &gx.targets[i];
+				target_remake(&gx.targets[i], 1);
+			if (gx.targets[i].unusable)
+			{
+				gx.target_missing = 1;
+				return NULL;
+			}
+			return &gx.targets[i];
 		}
 	if (gx.target_count == TARGET_LIMIT)
 	{
@@ -2626,7 +2657,7 @@ static struct target *target_get(const struct dk_surface *surface)
 	s->tileMode = GX2_TILE_MODE_DEFAULT;
 	GX2CalcSurfaceSizeAndAlignment(s);
 	target->in_mem1 = 0;
-	target_image(target, s, depth);
+	target_image(target, s, depth, 1);
 	if (!s->image)
 	{
 		wiiu_log("GX2: no memory for the %ux%u %s target at %08x", (unsigned)s->width, (unsigned)s->height, depth ? "depth" : "color",
@@ -2696,8 +2727,13 @@ static void context_resume(void)
 
 static void targets_bind(const struct dk_command_targets *command)
 {
+	gx.target_missing = 0;
 	gx.color = target_get(&command->color);
 	gx.depth = target_get(&command->depth);
+	/* (a pass that asks for a colour and a depth target of which one has no memory is not drawn at all: half of it would draw into what the context last had; a pass
+	that asks for only one, as the game's colour-only and depth-only passes do, is drawn as before) */
+	if (gx.target_missing)
+		gx.color = gx.depth = NULL;
 	context_resume();
 	if (gx.color || gx.depth)
 	{
@@ -3664,6 +3700,13 @@ static struct
 	OSTime waited;
 	unsigned long jobs;
 } gt;
+
+/* the foreground gate's caller: the GX2 thread is not the game thread (the shell's release callback waits for the game thread to be held, and must not take the GX2
+thread's hold for it) */
+static int gate_is_game_thread(void)
+{
+	return !(gt.state == 2 && OSGetCurrentThread() == &gt.thread);
+}
 
 static void gt_log(unsigned frames)
 {

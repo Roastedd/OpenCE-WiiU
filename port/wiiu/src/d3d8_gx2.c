@@ -2881,6 +2881,7 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 {
 	struct dk_command_draw *command;
 	unsigned long stream, streams = 0, slot = 0;
+	WORD *long_copy = NULL;
 	unsigned long index_bytes = indices && count * sizeof(WORD) <= INLINE_INDEX_LIMIT && !indices_fixed(indices, count) ?
 		(count * sizeof(WORD) + 3) & ~3UL : 0;
 
@@ -2898,6 +2899,13 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 
 		if (index_bytes)
 			wiiu_index_copy_range((uint16_t *)(void *)&command->streams[streams], indices, count, &lowest, &highest);
+		else if (!indices_fixed(indices, count) && (long_copy = malloc(count * sizeof(WORD))) != NULL)
+		{
+			/* a list the game remakes as it draws, too long to go in the command: copied now into a buffer of its own, freed once the stream that reads it is
+			retired (read where it is, the game could rewrite it before the host reads it: the host reads the stream later, and with the GX2 thread much later) */
+			wiiu_index_copy_range((uint16_t *)(void *)long_copy, indices, count, &lowest, &highest);
+			command->index_address = (uint32_t)(uintptr_t)long_copy;
+		}
 		else
 			wiiu_index_range(indices, count, &lowest, &highest);
 		first += lowest;
@@ -2931,6 +2939,8 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 	/* (after the command: writing it may have handed the stream over, and the
 	draw is in the submission it is written to) */
 	draw_resources_used(indices != NULL, TRUE);
+	if (long_copy)
+		dk_stream_free_after_handover(long_copy, count * sizeof(WORD));
 	/* handed over every so many draws, not all at the present: the GPU starts on the frame's first draws while the CPU makes the rest (when the stream went only at the present the frame took the CPU's
 	time and then the GPU's: 38 frames a second instead of 43) */
 	if (++draws_since_handover >= DRAWS_PER_HANDOVER)
