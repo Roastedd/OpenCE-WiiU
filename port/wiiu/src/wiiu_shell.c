@@ -57,8 +57,9 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 /* ProcUI runs the callbacks of the higher priority first; ours runs before SDL's (100) and the like */
 #define RELEASE_PRIORITY 2000
 #define ACQUIRE_PRIORITY 50
-#define ACQUIRE_LATE_PRIORITY 3000
+#define ACQUIRE_LATE_PRIORITY 10 /* (the higher run first: libwhb's acquire callback, at 100, makes its heap and buffers before this) */
 #define EXIT_PRIORITY 50
+#define EXIT_TRAIL_FILE WIIU_DATA_DIRECTORY "/exit-trail.txt"
 #define LOG_FILE WIIU_DATA_DIRECTORY "/log.txt"
 #define LOG_PREVIOUS_FILE WIIU_DATA_DIRECTORY "/log-previous.txt"
 #define BLACKBOX_FILE WIIU_DATA_DIRECTORY "/blackbox.txt"
@@ -101,6 +102,23 @@ static uint32_t system_ms(void)
 static uint32_t shell_ms(void)
 {
 	return system_ms() - base_ms;
+}
+
+/* one line into exit-trail.txt, written and closed at once (the steps of a close, for after a hang) */
+static void exit_note(const char *text)
+{
+	FILE *file = fopen(EXIT_TRAIL_FILE, "a");
+
+	if (file)
+	{
+		fprintf(file, "%u ms: %s\n", (unsigned)shell_ms(), text);
+		fclose(file);
+	}
+}
+
+static void exit_note_last(void)
+{
+	exit_note("exit: the last registered handler");
 }
 
 static void sleep_ms(uint32_t milliseconds)
@@ -645,6 +663,13 @@ int wiiu_shell_run(int (*game_main)(void))
 	int error;
 
 	base_ms = system_ms();
+	{
+		FILE *trail = fopen(EXIT_TRAIL_FILE, "w"); /* (this run's) */
+
+		if (trail)
+			fclose(trail);
+		atexit(exit_note_last); /* (the first registered runs last) */
+	}
 	main_priority = OSGetThreadPriority(OSGetCurrentThread());
 	game_main_function = game_main;
 	wiiu_shell_watch_init(&shell_watch, 0);
@@ -731,6 +756,21 @@ int wiiu_shell_run(int (*game_main)(void))
 	}
 	wiiu_log("Closed");
 	wiiu_shell_log_flush(&shell_log, 1500);
+	exit_note("the log is flushed; WHBProcShutdown next");
 	WHBProcShutdown();
+	exit_note("WHBProcShutdown returned; main returns");
 	return game_done ? game_result : 0;
+}
+
+/* What follows main's return is the C library's and the system's: the steps wut takes then (the SD card, newlib) are told in exit-trail.txt, as they happen, so that after a
+close that hung the console the file says how far it got (the process's own log is closed by then) */
+void __fini_wut_devoptab(void);
+void __fini_wut_newlib(void);
+
+void __fini_wut(void)
+{
+	exit_note("wut fini (the socket library is not linked: nothing for it)");
+	exit_note("wut fini: the SD card's devoptab");
+	__fini_wut_devoptab();
+	__fini_wut_newlib();
 }
