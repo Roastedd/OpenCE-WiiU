@@ -33,34 +33,8 @@ a time, and only the atlas's rows that changed are sent again.
 #include "menu_files.h"
 #include "text_hires.h"
 
-/* The high-resolution HUD and menu art (hud_hires.c, menu_files.c) draw with OpenGL and are not in the Wii U build; the texture cache asks them for
-replacements for the game's own textures, and is told there are none. The text's atlas is (text_hires.c, text_hires_atlas_rows). */
-static unsigned char *hud_hires_png_pixels(const void *png, unsigned long size, unsigned long *width, unsigned long *height)
-{
-	(void)png;
-	(void)size;
-	(void)width;
-	(void)height;
-	return NULL;
-}
-
-static const char *menu_art_name(unsigned long data)
-{
-	(void)data;
-	return NULL;
-}
-
-static const unsigned char *menu_art_png(const char *name, unsigned long *size)
-{
-	(void)name;
-	(void)size;
-	return NULL;
-}
-
-static unsigned long menu_art_serial(void)
-{
-	return 0;
-}
+/* (the high-res HUD's and the menus' PNGs come from hud_hires.c and menu_files.c, built without OpenGL here: hud_hires_png_pixels, menu_art_name, menu_art_png,
+menu_art_serial; the text's atlas from text_hires.c, text_hires_atlas_rows) */
 
 #include <stdio.h>
 #include <stdlib.h>

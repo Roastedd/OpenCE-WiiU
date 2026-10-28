@@ -387,6 +387,16 @@ static uint32_t on_network_start(void *unused)
 
 /* ---------- files */
 
+/* for the platform layer's units, built with the Xbox's headers (menu_files.c): whether path is a folder */
+int wiiu_directory_exists(const char *path);
+
+int wiiu_directory_exists(const char *path)
+{
+	struct stat status;
+
+	return stat(path, &status) == 0 && S_ISDIR(status.st_mode);
+}
+
 static void make_directories(void)
 {
 	/* each level; failing because it is there is the usual case */

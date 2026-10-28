@@ -23,7 +23,9 @@ zlib (port/third_party/zlib).
 #include "hud_hires.h"
 #include "platform.h"
 #include "port_config.h"
-#include "xgpu.h"
+#ifndef HALO_WIIU
+#include "xgpu.h" /* (OpenGL: the Wii U's texture cache makes the images itself) */
+#endif
 
 #include "zlib_prefixed.h"
 
@@ -167,6 +169,17 @@ int hud_hires_sprites_drawable(long asset, unsigned long address, unsigned long 
 	static unsigned long read_at = (unsigned long)-1;
 	unsigned long levels;
 
+#ifdef HALO_WIIU
+	/* (the Wii U's texture cache draws no texture for a placeholder: the sprites are drawn from the bitmap as they are) */
+	(void)levels;
+	(void)address;
+	(void)level0_size;
+	(void)asset;
+	(void)hud_enabled;
+	(void)titles_enabled;
+	(void)read_at;
+	return 0;
+#else
 	if (read_at != config_changes())
 	{
 		read_at = config_changes();
@@ -190,6 +203,7 @@ int hud_hires_sprites_drawable(long asset, unsigned long address, unsigned long 
 		return 0;
 	}
 	return hud_hires_override_texture(asset, &levels) != 0;
+#endif
 }
 
 /* the placeholder the game draws the texture's sprites from: its D3D
@@ -209,6 +223,7 @@ void hud_hires_register_placeholder(long asset, const unsigned long *texture)
 	}
 }
 
+#ifndef HALO_WIIU
 unsigned int hud_hires_placeholder_texture(unsigned long data, unsigned long *levels)
 {
 	long index;
@@ -220,6 +235,7 @@ unsigned int hud_hires_placeholder_texture(unsigned long data, unsigned long *le
 	}
 	return 0;
 }
+#endif
 
 int hud_hires_override_point_threshold(long asset)
 {
@@ -342,6 +358,7 @@ static void upscale_outline(unsigned char *pixels, const unsigned char *bgra,
 	}
 }
 
+#ifndef HALO_WIIU
 unsigned int hud_hires_upscale_texture(const unsigned char *bgra, unsigned long width,
 	unsigned long height, long kind, unsigned long *levels)
 {
@@ -367,6 +384,8 @@ unsigned int hud_hires_upscale_texture(const unsigned char *bgra, unsigned long 
 	free(pixels);
 	return texture;
 }
+
+#endif
 
 static unsigned long big_endian_long(const unsigned char *bytes)
 {
@@ -493,6 +512,12 @@ failed:
 	return NULL;
 }
 
+#ifdef HALO_WIIU
+unsigned char *hud_hires_png_pixels(const void *png, unsigned long size, unsigned long *width, unsigned long *height)
+{
+	return png_decode(png, size, width, height);
+}
+#else
 unsigned int hud_hires_png_texture(const void *png, unsigned long size, unsigned long *levels)
 {
 	unsigned long width = 0, height = 0, largest;
@@ -539,3 +564,4 @@ unsigned int hud_hires_override_texture(long asset, unsigned long *levels)
 	*levels = textures[asset].levels;
 	return textures[asset].texture;
 }
+#endif

@@ -14,7 +14,9 @@ file is used: the game keeps its own menus.
 
 Also the menus' art: the PNGs of their bitmaps' frames, each drawn for the
 D3D texture the game made for it (menu_art_texture, xbox_textures.c), as the
-high-res HUD's are (hud_hires.c).
+high-res HUD's are (hud_hires.c). The Wii U has no OpenGL: its texture cache
+(port/wiiu/src/xbox_textures_gx2.c) asks for a bitmap's PNG by name
+(menu_art_name, menu_art_png) and makes the image itself.
 */
 
 #include "halo_menus.h"
@@ -22,11 +24,15 @@ high-res HUD's are (hud_hires.c).
 #include "menu_files.h"
 #include "platform.h"
 #include "port_config.h"
-#include "xgpu.h"
+#ifndef HALO_WIIU
+#include "xgpu.h" /* (OpenGL: the Wii U's texture cache makes the images itself) */
+#endif
 
 #include "expat.h"
 
+#ifndef HALO_WIIU
 #include <SDL3/SDL.h>
+#endif
 #include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -99,7 +105,7 @@ static long file_add(const char *path, const unsigned char *data, unsigned long 
 
 static unsigned char *file_read(const char *path, unsigned long *size)
 {
-#ifdef HALO_ARM64_GUEST
+#if defined(HALO_ARM64_GUEST) || defined(HALO_WIIU)
 	FILE *file = fopen(path, "rb");
 	unsigned char *data = NULL;
 	long length;
@@ -147,6 +153,20 @@ static void files_gather(void)
 
 	config_folder(folder, sizeof(folder));
 	snprintf(folder + strlen(folder), sizeof(folder) - strlen(folder), "menus");
+#ifdef HALO_WIIU
+	{
+		/* (a look for each of the hundreds of files on the card takes seconds: only when there is a folder; port/wiiu/src/wiiu_shell.c) */
+		int wiiu_directory_exists(const char *path);
+
+		if (!wiiu_directory_exists(folder))
+		{
+			for (index = 0; index < menu_files_embedded_count; index++)
+				file_add(menu_files_embedded[index].path, (const unsigned char *)menu_files_embedded[index].data,
+					menu_files_embedded[index].size, 0);
+			return;
+		}
+	}
+#endif
 	for (index = 0; index < menu_files_embedded_count; index++)
 	{
 		const struct menu_file_embedded *embedded = &menu_files_embedded[index];
@@ -165,7 +185,7 @@ static void files_gather(void)
 			file_add(embedded->path, (const unsigned char *)embedded->data, embedded->size, 0);
 		}
 	}
-#ifndef HALO_ANDROID
+#if !defined(HALO_ANDROID) && !defined(HALO_WIIU)
 	{
 		/* (the folder's own and its folders': SDL's * does not cross a /) */
 		static const char *const patterns[] = { "*.xml", "*/*.xml" };
@@ -388,7 +408,9 @@ static long current_line(struct reader *reader)
 }
 
 /* this build's platform, as the platform attribute names it */
-#ifdef HALO_ANDROID
+#ifdef HALO_WIIU
+#define MENU_PLATFORM "wiiu"
+#elif defined(HALO_ANDROID)
 #define MENU_PLATFORM "android"
 #elif defined(HALO_WEB)
 #define MENU_PLATFORM "web"
@@ -416,9 +438,9 @@ static int for_this_platform(struct reader *reader, const XML_Char **attributes)
 				if (length)
 				{
 					if ((length != 7 || strncmp(name, "desktop", 7)) && (length != 7 || strncmp(name, "android", 7)) &&
-						(length != 3 || strncmp(name, "web", 3)))
+						(length != 3 || strncmp(name, "web", 3)) && (length != 4 || strncmp(name, "wiiu", 4)))
 					{
-						reader_error(reader, "platform=\"%s\" names one that is not desktop, android or web",
+						reader_error(reader, "platform=\"%s\" names one that is not desktop, android, web or wiiu",
 							attributes[index + 1]);
 						return 1;
 					}
@@ -1031,6 +1053,8 @@ static struct
 	int failed;
 } art[MAXIMUM_ART];
 static long art_count;
+/* (moved on by every change of the art registered: the Wii U's texture cache looks a texture's art up again then) */
+static unsigned long art_serial = 1;
 
 void halo_menus_art_register(void const *texture, char const *png)
 {
@@ -1058,15 +1082,18 @@ void halo_menus_art_register(void const *texture, char const *png)
 	else
 	{
 		free(art[index].png);
+#ifndef HALO_WIIU
 		if (art[index].texture)
 		{
 			xgpu_gl_texture_deleted(art[index].texture);
 			glDeleteTextures(1, &art[index].texture);
 		}
+#endif
 	}
 	memset(&art[index], 0, sizeof(art[index]));
 	art[index].data = data;
 	art[index].png = strdup(png);
+	art_serial++;
 }
 
 void halo_menus_art_forget(void)
@@ -1076,15 +1103,41 @@ void halo_menus_art_forget(void)
 	for (index = 0; index < art_count; index++)
 	{
 		free(art[index].png);
+#ifndef HALO_WIIU
 		if (art[index].texture)
 		{
 			xgpu_gl_texture_deleted(art[index].texture);
 			glDeleteTextures(1, &art[index].texture);
 		}
+#endif
 	}
 	art_count = 0;
+	art_serial++;
 }
 
+#ifdef HALO_WIIU
+const char *menu_art_name(unsigned long data)
+{
+	long index;
+
+	for (index = 0; index < art_count; index++)
+	{
+		if (art[index].data == data)
+			return art[index].png;
+	}
+	return NULL;
+}
+
+const unsigned char *menu_art_png(const char *name, unsigned long *size)
+{
+	return file_data(name, size);
+}
+
+unsigned long menu_art_serial(void)
+{
+	return art_serial;
+}
+#else
 unsigned int menu_art_texture(unsigned long data, unsigned long *levels)
 {
 	long index;
@@ -1113,3 +1166,4 @@ unsigned int menu_art_texture(unsigned long data, unsigned long *levels)
 	*levels = art[index].levels;
 	return art[index].texture;
 }
+#endif

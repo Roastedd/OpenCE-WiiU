@@ -28,7 +28,7 @@ VOLUMES = [(str(step), f"{step / 10:g}") for step in range(11)]
 # menu opens), its header (widget, bitmap), the row spacing, and its rows:
 # (label, setting, [(shown, value)], help, platform[, key]): platform is None
 # for every platform, else the platforms the row is for, separated by spaces
-# ("desktop", "android", "web": the menus' platform attribute,
+# ("desktop", "android", "web", "wiiu": the menus' platform attribute,
 # port/linux/src/menu_files.c); key names the row's widgets where two rows set
 # one setting (one for each platform), else the setting's name does
 SCREENS = {
@@ -60,7 +60,12 @@ SCREENS = {
             ("RESOLUTION SCALING:", "display.resolution_scaling", [("NATIVE", "native"), ("ORIGINAL", "original")],
              "Native draws at the resolution; Original draws\nthe Xbox's 640x480 and scales it up.", "desktop web"),
             ("V-SYNC:", "display.vsync", ON_OFF,
-             "Wait for the display between frames, so that the\npicture never tears.", None),
+             "Wait for the display between frames, so that the\npicture never tears.", "desktop android web"),
+            # (the Wii U: port/wiiu/src/wiiu_gx2.c reads it when the game starts)
+            ("RENDER RESOLUTION:", "display.render_lines",
+             [("480", "480"), ("540", "540"), ("720", "720"), ("900", "900"), ("1080", "1080")],
+             "The lines the game draws (TV and GamePad scale it).\n720 holds 60 most places. From the next start.",
+             "wiiu"),
             ("FRAME RATE LIMIT:", "display.max_fps",
              [("AUTO", "0"), ("30", "30"), ("60", "60"), ("120", "120"), ("144", "144"), ("165", "165"),
               ("240", "240"), ("NONE", "-1")],
@@ -88,13 +93,15 @@ SCREENS = {
             ("SHADOW RESOLUTION:", "display.shadow_resolution",
              [("128", "128"), ("256", "256"), ("512", "512"), ("1024", "1024")],
              "The size objects' shadows are drawn at: 128 as on\nthe Xbox; larger for smoother, as soft, edges.",
-             None),
+             "desktop android web"),
             ("PER-PIXEL LIGHTING:", "display.per_pixel_lighting", ON_OFF,
-             "Light models for each pixel, without the facets\nof the Xbox's lighting for each vertex.", None),
+             "Light models for each pixel, without the facets\nof the Xbox's lighting for each vertex.",
+             "desktop android web"),
             ("SHIELD GLOW:", "display.shield_glow", ON_OFF,
-             "Shields light their surroundings as they flare,\nin the shield's own color.", None),
+             "Shields light their surroundings as they flare,\nin the shield's own color.", "desktop android web"),
             ("GLOW INTENSITY:", "display.shield_glow_intensity", [("DEFAULT", "default"), ("LIGHT SHOW", "light_show")],
-             "Light Show: the shield glow three times as far,\nat full from a third of the flare.", None),
+             "Light Show: the shield glow three times as far,\nat full from a third of the flare.",
+             "desktop android web"),
         ],
     },
     "mouse_settings": {
@@ -135,8 +142,9 @@ SCREENS = {
             # voice chat: this machine's own (port/linux/game/network_voice.c)
             ("VOICE CHAT:", "audio.voice_chat",
              [("PUSH TO TALK", "push_to_talk"), ("OPEN MIC", "open_mic"), ("OFF", "off")],
-             "Talk in network games: while PUSH TO TALK is held\n(Controls), whenever you speak, or never.", None),
-            ("VOICE VOLUME:", "audio.voice_volume", VOLUMES, "The other players' voices.", None),
+             "Talk in network games: while PUSH TO TALK is held\n(Controls), whenever you speak, or never.",
+             "desktop android web"),
+            ("VOICE VOLUME:", "audio.voice_volume", VOLUMES, "The other players' voices.", "desktop android web"),
         ],
     },
     "network_setup": {
@@ -173,6 +181,7 @@ SCREENS = {
         "screen": "gamepad_setup_screen",
         "header": ("header_profile_controller_setting", f"{PE}/controller_edit/header_profile_controller_setting"),
         "spacing": 30,
+        "platform_places": True,
         "rows": [
             ("LOOK SENSITIVITY:", "profile.look_sensitivity", [(str(step), str(step)) for step in range(1, 11)],
              "How fast the right stick turns the view.", None),
@@ -201,7 +210,7 @@ _graphics = {"display.high_res_hud", "display.hud_button_style", "display.high_r
              "display.shadow_resolution", "display.per_pixel_lighting",
              "display.shield_glow", "display.shield_glow_intensity"}
 SCREENS["video_settings/graphics"] = {
-    "screen": "graphics_settings_screen", "header": _video["header"], "spacing": 30,
+    "screen": "graphics_settings_screen", "header": _video["header"], "spacing": 30, "platform_places": True,
     "same_place": ["anti_aliasing_android"],
     "rows": [row for row in _video["rows"] if row[1] in _graphics],
 }
@@ -226,6 +235,27 @@ SCREENS["video_settings/fov_viewmodels"] = {
          "Your legs in first person, seen looking down,\nmoving as you run. Your body as others see it.", None),
         ("SHIELD COLOR:", "display.shield_color", [("DEFAULT", "default")] + [(c.upper(), c) for c in SHIELD_COLORS],
          "Your shield's flare in an armor color, whatever\nyour armor. Only you see it. Default: its own.", None),
+    ],
+}
+
+# the Wii U's GamePad and controllers, a screen of their own from Controller Setup (port/wiiu/src/xinput_wiiu.c)
+SCREENS["gamepad_setup"]["categories"] = [
+    ("WII U GAMEPAD:", "gamepad_setup/wiiu", "The GamePad's gyro aim, its buttons and the\nPro Controllers.", "wiiu"),
+]
+SCREENS["gamepad_setup/wiiu"] = {
+    "screen": "wiiu_gamepad_settings_screen", "header": SCREENS["gamepad_setup"]["header"], "spacing": 30,
+    "rows": [
+            # (the Wii U's own: port/wiiu/src/xinput_wiiu.c)
+            ("GYRO AIM:", "input.wiiu_gyro_aim", [("OFF", "off"), ("ALWAYS", "always"), ("ZOOMED", "zoom")],
+             "Turning the GamePad aims too: always, or only\nwhile zoomed in through a scope.", None),
+            ("GYRO SENSITIVITY:", "input.wiiu_gyro_sensitivity", SENSITIVITIES,
+             "How far the view turns for the GamePad's turning.", None),
+            ("INVERT GYRO:", "input.wiiu_gyro_invert_y", YES_NO,
+             "Tilting the top of the GamePad away looks down.", None),
+            ("FACE BUTTONS:", "input.wiiu_face_buttons", [("AUTO", "auto"), ("BY PLACE", "position"), ("BY LETTER", "label")],
+             "Auto: by letter in the menus, by place in the\ngame (B jumps). From the next start.", None),
+            ("CONTROLLERS:", "input.wiiu_controller_layout", [("MERGED", "merged"), ("SEPARATE", "separate")],
+             "Separate: a Pro Controller is player 2, for\nsplit screen. From the next start.", None),
     ],
 }
 
@@ -382,7 +412,7 @@ def _setting_screen(folder: str, spec: dict) -> list:
     # (platform_places: each platform's rows in places of their own, with
     # no gap where the others' are; a row in one place for all its
     # platforms, else a child for each place)
-    places = {"desktop": -1, "android": -1, "web": -1}
+    places = {"desktop": -1, "android": -1, "web": -1, "wiiu": -1}
     for index, (label, setting, choices, _, platform, *named) in enumerate(spec["rows"]):
         key = named[0] if named else setting.split(".", 1)[1]
         row = f"{base}/op_{key}"
