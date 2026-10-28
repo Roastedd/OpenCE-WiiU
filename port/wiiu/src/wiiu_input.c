@@ -132,6 +132,111 @@ static struct
 	OSTime told;
 } ranges;
 
+/* ---------- the gyro as a mouse */
+
+#include <math.h>
+
+static struct
+{
+	int space;
+	int gravity_known;
+	float gravity[3]; /* the direction gravity pulls, in the pad's axes, smoothed */
+	OSTime last;
+	float turn, pitch; /* rotations not yet taken */
+	OSTime told;
+} gyro_mouse;
+
+void wiiu_input_set_gyro_space(int space)
+{
+	gyro_mouse.space = space;
+}
+
+void wiiu_input_gyro_take(float *turn, float *pitch)
+{
+	*turn = gyro_mouse.turn;
+	*pitch = gyro_mouse.pitch;
+	gyro_mouse.turn = gyro_mouse.pitch = 0.0f;
+}
+
+/* (rates under this many rotations a second, about 3 degrees, are scaled down towards nothing: the sensor's noise and a steady hand's tremor, which would otherwise
+make the view swim; "tightening" in GyroWiki's terms) */
+#define GYRO_TIGHTENING 0.008f
+/* (the share of each sample the gravity estimate takes from the accelerometer: a few tenths of a second to follow a change of grip) */
+#define GRAVITY_FOLLOW 0.05f
+
+static void gyro_mouse_note(const VPADStatus *status, float pitch_rate, float yaw_rate, float roll_rate)
+{
+	const OSTime now = OSGetSystemTime();
+	float seconds = gyro_mouse.last ? (float)OSTicksToMicroseconds(now - gyro_mouse.last) / 1000000.0f : 0.0f;
+	/* the accelerometer measures the push that holds the pad up, opposite to gravity */
+	float down[3] = { -status->accelorometer.acc.x, -status->accelorometer.acc.y, -status->accelorometer.acc.z };
+	float length = sqrtf(down[0] * down[0] + down[1] * down[1] + down[2] * down[2]);
+	float turn_rate, magnitude, scale;
+	int i;
+
+	gyro_mouse.last = now;
+	if (seconds > 0.1f)
+		seconds = 0.1f;
+	if (length > 0.5f && length < 2.0f)
+	{
+		for (i = 0; i < 3; i++)
+			down[i] /= length;
+		if (!gyro_mouse.gravity_known)
+		{
+			memcpy(gyro_mouse.gravity, down, sizeof(down));
+			gyro_mouse.gravity_known = 1;
+		}
+		else
+		{
+			for (i = 0; i < 3; i++)
+				gyro_mouse.gravity[i] += (down[i] - gyro_mouse.gravity[i]) * GRAVITY_FOLLOW;
+			length = sqrtf(gyro_mouse.gravity[0] * gyro_mouse.gravity[0] + gyro_mouse.gravity[1] * gyro_mouse.gravity[1] +
+				gyro_mouse.gravity[2] * gyro_mouse.gravity[2]);
+			if (length > 0.0f)
+				for (i = 0; i < 3; i++)
+					gyro_mouse.gravity[i] /= length;
+		}
+	}
+	if (gyro_mouse.space == WIIU_GYRO_SPACE_TURN)
+	{
+		turn_rate = yaw_rate;
+	}
+	else if (gyro_mouse.space == WIIU_GYRO_SPACE_LEAN)
+	{
+		turn_rate = roll_rate;
+	}
+	else
+	{
+		/* player space (GyroWiki, "Player Space Gyro (and Alternatives) Explained"): the direction from gravity, the size from the pad's yaw and roll together;
+		with the pad held upright gravity pulls along +y (measured: 0.99) and this is the pad's own yaw, positive to the right */
+		const float world = yaw_rate * gyro_mouse.gravity[1] + roll_rate * gyro_mouse.gravity[2];
+		const float joined = sqrtf(yaw_rate * yaw_rate + roll_rate * roll_rate);
+		float size = fabsf(world) * 1.41f;
+
+		if (!gyro_mouse.gravity_known)
+		{
+			turn_rate = yaw_rate;
+		}
+		else
+		{
+			if (size > joined)
+				size = joined;
+			turn_rate = world < 0.0f ? -size : size;
+		}
+	}
+	magnitude = sqrtf(turn_rate * turn_rate + pitch_rate * pitch_rate);
+	scale = magnitude < GYRO_TIGHTENING ? magnitude / GYRO_TIGHTENING : 1.0f;
+	gyro_mouse.turn += turn_rate * scale * seconds;
+	gyro_mouse.pitch += pitch_rate * scale * seconds;
+	/* (the gravity the pad is held against, in the log now and then: which way the axes point is the system's) */
+	if (now - gyro_mouse.told >= OSSecondsToTicks(10))
+	{
+		gyro_mouse.told = now;
+		wiiu_log("Input: GamePad gravity %.2f %.2f %.2f (accelerometer %.2f %.2f %.2f)", gyro_mouse.gravity[0], gyro_mouse.gravity[1], gyro_mouse.gravity[2],
+			status->accelorometer.acc.x, status->accelorometer.acc.y, status->accelorometer.acc.z);
+	}
+}
+
 static void ranges_note(const VPADStatus *status)
 {
 	const float values[6] = { status->leftStick.x, status->leftStick.y, status->rightStick.x, status->rightStick.y, status->gyro.x, status->gyro.y };
@@ -275,6 +380,7 @@ int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 	{
 		VPADStatus status;
 		VPADReadError error = VPAD_READ_SUCCESS;
+		int fresh = 0;
 
 		memset(&status, 0, sizeof(status));
 		/* (the GamePad is always there) */
@@ -290,6 +396,7 @@ int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 			last_vpad.gyro_pitch = status.gyro.x;
 			last_vpad.gyro_yaw = status.gyro.y;
 			ranges_note(&status);
+			fresh = 1;
 			read_touch(&status);
 		}
 		else if (error != VPAD_READ_NO_SAMPLES && error != VPAD_READ_BUSY)
@@ -298,6 +405,9 @@ int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 		}
 		*pad = last_vpad;
 		wiiu_debug_input(pad);
+		/* (after the debug server's held rates, which stand for the gyro's) */
+		if (fresh)
+			gyro_mouse_note(&status, pad->gyro_pitch, pad->gyro_yaw, status.gyro.z);
 	}
 	/* (merged: the controller of KPAD channel port joins this port; separate: the GamePad is port 0 alone and channel n-1 is port n) */
 	if (controllers_separate)

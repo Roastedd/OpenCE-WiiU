@@ -239,13 +239,17 @@ static const struct config_setting config_settings[] =
 	{ "network.wiiu_sockets", _config_boolean, "true", "HALO_WIIU_SOCKETS", _environment_value, _platform_wiiu,
 		"The Wii U's sockets for system link and internet play. false: the network is down." },
 	{ "input.wiiu_gyro_aim", _config_string, "\"off\"", "HALO_WIIU_GYRO_AIM", _environment_value, _platform_wiiu,
-		"The GamePad's gyro aims: the pad's turning is added to the right stick in the game\n"
-		"(not in the menus). \"off\"; \"always\"; \"zoom\": only while zoomed in (for fine aim\n"
-		"through a scope). Not tried with a hand on the pad: the axes' signs and the scale\n"
-		"are the system's own and not measured." },
-	{ "input.wiiu_gyro_sensitivity", _config_real, "1.0", "HALO_WIIU_GYRO_SENSITIVITY", _environment_value, _platform_wiiu,
-		"How far the gyro turns the view: 1 is the stick's full push for a quarter turn of\n"
-		"the GamePad a second." },
+		"The GamePad's gyro aims as a mouse does: the view turns as far as the pad turns\n"
+		"(times input.wiiu_gyro_sensitivity), in the game, not the menus. \"off\"; \"always\";\n"
+		"\"zoom\": only while zoomed in (for fine aim through a scope)." },
+	{ "input.wiiu_gyro_space", _config_string, "\"player\"", "HALO_WIIU_GYRO_SPACE", _environment_value, _platform_wiiu,
+		"Which turn of the GamePad turns the view left and right. \"player\": turning it left\n"
+		"and right however it is held, flat, upright or between (its yaw and roll joined,\n"
+		"told apart by gravity); \"turn\": its own yaw only; \"lean\": its own roll only\n"
+		"(leaning it like a steering wheel)." },
+	{ "input.wiiu_gyro_sensitivity", _config_real, "2.0", "HALO_WIIU_GYRO_SENSITIVITY", _environment_value, _platform_wiiu,
+		"How far the view turns for the GamePad's turn: 1 turns it as far as the pad,\n"
+		"2 twice as far." },
 	{ "input.wiiu_gyro_invert_y", _config_boolean, "false", "HALO_WIIU_GYRO_INVERT_Y", _environment_value, _platform_wiiu,
 		"Tilting the top of the GamePad away looks down, not up." },
 	{ "input.wiiu_controller_layout", _config_string, "\"merged\"", "HALO_WIIU_CONTROLLER_LAYOUT", _environment_value, _platform_wiiu,

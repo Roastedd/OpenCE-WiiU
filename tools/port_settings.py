@@ -248,8 +248,10 @@ SCREENS["gamepad_setup/wiiu"] = {
             # (the Wii U's own: port/wiiu/src/xinput_wiiu.c)
             ("GYRO AIM:", "input.wiiu_gyro_aim", [("OFF", "off"), ("ALWAYS", "always"), ("ZOOMED", "zoom")],
              "Turning the GamePad aims too: always, or only\nwhile zoomed in through a scope.", None),
+            ("GYRO TURNS WITH:", "input.wiiu_gyro_space", [("ANY HOLD", "player"), ("YAW", "turn"), ("LEAN", "lean")],
+             "Any hold: turn the GamePad left and right\nhowever you hold it. Lean: like a wheel.", None),
             ("GYRO SENSITIVITY:", "input.wiiu_gyro_sensitivity", SENSITIVITIES,
-             "How far the view turns for the GamePad's turning.", None),
+             "How far the view turns for the GamePad's\nturn: 1 as far as the pad, 2 twice as far.", None),
             ("INVERT GYRO:", "input.wiiu_gyro_invert_y", YES_NO,
              "Tilting the top of the GamePad away looks down.", None),
             ("FACE BUTTONS:", "input.wiiu_face_buttons", [("AUTO", "auto"), ("BY PLACE", "position"), ("BY LETTER", "label")],

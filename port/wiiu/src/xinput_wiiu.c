@@ -133,63 +133,48 @@ static void pad_state(const struct wiiu_pad *pad, XINPUT_GAMEPAD *state)
 /* (the game's: NONE, -1, while the first player is not zoomed in) */
 short player_control_get_zoom_level(short local_player_index);
 
-/* the gyro's turn rates, added to the right stick: input.wiiu_gyro_aim ("off", "always" or "zoom": only while zoomed in), input.wiiu_gyro_sensitivity (1: a quarter turn a second is the stick's full push) and
-input.wiiu_gyro_invert_y; a rate under 2% of a turn a second is the sensor's noise */
-/* The game ignores a stick's first 9000 of 32767 each way (input_xbox.c, GAMEPAD_STICK_DEAD_RANGE): a gyro rate added to the stick as it is would vanish for every
-slow, careful turn of the pad, which is what aiming with it is. So the rate is added after the dead range (as a part of the stick's push beyond it) and the
-sum put back before it; with no rate the stick is left as it is. */
-#define STICK_DEAD_RANGE 9000.0f
+/* The GamePad's gyro aims as a mouse does (as Steam Input's "gyro to mouse" and GyroWiki recommend), not as a stick: how far the pad turned since the game last
+asked becomes how far the view turns, sensitivity times as far (1: the view turns as far as the pad), through the game's own path for a phone's gyroscope
+(player_control.c, halo_linux_touch_look: after the look curve and the stick's dead range, before the zoom and the aim assist). input.wiiu_gyro_aim "off",
+"always" or "zoom" (only while zoomed in); input.wiiu_gyro_space "player" (turn the pad left and right however it is held), "turn" or "lean";
+input.wiiu_gyro_invert_y. Nothing in the menus. */
+int halo_linux_touch_look(short gamepad_index, float *yaw, float *pitch, float *gyro_yaw, float *gyro_pitch);
 
-static int through_dead_zone(int raw, float add)
-{
-	float beyond;
-
-	if (add == 0.0f)
-		return raw;
-	beyond = raw > STICK_DEAD_RANGE ? (raw - STICK_DEAD_RANGE) / (32767.0f - STICK_DEAD_RANGE) :
-		raw < -STICK_DEAD_RANGE ? (raw + STICK_DEAD_RANGE) / (32768.0f - STICK_DEAD_RANGE) : 0.0f;
-	beyond += add;
-	if (beyond > 1.0f)
-		beyond = 1.0f;
-	if (beyond < -1.0f)
-		beyond = -1.0f;
-	if (beyond > 0.0f)
-		return (int)(STICK_DEAD_RANGE + 1.0f + beyond * (32767.0f - STICK_DEAD_RANGE - 1.0f));
-	if (beyond < 0.0f)
-		return (int)(-STICK_DEAD_RANGE - 1.0f + beyond * (32768.0f - STICK_DEAD_RANGE - 1.0f));
-	return 0;
-}
-
-static void add_gyro(const struct wiiu_pad *pad, XINPUT_GAMEPAD *state)
+int halo_linux_touch_look(short gamepad_index, float *yaw, float *pitch, float *gyro_yaw, float *gyro_pitch)
 {
 	static int mode; /* 0 off, 1 always, 2 only zoomed in */
 	static float sensitivity, invert;
 	static unsigned long read_at = (unsigned long)-1;
-	float yaw, pitch;
-	int x, y;
+	const float full_turn = 6.2831853f;
+	float turn, tilt;
 
+	*yaw = *pitch = *gyro_yaw = *gyro_pitch = 0.0f;
+	if (gamepad_index != 0)
+		return 0;
 	/* (read again whenever the settings change: the Wii U GamePad screen sets them while the game runs) */
 	if (read_at != config_changes())
 	{
 		const char *setting = config_string("input.wiiu_gyro_aim");
+		const char *space = config_string("input.wiiu_gyro_space");
 
 		read_at = config_changes();
 		mode = !strcmp(setting, "always") ? 1 : !strcmp(setting, "zoom") ? 2 : 0;
 		sensitivity = (float)config_real("input.wiiu_gyro_sensitivity");
+		if (!(sensitivity > 0.0f && sensitivity <= 10.0f))
+			sensitivity = 1.0f;
 		invert = config_boolean("input.wiiu_gyro_invert_y") ? -1.0f : 1.0f;
+		wiiu_input_set_gyro_space(!strcmp(space, "turn") ? WIIU_GYRO_SPACE_TURN : !strcmp(space, "lean") ? WIIU_GYRO_SPACE_LEAN : WIIU_GYRO_SPACE_PLAYER);
 	}
+	/* (taken whether it is used or not: a turn made in a menu must not jump the view when the game comes back) */
+	wiiu_input_gyro_take(&turn, &tilt);
 	if (!mode || port_menus_active() || (mode == 2 && player_control_get_zoom_level(0) < 0))
-		return;
-	yaw = pad->gyro_yaw;
-	pitch = pad->gyro_pitch;
-	if (yaw > -0.02f && yaw < 0.02f)
-		yaw = 0.0f;
-	if (pitch > -0.02f && pitch < 0.02f)
-		pitch = 0.0f;
-	x = through_dead_zone(state->sThumbRX, yaw * 4.0f * sensitivity);
-	y = through_dead_zone(state->sThumbRY, pitch * 4.0f * sensitivity * invert);
-	state->sThumbRX = (SHORT)x;
-	state->sThumbRY = (SHORT)y;
+		return 0;
+	if (turn == 0.0f && tilt == 0.0f)
+		return 0;
+	/* (the game's yaw turns left positive; the pad's turn is right positive) */
+	*gyro_yaw = -turn * full_turn * sensitivity;
+	*gyro_pitch = tilt * full_turn * sensitivity * invert;
+	return 1;
 }
 
 /* Hold to skip: while the game says a cinematic can be skipped (touch_game.c: the game's own question) and no menu has the screen, A, Start and a finger on the
@@ -378,7 +363,6 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 	if (port == 0)
 	{
 		overlay_combo(&pad, &state->Gamepad);
-		add_gyro(&pad, &state->Gamepad);
 	}
 	if (memcmp(&state->Gamepad, &controllers[port].previous, sizeof(state->Gamepad)))
 	{

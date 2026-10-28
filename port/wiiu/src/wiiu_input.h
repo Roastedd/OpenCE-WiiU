@@ -46,6 +46,23 @@ on ports 1 to 3 by their KPAD channel); 1, "separate": port 0 is the GamePad alo
 have (for split screen with the GamePad and a Pro Controller). */
 void wiiu_input_set_layout(int separate);
 
+/* The GamePad's gyro as a mouse: how far it has turned since the last call, in rotations (turn: right positive; pitch: the top tilting away positive), worked
+out from each sample in the space chosen (wiiu_input_set_gyro_space), and cleared. */
+void wiiu_input_gyro_take(float *turn, float *pitch);
+
+enum
+{
+	/* player space (GyroWiki): the pad's yaw and roll joined about the axis the player turns it around, told apart by gravity: turning the pad left and right, held
+	flat, upright or between, turns the view */
+	WIIU_GYRO_SPACE_PLAYER,
+	/* the pad's own yaw axis only (turning it as if on a table) */
+	WIIU_GYRO_SPACE_TURN,
+	/* the pad's own roll axis only (leaning it like a steering wheel) */
+	WIIU_GYRO_SPACE_LEAN,
+};
+
+void wiiu_input_set_gyro_space(int space);
+
 /* Reads the pad of a port (0: the GamePad, with the Pro Controller of channel 0 if one is there; 1 to 3: the Pro Controllers of channels 1 to 3). Returns 1
 if there is such a pad, with its state; 0 if not. */
 int wiiu_input_read(unsigned int port, struct wiiu_pad *pad);

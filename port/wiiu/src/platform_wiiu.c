@@ -161,16 +161,6 @@ int halo_linux_touch_aiming(short gamepad_index)
 	return 0;
 }
 
-int halo_linux_touch_look(short gamepad_index, real *yaw, real *pitch, real *gyro_yaw, real *gyro_pitch)
-{
-	(void)gamepad_index;
-	(void)yaw;
-	(void)pitch;
-	(void)gyro_yaw;
-	(void)gyro_pitch;
-	return 0;
-}
-
 int halo_linux_touch_move(short controller_index, real *forward, real *strafe)
 {
 	(void)controller_index;
