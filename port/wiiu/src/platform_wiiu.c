@@ -141,23 +141,19 @@ int halo_push_to_talk_held(void)
 
 /* ---------- aiming and moving by mouse or touch: none */
 
-int halo_linux_mouse_aiming(short gamepad_index)
+int halo_linux_touch_aiming(short gamepad_index)
 {
 	(void)gamepad_index;
 	return 0;
 }
 
-int halo_linux_mouse_look(short gamepad_index, real *yaw, real *pitch)
+int halo_linux_touch_look(short gamepad_index, real *yaw, real *pitch, real *gyro_yaw, real *gyro_pitch)
 {
 	(void)gamepad_index;
 	(void)yaw;
 	(void)pitch;
-	return 0;
-}
-
-int halo_linux_touch_aiming(short gamepad_index)
-{
-	(void)gamepad_index;
+	(void)gyro_yaw;
+	(void)gyro_pitch;
 	return 0;
 }
 

@@ -134,13 +134,17 @@ static void pad_state(const struct wiiu_pad *pad, XINPUT_GAMEPAD *state)
 short player_control_get_zoom_level(short local_player_index);
 
 /* The GamePad's gyro aims as a mouse does (as Steam Input's "gyro to mouse" and GyroWiki recommend), not as a stick: how far the pad turned since the game last
-asked becomes how far the view turns, sensitivity times as far (1: the view turns as far as the pad), through the game's own path for a phone's gyroscope
-(player_control.c, halo_linux_touch_look: after the look curve and the stick's dead range, before the zoom and the aim assist). input.wiiu_gyro_aim "off",
-"always" or "zoom" (only while zoomed in); input.wiiu_gyro_space "player" (turn the pad left and right however it is held), "turn" or "lean";
-input.wiiu_gyro_invert_y. Nothing in the menus. */
-int halo_linux_touch_look(short gamepad_index, float *yaw, float *pitch, float *gyro_yaw, float *gyro_pitch);
+asked becomes how far the view turns, sensitivity times as far (1: the view turns as far as the pad), through the game's path for the PC's mouse (player_control.c,
+halo_linux_mouse_look: after the stick's look curve and the aim assist's magnetism, which would slow the view over a target and pull it after one, as GyroWiki
+warns; only the zoom divides it). input.wiiu_gyro_aim "off", "always" or "zoom" (only while zoomed in); input.wiiu_gyro_space "player" (turn the pad left and
+right however it is held), "turn" or "lean"; input.wiiu_gyro_invert_y. Nothing in the menus. */
+int halo_linux_mouse_look(short gamepad_index, float *yaw, float *pitch);
+int halo_linux_mouse_aiming(short gamepad_index);
 
-int halo_linux_touch_look(short gamepad_index, float *yaw, float *pitch, float *gyro_yaw, float *gyro_pitch)
+/* (which aimed last, the gyro or the right stick, counted in the game's polls: halo_linux_mouse_aiming) */
+static unsigned long aim_polls, gyro_aimed_at, stick_aimed_at;
+
+int halo_linux_mouse_look(short gamepad_index, float *yaw, float *pitch)
 {
 	static int mode; /* 0 off, 1 always, 2 only zoomed in */
 	static float sensitivity, invert;
@@ -148,7 +152,7 @@ int halo_linux_touch_look(short gamepad_index, float *yaw, float *pitch, float *
 	const float full_turn = 6.2831853f;
 	float turn, tilt;
 
-	*yaw = *pitch = *gyro_yaw = *gyro_pitch = 0.0f;
+	*yaw = *pitch = 0.0f;
 	if (gamepad_index != 0)
 		return 0;
 	/* (read again whenever the settings change: the Wii U GamePad screen sets them while the game runs) */
@@ -171,10 +175,20 @@ int halo_linux_touch_look(short gamepad_index, float *yaw, float *pitch, float *
 		return 0;
 	if (turn == 0.0f && tilt == 0.0f)
 		return 0;
+	/* (a turn of more than about a fifth of a degree since the last poll, 5 to 10 degrees a second, is aiming, not the hand's tremor) */
+	if (turn * turn + tilt * tilt > 0.0005f * 0.0005f)
+		gyro_aimed_at = aim_polls;
 	/* (the game's yaw turns left positive; the pad's turn is right positive) */
-	*gyro_yaw = -turn * full_turn * sensitivity;
-	*gyro_pitch = tilt * full_turn * sensitivity * invert;
+	*yaw = -turn * full_turn * sensitivity;
+	*pitch = tilt * full_turn * sensitivity * invert;
 	return 1;
+}
+
+/* whether the first player aims with the gyro (it turned after the right stick was last pushed): then the view's magnetism leaves them be, as it does the PC's
+mouse; the bullets' autoaim stays */
+int halo_linux_mouse_aiming(short gamepad_index)
+{
+	return gamepad_index == 0 && gyro_aimed_at != 0 && gyro_aimed_at >= stick_aimed_at;
 }
 
 /* Hold to skip: while the game says a cinematic can be skipped (touch_game.c: the game's own question) and no menu has the screen, A, Start and a finger on the
@@ -363,6 +377,10 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 	if (port == 0)
 	{
 		overlay_combo(&pad, &state->Gamepad);
+		aim_polls++;
+		/* (the game's dead range: input_xbox.c, GAMEPAD_STICK_DEAD_RANGE) */
+		if (state->Gamepad.sThumbRX > 9000 || state->Gamepad.sThumbRX < -9000 || state->Gamepad.sThumbRY > 9000 || state->Gamepad.sThumbRY < -9000)
+			stick_aimed_at = aim_polls;
 	}
 	if (memcmp(&state->Gamepad, &controllers[port].previous, sizeof(state->Gamepad)))
 	{

@@ -144,6 +144,9 @@ static struct
 	OSTime last;
 	float turn, pitch; /* rotations not yet taken */
 	OSTime told;
+	/* (for the log: the system's own angle against the rates added up here, each axis, since the last line) */
+	int angle_known;
+	float last_angle[3], by_angle[3], by_rates[3];
 } gyro_mouse;
 
 void wiiu_input_set_gyro_space(int space)
@@ -197,6 +200,19 @@ static void gyro_mouse_note(const VPADStatus *status, float pitch_rate, float ya
 					gyro_mouse.gravity[i] /= length;
 		}
 	}
+	{
+		const float angle[3] = { status->angle.x, status->angle.y, status->angle.z };
+		const float rate[3] = { status->gyro.x, status->gyro.y, status->gyro.z };
+
+		for (i = 0; i < 3; i++)
+		{
+			if (gyro_mouse.angle_known)
+				gyro_mouse.by_angle[i] += angle[i] - gyro_mouse.last_angle[i];
+			gyro_mouse.last_angle[i] = angle[i];
+			gyro_mouse.by_rates[i] += rate[i] * seconds;
+		}
+		gyro_mouse.angle_known = 1;
+	}
 	if (gyro_mouse.space == WIIU_GYRO_SPACE_TURN)
 	{
 		turn_rate = yaw_rate;
@@ -234,6 +250,12 @@ static void gyro_mouse_note(const VPADStatus *status, float pitch_rate, float ya
 		gyro_mouse.told = now;
 		wiiu_log("Input: GamePad gravity %.2f %.2f %.2f (accelerometer %.2f %.2f %.2f)", gyro_mouse.gravity[0], gyro_mouse.gravity[1], gyro_mouse.gravity[2],
 			status->accelorometer.acc.x, status->accelorometer.acc.y, status->accelorometer.acc.z);
+		/* (whether the system's angle, a turn added up at the pad's own rate, can stand for the rates added up at the game's: x, y, z in rotations) */
+		wiiu_log("Input: GamePad turned by its angle %.3f %.3f %.3f, by the rates %.3f %.3f %.3f (angle now %.3f %.3f %.3f)", gyro_mouse.by_angle[0],
+			gyro_mouse.by_angle[1], gyro_mouse.by_angle[2], gyro_mouse.by_rates[0], gyro_mouse.by_rates[1], gyro_mouse.by_rates[2], status->angle.x, status->angle.y,
+			status->angle.z);
+		memset(gyro_mouse.by_angle, 0, sizeof(gyro_mouse.by_angle));
+		memset(gyro_mouse.by_rates, 0, sizeof(gyro_mouse.by_rates));
 	}
 }
 
