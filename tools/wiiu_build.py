@@ -100,7 +100,8 @@ WIIU_NATIVE_PREFIX = "wiiu_"
 
 # what the link needs and the compile does not say: wut's specs and libraries (the environment has WUT_ROOT, as
 # the opence-wiiu container does)
-WIIU_LINK_FLAGS = ["-g", "-specs=$$WUT_ROOT/share/wut.specs", WIIU_MARCH, "-meabi", "-mhard-float"]
+# (--wrap: the game thread's waits for locks are timed while the profiler runs, port/wiiu/src/wiiu_lockprof.c)
+WIIU_LINK_FLAGS = ["-g", "-specs=$$WUT_ROOT/share/wut.specs", WIIU_MARCH, "-meabi", "-mhard-float", "-Wl,--wrap=pthread_mutex_lock"]
 WIIU_LIBS = ["-L$$WUT_ROOT/lib", "-lwut", "-lm"]
 
 

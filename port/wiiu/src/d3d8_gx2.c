@@ -3161,17 +3161,34 @@ void WINAPI D3DDevice_SetVertexData2s(INT reg, SHORT a, SHORT b)
 	set_attribute(reg, (float)a, (float)b, 0.0f, 1.0f);
 }
 
+/* a byte as the vertex attribute it is, b / 255.0f, from a table: four divisions for each colour of each immediate vertex (the decals draw thousands a frame)
+cost the Wii U's game thread several percent; the table's values are the divisions' */
+static float byte_unit[256];
+
+static const float *byte_units(void)
+{
+	if (byte_unit[255] == 0.0f)
+	{
+		unsigned i;
+
+		for (i = 0; i < 256; i++)
+			byte_unit[i] = (float)i / 255.0f;
+	}
+	return byte_unit;
+}
+
 void WINAPI D3DDevice_SetVertexData4ub(INT reg, BYTE a, BYTE b, BYTE c, BYTE d)
 {
-	set_attribute(reg, a / 255.0f, b / 255.0f, c / 255.0f, d / 255.0f);
+	const float *unit = byte_units();
+
+	set_attribute(reg, unit[a], unit[b], unit[c], unit[d]);
 }
 
 void WINAPI D3DDevice_SetVertexDataColor(INT reg, D3DCOLOR color)
 {
-	float value[4];
+	const float *unit = byte_units();
 
-	color_to_vec4(color, value);
-	set_attribute(reg, value[0], value[1], value[2], value[3]);
+	set_attribute(reg, unit[(color >> 16) & 0xff], unit[(color >> 8) & 0xff], unit[color & 0xff], unit[(color >> 24) & 0xff]);
 }
 /* ---------- clearing */
 

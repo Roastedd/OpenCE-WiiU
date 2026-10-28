@@ -93,8 +93,16 @@ int wiiu_immediate_emit(struct wiiu_immediate *immediate, const float (*register
 	if (!room_for(immediate, immediate->count + 1, immediate->layout_count))
 		return 0;
 	vertex = immediate->vertices + immediate->count * immediate->layout_count * 4;
+	/* (four stores, not a call of memcpy for 16 bytes: a decal's vertex is three registers, and the decals are thousands of vertices a frame) */
 	for (i = 0; i < immediate->layout_count; i++)
-		memcpy(vertex + i * 4, registers[immediate->layout[i]], 4 * sizeof(float));
+	{
+		const float *from = registers[immediate->layout[i]];
+
+		vertex[i * 4] = from[0];
+		vertex[i * 4 + 1] = from[1];
+		vertex[i * 4 + 2] = from[2];
+		vertex[i * 4 + 3] = from[3];
+	}
 	immediate->count++;
 	return 1;
 }

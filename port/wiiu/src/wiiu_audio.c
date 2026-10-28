@@ -24,7 +24,9 @@ Not run on a console.
 #include <string.h>
 
 #define RING_FRAMES 4096u
-#define CHUNK_FRAMES 256u
+/* (64 frames, 1.3 ms, a mix at a time: the mixer holds the sound's lock while it mixes every voice, and the game thread waits for it to queue or change a sound -
+10% of its time while the assault rifle fired with chunks of 256; a quarter of the chunk is about a quarter of each wait) */
+#define CHUNK_FRAMES 64u
 #define AHEAD_LOW 768u
 #define AHEAD_HIGH 1536u
 #define STACK_BYTES (64 * 1024)
@@ -95,9 +97,9 @@ static int audio_thread(int argc, const char **argv)
 				at = (at + 1) % RING_FRAMES;
 			}
 			written += CHUNK_FRAMES;
-			/* (the part of the ring written, flushed for the voices) */
-			DCFlushRange(rings[0], RING_FRAMES * sizeof(int16_t));
-			DCFlushRange(rings[1], RING_FRAMES * sizeof(int16_t));
+			/* (the part of the ring written, flushed for the voices: a chunk never wraps, the ring being a whole number of them) */
+			DCFlushRange(rings[0] + write, CHUNK_FRAMES * sizeof(int16_t));
+			DCFlushRange(rings[1] + write, CHUNK_FRAMES * sizeof(int16_t));
 			if (ahead >= AHEAD_LOW)
 				OSSleepTicks(OSMillisecondsToTicks(2));
 		}

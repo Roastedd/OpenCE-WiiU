@@ -64,6 +64,11 @@ static void report(void)
 	static uint8_t done[TABLE_SIZE];
 
 	wiiu_log("PROF %u samples, %u lost, function addresses: wiiu_log %08x", (unsigned)samples, (unsigned)lost, (unsigned)(uintptr_t)&wiiu_log);
+	{
+		void wiiu_lockprof_report(void);
+
+		wiiu_lockprof_report();
+	}
 	memset(done, 0, sizeof(done));
 	for (line = 0; line < REPORT_LINES; line++)
 	{
@@ -176,6 +181,12 @@ void wiiu_profile_start(void)
 	if (read == 1 && seconds >= 2)
 		report_seconds = seconds;
 	target = OSGetCurrentThread();
+	{
+		/* (wiiu_lockprof.c: the game thread's waits for locks timed too) */
+		void wiiu_lockprof_watch(void *thread);
+
+		wiiu_lockprof_watch(target);
+	}
 	stack = MEMAllocFromDefaultHeapEx(stack_size, 16);
 	if (!stack)
 		return;
