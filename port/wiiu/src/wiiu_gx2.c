@@ -198,6 +198,7 @@ static struct
 	double exit_after;
 	int hiz; /* halo/hiz.txt: 1, the big depth target has hierarchical Z */
 	unsigned fail_allocations; /* halo/mem1_fail.txt: that many allocations of targets made again after HOME fail (a test) */
+	int gpu_test_wanted; /* halo/gpu_test.txt 1, read at the start: the GPU test runs once the game draws 250 or more a frame */
 	int mem1_ddr3_only; /* the targets are made again by the GX2 thread, not the acquire callback: not in libwhb's heap, which another thread may be making */
 	int mem1; /* halo/mem1.txt: 1, the big render targets are made in the eDRAM (MEM1) instead of the DDR3 */
 	volatile int mem1_lost; /* HOME: the eDRAM's targets are gone until mem1_restore */
@@ -2294,6 +2295,14 @@ static int initialize(void)
 		}
 		if (gx.exit_after > 0.0)
 			wiiu_log("GX2: the run ends %.0f seconds after its first frame (exit_after.txt)", gx.exit_after);
+		file = fopen(WIIU_DATA_DIRECTORY "/gpu_test.txt", "r");
+		if (file)
+		{
+			int asked = 0;
+
+			gx.gpu_test_wanted = fscanf(file, "%d", &asked) == 1 && asked == 1;
+			fclose(file);
+		}
 	}
 	if (overlay_make())
 	{
@@ -3111,7 +3120,7 @@ static void screenshot_take(struct target *source, uint32_t address)
 /* The GPU test. The commands of one frame, kept as they were handed over, are run again and again without the game (30 frames' worth, or what the ring has room for), then waited for:
 the time for each is the GPU's if it is more than the CPU's side of a frame (the commands need 2-4 ms of the GX2 thread), which is the question - could the GPU draw this frame in the time a 60 Hz display
 gives it, whatever is done to the CPU? Three runs: the frame as it is, with no pixels drawn (a scissor of one pixel: the cost of the draws without their fill), and with blending off. Asked for with a 1 in
-halo/gpu_test.txt (read every 120 frames, once a run). The picture of the frame is drawn 90 more times: no harm. */
+halo/gpu_test.txt (read at the start; run once). The picture of the frame is drawn 90 more times: no harm. */
 static void gpu_test_run(void)
 {
 	static const struct { const char *name; int mode; } variants[3] = { { "the frame", 0 }, { "no pixels (scissor 1x1)", 4 }, { "no blending", 1 } };
@@ -3281,26 +3290,8 @@ static void present(const struct dk_command_present *command)
 			gx.slow_frames++;
 	}
 	gx.last_present = OSGetSystemTime();
-	if (gx.frames % 300 == 0)
-	{
-		FILE *file = fopen(WIIU_DATA_DIRECTORY "/gx2_trace.txt", "r");
-		int frame = -1, mode = 0, features = 0, serial = 0;
-
-		if (file)
-		{
-			if (fscanf(file, "%d %d %d %d", &frame, &mode, &features, &serial) >= 1 && serial != gx.trace_serial)
-			{
-				gx.trace_serial = serial;
-				gx.trace_frame = (int)gx.frames + 2;
-				gx.traced = 0;
-				gx.debug_mode = mode;
-				gx.features_off = features;
-				gx.state_dirty = 1;
-				memset(gx.sampler_valid, 0, sizeof(gx.sampler_valid));
-			}
-			fclose(file);
-		}
-	}
+	/* (no file is read here: a read of the card took 40-60 ms of the game thread's frame, every 120 frames, when halo/gpu_test.txt and gx2_trace.txt were looked at from here;
+	both are read once, at the start) */
 	gx.present_ticks += OSGetSystemTime() - present_start;
 	if (gx.frames == 1)
 	{
@@ -3391,18 +3382,8 @@ static void present(const struct dk_command_present *command)
 	context_resume();
 	if (gx.test_armed == 3)
 		gx.test_armed = 4; /* (done: once a run) */
-	if (!gx.test_armed && gx.frames % 120 == 0 && gx.frames > 300 && gx.last_frame_draws >= 250)
+	if (!gx.test_armed && gx.gpu_test_wanted && gx.frames > 300 && gx.last_frame_draws >= 250)
 	{
-		FILE *file = fopen(WIIU_DATA_DIRECTORY "/gpu_test.txt", "r");
-		int asked = 0;
-
-		if (file)
-		{
-			if (fscanf(file, "%d", &asked) != 1)
-				asked = 0;
-			fclose(file);
-		}
-		if (asked == 1)
 		{
 			if (!gx.test_log)
 				gx.test_log = malloc(TEST_LOG_BYTES);
