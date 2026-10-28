@@ -687,6 +687,7 @@ static struct
 	struct static_entry
 	{
 		uint32_t address, size;
+		unsigned long serial; /* the memory watch's serial when the copy was made: a write to the range announced after it makes the copy stale */
 		void *memory;
 	} table[STATIC_TABLE];
 	uint8_t *chunks[STATIC_CHUNKS];
@@ -707,26 +708,25 @@ block copied whole with the 256 KB after it (any range of up to 256 KB is inside
 static struct
 {
 	uint32_t window_base, window_size;
-	struct { uint8_t *memory; uint32_t length; } block[BLOCK_SLOTS];
+	struct { uint8_t *memory; uint32_t length; unsigned long serial; unsigned refreshes; } block[BLOCK_SLOTS];
 	unsigned copies, hits, misses_range;
 } blocks;
 
-/* the memory watch (memory_watch_wiiu.c): a range of the window written since the map was loaded (a Lock, a file read after the load) is not the map's: its copy is not kept, the draw
-copies it into the ring (dynamic vertex buffers are in the window too: a cached copy of one would be shown for ever) */
+/* the memory watch (memory_watch_wiiu.c): a copy is good for a range while no write to it has been announced since the copy was made (dynamic vertex buffers are in the window too: a copy of
+one would be shown for ever). A block whose range was written is copied again (to new memory: the GPU may still be reading the old) up to twice; after that, or for an exact range, the draw
+copies the range into the ring */
 unsigned long memory_watch_generation_raw(unsigned long address, unsigned long size);
 unsigned long memory_watch_serial(void);
-static unsigned long cache_epoch;
 
-static int cacheable(uint32_t address, uint32_t size)
+static int copy_is_current(uint32_t address, uint32_t size, unsigned long serial)
 {
-	return memory_watch_generation_raw(address, size) <= cache_epoch;
+	return memory_watch_generation_raw(address, size) <= serial;
 }
 
 static void cache_flush(void)
 {
 	unsigned i;
 
-	cache_epoch = memory_watch_serial(); /* (what is written from now on is not the map's) */
 	for (i = 0; i < cache.chunk_count; i++)
 		free_later(cache.chunks[i]);
 	memset(&cache, 0, sizeof(cache));
@@ -789,17 +789,29 @@ static void *block_get(uint32_t address, uint32_t size)
 	offset = relative % BLOCK_UNIT;
 	if (block >= BLOCK_SLOTS)
 		return NULL;
+	if (blocks.block[block].memory && !copy_is_current(address, size, blocks.block[block].serial))
+	{
+		if (blocks.block[block].refreshes >= 2)
+		{
+			gx.dynamic_streams++;
+			return NULL;
+		}
+		blocks.block[block].refreshes++;
+		blocks.block[block].memory = NULL; /* (copied again below, to new memory) */
+	}
 	if (!blocks.block[block].memory)
 	{
 		const uint32_t start = block * BLOCK_UNIT;
 		uint32_t length = BLOCK_SPAN;
 		uint8_t *memory;
+		const unsigned long serial = memory_watch_serial(); /* (before the copy: a write during it is newer) */
 
 		if (start + length > blocks.window_size)
 			length = blocks.window_size - start;
 		memory = cache_alloc(BLOCK_SPAN);
 		if (!memory)
 			return NULL;
+		blocks.block[block].serial = serial;
 		memcpy(memory, (const void *)(uintptr_t)(blocks.window_base + start), length);
 		GX2Invalidate(GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER, memory, length);
 		blocks.block[block].memory = memory;
@@ -826,6 +838,11 @@ static void *cache_get(uint32_t address, uint32_t size)
 			break;
 		if (entry->address == address && entry->size == size)
 		{
+			if (!copy_is_current(address, size, entry->serial))
+			{
+				gx.dynamic_streams++;
+				return NULL;
+			}
 			cache.hits++;
 			return entry->memory;
 		}
@@ -835,6 +852,7 @@ static void *cache_get(uint32_t address, uint32_t size)
 	memory = cache_alloc(aligned);
 	if (!memory)
 		return NULL;
+	cache.table[slot].serial = memory_watch_serial();
 	memcpy(memory, (const void *)(uintptr_t)address, size);
 	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER, memory, size);
 	cache.table[slot].address = address;
@@ -1994,14 +2012,9 @@ static void draw(const struct dk_command_draw *command)
 		buffers[stream] = NULL;
 		if (!command->inline_bytes && ((gx.format.static_streams >> stream) & 1))
 		{
-			if (cacheable((uint32_t)(uintptr_t)source, sizes[stream]))
-			{
-				buffers[stream] = block_get((uint32_t)(uintptr_t)source, sizes[stream]);
-				if (!buffers[stream])
-					buffers[stream] = cache_get((uint32_t)(uintptr_t)source, sizes[stream]);
-			}
-			else
-				gx.dynamic_streams++;
+			buffers[stream] = block_get((uint32_t)(uintptr_t)source, sizes[stream]);
+			if (!buffers[stream])
+				buffers[stream] = cache_get((uint32_t)(uintptr_t)source, sizes[stream]);
 		}
 		gx.ring_what = command->inline_bytes ? 1 : 0;
 		if (!buffers[stream])
@@ -2036,7 +2049,7 @@ static void draw(const struct dk_command_draw *command)
 		else
 			source = (const unsigned char *)(uintptr_t)command->index_address;
 		gx.index_bytes += command->count * 2;
-		indices = command->index_address != DK_INDEX_INLINE && cacheable((uint32_t)(uintptr_t)source, command->count * 2) ? cache_get((uint32_t)(uintptr_t)source, command->count * 2) : NULL;
+		indices = command->index_address != DK_INDEX_INLINE ? cache_get((uint32_t)(uintptr_t)source, command->count * 2) : NULL;
 		gx.ring_what = 3;
 		if (!indices)
 			indices = ring_copy(source, command->count * 2);
@@ -3136,7 +3149,7 @@ static void present(const struct dk_command_present *command)
 		gx.counts_state = gx.counts_fetch = gx.counts_vs = gx.counts_ps = gx.counts_vertex_regs = gx.counts_pixel_regs = gx.counts_texture_sets = 0;
 		memset(gx.section_ticks, 0, sizeof(gx.section_ticks));
 		big_copies_log();
-		wiiu_log("GX2:   %lu streams of the window were written since the map loaded, so copied into the ring", gx.dynamic_streams);
+		wiiu_log("GX2:   %lu copies of the window's data were out of date (written since), so the range was copied into the ring", gx.dynamic_streams);
 		gx.dynamic_streams = 0;
 		wiiu_log("GX2:   by kind a frame: streams %lu KB in %lu, immediate vertices %lu KB in %lu, constants %lu KB in %lu, indices %lu KB in %lu", gx.ring_kind_bytes[0] / 1024 / (gx.window_frames ? gx.window_frames : 1),
 			gx.ring_kind_calls[0] / (gx.window_frames ? gx.window_frames : 1), gx.ring_kind_bytes[1] / 1024 / (gx.window_frames ? gx.window_frames : 1),
