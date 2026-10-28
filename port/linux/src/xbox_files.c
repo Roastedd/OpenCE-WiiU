@@ -362,6 +362,17 @@ HANDLE WINAPI CreateFileA(LPCSTR file_name, DWORD desired_access, DWORD share_mo
 	descriptor = open(path, flags | O_CLOEXEC, 0644);
 	if (descriptor < 0)
 	{
+#ifdef HALO_WIIU
+		/* (the first failures that were not a read of a file that is not there, in the log: what the card refuses to make or open for writing, which saved games
+		and the settings depend on, and which the game only says "failed to open" of) */
+		{
+			static unsigned int told;
+
+			if ((flags & (O_CREAT | O_RDWR | O_WRONLY | O_TRUNC)) && (flags & O_ACCMODE) != O_RDONLY && told++ < 40u)
+				platform_log("Files: %s for %s%s%s failed, errno %d (%s)", (flags & O_CREAT) ? "creating" : "opening", path,
+					(flags & O_EXCL) ? " (exclusive)" : "", (flags & O_TRUNC) ? " (truncating)" : "", errno, strerror(errno));
+		}
+#endif
 		platform_set_last_error_from_errno(errno);
 		if (errno == ENOENT && !existed && (flags & O_CREAT))
 			SetLastError(ERROR_PATH_NOT_FOUND);
