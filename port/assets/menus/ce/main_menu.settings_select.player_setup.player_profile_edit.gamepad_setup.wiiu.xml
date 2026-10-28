@@ -14,10 +14,11 @@
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/options_menu" type="column_list" width="640" height="480" flags="pass_unhandled_to_focused_child up_down_tabs_children" description="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/help">
 		<data input="port settings help"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/op_wiiu_gyro_aim" x="54" y="73"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/op_wiiu_gyro_sensitivity" x="54" y="103"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/op_wiiu_gyro_invert_y" x="54" y="133"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/op_wiiu_face_buttons" x="54" y="163"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/op_wiiu_controller_layout" x="54" y="193"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/op_wiiu_gyro_space" x="54" y="103"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/op_wiiu_gyro_sensitivity" x="54" y="133"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/op_wiiu_gyro_invert_y" x="54" y="163"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/op_wiiu_face_buttons" x="54" y="193"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/op_wiiu_controller_layout" x="54" y="223"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/button_bar" y="414"/>
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/button_bar" type="column_list" width="640" height="28" flags="pass_unhandled_to_focused_child left_right_tabs_items">
@@ -34,11 +35,20 @@
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_gyro_aim_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="OFF|ALWAYS|ZOOMED" setting="input.wiiu_gyro_aim" values="off|always|zoom" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
 		<on event="created" run="port setting load"/>
 	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/op_wiiu_gyro_space" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_gyro_space_label"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_gyro_space_spinner" x="320" y="1"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_gyro_space_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/labels" string_index="1" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_gyro_space_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="ANY HOLD|YAW|LEAN" setting="input.wiiu_gyro_space" values="player|turn|lean" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
+		<on event="created" run="port setting load"/>
+	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/op_wiiu_gyro_sensitivity" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_gyro_sensitivity_label"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_gyro_sensitivity_spinner" x="320" y="1"/>
 	</widget>
-	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_gyro_sensitivity_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/labels" string_index="1" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_gyro_sensitivity_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/labels" string_index="2" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_gyro_sensitivity_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="0.1|0.15|0.25|0.4|0.5|0.75|1|1.25|1.5|1.75|2|2.5|3|4" setting="input.wiiu_gyro_sensitivity" values="0.1|0.15|0.25|0.4|0.5|0.75|1|1.25|1.5|1.75|2|2.5|3|4" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
 		<on event="created" run="port setting load"/>
@@ -47,7 +57,7 @@
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_gyro_invert_y_label"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_gyro_invert_y_spinner" x="320" y="1"/>
 	</widget>
-	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_gyro_invert_y_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/labels" string_index="2" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_gyro_invert_y_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/labels" string_index="3" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_gyro_invert_y_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="YES|NO" setting="input.wiiu_gyro_invert_y" values="true|false" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
 		<on event="created" run="port setting load"/>
@@ -56,7 +66,7 @@
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_face_buttons_label"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_face_buttons_spinner" x="320" y="1"/>
 	</widget>
-	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_face_buttons_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/labels" string_index="3" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_face_buttons_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/labels" string_index="4" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_face_buttons_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="AUTO|BY PLACE|BY LETTER" setting="input.wiiu_face_buttons" values="auto|position|label" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
 		<on event="created" run="port setting load"/>
@@ -65,7 +75,7 @@
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_controller_layout_label"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_controller_layout_spinner" x="320" y="1"/>
 	</widget>
-	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_controller_layout_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/labels" string_index="4" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_controller_layout_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/labels" string_index="5" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/wiiu_controller_layout_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="MERGED|SEPARATE" setting="input.wiiu_controller_layout" values="merged|separate" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
 		<on event="created" run="port setting load"/>
@@ -82,6 +92,7 @@
 	</widget>
 	<strings name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/labels">
 		<string text="GYRO AIM:"/>
+		<string text="GYRO TURNS WITH:"/>
 		<string text="GYRO SENSITIVITY:"/>
 		<string text="INVERT GYRO:"/>
 		<string text="FACE BUTTONS:"/>
@@ -90,7 +101,8 @@
 	<strings name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiiu/help_strings">
 		<string text=""/>
 		<string text="Turning the GamePad aims too: always, or only\nwhile zoomed in through a scope."/>
-		<string text="How far the view turns for the GamePad's turning."/>
+		<string text="Any hold: turn the GamePad left and right\nhowever you hold it. Lean: like a wheel."/>
+		<string text="How far the view turns for the GamePad's\nturn: 1 as far as the pad, 2 twice as far."/>
 		<string text="Tilting the top of the GamePad away looks down."/>
 		<string text="Auto: by letter in the menus, by place in the\ngame (B jumps). From the next start."/>
 		<string text="Separate: a Pro Controller is player 2, for\nsplit screen. From the next start."/>
