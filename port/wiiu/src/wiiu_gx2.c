@@ -84,6 +84,8 @@ struct target
 	GX2Texture texture; /* a color target as the blit samples it */
 	unsigned last_used;
 	int in_mem1; /* its image is in the eDRAM (MEM1), which the system takes while the app is in the background: made again by mem1_restore */
+	int unusable; /* no memory for it after HOME: nothing is drawn into it or from it (target_get and target_latest leave it out) */
+	OSTime remade_at;
 };
 
 struct blit_vertex
@@ -143,6 +145,7 @@ static struct
 	unsigned deferred_count;
 
 	unsigned long ring_bytes, ring_calls, ring_largest, index_bytes, dynamic_streams;
+	unsigned long frame_buckets[4]; /* frames since the last log note that took one refresh of the display, two, three, more */
 	OSTime draw_started, section_now;
 	OSTime section_ticks[7];
 	unsigned long counts_state, counts_fetch, counts_vs, counts_ps, counts_vertex_regs, counts_pixel_regs, counts_texture_sets, counts_draw_calls; /* of the draw's: its copies of data, state, shaders, uniforms, textures and attribute buffers, the draw call */
@@ -194,6 +197,8 @@ static struct
 	unsigned slow_frames; /* frames of the window that took more than 40 ms */
 	double exit_after;
 	int hiz; /* halo/hiz.txt: 1, the big depth target has hierarchical Z */
+	unsigned fail_allocations; /* halo/mem1_fail.txt: that many allocations of targets made again after HOME fail (a test) */
+	int mem1_ddr3_only; /* the targets are made again by the GX2 thread, not the acquire callback: not in libwhb's heap, which another thread may be making */
 	int mem1; /* halo/mem1.txt: 1, the big render targets are made in the eDRAM (MEM1) instead of the DDR3 */
 	volatile int mem1_lost; /* HOME: the eDRAM's targets are gone until mem1_restore */
 	volatile int resume_needed;
@@ -591,6 +596,7 @@ static void ring_flush(void)
 #define TEST_LOG_BYTES (8 * 1024 * 1024)
 
 static void run_stream(const unsigned char *at, const unsigned char *end);
+static void gx_gate(void);
 static void gt_log(unsigned frames);
 static void gpu_poll(void);
 static int overlay_make(void);
@@ -1585,7 +1591,8 @@ static struct target *target_latest(uint32_t data)
 	unsigned i;
 
 	for (i = 0; i < gx.target_count; i++)
-		if (gx.targets[i].surface.kind == DK_SURFACE_COLOR && gx.targets[i].surface.data == data && (!found || gx.targets[i].last_used >= found->last_used))
+		if (gx.targets[i].surface.kind == DK_SURFACE_COLOR && gx.targets[i].surface.data == data && !gx.targets[i].unusable &&
+			(!found || gx.targets[i].last_used >= found->last_used))
 			found = &gx.targets[i];
 	return found;
 }
@@ -1956,7 +1963,7 @@ static void attrib_set(unsigned index, uint32_t size, uint32_t stride, void *buf
 static void draw(const struct dk_command_draw *command)
 {
 	/* (HOME can come between two draws: the game thread is held here, before the next call into GX2, not at the end of the stream) */
-	wiiu_foreground_gate(1);
+	gx_gate();
 	gx.draw_started = OSGetSystemTime();
 	struct shader *vs, *ps;
 	struct fetch *fetch;
@@ -2256,6 +2263,16 @@ static int initialize(void)
 		}
 		gx.hiz = on;
 		wiiu_log("GX2: hierarchical Z (halo/hiz.txt): %s", on ? "yes" : "no");
+		file = fopen(WIIU_DATA_DIRECTORY "/mem1_fail.txt", "r");
+		if (file)
+		{
+			if (fscanf(file, "%d", &on) == 1 && on > 0)
+			{
+				gx.fail_allocations = (unsigned)on;
+				wiiu_log("GX2: a test: the next %d allocations of targets made again after HOME fail (halo/mem1_fail.txt)", on);
+			}
+			fclose(file);
+		}
 	}
 	/* a note in halo/exit_after.txt (seconds) ends the run by itself that long after the first frame: for runs nobody is at the console for */
 	{
@@ -2428,7 +2445,14 @@ would go to is shared with the CPU: the frame's fill is what the GPU spends its 
 
 static void target_image(struct target *target, GX2Surface *s, int depth)
 {
-	if (gx.mem1)
+	if (gx.fail_allocations && gx.mem1_lost)
+	{
+		/* (halo/mem1_fail.txt: a test of what happens when there is no memory for a target after HOME) */
+		gx.fail_allocations--;
+		s->image = NULL;
+		return;
+	}
+	if (gx.mem1 && !gx.mem1_ddr3_only)
 	{
 		const uint32_t imageSize = s->imageSize;
 
@@ -2452,53 +2476,98 @@ void wiiu_gx2_mem1_restore(void);
 
 void wiiu_gx2_mem1_lost(void)
 {
-	unsigned i;
+	unsigned i, count = 0;
 
 	if (!gx.mem1)
 		return;
+	/* Only noted: the images stay where they are until libwhb's release callback destroys its heap, which runs after this one (the higher priority first) and after the GPU
+	is drained; a stream being run (the GX2 thread's, mid-job) may still use them until then, and no stream starts while this is set (run_stream waits for mem1_restore) */
 	gx.mem1_lost = 1;
 	for (i = 0; i < gx.target_count; i++)
-		if (gx.targets[i].in_mem1)
-		{
-			GX2Surface *s = gx.targets[i].surface.kind == DK_SURFACE_DEPTH ? &gx.targets[i].depth.surface : &gx.targets[i].color.surface;
-
-			s->image = NULL; /* (not freed: the heap it is in is destroyed) */
-		}
-	wiiu_log("GX2: HOME: the eDRAM's render targets are given up");
+		count += gx.targets[i].in_mem1;
+	wiiu_log("GX2: HOME: the eDRAM's render targets (%u) are given up", count);
 }
 
-/* the targets again (in the eDRAM if libwhb has its heap back, else in the DDR3), and their registers; the shell's late acquire callback (the priority after libwhb's) */
+/* a target's image made again (after HOME) and its registers set for it; unusable if there is no memory (target_get tries again, once a second) */
+static void target_remake(struct target *target)
+{
+	const int depth = target->surface.kind == DK_SURFACE_DEPTH;
+	GX2Surface *s = depth ? &target->depth.surface : &target->color.surface;
+
+	target->in_mem1 = 0;
+	target_image(target, s, depth);
+	target->unusable = !s->image;
+	target->remade_at = OSGetSystemTime();
+	if (target->unusable)
+	{
+		wiiu_log("GX2: no memory for the %ux%u %s target: nothing is drawn into it or from it until there is", (unsigned)s->width, (unsigned)s->height, depth ? "depth" : "color");
+		return;
+	}
+	if (depth)
+		GX2InitDepthBufferRegs(&target->depth);
+	else
+	{
+		GX2InitColorBufferRegs(&target->color);
+		target->texture.surface = target->color.surface;
+		GX2InitTextureRegs(&target->texture);
+	}
+}
+
+/* the targets again (in the eDRAM if libwhb has its heap back, else in the DDR3), and their registers; the shell's late acquire callback (the priority after libwhb's), or the GX2 thread
+if that does not come (mem1_wait) */
 void wiiu_gx2_mem1_restore(void)
 {
-	unsigned i, again = 0;
+	unsigned i, again = 0, unusable = 0;
 
 	if (!gx.mem1_lost)
 		return;
 	for (i = 0; i < gx.target_count; i++)
 	{
 		struct target *target = &gx.targets[i];
-		const int depth = target->surface.kind == DK_SURFACE_DEPTH;
-		GX2Surface *s = depth ? &target->depth.surface : &target->color.surface;
 
 		if (!target->in_mem1)
 			continue;
-		target->in_mem1 = 0;
-		target_image(target, s, depth);
-		if (!s->image)
-			continue;
-		if (depth)
-			GX2InitDepthBufferRegs(&target->depth);
-		else
-		{
-			GX2InitColorBufferRegs(&target->color);
-			target->texture.surface = target->color.surface;
-			GX2InitTextureRegs(&target->texture);
-		}
+		target_remake(target);
 		again += target->in_mem1;
+		unusable += target->unusable;
 	}
-	gx.mem1_lost = 0;
+	/* (the targets being drawn into are bound again by context_resume; if one of them has no memory, neither is: nothing is drawn until the game binds targets again) */
+	if ((gx.color && gx.color->unusable) || (gx.depth && gx.depth->unusable))
+		gx.color = gx.depth = NULL;
 	gx.resume_needed = 1;
-	wiiu_log("GX2: back: %u render targets are in the eDRAM again", again);
+	__sync_synchronize(); /* (what was made is seen before the flag is) */
+	gx.mem1_lost = 0;
+	wiiu_log("GX2: back: %u render targets are in the eDRAM again, %u have no memory", again, unusable);
+}
+
+/* where the GX2 calls may go on after HOME: the app in the foreground and the targets made again. A thread held at the foreground gate in the middle of a stream (a draw, a submit)
+comes back here before its next GX2 call; the context is set again (the targets' new images) before it goes on. If the acquire callback has not made the targets in 3 s, they are made
+here, in the DDR3 (libwhb's heap may be being made by the thread of that callback). */
+static void mem1_wait(void)
+{
+	const OSTime start = OSGetSystemTime();
+
+	while (gx.mem1_lost && wiiu_in_foreground() && OSGetSystemTime() - start < OSMillisecondsToTicks(3000))
+		OSSleepTicks(OSMillisecondsToTicks(2));
+	if (gx.mem1_lost && wiiu_in_foreground())
+	{
+		wiiu_log("GX2: the targets were not made again by the acquire callback in 3 s: made here, in the DDR3");
+		gx.mem1_ddr3_only = 1;
+		wiiu_gx2_mem1_restore();
+		gx.mem1_ddr3_only = 0;
+	}
+}
+
+static void gx_gate(void)
+{
+	wiiu_foreground_gate(1);
+	if (gx.mem1_lost)
+		mem1_wait();
+	if (gx.resume_needed)
+	{
+		gx.resume_needed = 0;
+		context_resume();
+	}
 }
 
 static struct target *target_get(const struct dk_surface *surface)
@@ -2512,7 +2581,11 @@ static struct target *target_get(const struct dk_surface *surface)
 		return NULL;
 	for (i = 0; i < gx.target_count; i++)
 		if (!memcmp(&gx.targets[i].surface, surface, sizeof(*surface)))
-			return &gx.targets[i];
+		{
+			if (gx.targets[i].unusable && OSGetSystemTime() - gx.targets[i].remade_at > OSMillisecondsToTicks(1000))
+				target_remake(&gx.targets[i]);
+			return gx.targets[i].unusable ? NULL : &gx.targets[i];
+		}
 	if (gx.target_count == TARGET_LIMIT)
 	{
 		wiiu_log("GX2: more than %d render targets; %08x is not drawn into", TARGET_LIMIT, (unsigned)surface->data);
@@ -2573,8 +2646,8 @@ static struct target *target_get(const struct dk_surface *surface)
 	}
 	target->surface = *surface;
 	gx.target_count++;
-	wiiu_log("GX2: %s target %08x, %ux%u (%ux%u pixels)", depth ? "depth" : "color", (unsigned)surface->data, (unsigned)surface->width,
-		(unsigned)surface->height, (unsigned)s->width, (unsigned)s->height);
+	wiiu_log("GX2: %s target %08x, %ux%u (%ux%u pixels, %u KB in the %s)", depth ? "depth" : "color", (unsigned)surface->data, (unsigned)surface->width,
+		(unsigned)surface->height, (unsigned)s->width, (unsigned)s->height, (unsigned)(s->imageSize / 1024), target->in_mem1 ? "eDRAM" : "DDR3");
 	return target;
 }
 
@@ -3179,6 +3252,10 @@ static void present(const struct dk_command_present *command)
 
 		if (gx.overlay_previous_end)
 		{
+			const float frame_ms = (float)OSTicksToMicroseconds(end - gx.overlay_previous_end) / 1000.0f;
+
+			/* (by how many of the display's refreshes the frame took: one is 60 a second) */
+			gx.frame_buckets[frame_ms < 20.0f ? 0 : frame_ms < 36.7f ? 1 : frame_ms < 53.3f ? 2 : 3]++;
 			gx.overlay.render_width = (unsigned)((float)gx.render_height * 16.0f / 9.0f + 0.5f);
 			gx.overlay.render_height = gx.render_height;
 			gx.overlay.interpolation = config_boolean("display.interpolation");
@@ -3258,6 +3335,13 @@ static void present(const struct dk_command_present *command)
 			gx.ring_calls / (gx.window_frames ? gx.window_frames : 1), gx.ring_largest / 1024, gx.index_bytes / 1024 / (gx.window_frames ? gx.window_frames : 1));
 		if (gx.window_frames)
 			gt_log(gx.window_frames);
+		if (gx.overlay_on)
+		{
+			wiiu_log("GX2:   frame times: median %.1f, 95th percentile %.1f, 99th %.1f ms (the last %u frames); frames of 1, 2, 3, more refreshes since the last note: %lu %lu %lu %lu",
+				(double)overlay_percentile(&gx.overlay, 50), (double)overlay_percentile(&gx.overlay, 95), (double)overlay_percentile(&gx.overlay, 99), gx.overlay.count,
+				gx.frame_buckets[0], gx.frame_buckets[1], gx.frame_buckets[2], gx.frame_buckets[3]);
+			memset(gx.frame_buckets, 0, sizeof(gx.frame_buckets));
+		}
 		if (gx.overlay_on)
 			wiiu_log("GX2:   overlay: %.1f frames a second, longest of 120 %.1f ms, cpu %.1f gpu %.1f wait %.1f ms, %ux%u, interpolation %d", (double)overlay_fps(&gx.overlay),
 				(double)overlay_longest(&gx.overlay, 120), (double)gx.overlay.cpu_average, (double)gx.overlay.gpu_average, (double)gx.overlay.wait_average,
@@ -3345,21 +3429,7 @@ unsigned int host_gx2_output_height(void);
 /* runs the commands of a stream; replaying (the GPU test) leaves out those that make or free resources and the present */
 static void run_stream(const unsigned char *at, const unsigned char *end)
 {
-	if (gx.mem1_lost)
-	{
-		/* (the app is back and libwhb is making its buffers again: the shell's late acquire callback makes ours; if it does not come, the targets are made here) */
-		const OSTime start = OSGetSystemTime();
-
-		while (gx.mem1_lost && OSGetSystemTime() - start < OSMillisecondsToTicks(3000))
-			OSSleepTicks(OSMillisecondsToTicks(2));
-		if (gx.mem1_lost)
-			wiiu_gx2_mem1_restore();
-	}
-	if (gx.resume_needed)
-	{
-		gx.resume_needed = 0;
-		context_resume();
-	}
+	gx_gate();
 	while (at + sizeof(struct dk_command_header) <= end)
 	{
 		const struct dk_command_header *header = (const struct dk_command_header *)at;
@@ -3470,7 +3540,7 @@ static void submit_job(uint32_t commands, uint32_t size)
 	const unsigned char *at = (const unsigned char *)(uintptr_t)commands;
 	OSTime submit_start;
 
-	wiiu_foreground_gate(1);
+	gx_gate();
 	if (!gx.ready)
 		return;
 	submit_start = OSGetSystemTime();
@@ -3584,7 +3654,7 @@ static uint32_t run_job(uint32_t job, uint32_t a, uint32_t b)
 		submit_job(a, b);
 		break;
 	case JOB_IDLE:
-		wiiu_foreground_gate(1);
+		gx_gate();
 		GX2DrawDone();
 		break;
 	case JOB_MAP_CHANGED:

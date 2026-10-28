@@ -460,11 +460,18 @@ static int async_on(void)
 }
 
 /* waits until the stream numbered `submission` is retired; a wait of more than three seconds in the foreground is said (once), and goes on */
+static double waits_ms; /* the game thread's time in async_wait_retired and halo_switch_renderer_idle, for the hitch notes (D3DDevice_Present) */
+static double idle_ms;
+static double frame_draw_ms; /* this frame's time in the Direct3D layer's draws */
+static unsigned long idle_calls;
+
 static void async_wait_retired(uint32_t number)
 {
 	static int said;
 	const double start = profile_now_ms();
 
+	if (stream_queue_retired(&dk_stream_queue) >= number)
+		return;
 	while (stream_queue_retired(&dk_stream_queue) < number)
 	{
 		host_gx2_pause();
@@ -475,6 +482,7 @@ static void async_wait_retired(uint32_t number)
 				(unsigned long)(stream_queue_submission(&dk_stream_queue) - 1));
 		}
 	}
+	waits_ms += profile_now_ms() - start;
 }
 
 /* frees what the retired streams' commands named */
@@ -598,10 +606,14 @@ void halo_switch_renderer_idle(void);
 
 void halo_switch_renderer_idle(void)
 {
+	const double start = profile_now_ms();
+
 	stream_flush();
 	if (dk_async > 0)
 		async_wait_retired((uint32_t)(submission - 1));
 	host_gx2_idle();
+	idle_ms += profile_now_ms() - start;
+	idle_calls++;
 }
 
 /* room for a command of size bytes, its header filled in */
@@ -2943,7 +2955,12 @@ void WINAPI D3DDevice_DrawVertices(D3DPRIMITIVETYPE primitive_type, UINT start_v
 	const double start = profile_now_ms();
 
 	D3DDevice_DrawVertices_inner(primitive_type, start_vertex, vertex_count);
-	profile.draw_ms += profile_now_ms() - start;
+	{
+		const double spent = profile_now_ms() - start;
+
+		profile.draw_ms += spent;
+		frame_draw_ms += spent;
+	}
 }
 
 static void D3DDevice_DrawIndexedVertices_inner(D3DPRIMITIVETYPE primitive_type, UINT vertex_count, CONST WORD *index_data)
@@ -2964,7 +2981,12 @@ void WINAPI D3DDevice_DrawIndexedVertices(D3DPRIMITIVETYPE primitive_type, UINT 
 	const double start = profile_now_ms();
 
 	D3DDevice_DrawIndexedVertices_inner(primitive_type, vertex_count, index_data);
-	profile.draw_ms += profile_now_ms() - start;
+	{
+		const double spent = profile_now_ms() - start;
+
+		profile.draw_ms += spent;
+		frame_draw_ms += spent;
+	}
 }
 
 /* ---------- immediate mode */
@@ -3080,7 +3102,12 @@ void WINAPI D3DDevice_End(void)
 	const double start = profile_now_ms();
 
 	D3DDevice_End_inner();
-	profile.draw_ms += profile_now_ms() - start;
+	{
+		const double spent = profile_now_ms() - start;
+
+		profile.draw_ms += spent;
+		frame_draw_ms += spent;
+	}
 }
 
 static void set_attribute(INT reg, float a, float b, float c, float d)
@@ -3296,6 +3323,19 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 	profile.last_exit_ms = profile_now_ms();
 	profile.present_ms += present;
 	profile.work_ms += work;
+	/* a frame whose work took more than two refreshes: where it went (the draws, waiting for the GX2 thread, waiting for the renderer to be idle; the rest is the game's) */
+	{
+		static double waits_before, idle_before;
+		static unsigned long idle_calls_before;
+
+		if (work > 34.0)
+			platform_log("hitch: frame %lu took %.1f ms of work: %.1f in the Direct3D layer's draws, %.1f waiting for the GX2 thread's streams, %.1f in %lu waits for the renderer to be idle; "
+				"present %.1f", device.frame, work, frame_draw_ms, waits_ms - waits_before, idle_ms - idle_before, idle_calls - idle_calls_before, present);
+		frame_draw_ms = 0.0;
+		waits_before = waits_ms;
+		idle_before = idle_ms;
+		idle_calls_before = idle_calls;
+	}
 	if (work > profile.longest_work_ms)
 		profile.longest_work_ms = work;
 	if (present > profile.longest_present_ms)

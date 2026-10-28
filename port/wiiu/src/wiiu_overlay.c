@@ -66,6 +66,19 @@ static int compare_floats(const void *a, const void *b)
 	return x < y ? -1 : x > y;
 }
 
+float overlay_percentile(const struct overlay *overlay, unsigned percent)
+{
+	float sorted[OVERLAY_HISTORY];
+	unsigned at;
+
+	if (!overlay->count)
+		return 0.0f;
+	memcpy(sorted, overlay->frame, sizeof(float) * overlay->count);
+	qsort(sorted, overlay->count, sizeof(float), compare_floats);
+	at = (overlay->count * (percent > 100 ? 100 : percent)) / 100;
+	return sorted[at < overlay->count ? at : overlay->count - 1];
+}
+
 static float percent_of(float part_ms, float whole_ms)
 {
 	float percent;

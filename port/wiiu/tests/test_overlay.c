@@ -30,6 +30,7 @@ int main(int argc, char **argv)
 		overlay_push(&overlay, 16.667f, 10.0f, 2.0f, 1.0f, 8.0f, 300, 250);
 	CHECK(overlay_fps(&overlay) > 59.9f && overlay_fps(&overlay) < 60.1f);
 	CHECK(overlay_longest(&overlay, 120) < 16.7f);
+	CHECK(overlay_percentile(&overlay, 50) > 16.6f && overlay_percentile(&overlay, 99) < 16.7f);
 	overlay_update_view(&overlay);
 	CHECK(overlay.view.fps > 59.9f && overlay.view.low_fps > 59.0f);
 	CHECK(overlay.view.cpu_percent > 59.0f && overlay.view.cpu_percent < 61.0f); /* 10 of 16.7 ms */
@@ -38,6 +39,7 @@ int main(int argc, char **argv)
 	overlay_push(&overlay, 120.0f, 30.0f, 2.0f, 1.0f, 8.0f, 300, 250);
 	CHECK(overlay_longest(&overlay, 120) > 119.0f);
 	CHECK(overlay_longest(&overlay, 1) > 119.0f);
+	CHECK(overlay_percentile(&overlay, 100) > 119.0f && overlay_percentile(&overlay, 50) < 17.0f);
 	for (i = 0; i < 150; i++)
 		overlay_push(&overlay, i % 3 ? 16.667f : 33.333f, 25.0f, 4.0f, 2.0f, 0.0f, 372, 289); /* (gpu 0: not known, keeps the last average) */
 	overlay.render_width = 960;

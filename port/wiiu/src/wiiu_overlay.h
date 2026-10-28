@@ -38,6 +38,8 @@ void overlay_push(struct overlay *overlay, float frame_ms, float cpu_ms, float p
 /* the frame rate over the last frames, and the longest frame of the last `window` ones */
 float overlay_fps(const struct overlay *overlay);
 float overlay_longest(const struct overlay *overlay, unsigned window);
+/* the frame time at a percentile (0 to 100) of the history: 50 the median, 99 the worst of a hundred; 0 with no frames */
+float overlay_percentile(const struct overlay *overlay, unsigned percent);
 /* takes the panel's numbers from the averages (called a few times a second) */
 void overlay_update_view(struct overlay *overlay);
 /* draws the panel into pixels (OVERLAY_WIDTH x OVERLAY_HEIGHT RGBA, rows OVERLAY_WIDTH * 4 bytes apart) */
