@@ -174,7 +174,8 @@ static struct
 	/* the performance overlay (halo/overlay.txt: 0 is off): its numbers, the texture of its text and graph, and the GPU's time of a frame, found by when the timestamp of the work
 	submitted for it is retired */
 	struct overlay overlay;
-	int overlay_on;
+	int overlay_on; /* its numbers are taken (and logged every 5 s) */
+	volatile int overlay_shown; /* and it is drawn: halo/overlay.txt 1, or L + R + - on the GamePad (wiiu_overlay_toggle) */
 	GX2Texture overlay_texture;
 	GX2Sampler overlay_sampler;
 	struct blit_vertex *overlay_quad;
@@ -2307,16 +2308,17 @@ static int initialize(void)
 	if (overlay_make())
 	{
 		FILE *file = fopen(WIIU_DATA_DIRECTORY "/overlay.txt", "r");
-		int on = 1;
+		int on = 0;
 
 		if (file)
 		{
 			if (fscanf(file, "%d", &on) != 1)
-				on = 1;
+				on = 0;
 			fclose(file);
 		}
-		gx.overlay_on = on != 0;
-		wiiu_log("GX2: the performance overlay is %s (halo/overlay.txt: 0 turns it off)", gx.overlay_on ? "on" : "off");
+		gx.overlay_on = 1;
+		gx.overlay_shown = on != 0;
+		wiiu_log("GX2: the performance overlay is %s (halo/overlay.txt 1 shows it from the start; L + R + - on the GamePad shows or hides it)", gx.overlay_shown ? "shown" : "hidden");
 	}
 	{
 		/* how fast the index range runs on this machine: over a buffer made as the game's index buffers are (calloc), written, then read at once, then again, then with a 1 MB sweep between
@@ -2477,6 +2479,15 @@ static void target_image(struct target *target, GX2Surface *s, int depth)
 		s->imageSize = imageSize;
 	}
 	s->image = gx_alloc(s->imageSize, s->alignment ? s->alignment : 256);
+}
+
+/* xinput_wiiu.c: L + R + - on the GamePad shows or hides the performance overlay */
+void wiiu_overlay_toggle(void);
+
+void wiiu_overlay_toggle(void)
+{
+	gx.overlay_shown = !gx.overlay_shown;
+	wiiu_log("GX2: the performance overlay is %s (L + R + -)", gx.overlay_shown ? "shown" : "hidden");
 }
 
 /* HOME (the shell's release callback): the system takes the eDRAM, and libwhb makes its own heap and buffers again when the app is back */
@@ -2942,6 +2953,68 @@ static void overlay_draw(GX2ColorBuffer *screen, GX2ContextState *context, unsig
 	GX2DrawEx(GX2_PRIMITIVE_MODE_TRIANGLES, 6, 0, 1);
 }
 
+/* the hold-to-skip bar (xinput_wiiu.c says how far the hold is, 0 to 1): a grey frame and a white fill growing from the left, at the bottom middle of each screen, as games
+show a held skip. Its vertices are the ring's (each screen's draw its own: the GPU reads them after this returns). */
+static volatile float skip_progress;
+
+void wiiu_skip_progress(float progress);
+
+void wiiu_skip_progress(float progress)
+{
+	skip_progress = progress < 0.0f ? 0.0f : progress > 1.0f ? 1.0f : progress;
+}
+
+static void skip_bar_draw(GX2ColorBuffer *screen, GX2ContextState *context, float progress)
+{
+	static const unsigned corner_x[6] = { 0, 1, 0, 1, 1, 0 };
+	static const unsigned corner_y[6] = { 0, 0, 1, 0, 1, 1 };
+	const float screen_width = (float)screen->surface.width, screen_height = (float)screen->surface.height;
+	/* (in the clip space of the screen: x -1 to 1 left to right, y 1 at the top) */
+	const float half_width = 0.16f, bar_height = 2.0f * 10.0f / 480.0f, border_x = 2.0f * 3.0f / 854.0f, border_y = 2.0f * 3.0f / 480.0f;
+	const float bottom = -1.0f + 2.0f * 36.0f / 480.0f;
+	const float rectangles[2][8] = {
+		/* x0, y0, x1, y1, r, g, b, a */
+		{ -half_width - border_x, bottom - border_y, half_width + border_x, bottom + bar_height + border_y, 0.35f, 0.35f, 0.35f, 0.7f }, /* (grey: the cinematics' letterbox under it is black) */
+		{ -half_width, bottom, -half_width + 2.0f * half_width * progress, bottom + bar_height, 1.0f, 1.0f, 1.0f, 0.9f },
+	};
+	struct blit_vertex *vertices = ring_reserve(12 * sizeof(struct blit_vertex));
+	unsigned rectangle, i;
+
+	if (!vertices)
+		return;
+	for (rectangle = 0; rectangle < 2; rectangle++)
+		for (i = 0; i < 6; i++)
+		{
+			struct blit_vertex *v = &vertices[rectangle * 6 + i];
+			const float *r = rectangles[rectangle];
+
+			v->x = corner_x[i] ? r[2] : r[0];
+			v->y = corner_y[i] ? r[1] : r[3];
+			v->u = v->v = 0.5f;
+			v->r = r[4];
+			v->g = r[5];
+			v->b = r[6];
+			v->a = r[7];
+		}
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER, vertices, 12 * sizeof(struct blit_vertex));
+	GX2SetContextState(context);
+	GX2SetColorBuffer(screen, GX2_RENDER_TARGET_0);
+	GX2SetViewport(0.0f, 0.0f, screen_width, screen_height, 0.0f, 1.0f);
+	GX2SetScissor(0, 0, (uint32_t)screen_width, (uint32_t)screen_height);
+	blit_state();
+	GX2SetColorControl(GX2_LOGIC_OP_COPY, 1, FALSE, TRUE);
+	GX2SetBlendControl(GX2_RENDER_TARGET_0, GX2_BLEND_MODE_SRC_ALPHA, GX2_BLEND_MODE_INV_SRC_ALPHA, GX2_BLEND_COMBINE_MODE_ADD, TRUE, GX2_BLEND_MODE_ONE,
+		GX2_BLEND_MODE_INV_SRC_ALPHA, GX2_BLEND_COMBINE_MODE_ADD);
+	GX2SetFetchShader(&gx.blit.fetchShader);
+	GX2SetVertexShader(gx.blit.vertexShader);
+	GX2SetPixelShader(gx.blit.pixelShader);
+	GX2SetShaderMode(GX2_SHADER_MODE_UNIFORM_REGISTER);
+	GX2SetAttribBuffer(0, 12 * sizeof(struct blit_vertex), sizeof(struct blit_vertex), vertices);
+	GX2SetPixelTexture(&gx.white, gx.sampler_location);
+	GX2SetPixelSampler(&gx.sampler, gx.sampler_location);
+	GX2DrawEx(GX2_PRIMITIVE_MODE_TRIANGLES, 12, 0, 1);
+}
+
 static void blit_to(struct target *source, GX2ColorBuffer *screen, GX2ContextState *context)
 {
 	const float source_width = (float)source->color.surface.width, source_height = (float)source->color.surface.height;
@@ -3191,7 +3264,7 @@ static void present(const struct dk_command_present *command)
 			overlay_update_view(&gx.overlay);
 			gx.overlay_view_time = now;
 		}
-		if (!(gx.overlay_frame++ & 1))
+		if (gx.overlay_shown && !(gx.overlay_frame++ & 1))
 			overlay_refresh();
 	}
 	if (gx.test_armed == 2)
@@ -3208,15 +3281,19 @@ static void present(const struct dk_command_present *command)
 	if (back)
 	{
 		blit_to(back, WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState());
-		if (gx.overlay_on)
+		if (gx.overlay_shown)
 			overlay_draw(WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState(), 3); /* (768 pixels of the TV's 1920) */
+		if (skip_progress > 0.0f)
+			skip_bar_draw(WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState(), skip_progress);
 	}
 	GX2CopyColorBufferToScanBuffer(WHBGfxGetTVColourBuffer(), GX2_SCAN_TARGET_TV);
 	if (back)
 	{
 		blit_to(back, WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState());
-		if (gx.overlay_on)
+		if (gx.overlay_shown)
 			overlay_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState(), 2); /* (512 of the GamePad's 854) */
+		if (skip_progress > 0.0f)
+			skip_bar_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState(), skip_progress);
 	}
 	GX2CopyColorBufferToScanBuffer(WHBGfxGetDRCColourBuffer(), GX2_SCAN_TARGET_DRC);
 	/* (the frame's work is handed to the GPU before the swap, whose wait for the display is then not in the time the work is said to have taken) */
@@ -3789,7 +3866,7 @@ static int gt_start(void)
 	if (gt.state == 0)
 	{
 		FILE *file = fopen(WIIU_DATA_DIRECTORY "/gx2_thread.txt", "r");
-		int on = 0; /* (off unless asked for: the second core does not work yet, see the plan's phase 1 notes) */
+		int on = 7; /* (the GX2 thread on core 2 with the stream queue unless the file says otherwise: 0 is the game thread alone; HOME, return and Close were run with it) */
 
 		if (file)
 		{

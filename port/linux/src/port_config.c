@@ -106,7 +106,7 @@ static const struct config_setting config_settings[] =
 	{ "display.screen_width", _config_integer, "0", "HALO_SCREEN_WIDTH", _environment_value, _platform_android,
 		"Columns of the 480-line picture: 0 for the display's shape, 640 for the\n"
 		"Xbox's 4:3." },
-	{ "display.render_lines", _config_integer, "540", "HALO_WIIU_RENDER_LINES", _environment_value, _platform_wiiu,
+	{ "display.render_lines", _config_integer, "720", "HALO_WIIU_RENDER_LINES", _environment_value, _platform_wiiu,
 		"The lines the game draws at: 480, 540, 720, 900 or 1080 (the TV's picture and the\n"
 		"GamePad's are scaled from it; 1080 is the TV's own). More lines cost more of the\n"
 		"GPU's time: the menu at 1080 took 27 ms a frame. A note in halo/render_height.txt\n"

@@ -10,7 +10,10 @@ they are matched by letter (the Wii U's A selects, its B goes back, as on every 
 letters. The setting input.wiiu_face_buttons says "position" or "label" for both instead. The Xbox's black and white buttons, which later pads put on the shoulders, are the Wii U's R and L; its triggers are ZR and ZL
 (buttons, so all or nothing). The motors rumble with the game (input.wiiu_rumble).
 
-A tap on the GamePad's touch screen outside the menus skips a cinematic that can be skipped (it presses A, as the Android build's touch screen does).
+A cinematic that can be skipped is skipped by holding the Xbox's A (the Wii U's B, by place), + (Start) or a finger on the GamePad's screen for a second: a press
+that is only a press does nothing then, so that a cinematic is not skipped by accident (the game itself skips at the first A).
+
+L + R + - shows or hides the performance overlay.
 
 The GamePad's gyro can aim (input.wiiu_gyro_aim, "off" by default; "always", or "zoom" for only while zoomed in): its turn rates are added to the right stick
 while no menu has the screen.
@@ -21,6 +24,7 @@ while no menu has the screen.
 #include "wiiu_shell.h"
 #include "wiiu_input.h"
 
+#include <coreinit/time.h>
 #include <string.h>
 
 #define PORT_COUNT WIIU_PAD_PORTS
@@ -158,36 +162,97 @@ static void add_gyro(const struct wiiu_pad *pad, XINPUT_GAMEPAD *state)
 	state->sThumbRY = (SHORT)(y < -32768 ? -32768 : y > 32767 ? 32767 : y);
 }
 
-/* a tap on the touch screen, outside the menus, skips a cinematic that can be skipped (touch_game.c: the game's own question): A is held for a few polls,
-since a tap is shorter than the game's poll */
+/* Hold to skip: while the game says a cinematic can be skipped (touch_game.c: the game's own question) and no menu has the screen, A, Start and a finger on the
+touch screen (port 0's) are kept from the game; held for SKIP_HOLD_MS, A is given to the game for a few polls (it skips at A), and nothing more until they are let go. */
+#define SKIP_HOLD_MS 1000u
+#define SKIP_PRESS_POLLS 6
+
 int touch_game_cinematic_skippable(void);
 int wiiu_input_touch(float *x, float *y);
 
-static void tap_skips_cinematic(XINPUT_GAMEPAD *state)
+static struct
 {
-	static int was_down, polls_down, hold;
-	static float start_x, start_y;
+	OSTime held_since; /* 0: not held */
+	int pressing; /* polls of A left to give */
+	int spent; /* skipped: wait for the buttons to be let go */
+} skip_hold[PORT_COUNT];
+
+/* (wiiu_gx2.c draws a bar of how far the hold is, 0 to 1; port 0's hold, or the furthest) */
+void wiiu_skip_progress(float progress);
+static float skip_shown[PORT_COUNT];
+
+static void skip_show(unsigned int port, float progress)
+{
+	unsigned int other;
+	float furthest = 0.0f;
+
+	skip_shown[port] = progress;
+	for (other = 0; other < PORT_COUNT; other++)
+		if (skip_shown[other] > furthest)
+			furthest = skip_shown[other];
+	wiiu_skip_progress(furthest);
+}
+
+static void hold_to_skip(unsigned int port, XINPUT_GAMEPAD *state)
+{
 	float x, y;
-	int down = wiiu_input_touch(&x, &y);
+	const int touched = port == 0 && wiiu_input_touch(&x, &y);
+	const int held = state->bAnalogButtons[XINPUT_GAMEPAD_A] > 0x40 || (state->wButtons & XINPUT_GAMEPAD_START) || touched;
+
+	if (skip_hold[port].pressing > 0)
+	{
+		skip_hold[port].pressing--;
+		state->bAnalogButtons[XINPUT_GAMEPAD_A] = 0xff;
+		state->wButtons &= (WORD)~XINPUT_GAMEPAD_START;
+		return;
+	}
+	if (port_menus_active() || !touch_game_cinematic_skippable())
+	{
+		skip_hold[port].held_since = 0;
+		skip_hold[port].spent = 0;
+		skip_show(port, 0.0f);
+		return;
+	}
+	/* (a cinematic that can be skipped is playing: these are the skip's alone) */
+	state->bAnalogButtons[XINPUT_GAMEPAD_A] = 0;
+	state->wButtons &= (WORD)~XINPUT_GAMEPAD_START;
+	if (!held)
+	{
+		skip_hold[port].held_since = 0;
+		skip_hold[port].spent = 0;
+		skip_show(port, 0.0f);
+		return;
+	}
+	if (skip_hold[port].spent)
+	{
+		skip_show(port, 0.0f);
+		return;
+	}
+	if (!skip_hold[port].held_since)
+		skip_hold[port].held_since = OSGetSystemTime();
+	skip_show(port, (float)OSTicksToMilliseconds(OSGetSystemTime() - skip_hold[port].held_since) / (float)SKIP_HOLD_MS);
+	if (OSGetSystemTime() - skip_hold[port].held_since >= (OSTime)OSMillisecondsToTicks(SKIP_HOLD_MS))
+	{
+		skip_hold[port].spent = 1;
+		skip_hold[port].pressing = SKIP_PRESS_POLLS;
+		platform_log("input: a cinematic skipped (held %u ms)", SKIP_HOLD_MS);
+	}
+}
+
+/* L + R + - on the GamePad (or the Pro Controller merged with it) shows or hides the performance overlay (wiiu_gx2.c); the - is kept from the game while the three are down */
+void wiiu_overlay_toggle(void);
+
+static void overlay_combo(const struct wiiu_pad *pad, XINPUT_GAMEPAD *state)
+{
+	static int was_down;
+	const unsigned int combo = WIIU_PAD_L | WIIU_PAD_R | WIIU_PAD_MINUS;
+	const int down = (pad->buttons & combo) == combo;
 
 	if (down && !was_down)
-	{
-		polls_down = 0;
-		start_x = x;
-		start_y = y;
-	}
-	if (down)
-		polls_down++;
-	if (!down && was_down && polls_down <= 30 && (x - start_x) * (x - start_x) + (y - start_y) * (y - start_y) < 30.0f * 30.0f &&
-		!port_menus_active() && touch_game_cinematic_skippable())
-		hold = 6;
-	/* (x and y keep the last place of a finger that has gone) */
+		wiiu_overlay_toggle();
 	was_down = down;
-	if (hold > 0)
-	{
-		hold--;
-		state->bAnalogButtons[XINPUT_GAMEPAD_A] = 0xff;
-	}
+	if (down)
+		state->wButtons &= (WORD)~XINPUT_GAMEPAD_BACK;
 }
 
 VOID WINAPI XInitDevices(DWORD preallocation_type_count, PXDEVICE_PREALLOC_TYPE preallocation_types)
@@ -279,9 +344,10 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 	layout_apply();
 	if (wiiu_input_read((unsigned int)port, &pad))
 		pad_state(&pad, &state->Gamepad);
+	hold_to_skip((unsigned int)port, &state->Gamepad);
 	if (port == 0)
 	{
-		tap_skips_cinematic(&state->Gamepad);
+		overlay_combo(&pad, &state->Gamepad);
 		add_gyro(&pad, &state->Gamepad);
 	}
 	if (memcmp(&state->Gamepad, &controllers[port].previous, sizeof(state->Gamepad)))
