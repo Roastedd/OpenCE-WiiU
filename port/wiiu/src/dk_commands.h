@@ -42,6 +42,7 @@ enum
 	DK_COMMAND_VISIBILITY_BEGIN,
 	DK_COMMAND_VISIBILITY_END,
 	DK_COMMAND_MARKER,
+	DK_COMMAND_SHADER_KEYS,
 };
 
 /* a surface's kind, as the host makes its image */
@@ -222,6 +223,16 @@ struct dk_command_shaders
 	struct dk_command_header header;
 	uint32_t vertex;
 	uint32_t pixel;
+};
+
+/* the Wii U's: the draws' shaders by their keys (dk_vertex_key, then nv2a_pixel_shader_key, each its size in bytes, a multiple of 4), found in the pack by the
+host's thread (dk_shader_for_draw there), not by the game's */
+struct dk_command_shader_keys
+{
+	struct dk_command_header header;
+	uint32_t vertex_size;
+	uint32_t pixel_size;
+	/* then the two keys */
 };
 
 /* some of the vertex constants, c[first] on, as dk_vertex_constants */
@@ -491,6 +502,10 @@ the second view's lists of a level's visible triangles where the first's
 were - so indices the game may write again are read when the draw is made,
 not when the host or the GPU get to it */
 #define DK_INDEX_INLINE 1u
+
+/* in dk_command_draw's primitive (the Wii U's): the draw's inline indices' range is found by the host. Its streams then give the address of the
+draw's first vertex and the stride (not a size), and the host reads from the lowest vertex the indices name to the highest, as the game thread did before */
+#define DK_DRAW_RANGE_LATER 0x80000000u
 
 struct dk_command_draw
 {

@@ -1540,7 +1540,9 @@ HRESULT WINAPI D3DDevice_GetVisibilityTestResult(DWORD index, UINT *result, ULON
 		index = 1;
 	if (result)
 	{
-		unsigned int count = visibility_pending[index] ? host_gx2_visibility((unsigned int)index) : 0;
+		/* (with the queries off, as by default, the answer is none without asking the host: asking is a job of the GX2 thread's, after it has run every stream
+		before it - thousands a second with the lens flares, each a wait for the queue to empty) */
+		unsigned int count = visibility_pending[index] && host_gx2_visibility_enabled() ? host_gx2_visibility((unsigned int)index) : 0;
 
 		/* (in the game's pixels) */
 		*result = visibility_area[index] > 1.0f ? (UINT)(count / visibility_area[index] + 0.5f) : count;
@@ -2458,6 +2460,30 @@ static void draw_parameters_send(float texture_scale[4][4])
 	}
 }
 
+/* the shaders' keys, sent when they change (most draws repeat the last ones: a compare of the keys, not a hash and a search of the pack, on the game thread) */
+static struct dk_vertex_key vertex_key_told;
+static struct nv2a_pixel_shader_key pixel_key_told;
+static BOOL keys_known;
+
+static void draw_shader_keys_send(const struct dk_vertex_key *vertex, const struct nv2a_pixel_shader_key *pixel)
+{
+	struct dk_command_shader_keys *command;
+	unsigned char *data;
+
+	if (keys_known && words_equal(vertex, &vertex_key_told, sizeof(*vertex)) && words_equal(pixel, &pixel_key_told, sizeof(*pixel)))
+		return;
+	command = stream_command(DK_COMMAND_SHADER_KEYS, sizeof(*command) + sizeof(*vertex) + sizeof(*pixel));
+	command->vertex_size = (uint32_t)sizeof(*vertex);
+	command->pixel_size = (uint32_t)sizeof(*pixel);
+	data = (unsigned char *)(command + 1);
+	memcpy(data, vertex, sizeof(*vertex));
+	memcpy(data + sizeof(*vertex), pixel, sizeof(*pixel));
+	vertex_key_told = *vertex;
+	pixel_key_told = *pixel;
+	keys_known = TRUE;
+	shaders_known = FALSE;
+}
+
 static void draw_shaders_send(uint32_t vertex, uint32_t pixel)
 {
 	if (shaders_known && shaders_told[0] == vertex && shaders_told[1] == pixel)
@@ -2669,20 +2695,16 @@ static BOOL draw_prepare(BOOL immediate)
 	memset(&vertex_key, 0, sizeof(vertex_key));
 	vertex_key.program_hash = program->program_hash;
 	vertex_key.packed_mask = immediate ? 0 : (uint32_t)device.vertex_shader->packed_mask;
-	/* (both are asked for, so that both are queued if neither is ready) */
-	vertex_shader = dk_shader_for_draw(DK_SHADER_STAGE_VERTEX, &vertex_key);
-	pixel_shader = dk_shader_for_draw(DK_SHADER_STAGE_PIXEL, &pixel_key);
-	if (!vertex_shader || !pixel_shader)
-	{
-		stats.skipped_shader++;
-		return FALSE;
-	}
+	(void)vertex_shader;
+	(void)pixel_shader;
+	(void)draw_shaders_send;
 	if (immediate)
 		stats.immediate_draws++;
 	else
 		stats.draws++;
 	draw_state_send(has_depth);
-	draw_shaders_send(vertex_shader, pixel_shader);
+	/* (the keys go to the host's thread, which finds the shaders in the pack and skips a draw whose shader it has not: GX2's 'no shader' count) */
+	draw_shader_keys_send(&vertex_key, &pixel_key);
 	draw_constants_send();
 	draw_parameters_send(texture_scale);
 	draw_textures_send(&textures);
@@ -2902,6 +2924,30 @@ static BOOL indices_fixed(const WORD *indices, unsigned long count)
 	return custom && start >= custom && end <= custom + CUSTOM_EDITION_TAG_CACHE_BYTES;
 }
 
+/* whether every stream the format reads is the map's own vertex data in the tag cache, which the game does not write while it draws (a BSP switch loads into it,
+and announces it): a draw of those leaves its indices' range to the host's thread (DK_DRAW_RANGE_LATER) */
+static BOOL streams_in_tag_cache(unsigned long first)
+{
+	const unsigned char *base = (const unsigned char *)physical_memory_get_tag_cache_base_address();
+	unsigned long stream;
+
+	if (!base)
+		return FALSE;
+	for (stream = 0; stream < DK_STREAM_COUNT; stream++)
+	{
+		const unsigned char *at;
+
+		if (!((format_told.stream_mask >> stream) & 1))
+			continue;
+		if (!device.streams[stream].data || !device.streams[stream].stride)
+			return FALSE;
+		at = (const unsigned char *)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data) + first * device.streams[stream].stride;
+		if (at < base || at + 65536UL * device.streams[stream].stride > base + TAG_CACHE_BYTES)
+			return FALSE;
+	}
+	return TRUE;
+}
+
 static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long first, unsigned long vertex_count,
 	const WORD *indices, long vertex_offset)
 {
@@ -2911,10 +2957,14 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 	unsigned long index_bytes = indices && count * sizeof(WORD) <= INLINE_INDEX_LIMIT && !indices_fixed(indices, count) ?
 		(count * sizeof(WORD) + 3) & ~3UL : 0;
 
+	/* (a list the game made this frame, of the map's vertices: copied here, its range found by the host's thread, the copy and range together having cost the game
+	thread 6-9% of its time in a10) */
+	const BOOL range_later = indices && (index_bytes || indices_fixed(indices, count)) && streams_in_tag_cache(first);
+
 	for (stream = 0; stream < DK_STREAM_COUNT; stream++)
 		streams += (format_told.stream_mask >> stream) & 1;
 	command = stream_command(DK_COMMAND_DRAW, sizeof(*command) + streams * 2 * sizeof(uint32_t) + index_bytes);
-	command->primitive = primitive_of(type);
+	command->primitive = primitive_of(type) | (range_later ? DK_DRAW_RANGE_LATER : 0u);
 	command->count = (uint32_t)count;
 	command->index_address = index_bytes ? DK_INDEX_INLINE : (uint32_t)(uintptr_t)indices;
 	if (indices)
@@ -2923,7 +2973,14 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 		into the command, if they are, so that they are read once */
 		uint32_t lowest, highest;
 
-		if (index_bytes)
+		if (range_later)
+		{
+			if (index_bytes)
+				memcpy(&command->streams[streams], indices, count * sizeof(WORD));
+			lowest = 0;
+			highest = 65535;
+		}
+		else if (index_bytes)
 			wiiu_index_copy_range((uint16_t *)(void *)&command->streams[streams], indices, count, &lowest, &highest);
 		else if (!indices_fixed(indices, count) && (long_copy = malloc(count * sizeof(WORD))) != NULL)
 		{
@@ -2934,9 +2991,14 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 		}
 		else
 			wiiu_index_range(indices, count, &lowest, &highest);
-		first += lowest;
-		vertex_count = highest - lowest + 1;
-		vertex_offset = -(long)lowest;
+		if (!range_later)
+		{
+			first += lowest;
+			vertex_count = highest - lowest + 1;
+			vertex_offset = -(long)lowest;
+		}
+		else
+			vertex_count = highest - lowest + 1; /* (what the notes below cover: any vertex the indices could name) */
 	}
 	command->vertex_offset = (int32_t)vertex_offset;
 	command->inline_bytes = 0;
@@ -2949,7 +3011,7 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 			continue;
 		command->streams[slot][0] = (uint32_t)(uintptr_t)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data) +
 			(uint32_t)(first * stride);
-		command->streams[slot][1] = (uint32_t)(stride ? stride * vertex_count : STRIDELESS_STREAM_BYTES);
+		command->streams[slot][1] = range_later ? (uint32_t)stride : (uint32_t)(stride ? stride * vertex_count : STRIDELESS_STREAM_BYTES);
 		slot++;
 	}
 	/* (the memory the command reads when the stream is handed over is noted once the command is written: noting can hand the stream over when it has no room, and then the

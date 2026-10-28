@@ -121,6 +121,7 @@ static struct
 	struct dk_pixel_parameters pixel_parameters;
 	int vertex_parameters_dirty, pixel_parameters_dirty;
 	uint32_t vs_handle, ps_handle;
+	unsigned long shader_key_misses; /* key changes whose shader the pack has not (the draws after it skipped until the next change) */
 	struct dk_vertex_format format;
 	int format_set;
 	struct dk_stage_texture stages[4];
@@ -1982,11 +1983,24 @@ static void draw(const struct dk_command_draw *command)
 	void *indices = NULL;
 	void *constants;
 	unsigned stream, slot = 0;
+	const uint32_t primitive = command->primitive & ~DK_DRAW_RANGE_LATER;
+	int32_t vertex_offset = command->vertex_offset;
+	uint32_t lowest = 0, highest = 0;
+	const int range_later = (command->primitive & DK_DRAW_RANGE_LATER) != 0;
 
 	if (!gx.color && !gx.depth)
 	{
 		gx.skipped_target++;
 		return;
+	}
+	if (range_later)
+	{
+		/* (the game thread left the indices' range to this thread, the list copied into the command or the map's own: d3d8_gx2.c, draw_write) */
+		const uint16_t *list = command->index_address == DK_INDEX_INLINE ? (const uint16_t *)(const void *)(inline_data + ((command->inline_bytes + 3u) & ~3u)) :
+			(const uint16_t *)(uintptr_t)command->index_address;
+
+		wiiu_index_range(list, command->count, &lowest, &highest);
+		vertex_offset = -(int32_t)lowest;
 	}
 	if (!gx.vs_handle || !gx.ps_handle || !gx.format_set)
 	{
@@ -2029,8 +2043,18 @@ static void draw(const struct dk_command_draw *command)
 			continue;
 		if (slot >= command->stream_count)
 			break;
-		sizes[stream] = command->streams[slot][1];
-		source = command->inline_bytes ? inline_data : (const unsigned char *)(uintptr_t)command->streams[slot][0];
+		if (range_later)
+		{
+			const uint32_t stride = command->streams[slot][1];
+
+			sizes[stream] = stride ? stride * (highest - lowest + 1) : 64u;
+			source = (const unsigned char *)(uintptr_t)(command->streams[slot][0] + stride * lowest);
+		}
+		else
+		{
+			sizes[stream] = command->streams[slot][1];
+			source = command->inline_bytes ? inline_data : (const unsigned char *)(uintptr_t)command->streams[slot][0];
+		}
 		buffers[stream] = NULL;
 		if (!command->inline_bytes && ((gx.format.static_streams >> stream) & 1))
 		{
@@ -2148,9 +2172,9 @@ static void draw(const struct dk_command_draw *command)
 	gx.section_ticks[5] += OSGetSystemTime() - gx.section_now;
 	gx.section_now = OSGetSystemTime();
 	if (indices)
-		GX2DrawIndexedEx(primitive_of(command->primitive), command->count, GX2_INDEX_TYPE_U16, indices, (uint32_t)command->vertex_offset, 1);
+		GX2DrawIndexedEx(primitive_of(primitive), command->count, GX2_INDEX_TYPE_U16, indices, (uint32_t)vertex_offset, 1);
 	else
-		GX2DrawEx(primitive_of(command->primitive), command->count, 0, 1);
+		GX2DrawEx(primitive_of(primitive), command->count, 0, 1);
 	gx.section_ticks[6] += OSGetSystemTime() - gx.section_now;
 	gx.draws_made++;
 	gx.draw_total++;
@@ -3564,6 +3588,19 @@ static void run_stream(const unsigned char *at, const unsigned char *end)
 			gx.vs_handle = ((const struct dk_command_shaders *)header)->vertex;
 			gx.ps_handle = ((const struct dk_command_shaders *)header)->pixel;
 			break;
+		case DK_COMMAND_SHADER_KEYS:
+		{
+			/* (gx2_shaders.c's, which the game thread called for each draw before: here, on this thread, once per change of the keys) */
+			uint32_t dk_shader_for_draw(uint32_t stage, const void *key_data);
+			const struct dk_command_shader_keys *keys = (const struct dk_command_shader_keys *)header;
+			const unsigned char *data = (const unsigned char *)(keys + 1);
+
+			gx.vs_handle = dk_shader_for_draw(0 /* DK_SHADER_STAGE_VERTEX */, data);
+			gx.ps_handle = dk_shader_for_draw(1 /* DK_SHADER_STAGE_PIXEL */, data + keys->vertex_size);
+			if (!gx.vs_handle || !gx.ps_handle)
+				gx.shader_key_misses++;
+			break;
+		}
 		case DK_COMMAND_CONSTANTS:
 		{
 			const struct dk_command_constants *constants = (const struct dk_command_constants *)header;
