@@ -2236,7 +2236,7 @@ static int initialize(void)
 	/* halo/mem1.txt: 1, the game's render targets (the big ones) are made in the eDRAM */
 	{
 		FILE *file = fopen(WIIU_DATA_DIRECTORY "/mem1.txt", "r");
-		int on = 0;
+		int on = 1; /* (on unless the file says 0: HOME, return and closing were tried on the console with it on) */
 
 		if (file)
 		{
@@ -2246,7 +2246,7 @@ static int initialize(void)
 		}
 		gx.mem1 = on;
 		wiiu_log("GX2: render targets in the eDRAM (halo/mem1.txt): %s", on ? "yes" : "no");
-		on = 0;
+		on = 1;
 		file = fopen(WIIU_DATA_DIRECTORY "/hiz.txt", "r");
 		if (file)
 		{

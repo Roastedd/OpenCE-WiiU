@@ -57,7 +57,7 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 /* ProcUI runs the callbacks of the higher priority first; ours runs before SDL's (100) and the like */
 #define RELEASE_PRIORITY 2000
 #define ACQUIRE_PRIORITY 50
-#define ACQUIRE_LATE_PRIORITY 10 /* (the higher run first: libwhb's acquire callback, at 100, makes its heap and buffers before this) */
+#define ACQUIRE_LATE_PRIORITY 3000 /* (acquire callbacks run lowest first, the reverse of release's: libwhb's, at 100, makes its heap and buffers before this) */
 #define EXIT_PRIORITY 50
 #define EXIT_TRAIL_FILE WIIU_DATA_DIRECTORY "/exit-trail.txt"
 #define LOG_FILE WIIU_DATA_DIRECTORY "/log.txt"
