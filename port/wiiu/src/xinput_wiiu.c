@@ -62,12 +62,14 @@ int port_menus_active(void);
 
 int wiiu_face_buttons_by_label(void)
 {
-	static int mode = -1;
+	static int mode;
+	static unsigned long read_at = (unsigned long)-1;
 
-	if (mode < 0)
+	if (read_at != config_changes())
 	{
 		const char *setting = config_string("input.wiiu_face_buttons");
 
+		read_at = config_changes();
 		mode = !strcmp(setting, "label") ? 1 : !strcmp(setting, "position") ? 0 : 2;
 	}
 	if (mode == 2)
@@ -133,17 +135,45 @@ short player_control_get_zoom_level(short local_player_index);
 
 /* the gyro's turn rates, added to the right stick: input.wiiu_gyro_aim ("off", "always" or "zoom": only while zoomed in), input.wiiu_gyro_sensitivity (1: a quarter turn a second is the stick's full push) and
 input.wiiu_gyro_invert_y; a rate under 2% of a turn a second is the sensor's noise */
+/* The game ignores a stick's first 9000 of 32767 each way (input_xbox.c, GAMEPAD_STICK_DEAD_RANGE): a gyro rate added to the stick as it is would vanish for every
+slow, careful turn of the pad, which is what aiming with it is. So the rate is added after the dead range (as a part of the stick's push beyond it) and the
+sum put back before it; with no rate the stick is left as it is. */
+#define STICK_DEAD_RANGE 9000.0f
+
+static int through_dead_zone(int raw, float add)
+{
+	float beyond;
+
+	if (add == 0.0f)
+		return raw;
+	beyond = raw > STICK_DEAD_RANGE ? (raw - STICK_DEAD_RANGE) / (32767.0f - STICK_DEAD_RANGE) :
+		raw < -STICK_DEAD_RANGE ? (raw + STICK_DEAD_RANGE) / (32768.0f - STICK_DEAD_RANGE) : 0.0f;
+	beyond += add;
+	if (beyond > 1.0f)
+		beyond = 1.0f;
+	if (beyond < -1.0f)
+		beyond = -1.0f;
+	if (beyond > 0.0f)
+		return (int)(STICK_DEAD_RANGE + 1.0f + beyond * (32767.0f - STICK_DEAD_RANGE - 1.0f));
+	if (beyond < 0.0f)
+		return (int)(-STICK_DEAD_RANGE - 1.0f + beyond * (32768.0f - STICK_DEAD_RANGE - 1.0f));
+	return 0;
+}
+
 static void add_gyro(const struct wiiu_pad *pad, XINPUT_GAMEPAD *state)
 {
-	static int mode = -1; /* 0 off, 1 always, 2 only zoomed in */
+	static int mode; /* 0 off, 1 always, 2 only zoomed in */
 	static float sensitivity, invert;
+	static unsigned long read_at = (unsigned long)-1;
 	float yaw, pitch;
 	int x, y;
 
-	if (mode < 0)
+	/* (read again whenever the settings change: the Wii U GamePad screen sets them while the game runs) */
+	if (read_at != config_changes())
 	{
 		const char *setting = config_string("input.wiiu_gyro_aim");
 
+		read_at = config_changes();
 		mode = !strcmp(setting, "always") ? 1 : !strcmp(setting, "zoom") ? 2 : 0;
 		sensitivity = (float)config_real("input.wiiu_gyro_sensitivity");
 		invert = config_boolean("input.wiiu_gyro_invert_y") ? -1.0f : 1.0f;
@@ -156,10 +186,10 @@ static void add_gyro(const struct wiiu_pad *pad, XINPUT_GAMEPAD *state)
 		yaw = 0.0f;
 	if (pitch > -0.02f && pitch < 0.02f)
 		pitch = 0.0f;
-	x = state->sThumbRX + (int)(yaw * 4.0f * sensitivity * 32767.0f);
-	y = state->sThumbRY + (int)(pitch * 4.0f * sensitivity * invert * 32767.0f);
-	state->sThumbRX = (SHORT)(x < -32768 ? -32768 : x > 32767 ? 32767 : x);
-	state->sThumbRY = (SHORT)(y < -32768 ? -32768 : y > 32767 ? 32767 : y);
+	x = through_dead_zone(state->sThumbRX, yaw * 4.0f * sensitivity);
+	y = through_dead_zone(state->sThumbRY, pitch * 4.0f * sensitivity * invert);
+	state->sThumbRX = (SHORT)x;
+	state->sThumbRY = (SHORT)y;
 }
 
 /* Hold to skip: while the game says a cinematic can be skipped (touch_game.c: the game's own question) and no menu has the screen, A, Start and a finger on the
@@ -264,11 +294,11 @@ VOID WINAPI XInitDevices(DWORD preallocation_type_count, PXDEVICE_PREALLOC_TYPE 
 /* input.wiiu_controller_layout: "merged" or "separate" (wiiu_input.h) */
 static void layout_apply(void)
 {
-	static int applied;
+	static unsigned long read_at = (unsigned long)-1;
 
-	if (!applied)
+	if (read_at != config_changes())
 	{
-		applied = 1;
+		read_at = config_changes();
 		wiiu_input_set_layout(!strcmp(config_string("input.wiiu_controller_layout"), "separate"));
 	}
 }

@@ -123,6 +123,44 @@ static struct
 static struct wiiu_pad last_vpad;
 static int controllers_separate;
 
+/* The ranges the GamePad's sticks and gyro have given, in the log every few seconds while they grow: how far a stick goes each way (the look feels different
+up and down than left and right when the ranges are) and in what units the gyro is. */
+static struct
+{
+	float low[6], high[6];
+	int changed;
+	OSTime told;
+} ranges;
+
+static void ranges_note(const VPADStatus *status)
+{
+	const float values[6] = { status->leftStick.x, status->leftStick.y, status->rightStick.x, status->rightStick.y, status->gyro.x, status->gyro.y };
+	const OSTime now = OSGetSystemTime();
+	int i;
+
+	for (i = 0; i < 6; i++)
+	{
+		if (values[i] < ranges.low[i] - 0.01f)
+		{
+			ranges.low[i] = values[i];
+			ranges.changed = 1;
+		}
+		if (values[i] > ranges.high[i] + 0.01f)
+		{
+			ranges.high[i] = values[i];
+			ranges.changed = 1;
+		}
+	}
+	if (ranges.changed && now - ranges.told >= OSSecondsToTicks(3))
+	{
+		ranges.changed = 0;
+		ranges.told = now;
+		wiiu_log("Input: GamePad ranges: left x %.2f..%.2f y %.2f..%.2f, right x %.2f..%.2f y %.2f..%.2f, gyro x %.3f..%.3f y %.3f..%.3f", ranges.low[0],
+			ranges.high[0], ranges.low[1], ranges.high[1], ranges.low[2], ranges.high[2], ranges.low[3], ranges.high[3], ranges.low[4], ranges.high[4],
+			ranges.low[5], ranges.high[5]);
+	}
+}
+
 void wiiu_input_set_layout(int separate)
 {
 	controllers_separate = separate != 0;
@@ -251,6 +289,7 @@ int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 			last_vpad.right_y = status.rightStick.y;
 			last_vpad.gyro_pitch = status.gyro.x;
 			last_vpad.gyro_yaw = status.gyro.y;
+			ranges_note(&status);
 			read_touch(&status);
 		}
 		else if (error != VPAD_READ_NO_SAMPLES && error != VPAD_READ_BUSY)

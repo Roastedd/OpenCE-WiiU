@@ -66,6 +66,10 @@ int main(void)
 	CHECK(!parse("tap 10", &r));
 	CHECK(!parse("tap -1 10", &r));
 
+	CHECK(parse("gyro 0 0.2 1000", &r) && r.command == WIIU_DEBUG_GYRO && r.gyro[0] == 0.0f && r.gyro[1] == 0.2f && r.milliseconds == 1000);
+	CHECK(!parse("gyro 0 11 1000", &r));
+	CHECK(!parse("gyro 0 0.2", &r));
+
 	CHECK(parse("log", &r) && r.command == WIIU_DEBUG_LOG && r.count == WIIU_DEBUG_LOG_DEFAULT);
 	CHECK(parse("log 100", &r) && r.count == 100);
 	CHECK(!parse("log 101", &r));

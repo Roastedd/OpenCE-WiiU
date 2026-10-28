@@ -31,4 +31,9 @@ boolean viewmodel_shield_is_visible(void);
 /* whether a pass draws: not one of the first-person weapon's that is hidden */
 boolean viewmodel_draws_geometry(boolean first_person);
 
+/* input.gamepad_vertical_look: how fast a controller's stick looks up and
+down, against the game's own pitch rate (1: the game's, slower than its
+turning) */
+real view_gamepad_vertical_look(void);
+
 #endif

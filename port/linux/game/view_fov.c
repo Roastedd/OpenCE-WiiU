@@ -284,3 +284,20 @@ boolean viewmodel_draws_geometry(boolean first_person)
 {
 	return !first_person || viewmodel_is_visible();
 }
+
+unsigned long config_changes(void);
+
+real view_gamepad_vertical_look(void)
+{
+	static real scale = 1.0f;
+	static unsigned long read_at = (unsigned long)-1;
+
+	if (read_at != config_changes())
+	{
+		read_at = config_changes();
+		scale = (real)config_real("input.gamepad_vertical_look");
+		if (!(scale >= 0.25f && scale <= 4.0f))
+			scale = 1.0f;
+	}
+	return scale;
+}

@@ -211,6 +211,7 @@ symbols in this file:
 
 #include "real_math.h"
 #include "network_coop.h" /* port: port/linux/game/network_coop.c */
+#include "view_fov.h" /* port: port/linux/game/view_fov.c */
 
 /* ---------- constants */
 
@@ -1128,6 +1129,9 @@ static void get_local_player_input_blob(
 				}
 			}
 
+			/* port: how fast a controller's stick looks up and down, against the
+			game's own rate (input.gamepad_vertical_look; port/linux/game/view_fov.c) */
+			look_pitch_rate *= view_gamepad_vertical_look();
 			input->throttle.i = input_state->forward_movement;
 			input->throttle.j = input_state->strafe;
 			{

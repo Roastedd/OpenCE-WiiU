@@ -11,6 +11,7 @@ One command to a line, words separated by spaces:
 	                               network takes about 400 KB a second: a 1080p picture is 8 MB, 2 MB at 2)
 	press A+UP 150                 buttons (names as in wiiu_input.h, joined by +) held for some milliseconds
 	stick 0 1 0 0 500              left x y, right x y (-1 to 1, up and right positive) held for some milliseconds
+	gyro 0 0.2 1000                the GamePad's gyro: pitch and yaw turn rates (rotations a second, -10 to 10) for some milliseconds
 	tap 427 240 150                a finger on the GamePad's touch screen (854x480 pixels) for some milliseconds
 	log 20                         the last lines of the shell's log
 */
@@ -28,6 +29,7 @@ enum
 	WIIU_DEBUG_STICK,
 	WIIU_DEBUG_LOG,
 	WIIU_DEBUG_TAP,
+	WIIU_DEBUG_GYRO,
 };
 
 enum
@@ -49,6 +51,7 @@ typedef struct wiiu_debug_request
 	unsigned int scale;     /* screenshot: 1, 2 or 4 */
 	unsigned int buttons;   /* press: WIIU_PAD_* bits */
 	float stick[4];         /* stick: left x, left y, right x, right y */
+	float gyro[2];          /* gyro: pitch, yaw */
 	float tap[2];           /* tap: x, y in the GamePad's pixels */
 	unsigned int milliseconds;
 	unsigned int count;     /* log: lines */

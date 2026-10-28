@@ -91,6 +91,8 @@ static uint32_t now_ms(void)
 
 static volatile unsigned int held_buttons;
 static volatile uint32_t held_buttons_until;
+static float held_gyro[2];
+static volatile uint32_t held_gyro_until;
 static float held_stick[4];
 static volatile uint32_t held_stick_until;
 static volatile int holding;
@@ -101,6 +103,11 @@ void wiiu_debug_input(struct wiiu_pad *pad)
 
 	if (!holding)
 		return;
+	if ((int32_t)(held_gyro_until - now) > 0)
+	{
+		pad->gyro_pitch = held_gyro[0];
+		pad->gyro_yaw = held_gyro[1];
+	}
 	if ((int32_t)(held_buttons_until - now) > 0)
 		pad->buttons |= held_buttons;
 	if ((int32_t)(held_stick_until - now) > 0)
@@ -517,6 +524,13 @@ static void do_request(const wiiu_debug_request *request)
 	case WIIU_DEBUG_STICK:
 		memcpy(held_stick, request->stick, sizeof(held_stick));
 		held_stick_until = now_ms() + request->milliseconds;
+		holding = 1;
+		send_text("ok\n");
+		break;
+	case WIIU_DEBUG_GYRO:
+		held_gyro[0] = request->gyro[0];
+		held_gyro[1] = request->gyro[1];
+		held_gyro_until = now_ms() + request->milliseconds;
 		holding = 1;
 		send_text("ok\n");
 		break;

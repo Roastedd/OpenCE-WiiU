@@ -371,6 +371,7 @@ the setting for one start of the game. It has priority over the file.
 | `input.wiiu_gyro_invert_y` | `false` | `HALO_WIIU_GYRO_INVERT_Y` | The Wii U build only. `true`: tilting the top of the pad away looks down. |
 | `input.wiiu_controller_layout` | `"merged"` | `HALO_WIIU_CONTROLLER_LAYOUT` | The Wii U build only. `"merged"`: the first Pro or Classic Controller joins the GamePad as player 1, so it can play alone. `"separate"`: the GamePad is player 1 alone and the controllers are players 2 to 4, for split screen with the GamePad and a Pro Controller. |
 | `input.wiiu_rumble` | `true` | `HALO_WIIU_RUMBLE` | The Wii U build only. The GamePad and the Pro Controllers rumble as the game asks. |
+| `input.gamepad_vertical_look` | `1.0` | `HALO_GAMEPAD_VERTICAL_LOOK` | How fast a controller's stick looks up and down, against the game's own rate: `1` is the game's (slower up and down than it turns); `1.5` or `2` brings them nearer. 0.25 to 4. |
 | `input.mouse_sensitivity` | `1.0` | `HALO_MOUSE_SENSITIVITY` | The multiplier for the mouse aim. |
 | `input.mouse_vertical_sensitivity` | `0.0` | `HALO_MOUSE_VERTICAL_SENSITIVITY` | The multiplier for the vertical mouse aim. `0`: the same as `input.mouse_sensitivity`. |
 | `input.invert_mouse` | `false` | `HALO_MOUSE_INVERT=1` sets `true` | `true`: the vertical mouse aim is inverted. |

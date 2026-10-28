@@ -176,6 +176,26 @@ int wiiu_debug_parse(const char *line, wiiu_debug_request *request)
 		if ((at = next_word(at, word, sizeof(word))) && (!number(word, WIIU_DEBUG_HOLD_MAX_MS, &request->milliseconds) || !request->milliseconds))
 			return fail(request, "the time is 1 to 10000 milliseconds");
 	}
+	else if (!strcmp(word, "gyro"))
+	{
+		unsigned int i;
+
+		request->command = WIIU_DEBUG_GYRO;
+		for (i = 0; i < 2; i++)
+		{
+			char *end;
+			float value;
+
+			if (!(at = next_word(at, word, sizeof(word))))
+				return fail(request, "gyro PITCH YAW milliseconds");
+			value = strtof(word, &end);
+			if (*end || !(value >= -10.0f && value <= 10.0f))
+				return fail(request, "a gyro rate is -10 to 10 rotations a second");
+			request->gyro[i] = value;
+		}
+		if (!(at = next_word(at, word, sizeof(word))) || !number(word, WIIU_DEBUG_HOLD_MAX_MS, &request->milliseconds) || !request->milliseconds)
+			return fail(request, "the time is 1 to 10000 milliseconds");
+	}
 	else if (!strcmp(word, "log"))
 	{
 		request->command = WIIU_DEBUG_LOG;
@@ -185,7 +205,7 @@ int wiiu_debug_parse(const char *line, wiiu_debug_request *request)
 	}
 	else
 	{
-		return fail(request, "unknown command (hello quit screenshot press stick tap log)");
+		return fail(request, "unknown command (hello quit screenshot press stick tap gyro log)");
 	}
 	return 1;
 }
