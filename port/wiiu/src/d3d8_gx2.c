@@ -460,6 +460,30 @@ static int async_on(void)
 }
 
 /* waits until the stream numbered `submission` is retired; a wait of more than three seconds in the foreground is said (once), and goes on */
+/* the frame's parts (source/main/main.c): the game's ticks and its rendering, for the frame time note and the hitch notes */
+static double part_start, frame_tick_ms, frame_render_ms, sum_tick_ms, sum_render_ms, longest_tick_ms;
+static unsigned long frame_ticks, sum_ticks, frames_with_ticks;
+
+void wiiu_frame_part(int part, int ticks);
+
+void wiiu_frame_part(int part, int ticks)
+{
+	const double now = profile_now_ms();
+
+	if (part == 0 || part == 2)
+	{
+		part_start = now;
+		return;
+	}
+	if (part == 1)
+	{
+		frame_tick_ms += now - part_start;
+		frame_ticks += (unsigned long)(ticks > 0 ? ticks : 0);
+	}
+	else
+		frame_render_ms += now - part_start;
+}
+
 static double waits_ms; /* the game thread's time in async_wait_retired and halo_switch_renderer_idle, for the hitch notes (D3DDevice_Present) */
 static double idle_ms;
 static double frame_draw_ms; /* this frame's time in the Direct3D layer's draws */
@@ -3335,6 +3359,11 @@ static void draw_statistics_log(void)
 		platform_log("frame time: %.1f ms of game and rendering work, of which %.1f in the Direct3D layer's draws, %.1f in Present; longest work %.0f, longest present %.0f; "
 			"%lu of %lu frames over 17 ms, %lu over 34", profile.work_ms / (double)profile.frames, profile.draw_ms / (double)profile.frames,
 			profile.present_ms / (double)profile.frames, profile.longest_work_ms, profile.longest_present_ms, profile.over_17, profile.frames, profile.over_34);
+		platform_log("frame parts: the game's ticks %.1f ms a frame (%lu ticks in %lu of %lu frames, %.1f ms a tick, longest frame's ticks %.1f ms), rendering %.1f ms a frame",
+			sum_tick_ms / (double)profile.frames, sum_ticks, frames_with_ticks, profile.frames, sum_ticks ? sum_tick_ms / (double)sum_ticks : 0.0, longest_tick_ms,
+			sum_render_ms / (double)profile.frames);
+		sum_tick_ms = sum_render_ms = longest_tick_ms = 0.0;
+		sum_ticks = frames_with_ticks = 0;
 		memset(&profile, 0, sizeof(profile));
 	}
 }
@@ -3358,8 +3387,17 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 		static unsigned long idle_calls_before;
 
 		if (work > 34.0)
-			platform_log("hitch: frame %lu took %.1f ms of work: %.1f in the Direct3D layer's draws, %.1f waiting for the GX2 thread's streams, %.1f in %lu waits for the renderer to be idle; "
-				"present %.1f", device.frame, work, frame_draw_ms, waits_ms - waits_before, idle_ms - idle_before, idle_calls - idle_calls_before, present);
+			platform_log("hitch: frame %lu took %.1f ms of work: %.1f in the game's %lu ticks, %.1f rendering (%.1f of it in the Direct3D layer's draws), %.1f waiting for the GX2 thread's "
+				"streams, %.1f in %lu waits for the renderer to be idle; present %.1f", device.frame, work, frame_tick_ms, frame_ticks, frame_render_ms, frame_draw_ms,
+				waits_ms - waits_before, idle_ms - idle_before, idle_calls - idle_calls_before, present);
+		sum_tick_ms += frame_tick_ms;
+		sum_render_ms += frame_render_ms;
+		sum_ticks += frame_ticks;
+		frames_with_ticks += frame_ticks ? 1 : 0;
+		if (frame_tick_ms > longest_tick_ms)
+			longest_tick_ms = frame_tick_ms;
+		frame_tick_ms = frame_render_ms = 0.0;
+		frame_ticks = 0;
 		frame_draw_ms = 0.0;
 		waits_before = waits_ms;
 		idle_before = idle_ms;

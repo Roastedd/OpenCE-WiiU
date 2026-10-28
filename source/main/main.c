@@ -3625,8 +3625,19 @@ static boolean main_loop_iteration(
 					}
 					profile_scope_exit(main_network_end_frame_section)
 
+#ifdef HALO_WIIU
+					/* port: the frame's time in the game's ticks and in its rendering, for the Wii U's log (port/wiiu/src/d3d8_gx2.c) */
+					{
+						void wiiu_frame_part(int part, int ticks);
+
+						wiiu_frame_part(0, 0);
+						game_time_update((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);
+						wiiu_frame_part(1, game_time_get_elapsed());
+					}
+#else
 					profile_scope(main_game_time_update_section,
 						game_time_update((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);)
+#endif
 
 					render_frame = main_globals.main_menu_scenario_loaded ||
 						(main_globals.halt_time_scale &&
@@ -3654,7 +3665,17 @@ static boolean main_loop_iteration(
 				{
 					profile_render_start();
 					render_interpolation_frame_begin();
+#ifdef HALO_WIIU
+					{
+						void wiiu_frame_part(int part, int ticks);
+
+						wiiu_frame_part(2, 0);
+						main_game_render((double)main_globals.seconds_elapsed);
+						wiiu_frame_part(3, 0);
+					}
+#else
 					main_game_render((double)main_globals.seconds_elapsed);
+#endif
 					render_interpolation_frame_end();
 					profile_render_end();
 				}
