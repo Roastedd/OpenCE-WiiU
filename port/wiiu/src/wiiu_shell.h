@@ -57,6 +57,8 @@ void wiiu_request_exit(void);
 measured on the console), which flushes denormals to zero where x86 keeps them: a value that decays towards zero would differ between
 the Wii U and a PC. This clears it (mtfsb0 29); the probe showed that denormals then come out as on x86. */
 void wiiu_fpu_setup(void);
+/* the calling thread to core 0 (the game thread has core 1, the GX2 thread core 2) */
+void wiiu_thread_off_game_core(void);
 
 /* Registers the calling thread for the black box under a name (a string literal), until it ends or untags itself. */
 void wiiu_tag_thread(const char *name);

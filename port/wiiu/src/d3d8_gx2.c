@@ -671,8 +671,10 @@ static BOOL vertical_blank_thread_started = FALSE;
 static void *vertical_blank_thread(void *unused)
 {
 	struct timespec next;
+	void wiiu_thread_off_game_core(void);
 
 	(void)unused;
+	wiiu_thread_off_game_core();
 	clock_gettime(CLOCK_MONOTONIC, &next);
 	for (;;)
 	{

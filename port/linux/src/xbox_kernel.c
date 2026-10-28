@@ -516,6 +516,12 @@ static void *thread_main(void *context)
 
 #ifdef __WIIU__
 	wiiu_fpu_setup();
+	{
+		/* (port/wiiu/src/wiiu_shell.c: on core 0, not the game thread's or the GX2 thread's) */
+		void wiiu_thread_off_game_core(void);
+
+		wiiu_thread_off_game_core();
+	}
 #endif
 	pthread_mutex_lock(&handle->lock);
 	while (thread->suspended)

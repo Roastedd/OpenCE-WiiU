@@ -130,6 +130,19 @@ static void write_to_debug_file(
 	FILE *file = debug_file;
 	char prefix[32];
 
+#ifdef HALO_WIIU
+	/* port: on the Wii U a line is queued for a writer thread of its own (port/wiiu/src/wiiu_shell.c): a write and flush of the card on the game thread for each
+	line took 40-60 ms frames in combat, where the game notes many (and the card's lock was held against the shell's log writer) */
+	{
+		void wiiu_error_file_text(char const *text);
+
+		(void)file;
+		(void)date;
+		(void)prefix;
+		wiiu_error_file_text(string);
+		return;
+	}
+#endif
 	if (!file)
 	{
 		FILE *opened = fopen("d:\\debug.txt", "a+b");

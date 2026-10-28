@@ -174,6 +174,9 @@ static void setup_thread(const char *name)
 	OSThread *self = OSGetCurrentThread();
 
 	OSSetThreadName(self, name);
+	/* (the workers on core 0: core 1 is the game thread's, core 2 the GX2 thread's; a pthread may otherwise run on any) */
+	if (strcmp(name, "game") && strcmp(name, "main"))
+		OSSetThreadAffinity(self, OS_THREAD_ATTRIB_AFFINITY_CPU0);
 	if (!strcmp(name, "watchdog"))
 		OSSetThreadPriority(self, main_priority > 4 ? main_priority - 4 : 0);
 	else if (strcmp(name, "game") && strcmp(name, "main"))
@@ -187,6 +190,52 @@ static void echo_to_system(const char *line)
 {
 	OSReport("%s\n", line);
 	wiiu_debug_log_line(line);
+}
+
+/* The game's debug.txt (errors.c, write_to_debug_file): its lines go through a log of their own, written by its own thread, so that the game thread never waits for
+the card for them; lines from before the log is up are lost (none are written that early) */
+#define ERROR_FILE WIIU_DATA_DIRECTORY "/data/debug.txt"
+static wiiu_shell_log error_log;
+static pthread_once_t error_log_once = PTHREAD_ONCE_INIT;
+static volatile int error_log_started;
+
+static void error_log_start(void)
+{
+	wiiu_shell_log_config config;
+
+	memset(&config, 0, sizeof(config));
+	config.path = ERROR_FILE;
+	config.now_ms = shell_ms;
+	config.thread_setup = setup_thread;
+	if (wiiu_shell_log_start(&error_log, &config) == 0)
+		error_log_started = 1;
+}
+
+void wiiu_error_file_text(const char *text);
+
+void wiiu_error_file_text(const char *text)
+{
+	char line[WIIU_LOG_LINE_BYTES];
+
+	pthread_once(&error_log_once, error_log_start);
+	if (!error_log_started || !text)
+		return;
+	/* (a line at a time, without its \r\n) */
+	while (*text)
+	{
+		size_t length = strcspn(text, "\r\n");
+
+		if (length)
+		{
+			if (length >= sizeof(line))
+				length = sizeof(line) - 1;
+			memcpy(line, text, length);
+			line[length] = 0;
+			wiiu_shell_log_text(&error_log, line);
+		}
+		text += strcspn(text, "\r\n");
+		text += strspn(text, "\r\n");
+	}
 }
 
 void wiiu_log_text(const char *text)
@@ -277,6 +326,13 @@ void wiiu_request_exit(void)
 void platform_request_quit(void)
 {
 	wiiu_request_exit();
+}
+
+/* for the threads the game and the port make with pthreads (the game's CreateThread: its file reads, input; the vertical blank): off the game thread's core and the GX2
+thread's, on core 0 */
+void wiiu_thread_off_game_core(void)
+{
+	OSSetThreadAffinity(OSGetCurrentThread(), OS_THREAD_ATTRIB_AFFINITY_CPU0);
 }
 
 void wiiu_fpu_setup(void)
@@ -765,6 +821,8 @@ int wiiu_shell_run(int (*game_main)(void))
 			wiiu_shell_blackbox_stop(&shell_box);
 	}
 	wiiu_log("Closed");
+	if (error_log_started)
+		wiiu_shell_log_flush(&error_log, 500);
 	wiiu_shell_log_flush(&shell_log, 1500);
 	exit_note("the log is flushed; WHBProcShutdown next");
 	WHBProcShutdown();

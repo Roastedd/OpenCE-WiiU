@@ -1549,6 +1549,26 @@ boolean tag_index_is_group(
 			tag_instance->parent_group_tags[1] == group_tag);
 }
 
+/* port: whether the tag at tag_index is of exactly this group and has this name (as tag_loaded matches them): verify_tag_reference's check of a
+reference's own index, one comparison instead of a walk of every tag */
+boolean tag_index_has_group_and_name(
+	long tag_index,
+	long group_tag,
+	char const *name)
+{
+	short absolute_index = (short)tag_index;
+	struct cache_file_tag_instance *tag_instance;
+
+	if (tag_index == NONE || !name || !cache_file_globals.tags_loaded || !global_tag_instances ||
+		absolute_index < 0 || absolute_index >= global_tag_count)
+	{
+		return FALSE;
+	}
+	tag_instance = &global_tag_instances[absolute_index];
+	return tag_instance->tag_index == tag_index && tag_instance->group_tag == group_tag && tag_instance->name &&
+		!_stricmp(name, tag_instance->name);
+}
+
 char *tag_get_name(
 	long tag_index)
 {

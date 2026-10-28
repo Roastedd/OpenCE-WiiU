@@ -63,6 +63,7 @@ void *tag_empty_data(
 
 /* port: (cache_files.c) */
 boolean tag_index_is_group(long tag_index, long group_tag);
+boolean tag_index_has_group_and_name(long tag_index, long group_tag, char const *name);
 
 long verify_tag_reference(
 	const struct tag_reference *reference)
@@ -75,6 +76,10 @@ long verify_tag_reference(
 	(port/linux/game/custom_edition_cache.c) */
 	if (custom_edition_cache_tags_loaded())
 		return tag_index_is_group(reference->index, reference->group_tag) ? reference->index : NONE;
+	/* port: the reference's own index, when the tag there is the one its name names, without walking every tag for it (the HUD verifies its
+	references each frame: a walk of the map's thousands of tags each time, 3-4% of the Wii U's game thread in combat) */
+	if (tag_index_has_group_and_name(reference->index, reference->group_tag, reference->name))
+		return reference->index;
 	index = tag_loaded(reference->group_tag, reference->name);
 	
 	match_vassert(
