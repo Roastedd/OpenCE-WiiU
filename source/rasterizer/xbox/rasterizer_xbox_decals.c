@@ -906,6 +906,16 @@ static void rasterizer_decals_draw_batch(
 	if (!decal_batch_count)
 		return;
 	IDirect3DDevice8_Begin(global_d3d_device, D3DPT_QUADLIST);
+#ifdef HALO_WIIU
+	/* port: on the Wii U a decal's vertices go to the Direct3D layer in one call (port/wiiu/src/d3d8_gx2.c), which writes them straight into the
+	draw: three calls a vertex were a tenth of the game thread in a fight */
+	{
+		extern void wiiu_decal_vertices(byte const *color, void const *vertices, long count);
+
+		for (batch_index = 0; batch_index < decal_batch_count; batch_index++)
+			wiiu_decal_vertices(decal_batch[batch_index].color, decal_batch[batch_index].vertices, decal_batch[batch_index].vertex_count);
+	}
+#else
 	for (batch_index = 0; batch_index < decal_batch_count; batch_index++)
 	{
 		byte const *color = decal_batch[batch_index].color;
@@ -922,6 +932,7 @@ static void rasterizer_decals_draw_batch(
 				vertex->position.x, vertex->position.y, vertex->position.z, 1.0f);
 		}
 	}
+#endif
 	IDirect3DDevice8_End(global_d3d_device);
 	decal_batch_count = 0;
 

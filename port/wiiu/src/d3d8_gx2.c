@@ -411,9 +411,37 @@ int host_gx2_visibility_enabled(void);
 
 /* the buffers the stream is written into: one when the host runs a stream as it is handed over, STREAM_SLOTS when the GX2 thread runs them while the game goes on (host_gx2_async) */
 #define STREAM_SLOTS 3
-static uint32_t stream_buffers[STREAM_SLOTS][STREAM_SIZE / 4];
+/* (on cache lines: the lines made in a slot, stream_lines_make, are whole lines of it) */
+static uint32_t stream_buffers[STREAM_SLOTS][STREAM_SIZE / 4] __attribute__((aligned(64)));
 static uint32_t *stream = stream_buffers[0];
 static unsigned long stream_used;
+/* The stream's cache lines below this are made (dcbz) or written: those past it are made before anything is written in them. A write to a line that is not in the cache first
+reads it from memory on the 750 core, and the stream is a megabyte a slot of memory last written a few frames ago: the copies into it (wiiu_memcpy.c) made their lines, but
+the immediate vertices written straight into it (the decals') waited for every line, more than the copy they replaced. */
+static unsigned long stream_lines_made;
+
+#define STREAM_LINE 32UL
+
+/* the whole lines between from and to made (dcbz makes the line an address is in: a line partly outside, which may hold what is written, is left) */
+static void lines_make(unsigned char *from, unsigned char *to)
+{
+	from = (unsigned char *)(((uintptr_t)from + STREAM_LINE - 1) & ~(uintptr_t)(STREAM_LINE - 1));
+	to = (unsigned char *)((uintptr_t)to & ~(uintptr_t)(STREAM_LINE - 1));
+	for (; from < to; from += STREAM_LINE)
+		__asm__ volatile("dcbz 0,%0" : : "r"(from) : "memory");
+}
+
+/* the stream's lines made up to end (an offset into it), from the first not made */
+static inline void stream_lines_make(unsigned long end)
+{
+	if (end <= stream_lines_made)
+		return;
+	end = (end + STREAM_LINE - 1) & ~(STREAM_LINE - 1);
+	if (end > STREAM_SIZE)
+		end = STREAM_SIZE;
+	lines_make((unsigned char *)stream + stream_lines_made, (unsigned char *)stream + end);
+	stream_lines_made = end;
+}
 
 /* the queue of streams to the GX2 thread, and its buffers: the host (wiiu_gx2.c) takes from them */
 struct stream_queue dk_stream_queue;
@@ -597,6 +625,9 @@ static void stream_flush(void)
 		window_told = 1;
 		host_gx2_window((uint32_t)PLATFORM_CONTIGUOUS_BASE, (uint32_t)PLATFORM_CONTIGUOUS_SIZE); /* (the host cuts it in blocks to keep the map's vertices) */
 	}
+	/* (an immediate draw being written at the stream's tail, past what is handed over: its vertices are moved out first, the slot is the GX2 thread's from now) */
+	if (device.immediate.lent_floats)
+		wiiu_immediate_unlend(&device.immediate);
 	draws_since_handover = 0;
 	if (async_on())
 	{
@@ -605,6 +636,7 @@ static void stream_flush(void)
 		wiiu_foreground_gate(1);
 		stream_queue_post(&dk_stream_queue, (uint32_t)stream_used);
 		stream_used = 0;
+		stream_lines_made = 0;
 		submission++;
 		stream = stream_buffers[stream_queue_slot(&dk_stream_queue)];
 		/* (the slot to write next must be free: the stream that used it is retired) */
@@ -619,6 +651,7 @@ static void stream_flush(void)
 		return;
 	host_gx2_submit((unsigned int)(uintptr_t)stream, (unsigned int)stream_used);
 	stream_used = 0;
+	stream_lines_made = 0;
 	submission++;
 	while (pending_free_count)
 		free(pending_frees[--pending_free_count].buffer);
@@ -646,8 +679,12 @@ static void *stream_command(uint32_t type, unsigned long size)
 	struct dk_command_header *header;
 
 	size = (size + 3) & ~3UL;
+	/* (the command goes where an immediate draw's vertices are being written: they move out of its way) */
+	if (device.immediate.lent_floats)
+		wiiu_immediate_unlend(&device.immediate);
 	if (stream_used + size > STREAM_SIZE)
 		flush_because(3);
+	stream_lines_make(stream_used + size);
 	header = (struct dk_command_header *)((unsigned char *)stream + stream_used);
 	header->type = type;
 	header->size = (uint32_t)size;
@@ -2924,6 +2961,103 @@ static BOOL indices_fixed(const WORD *indices, unsigned long count)
 	return custom && start >= custom && end <= custom + CUSTOM_EDITION_TAG_CACHE_BYTES;
 }
 
+/* ---------- the dynamic triangles' index buffer, a new one each frame
+
+The game remakes the BSP's visible triangles (and the other dynamic triangles) every frame into one index buffer (rasterizer_xbox_draw_primitives.c), from its start
+again at each rasterizer_dynamic_geometry_begin: each draw's list had to be copied into the stream (the GX2 thread reads it later, by when the game has written the
+next frame's over it), 4% of the game thread in a fight. Instead the buffer's memory is one of four, the next at each begin, once every stream that could read it
+is retired: a list stays as it was until the GX2 thread has read it, and a draw names it where it is (the GX2 thread copies it for the GPU, as it does the map's). */
+#define RENEWED_STORES 4
+
+static struct
+{
+	D3DIndexBuffer *buffer;
+	DWORD original; /* (the buffer's own memory, store 0, which Release frees) */
+	unsigned long bytes;
+	unsigned char *stores[RENEWED_STORES];
+	unsigned long last_read[RENEWED_STORES]; /* the last stream that may read each; 0: none */
+	unsigned current;
+	unsigned long used; /* how far into the store of now the draws' lists reach */
+} renewed;
+
+void wiiu_index_buffer_renew_end(D3DIndexBuffer *buffer);
+
+void wiiu_index_buffer_renew_end(D3DIndexBuffer *buffer)
+{
+	unsigned store;
+
+	if (!renewed.buffer || renewed.buffer != buffer)
+		return;
+	halo_switch_renderer_idle(); /* (no stream left that reads them) */
+	buffer->Data = renewed.original;
+	if (device.index_buffer == buffer)
+		D3D__IndexData = (WORD *)PORT_WINDOW_REBASE(buffer->Data);
+	for (store = 1; store < RENEWED_STORES; store++)
+		free(renewed.stores[store]);
+	memset(&renewed, 0, sizeof(renewed));
+}
+
+/* rasterizer_dynamic_geometry_begin (the game's, on the Wii U): the buffer's memory from now on is the next store; bytes is the buffer's size */
+void wiiu_index_buffer_renew(D3DIndexBuffer *buffer, unsigned long bytes);
+
+void wiiu_index_buffer_renew(D3DIndexBuffer *buffer, unsigned long bytes)
+{
+	unsigned next, store;
+
+	if (!buffer)
+		return;
+	if (renewed.buffer != buffer)
+	{
+		wiiu_index_buffer_renew_end(renewed.buffer);
+		renewed.original = buffer->Data;
+		renewed.bytes = bytes;
+		renewed.stores[0] = (unsigned char *)(uintptr_t)buffer->Data;
+		for (store = 1; store < RENEWED_STORES; store++)
+		{
+			renewed.stores[store] = malloc(bytes);
+			if (!renewed.stores[store])
+			{
+				/* (out of memory: the lists are copied as before) */
+				while (--store > 0)
+					free(renewed.stores[store]);
+				memset(&renewed, 0, sizeof(renewed));
+				return;
+			}
+		}
+		renewed.buffer = buffer;
+		renewed.current = 0;
+	}
+	renewed.last_read[renewed.current] = submission; /* (the stream being written may read it: the draws so far) */
+	next = (renewed.current + 1) % RENEWED_STORES;
+	if (renewed.last_read[next])
+	{
+		if (renewed.last_read[next] >= submission)
+			flush_because(2);
+		if (dk_async > 0)
+			async_wait_retired((uint32_t)renewed.last_read[next]);
+	}
+	renewed.current = next;
+	buffer->Data = (DWORD)(uintptr_t)renewed.stores[next];
+	/* (as far as the last frame's lists reached, the store's lines made, not read: it was written four frames ago, and the game waited for each line it wrote) */
+	{
+		unsigned char *store = renewed.stores[next];
+		const unsigned long reach = renewed.used < renewed.bytes ? renewed.used : renewed.bytes;
+
+		lines_make(store, store + reach);
+		renewed.used = 0;
+	}
+	if (device.index_buffer == buffer)
+		D3D__IndexData = (WORD *)PORT_WINDOW_REBASE(buffer->Data);
+}
+
+/* whether a draw's indices are in the renewed buffer's store of now (unchanged until the stream reading them is retired) */
+static BOOL indices_renewed(const WORD *indices, unsigned long count)
+{
+	const unsigned char *at = (const unsigned char *)indices, *store = renewed.stores[renewed.current];
+
+	return renewed.buffer && store && at >= store && at + count * sizeof(WORD) <= store + renewed.bytes;
+}
+
 /* whether every stream the format reads is the map's own vertex data in the tag cache, which the game does not write while it draws (a BSP switch loads into it,
 and announces it): a draw of those leaves its indices' range to the host's thread (DK_DRAW_RANGE_LATER) */
 static BOOL streams_in_tag_cache(unsigned long first)
@@ -2954,13 +3088,18 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 	struct dk_command_draw *command;
 	unsigned long stream, streams = 0, slot = 0;
 	WORD *long_copy = NULL;
-	unsigned long index_bytes = indices && count * sizeof(WORD) <= INLINE_INDEX_LIMIT && !indices_fixed(indices, count) ?
+	/* (a list in the renewed dynamic buffer is read where it is: the buffer is not written again until its stream is retired) */
+	const BOOL renewed_list = indices && indices_renewed(indices, count);
+	const unsigned long renewed_reach = renewed_list ? (unsigned long)((const unsigned char *)(indices + count) - renewed.stores[renewed.current]) : 0;
+	unsigned long index_bytes = indices && !renewed_list && count * sizeof(WORD) <= INLINE_INDEX_LIMIT && !indices_fixed(indices, count) ?
 		(count * sizeof(WORD) + 3) & ~3UL : 0;
 
 	/* (a list the game made this frame, of the map's vertices: copied here, its range found by the host's thread, the copy and range together having cost the game
 	thread 6-9% of its time in a10) */
-	const BOOL range_later = indices && (index_bytes || indices_fixed(indices, count)) && streams_in_tag_cache(first);
+	const BOOL range_later = indices && (index_bytes || renewed_list || indices_fixed(indices, count)) && streams_in_tag_cache(first);
 
+	if (renewed_reach > renewed.used)
+		renewed.used = renewed_reach;
 	for (stream = 0; stream < DK_STREAM_COUNT; stream++)
 		streams += (format_told.stream_mask >> stream) & 1;
 	command = stream_command(DK_COMMAND_DRAW, sizeof(*command) + streams * 2 * sizeof(uint32_t) + index_bytes);
@@ -2982,7 +3121,7 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 		}
 		else if (index_bytes)
 			wiiu_index_copy_range((uint16_t *)(void *)&command->streams[streams], indices, count, &lowest, &highest);
-		else if (!indices_fixed(indices, count) && (long_copy = malloc(count * sizeof(WORD))) != NULL)
+		else if (!renewed_list && !indices_fixed(indices, count) && (long_copy = malloc(count * sizeof(WORD))) != NULL)
 		{
 			/* a list the game remakes as it draws, too long to go in the command: copied now into a buffer of its own, freed once the stream that reads it is
 			retired (read where it is, the game could rewrite it before the host reads it: the host reads the stream later, and with the GX2 thread much later) */
@@ -3118,11 +3257,94 @@ void WINAPI D3DDevice_Begin(D3DPRIMITIVETYPE primitive_type)
 	wiiu_immediate_begin(&device.immediate);
 }
 
+/* the vertex format of an immediate draw: the registers of `mask` from the stream (four floats each, in order of register), the others at their values now */
+static void immediate_format_send(unsigned long mask)
+{
+	struct dk_vertex_format format;
+	unsigned long index, place = 0;
+
+	memset(&format, 0, sizeof(format));
+	for (index = 0; index < XGPU_VERTEX_ATTRIBUTE_COUNT; index++)
+	{
+		if (mask & (1UL << index))
+		{
+			format.attributes[index].format = DK_ATTRIBUTE_FLOAT4;
+			format.attributes[index].stream = 0;
+			format.attributes[index].offset = (uint32_t)(place++ * 4 * sizeof(float));
+		}
+		else
+		{
+			format.attributes[index].format = DK_ATTRIBUTE_UNFED;
+			memcpy(format.constants[index], device.attributes[index], sizeof(format.constants[index]));
+		}
+	}
+	format.strides[0] = (uint32_t)(place * 4 * sizeof(float));
+	format.stream_mask = 1;
+	draw_format_send(&format);
+}
+
+#define IMMEDIATE_DRAW_HEADER (sizeof(struct dk_command_draw) + 2 * sizeof(uint32_t))
+
+/* An immediate draw's first vertex: what it draws with (state, shaders, the vertex format: nothing a Begin/End may change comes before its End) goes in the stream now,
+and the vertices are written at the stream's tail, after room for the draw's command, where End's command has them inline: they were kept apart and copied in at End,
+4-5% of the game thread in a fight (the decals' thousands a frame). The tail is lent until End, a register the layout lacks, too many vertices for the room left, or anything
+else written to the stream or handed over: then they go back to the heap (wiiu_immediate_unlend), and End copies them in as before. */
+static void immediate_stream_open(void)
+{
+	const unsigned long stride = device.immediate.layout_count * 4 * sizeof(float);
+
+	if (stream_used + IMMEDIATE_DRAW_HEADER + 64 * stride > STREAM_SIZE)
+		flush_because(3);
+	if (!draw_prepare(TRUE))
+	{
+		device.immediate_skipped = TRUE; /* (as End would have: nothing to draw with) */
+		return;
+	}
+	immediate_format_send(device.immediate.mask);
+	if (stream_used + IMMEDIATE_DRAW_HEADER + stride > STREAM_SIZE)
+		return;
+	wiiu_immediate_lend(&device.immediate, (float *)(void *)((unsigned char *)stream + stream_used + IMMEDIATE_DRAW_HEADER),
+		(STREAM_SIZE - stream_used - IMMEDIATE_DRAW_HEADER) / sizeof(float));
+}
+
 static void immediate_emit(void)
 {
 	if (device.immediate_skipped)
 		return;
+	if (!device.immediate.count && !device.immediate.lent_floats)
+	{
+		immediate_stream_open();
+		if (device.immediate_skipped)
+			return;
+	}
+	if (device.immediate.lent_floats)
+		stream_lines_make((unsigned long)((unsigned char *)(device.immediate.vertices + (device.immediate.count + 1) * device.immediate.layout_count * 4) -
+			(unsigned char *)stream));
 	wiiu_immediate_emit(&device.immediate, (const float (*)[4])device.attributes);
+}
+
+/* End of a draw whose vertices are at the stream's tail: its command written round them */
+static void immediate_stream_close(unsigned long count)
+{
+	struct dk_command_draw *command = (struct dk_command_draw *)(void *)((unsigned char *)stream + stream_used);
+	const unsigned long bytes = count * device.immediate.layout_count * 4 * sizeof(float);
+
+	device.immediate.lent_floats = 0;
+	device.immediate.vertices = device.immediate.heap;
+	if (!count)
+		return;
+	command->header.type = DK_COMMAND_DRAW;
+	command->header.size = (uint32_t)((IMMEDIATE_DRAW_HEADER + bytes + 3) & ~3UL);
+	command->primitive = primitive_of(device.immediate_type);
+	command->count = (uint32_t)count;
+	command->index_address = 0;
+	command->vertex_offset = 0;
+	command->inline_bytes = (uint32_t)bytes;
+	command->stream_count = 1;
+	command->streams[0][0] = 0;
+	command->streams[0][1] = (uint32_t)bytes;
+	stream_used += command->header.size;
+	draw_resources_used(FALSE, FALSE);
 }
 
 static void D3DDevice_End_inner(void)
@@ -3132,7 +3354,6 @@ static void D3DDevice_End_inner(void)
 	unsigned long count = device.immediate.count, index, stride, touched = 0;
 	D3DPRIMITIVETYPE type = device.immediate_type;
 	unsigned long mask = device.immediate.mask;
-	struct dk_vertex_format format;
 	struct dk_command_draw *command;
 	unsigned registers[XGPU_VERTEX_ATTRIBUTE_COUNT];
 
@@ -3140,6 +3361,11 @@ static void D3DDevice_End_inner(void)
 	device.immediate.count = 0;
 	if (type == D3DPT_QUADLIST)
 		count &= ~3UL;
+	if (device.immediate.lent_floats)
+	{
+		immediate_stream_close(count);
+		return;
+	}
 	if (!count)
 		return;
 	/* a lens flare's occlusion test draws a quad between its Begin and End: with the backend's queries off the quad is counted by nothing (the result is 0 whatever is drawn), and
@@ -3159,28 +3385,7 @@ static void D3DDevice_End_inner(void)
 	}
 	if (!draw_prepare(TRUE))
 		return;
-	memset(&format, 0, sizeof(format));
-	{
-		unsigned long place = 0;
-
-		for (index = 0; index < XGPU_VERTEX_ATTRIBUTE_COUNT; index++)
-		{
-			if (mask & (1UL << index))
-			{
-				format.attributes[index].format = DK_ATTRIBUTE_FLOAT4;
-				format.attributes[index].stream = 0;
-				format.attributes[index].offset = (uint32_t)(place++ * 4 * sizeof(float));
-			}
-			else
-			{
-				format.attributes[index].format = DK_ATTRIBUTE_UNFED;
-				memcpy(format.constants[index], device.attributes[index], sizeof(format.constants[index]));
-			}
-		}
-	}
-	format.strides[0] = (uint32_t)stride;
-	format.stream_mask = 1;
-	draw_format_send(&format);
+	immediate_format_send(mask);
 	command = stream_command(DK_COMMAND_DRAW, sizeof(*command) + 2 * sizeof(uint32_t) + count * stride);
 	command->primitive = primitive_of(type);
 	command->count = (uint32_t)count;
@@ -3275,6 +3480,82 @@ void WINAPI D3DDevice_SetVertexDataColor(INT reg, D3DCOLOR color)
 	const float *unit = byte_units();
 
 	set_attribute(reg, unit[(color >> 16) & 0xff], unit[(color >> 8) & 0xff], unit[color & 0xff], unit[(color >> 24) & 0xff]);
+}
+
+/* the decals' vertices (rasterizer_xbox_decals.c's struct decal_vertex) */
+struct wiiu_decal_vertex
+{
+	float position[3];
+	uint32_t texcoord;
+};
+
+#define DECAL_LAYOUT (1UL | 1UL << 4 | 1UL << 9)
+
+static void decal_vertex_through_registers(const float color[4], const struct wiiu_decal_vertex *vertex)
+{
+	set_attribute(9, color[0], color[1], color[2], color[3]);
+	set_attribute(4, (float)(short)(vertex->texcoord & 0xffff) * (1.0f / 32767.0f), (float)(short)(vertex->texcoord >> 16) * (1.0f / 32767.0f), 0.0f, 1.0f);
+	set_attribute(0, vertex->position[0], vertex->position[1], vertex->position[2], 1.0f);
+}
+
+/* A decal's vertices between the batch's Begin and End (rasterizer_xbox_decals.c on the Wii U): each is what SetVertexData4ub(9, color), SetVertexData2f(4, texcoord /
+32767) and SetVertexData4f(0, position, 1) make, but written straight into the draw, registers 0, 4 and 9 side by side, once the first vertex has laid the draw out so:
+three calls and the registers' bookkeeping for each of thousands of vertices a frame were 10% of the game thread in a fight. (The texture coordinates are multiplied by
+1/32767, not divided: the last bit may differ, which nothing sees.) */
+void wiiu_decal_vertices(const unsigned char *color_bytes, const void *vertices, long count);
+
+void wiiu_decal_vertices(const unsigned char *color_bytes, const void *vertices, long count)
+{
+	const struct wiiu_decal_vertex *vertex = (const struct wiiu_decal_vertex *)vertices;
+	const float *unit = byte_units();
+	const float color[4] = { unit[color_bytes[0]], unit[color_bytes[1]], unit[color_bytes[2]], unit[color_bytes[3]] };
+	float *out;
+	long index;
+
+	while (count > 0 && (!device.immediate_active || device.immediate_skipped || device.immediate.layout_mask != DECAL_LAYOUT))
+	{
+		decal_vertex_through_registers(color, vertex++);
+		count--;
+	}
+	if (count <= 0)
+		return;
+	out = wiiu_immediate_room(&device.immediate, (unsigned long)count);
+	if (!out)
+	{
+		while (count-- > 0)
+			decal_vertex_through_registers(color, vertex++);
+		return;
+	}
+	for (index = 0; index < count; index++, out += 12)
+	{
+		/* (the stream's lines a few vertices ahead made, the decal's vertices asked for ahead: the 750 core waits for every line it has not) */
+		if (!(index & 7))
+		{
+			if (device.immediate.lent_floats)
+				stream_lines_make((unsigned long)((unsigned char *)(out + 12 * 16) - (unsigned char *)stream));
+			__asm__ volatile("dcbt 0,%0" : : "r"(&vertex[index + 16]));
+			__asm__ volatile("dcbt 0,%0" : : "r"(&vertex[index + 18]));
+			__asm__ volatile("dcbt 0,%0" : : "r"(&vertex[index + 20]));
+			__asm__ volatile("dcbt 0,%0" : : "r"(&vertex[index + 22]));
+		}
+		out[0] = vertex[index].position[0];
+		out[1] = vertex[index].position[1];
+		out[2] = vertex[index].position[2];
+		out[3] = 1.0f;
+		out[4] = (float)(short)(vertex[index].texcoord & 0xffff) * (1.0f / 32767.0f);
+		out[5] = (float)(short)(vertex[index].texcoord >> 16) * (1.0f / 32767.0f);
+		out[6] = 0.0f;
+		out[7] = 1.0f;
+		out[8] = color[0];
+		out[9] = color[1];
+		out[10] = color[2];
+		out[11] = color[3];
+	}
+	device.immediate.count += (unsigned long)count;
+	/* (the registers hold the last vertex's values after, as the calls would have left them) */
+	memcpy(device.attributes[0], out - 12, 4 * sizeof(float));
+	memcpy(device.attributes[4], out - 8, 4 * sizeof(float));
+	memcpy(device.attributes[9], out - 4, 4 * sizeof(float));
 }
 /* ---------- clearing */
 

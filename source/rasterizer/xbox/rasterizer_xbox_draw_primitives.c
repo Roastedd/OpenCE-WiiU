@@ -566,6 +566,16 @@ void rasterizer_dynamic_geometry_begin(
 		dynamic_triangles.buffer_count = 0;
 	}
 
+#ifdef HALO_WIIU
+	/* port: the triangles are written from the index buffer's start again: on the Wii U into new memory, so that the draws can read the last
+	frame's lists where they are until the GX2 thread has (port/wiiu/src/d3d8_gx2.c), not copy each */
+	{
+		extern void wiiu_index_buffer_renew(IDirect3DIndexBuffer8 *buffer, unsigned long bytes);
+
+		wiiu_index_buffer_renew(dynamic_triangles.d3d_index_buffer, sizeof(struct rasterizer_triangle)*RASTERIZER_MAXIMUM_DYNAMIC_TRIANGLES);
+	}
+#endif
+
 	return;
 }
 
@@ -605,6 +615,13 @@ void rasterizer_dynamic_geometry_dispose(
 
 	if (dynamic_triangles.d3d_index_buffer)
 	{
+#ifdef HALO_WIIU
+		{
+			extern void wiiu_index_buffer_renew_end(IDirect3DIndexBuffer8 *buffer); /* port: (its own memory back before it is freed) */
+
+			wiiu_index_buffer_renew_end(dynamic_triangles.d3d_index_buffer);
+		}
+#endif
 		IDirect3DIndexBuffer8_Release(dynamic_triangles.d3d_index_buffer);
 		dynamic_triangles.d3d_index_buffer = NULL;
 	}
