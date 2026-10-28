@@ -29,6 +29,13 @@ the game's completion callback is not meant to run concurrently with it.
 Without an audio device, a clock thread runs the same mixer into a scratch
 buffer, so streams still drain at their real rate.
 
+On the Wii U (DSOUND_DECODE_THREAD) a packet is decoded by a thread of its
+own on the GX2 thread's core, not the game thread as it is submitted: the
+mixer waits for a packet until it is decoded. And the mixer lets go of its
+lock between voices when the game thread waits for it (DSOUND_MIXER_YIELDS):
+it held it for all the voices, a millisecond, and in a fight the game thread
+spent a fifth of its time waiting for it and a twelfth decoding.
+
 audio.volume sets the master volume (default 1.0); audio.reverb = false
 turns the reverb off; audio.enabled = false skips opening a device
 (port_config.c).
@@ -51,6 +58,11 @@ turns the reverb off; audio.enabled = false skips opening a device
 #define OUTPUT_CHANNELS 2
 #define MAXIMUM_STREAM_PACKETS 64
 #define MIX_CHUNK_FRAMES 1024
+
+#ifdef HALO_WIIU
+#define DSOUND_DECODE_THREAD
+#define DSOUND_MIXER_YIELDS
+#endif
 
 #define XBOX_ADPCM_BLOCK_BYTES 36
 #define XBOX_ADPCM_BLOCK_SAMPLES 64
@@ -76,6 +88,8 @@ struct voice_packet
 	short *samples;           /* interleaved, source channel count */
 	unsigned long frames;
 	BOOL finished;            /* played out by the mixer, not yet completed */
+	BOOL ready;               /* decoded (DSOUND_DECODE_THREAD: the decoder sets it) */
+	unsigned long serial;     /* the packet's, among every stream's (the decoder finds it by it) */
 };
 
 struct sdl_stream
@@ -148,6 +162,25 @@ struct sdl_stream
 
 static pthread_mutex_t mixer_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct sdl_stream *streams;
+
+#ifdef DSOUND_MIXER_YIELDS
+/* how many threads other than the mixer wait for its lock, and the voice the
+mixer goes on with once it has the lock back (stream_release moves it past a
+voice it removes) */
+static int mixer_lock_wanted;
+static struct sdl_stream *mixer_walk_next;
+
+static void mixer_lock_take(void)
+{
+	if (pthread_mutex_trylock(&mixer_lock) == 0)
+		return;
+	__atomic_add_fetch(&mixer_lock_wanted, 1, __ATOMIC_ACQ_REL);
+	pthread_mutex_lock(&mixer_lock);
+	__atomic_sub_fetch(&mixer_lock_wanted, 1, __ATOMIC_ACQ_REL);
+}
+#else
+#define mixer_lock_take() pthread_mutex_lock(&mixer_lock)
+#endif
 
 /* the listener, in DirectSound's left-handed +y up space */
 static struct
@@ -649,7 +682,7 @@ static BOOL take_frame(struct sdl_stream *stream, float *frame)
 				break;
 			}
 		}
-		if (!packet)
+		if (!packet || !packet->ready)
 			return FALSE;
 		if (stream->cursor < packet->frames)
 		{
@@ -675,6 +708,8 @@ static BOOL voice_has_frames(struct sdl_stream *stream)
 
 		if (packet->finished)
 			continue;
+		if (!packet->ready)
+			return FALSE;
 		if (stream->cursor < packet->frames)
 			return TRUE;
 		stream->cursor = 0;
@@ -701,6 +736,21 @@ static void mix_voice(struct sdl_stream *stream, float *output, float *send, uns
 
 	if (stream->paused || !stream->packet_count || !stream->sample_rate)
 		return;
+	/* a voice whose next packet is not decoded yet waits for it (DSOUND_DECODE_THREAD) */
+	{
+		unsigned long position;
+
+		for (position = 0; position < stream->packet_count; position++)
+		{
+			const struct voice_packet *packet = &stream->packets[(stream->packet_head + position) % MAXIMUM_STREAM_PACKETS];
+
+			if (packet->finished)
+				continue;
+			if (!packet->ready)
+				return;
+			break;
+		}
+	}
 	step = (double)(stream->frequency ? stream->frequency : stream->sample_rate) / OUTPUT_RATE;
 	/* the low pass narrowed for a voice taking frames faster than the output
 	rate, and the frames it reaches on each side */
@@ -1265,8 +1315,30 @@ static void mix(float *output, unsigned long frames)
 	memset(output, 0, frames * OUTPUT_CHANNELS * sizeof(float));
 	memset(reverb.send, 0, frames * sizeof(float));
 	pthread_mutex_lock(&mixer_lock);
+#ifdef DSOUND_MIXER_YIELDS
+	{
+		struct sdl_stream *next;
+
+		for (stream = streams; stream; stream = next)
+		{
+			mix_voice(stream, output, reverb.send, frames);
+			next = stream->next;
+			/* (the game thread waits: the lock is let go until it has had it) */
+			if (next && __atomic_load_n(&mixer_lock_wanted, __ATOMIC_ACQUIRE))
+			{
+				mixer_walk_next = next;
+				pthread_mutex_unlock(&mixer_lock);
+				while (__atomic_load_n(&mixer_lock_wanted, __ATOMIC_ACQUIRE))
+					sched_yield();
+				pthread_mutex_lock(&mixer_lock);
+				next = mixer_walk_next;
+			}
+		}
+	}
+#else
 	for (stream = streams; stream; stream = stream->next)
 		mix_voice(stream, output, reverb.send, frames);
+#endif
 	/* a new environment, once the fade to the last is over */
 	if (reverb.serial != environment_serial && !reverb.fade)
 	{
@@ -1362,6 +1434,10 @@ static void *silent_clock_thread(void *parameter)
 	return NULL;
 }
 
+#ifdef DSOUND_DECODE_THREAD
+static void decoder_start(void);
+#endif
+
 #ifdef HALO_WIIU
 /* wiiu_audio.c's (the console's ABI): two AX voices over a ring, filled by calling mix */
 int wiiu_audio_open(void (*mixer)(float *output, unsigned long frames));
@@ -1376,6 +1452,9 @@ static void audio_start(void)
 	resampler_initialize();
 	resampler_phases_initialize();
 	reverb_initialize();
+#ifdef DSOUND_DECODE_THREAD
+	decoder_start();
+#endif
 
 	if (config_boolean("audio.enabled") && wiiu_audio_open(mix))
 		return;
@@ -1516,7 +1595,7 @@ static void stream_complete_head(struct sdl_stream *stream, DWORD status, DWORD 
 	{
 		pthread_mutex_unlock(&mixer_lock);
 		stream->callback(stream->context, packet.pContext, status);
-		pthread_mutex_lock(&mixer_lock);
+		mixer_lock_take();
 	}
 	else if (packet.hCompletionEvent)
 	{
@@ -1528,7 +1607,7 @@ static void streams_complete_finished(void)
 {
 	struct sdl_stream *stream;
 
-	pthread_mutex_lock(&mixer_lock);
+	mixer_lock_take();
 	for (stream = streams; stream; stream = stream->next)
 	{
 		while (stream->packet_count && stream->packets[stream->packet_head].finished)
@@ -1549,7 +1628,7 @@ static ULONG STDMETHODCALLTYPE stream_add_reference(IDirectSoundStream *object)
 	struct sdl_stream *stream = stream_from_interface(object);
 	ULONG count;
 
-	pthread_mutex_lock(&mixer_lock);
+	mixer_lock_take();
 	count = ++stream->reference_count;
 	pthread_mutex_unlock(&mixer_lock);
 	return count;
@@ -1563,14 +1642,14 @@ static ULONG STDMETHODCALLTYPE stream_release(IDirectSoundStream *object)
 	struct sdl_stream **link;
 	ULONG count;
 
-	pthread_mutex_lock(&mixer_lock);
+	mixer_lock_take();
 	count = --stream->reference_count;
 	pthread_mutex_unlock(&mixer_lock);
 	if (count)
 		return count;
 
 	stream_flush(object);
-	pthread_mutex_lock(&mixer_lock);
+	mixer_lock_take();
 	for (link = &streams; *link; link = &(*link)->next)
 	{
 		if (*link == stream)
@@ -1578,6 +1657,10 @@ static ULONG STDMETHODCALLTYPE stream_release(IDirectSoundStream *object)
 			*link = stream->next;
 			break;
 		}
+#ifdef DSOUND_MIXER_YIELDS
+	if (mixer_walk_next == stream)
+		mixer_walk_next = stream->next;
+#endif
 	}
 	pthread_mutex_unlock(&mixer_lock);
 	free(stream);
@@ -1598,27 +1681,162 @@ static HRESULT STDMETHODCALLTYPE stream_get_status(IDirectSoundStream *object, L
 {
 	struct sdl_stream *stream = stream_from_interface(object);
 
-	pthread_mutex_lock(&mixer_lock);
+	mixer_lock_take();
 	*status = stream->packet_count < MAXIMUM_STREAM_PACKETS ? XMO_STATUSF_ACCEPT_INPUT_DATA : 0;
 	pthread_mutex_unlock(&mixer_lock);
 	return S_OK;
 }
 
+/* the serial of the last packet submitted (under the lock) */
+static unsigned long packet_serial;
+
+#ifdef DSOUND_DECODE_THREAD
+/* a packet's samples to its entry, found by its serial (it may have been
+completed, flushed or its stream released meanwhile: then they are freed) */
+static void packet_samples_give(struct sdl_stream *stream, unsigned long serial, short *samples, unsigned long frames)
+{
+	struct sdl_stream *walk;
+
+	mixer_lock_take();
+	for (walk = streams; walk && walk != stream; walk = walk->next)
+		;
+	if (walk)
+	{
+		unsigned long position;
+
+		for (position = 0; position < walk->packet_count; position++)
+		{
+			struct voice_packet *entry = &walk->packets[(walk->packet_head + position) % MAXIMUM_STREAM_PACKETS];
+
+			if (entry->serial == serial && !entry->ready)
+			{
+				entry->samples = samples;
+				entry->frames = samples ? frames : 0;
+				entry->ready = TRUE;
+				samples = NULL;
+				break;
+			}
+		}
+	}
+	pthread_mutex_unlock(&mixer_lock);
+	free(samples);
+}
+
+/* ---------- the decoder (the Wii U: beside the GX2 thread, wiiu_shell.c) */
+
+#define DECODER_JOBS 256
+
+static struct
+{
+	pthread_mutex_t lock;
+	pthread_cond_t posted;
+	BOOL started;
+	unsigned long first, count;
+	struct decoder_job
+	{
+		struct sdl_stream *stream;
+		unsigned long serial;
+		const unsigned char *source;
+		unsigned long size, channels;
+		BOOL adpcm;
+	} jobs[DECODER_JOBS];
+} decoder = { PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER };
+
+static short *packet_decode(BOOL adpcm, const unsigned char *source, unsigned long size, unsigned long channels,
+	unsigned long *frames)
+{
+	return adpcm ? decode_adpcm(source, size, channels, frames) : decode_pcm(source, size, channels, frames);
+}
+
+static void *decoder_thread(void *parameter)
+{
+	(void)parameter;
+	{
+		void wiiu_thread_beside_gx2(void);
+
+		wiiu_thread_beside_gx2();
+	}
+	for (;;)
+	{
+		struct decoder_job job;
+		short *samples;
+		unsigned long frames = 0;
+
+		pthread_mutex_lock(&decoder.lock);
+		while (!decoder.count)
+			pthread_cond_wait(&decoder.posted, &decoder.lock);
+		job = decoder.jobs[decoder.first];
+		decoder.first = (decoder.first + 1) % DECODER_JOBS;
+		decoder.count--;
+		pthread_mutex_unlock(&decoder.lock);
+		/* (the packet's memory is the game's until it is completed; if it was
+		flushed first this reads what is there now, and the samples are dropped) */
+		samples = packet_decode(job.adpcm, job.source, job.size, job.channels, &frames);
+		packet_samples_give(job.stream, job.serial, samples, frames);
+	}
+	return NULL;
+}
+
+static void decoder_start(void)
+{
+	pthread_t thread;
+
+	if (pthread_create(&thread, NULL, decoder_thread, NULL) == 0)
+	{
+		pthread_detach(thread);
+		decoder.started = TRUE;
+	}
+	else
+	{
+		platform_log("audio: no decoder thread; packets are decoded as they come");
+	}
+}
+
+/* FALSE if the queue is full (the caller decodes) */
+static BOOL decoder_post(struct sdl_stream *stream, unsigned long serial, const XMEDIAPACKET *input)
+{
+	BOOL posted = FALSE;
+
+	pthread_mutex_lock(&decoder.lock);
+	if (decoder.count < DECODER_JOBS)
+	{
+		struct decoder_job *job = &decoder.jobs[(decoder.first + decoder.count) % DECODER_JOBS];
+
+		job->stream = stream;
+		job->serial = serial;
+		job->source = input->pvBuffer;
+		job->size = input->dwMaxSize;
+		job->channels = stream->channels;
+		job->adpcm = stream->adpcm;
+		decoder.count++;
+		posted = TRUE;
+		pthread_cond_signal(&decoder.posted);
+	}
+	pthread_mutex_unlock(&decoder.lock);
+	return posted;
+}
+#endif
+
 static HRESULT STDMETHODCALLTYPE stream_process(IDirectSoundStream *object, LPCXMEDIAPACKET input, LPCXMEDIAPACKET output)
 {
 	struct sdl_stream *stream = stream_from_interface(object);
 	struct voice_packet *entry;
-	unsigned long frames = 0;
-	short *samples;
+	unsigned long frames = 0, serial;
+	short *samples = NULL;
+	BOOL later = FALSE;
 
 	(void)output;
 	if (!input)
 		return E_INVALIDARG;
-	/* decode outside the lock */
-	samples = stream->adpcm ?
-		decode_adpcm(input->pvBuffer, input->dwMaxSize, stream->channels, &frames) :
-		decode_pcm(input->pvBuffer, input->dwMaxSize, stream->channels, &frames);
-	pthread_mutex_lock(&mixer_lock);
+#ifdef DSOUND_DECODE_THREAD
+	later = decoder.started;
+#endif
+	/* decode outside the lock (or on the decoder's thread) */
+	if (!later)
+		samples = stream->adpcm ?
+			decode_adpcm(input->pvBuffer, input->dwMaxSize, stream->channels, &frames) :
+			decode_pcm(input->pvBuffer, input->dwMaxSize, stream->channels, &frames);
+	mixer_lock_take();
 	if (stream->packet_count == MAXIMUM_STREAM_PACKETS)
 	{
 		pthread_mutex_unlock(&mixer_lock);
@@ -1630,6 +1848,8 @@ static HRESULT STDMETHODCALLTYPE stream_process(IDirectSoundStream *object, LPCX
 	entry->samples = samples;
 	entry->frames = samples ? frames : 0;
 	entry->finished = FALSE;
+	entry->ready = !later;
+	entry->serial = serial = ++packet_serial;
 	if (input->pdwStatus)
 		*input->pdwStatus = XMEDIAPACKET_STATUS_PENDING;
 	if (input->pdwCompletedSize)
@@ -1643,6 +1863,15 @@ static HRESULT STDMETHODCALLTYPE stream_process(IDirectSoundStream *object, LPCX
 	}
 	stream->packet_count++;
 	pthread_mutex_unlock(&mixer_lock);
+#ifdef DSOUND_DECODE_THREAD
+	if (later && !decoder_post(stream, serial, input))
+	{
+		samples = packet_decode(stream->adpcm, input->pvBuffer, input->dwMaxSize, stream->channels, &frames);
+		packet_samples_give(stream, serial, samples, frames);
+	}
+#else
+	(void)serial;
+#endif
 	return S_OK;
 }
 
@@ -1656,7 +1885,7 @@ static HRESULT STDMETHODCALLTYPE stream_flush(IDirectSoundStream *object)
 {
 	struct sdl_stream *stream = stream_from_interface(object);
 
-	pthread_mutex_lock(&mixer_lock);
+	mixer_lock_take();
 	while (stream->packet_count)
 	{
 		struct voice_packet *head = &stream->packets[stream->packet_head];
@@ -1686,7 +1915,7 @@ void dsound_sdl_stream_set_stereo_position(IDirectSoundStream *object, BOOL posi
 {
 	struct sdl_stream *stream = stream_from_interface(object);
 
-	pthread_mutex_lock(&mixer_lock);
+	mixer_lock_take();
 	stream->stereo_positioned = positioned && stream->channels == 2;
 	stream->stereo_pan = pan < -1.0f ? -1.0f : (pan > 1.0f ? 1.0f : pan);
 	stream->stereo_distance = distance > 0.0f ? distance : 0.0f;
@@ -1789,7 +2018,7 @@ HRESULT WINAPI IDirectSound_SetI3DL2Listener(LPDIRECTSOUND sound, LPCDSI3DL2LIST
 {
 	(void)sound;
 	(void)apply;
-	pthread_mutex_lock(&mixer_lock);
+	mixer_lock_take();
 	environment = *listener_properties;
 	environment_serial++;
 	pthread_mutex_unlock(&mixer_lock);
@@ -1800,7 +2029,7 @@ HRESULT WINAPI IDirectSound_SetDistanceFactor(LPDIRECTSOUND sound, FLOAT factor,
 {
 	(void)sound;
 	(void)apply;
-	pthread_mutex_lock(&mixer_lock);
+	mixer_lock_take();
 	listener.distance_factor = factor > 0.0f ? factor : 1.0f;
 	pthread_mutex_unlock(&mixer_lock);
 	return DS_OK;
@@ -1810,7 +2039,7 @@ HRESULT WINAPI IDirectSound_SetRolloffFactor(LPDIRECTSOUND sound, FLOAT factor, 
 {
 	(void)sound;
 	(void)apply;
-	pthread_mutex_lock(&mixer_lock);
+	mixer_lock_take();
 	listener.rolloff_factor = factor >= 0.0f ? factor : 1.0f;
 	pthread_mutex_unlock(&mixer_lock);
 	return DS_OK;
@@ -1820,7 +2049,7 @@ HRESULT WINAPI IDirectSound_SetPosition(LPDIRECTSOUND sound, FLOAT x, FLOAT y, F
 {
 	(void)sound;
 	(void)apply;
-	pthread_mutex_lock(&mixer_lock);
+	mixer_lock_take();
 	listener.position[0] = x;
 	listener.position[1] = y;
 	listener.position[2] = z;
@@ -1847,7 +2076,7 @@ HRESULT WINAPI IDirectSound_SetOrientation(LPDIRECTSOUND sound, FLOAT x_front, F
 {
 	(void)sound;
 	(void)apply;
-	pthread_mutex_lock(&mixer_lock);
+	mixer_lock_take();
 	listener.front[0] = x_front;
 	listener.front[1] = y_front;
 	listener.front[2] = z_front;
@@ -1888,7 +2117,7 @@ HRESULT WINAPI IDirectSound_CreateSoundStream(LPDIRECTSOUND sound, LPCDSSTREAMDE
 	stream->minimum_distance = DS3D_DEFAULTMINDISTANCE;
 	stream->maximum_distance = DS3D_DEFAULTMAXDISTANCE;
 	resampler_reset(stream);
-	pthread_mutex_lock(&mixer_lock);
+	mixer_lock_take();
 	stream->next = streams;
 	streams = stream;
 	pthread_mutex_unlock(&mixer_lock);
@@ -1909,7 +2138,7 @@ unsigned long __stdcall DirectSoundGetStreamVoiceStatus(LPDIRECTSOUNDSTREAM stre
 	struct sdl_stream *record = stream_from_interface(stream);
 	unsigned long active;
 
-	pthread_mutex_lock(&mixer_lock);
+	mixer_lock_take();
 	active = record->packet_count != 0;
 	pthread_mutex_unlock(&mixer_lock);
 	return active;
@@ -1917,7 +2146,7 @@ unsigned long __stdcall DirectSoundGetStreamVoiceStatus(LPDIRECTSOUNDSTREAM stre
 
 #define STREAM_SETTER(body) \
 	struct sdl_stream *record = stream_from_interface(stream); \
-	pthread_mutex_lock(&mixer_lock); \
+	mixer_lock_take(); \
 	body; \
 	pthread_mutex_unlock(&mixer_lock); \
 	return DS_OK;
@@ -1945,7 +2174,7 @@ HRESULT WINAPI IDirectSoundStream_SetMixBinVolumes(LPDIRECTSOUNDSTREAM stream, D
 	struct sdl_stream *record = stream_from_interface(stream);
 	unsigned long bit, index = 0;
 
-	pthread_mutex_lock(&mixer_lock);
+	mixer_lock_take();
 	for (bit = 0; bit < 32; bit++)
 	{
 		if (!(mix_bin_mask & (1UL << bit)))
