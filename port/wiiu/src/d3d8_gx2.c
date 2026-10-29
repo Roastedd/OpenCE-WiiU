@@ -29,6 +29,7 @@ and presenting go there; a draw and a visibility test do nothing yet.
 #include "wiiu_pending_reads.h"
 #include "wiiu_stream_queue.h"
 #include "dk_shaders.h"
+#include "wiiu_uniform_cache.h"
 #include "dk_textures.h"
 #include "shader_key_wire.h"
 
@@ -2218,8 +2219,7 @@ static struct dk_draw_state state_told;
 static BOOL state_known;
 static uint32_t shaders_told[2];
 static BOOL shaders_known;
-static struct dk_vertex_parameters vertex_parameters_told;
-static struct dk_pixel_parameters pixel_parameters_told;
+static struct wiiu_uniform_cache draw_uniform_cache;
 static BOOL parameters_known;
 static struct dk_vertex_format format_told;
 static BOOL format_known;
@@ -2231,8 +2231,7 @@ static unsigned long long constants_told;
 they need no converting (most draws share it with the draw before) */
 #define DRAW_UNIFORM_INPUT_COUNT (4 + 4 + 16 + 1 + 16 + 2 + 4 + 1 + 1 + 3 + 6 * D3DTSS_MAXSTAGES)
 
-static DWORD draw_uniform_inputs[DRAW_UNIFORM_INPUT_COUNT];
-static BOOL draw_uniform_inputs_known;
+typedef char draw_uniform_input_count_check[DRAW_UNIFORM_INPUT_COUNT == WIIU_UNIFORM_INPUT_WORDS ? 1 : -1];
 
 static unsigned long stage_texture_mode(int stage)
 {
@@ -2399,6 +2398,7 @@ static void draw_parameters_send(float texture_scale[4][4])
 	DWORD inputs[DRAW_UNIFORM_INPUT_COUNT];
 	unsigned long count = 0;
 	int stage;
+	unsigned changed;
 
 	memcpy(&inputs[count], device.viewport_scale, sizeof(device.viewport_scale));
 	count += 4;
@@ -2433,68 +2433,22 @@ static void draw_parameters_send(float texture_scale[4][4])
 		inputs[count++] = state[D3DTSS_BUMPENVLSCALE];
 		inputs[count++] = state[D3DTSS_BUMPENVLOFFSET];
 	}
-	if (draw_uniform_inputs_known && words_equal(inputs, draw_uniform_inputs, sizeof(inputs)))
-		return;
-	memcpy(draw_uniform_inputs, inputs, sizeof(inputs));
-	draw_uniform_inputs_known = TRUE;
+	/* The CPU cache owns converted groups. GPU state can be forgotten
+	   independently, so even a CPU cache hit must resend unknown blocks. */
+	changed = wiiu_uniform_cache_update(&draw_uniform_cache, inputs);
+	if (!parameters_known || (changed & WIIU_UNIFORM_VERTEX_CHANGED))
 	{
-		struct dk_vertex_parameters vertex;
-		struct dk_pixel_parameters pixel;
+		struct dk_command_vertex_parameters *command = stream_command(DK_COMMAND_VERTEX_PARAMETERS, sizeof(*command));
 
-		memset(&vertex, 0, sizeof(vertex));
-		memset(&pixel, 0, sizeof(pixel));
-		memcpy(vertex.viewport_scale, device.viewport_scale, sizeof(vertex.viewport_scale));
-		memcpy(vertex.viewport_offset, device.viewport_offset, sizeof(vertex.viewport_offset));
-		vertex.point_and_screen[0] = D3D__RenderState[D3DRS_POINTSIZE] ?
-			dword_to_float(D3D__RenderState[D3DRS_POINTSIZE]) : 1.0f;
-		vertex.point_and_screen[1] = (float)UI_OFFSET;
-
-
-		for (stage = 0; stage < 8; stage++)
-		{
-			color_to_vec4(D3D__RenderState[D3DRS_PSCONSTANT0_0 + stage], pixel.ps_c0[stage]);
-			color_to_vec4(D3D__RenderState[D3DRS_PSCONSTANT1_0 + stage], pixel.ps_c1[stage]);
-		}
-		color_to_vec4(D3D__RenderState[D3DRS_PSFINALCOMBINERCONSTANT0], pixel.ps_final_c0);
-		color_to_vec4(D3D__RenderState[D3DRS_PSFINALCOMBINERCONSTANT1], pixel.ps_final_c1);
-		color_to_vec4(D3D__RenderState[D3DRS_FOGCOLOR], pixel.fog_color);
-		pixel.fog_parameters[0] = dword_to_float(D3D__RenderState[D3DRS_FOGSTART]);
-		pixel.fog_parameters[1] = dword_to_float(D3D__RenderState[D3DRS_FOGEND]);
-		pixel.fog_parameters[2] = dword_to_float(D3D__RenderState[D3DRS_FOGDENSITY]);
-		pixel.alpha_reference[0] = (float)(D3D__RenderState[D3DRS_ALPHAREF] & 0xff);
-		/* (the clip, which the pixel shader makes before anything else: its
-		limits in the units the stage is sampled in, 0 to 1) */
-		pixel.alpha_reference[1] = texture_clip[0];
-		pixel.alpha_reference[2] = texture_clip[1];
-		pixel.alpha_reference[3] = texture_clip[2];
-		memcpy(pixel.texture_scale, texture_scale, sizeof(pixel.texture_scale));
-		for (stage = 0; stage < D3DTSS_MAXSTAGES; stage++)
-		{
-			DWORD *state = D3D__TextureState[stage];
-
-			pixel.bump_matrix[stage][0] = dword_to_float(state[D3DTSS_BUMPENVMAT00]);
-			pixel.bump_matrix[stage][1] = dword_to_float(state[D3DTSS_BUMPENVMAT01]);
-			pixel.bump_matrix[stage][2] = dword_to_float(state[D3DTSS_BUMPENVMAT10]);
-			pixel.bump_matrix[stage][3] = dword_to_float(state[D3DTSS_BUMPENVMAT11]);
-			pixel.bump_luminance[stage][0] = dword_to_float(state[D3DTSS_BUMPENVLSCALE]);
-			pixel.bump_luminance[stage][1] = dword_to_float(state[D3DTSS_BUMPENVLOFFSET]);
-		}
-		if (!parameters_known || !words_equal(&vertex, &vertex_parameters_told, sizeof(vertex)))
-		{
-			struct dk_command_vertex_parameters *command = stream_command(DK_COMMAND_VERTEX_PARAMETERS, sizeof(*command));
-
-			command->parameters = vertex;
-			vertex_parameters_told = vertex;
-		}
-		if (!parameters_known || !words_equal(&pixel, &pixel_parameters_told, sizeof(pixel)))
-		{
-			struct dk_command_pixel_parameters *command = stream_command(DK_COMMAND_PIXEL_PARAMETERS, sizeof(*command));
-
-			command->parameters = pixel;
-			pixel_parameters_told = pixel;
-		}
-		parameters_known = TRUE;
+		command->parameters = draw_uniform_cache.vertex;
 	}
+	if (!parameters_known || (changed & WIIU_UNIFORM_PIXEL_CHANGED))
+	{
+		struct dk_command_pixel_parameters *command = stream_command(DK_COMMAND_PIXEL_PARAMETERS, sizeof(*command));
+
+		command->parameters = draw_uniform_cache.pixel;
+	}
+	parameters_known = TRUE;
 }
 
 /* the shaders' keys, sent when they change (most draws repeat the last ones: a compare of the keys, not a hash and a search of the pack, on the game thread) */
