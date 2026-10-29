@@ -17,55 +17,42 @@ OBJDUMP = os.environ.get("WIIU_OBJDUMP", "powerpc-eabi-objdump")
 
 
 def contract(stereo, blended):
-    """Independent instruction contract, including every register and offset."""
-    lines = ["lis r12,0"]
-    lines += [f"lfs f{n},0(r12)" for n in range(4 if stereo else 2)]
+    code = ["lis r12,0"] + [f"lfs f{i},0(r12)" for i in range(4 if stereo else 2)]
     if blended:
-        lines += [f"lfs f12,0(r{7 if stereo else 6})"]
-    lines += ["li r0,12", "mtctr r0"]
-    loop = len(lines) * 4
-    if stereo:
-        lines += ["psq_l f4,0(r5),0,0", "psq_l f5,8(r5),0,0"]
-        if blended:
-            lines += ["psq_l f6,0(r6),0,0", "psq_l f7,8(r6),0,0",
-                      "ps_mul f6,f6,f12", "ps_mul f7,f7,f12",
-                      "ps_add f4,f4,f6", "ps_add f5,f5,f7"]
-        lines += ["psq_l f6,0(r3),0,0", "psq_l f7,8(r3),0,0",
-                  "psq_l f8,0(r4),0,0", "psq_l f9,8(r4),0,0"]
-        if blended:
-            lines += ["ps_mul f6,f6,f4", "ps_mul f7,f7,f5",
-                      "ps_mul f8,f8,f4", "ps_mul f9,f9,f5",
-                      "ps_add f0,f0,f6", "ps_add f1,f1,f7",
-                      "ps_add f2,f2,f8", "ps_add f3,f3,f9"]
+        code += [f"lfs f12,0(r{7 if stereo else 6})"]
+    for offset in range(0, 192, 16):
+        if stereo:
+            code += [f"psq_l f4,{offset}(r5),0,0", f"psq_l f5,{offset+8}(r5),0,0"]
+            if blended:
+                code += [f"psq_l f6,{offset}(r6),0,0", f"psq_l f7,{offset+8}(r6),0,0",
+                         "ps_mul f6,f6,f12", "ps_mul f7,f7,f12", "ps_add f4,f4,f6", "ps_add f5,f5,f7"]
+            code += [f"psq_l f6,{offset}(r3),0,0", f"psq_l f7,{offset+8}(r3),0,0",
+                     f"psq_l f8,{offset}(r4),0,0", f"psq_l f9,{offset+8}(r4),0,0"]
+            if blended:
+                code += ["ps_mul f6,f6,f4", "ps_mul f7,f7,f5", "ps_mul f8,f8,f4", "ps_mul f9,f9,f5",
+                         "ps_add f0,f0,f6", "ps_add f1,f1,f7", "ps_add f2,f2,f8", "ps_add f3,f3,f9"]
+            else:
+                code += ["ps_mul f10,f6,f4", "ps_mul f11,f7,f5", "ps_add f0,f0,f10", "ps_add f1,f1,f11",
+                         "ps_mul f10,f8,f4", "ps_mul f11,f9,f5", "ps_add f2,f2,f10", "ps_add f3,f3,f11"]
         else:
-            lines += ["ps_mul f10,f6,f4", "ps_mul f11,f7,f5",
-                      "ps_add f0,f0,f10", "ps_add f1,f1,f11",
-                      "ps_mul f10,f8,f4", "ps_mul f11,f9,f5",
-                      "ps_add f2,f2,f10", "ps_add f3,f3,f11"]
-    else:
-        lines += ["psq_l f2,0(r4),0,0", "psq_l f3,8(r4),0,0",
-                  "psq_l f4,0(r5),0,0" if blended else "psq_l f4,0(r3),0,0",
-                  "psq_l f5,8(r5),0,0" if blended else "psq_l f5,8(r3),0,0"]
-        if blended:
-            lines += ["ps_mul f4,f4,f12", "ps_mul f5,f5,f12",
-                      "ps_add f2,f2,f4", "ps_add f3,f3,f5",
-                      "psq_l f6,0(r3),0,0", "psq_l f7,8(r3),0,0",
-                      "ps_mul f8,f6,f2", "ps_mul f9,f7,f3",
-                      "ps_add f0,f0,f8", "ps_add f1,f1,f9"]
-        else:
-            lines += ["ps_mul f6,f4,f2", "ps_mul f7,f5,f3",
-                      "ps_add f0,f0,f6", "ps_add f1,f1,f7"]
-    lines += [f"addi r{n},r{n},16" for n in range(3, (7 if blended else 6) if stereo else (6 if blended else 5))]
-    lines += [f"bdnz+ @{loop}"]
-    lines += [f"ps_sum0 f{n},f{n},f{n},f{n}" for n in range(4 if stereo else 2)]
-    lines += ["fadds f0,f0,f1"]
+            code += [f"psq_l f2,{offset}(r4),0,0", f"psq_l f3,{offset+8}(r4),0,0",
+                     f"psq_l f4,{offset}(r{5 if blended else 3}),0,0",
+                     f"psq_l f5,{offset+8}(r{5 if blended else 3}),0,0"]
+            if blended:
+                code += ["ps_mul f4,f4,f12", "ps_mul f5,f5,f12", "ps_add f2,f2,f4", "ps_add f3,f3,f5",
+                         f"psq_l f6,{offset}(r3),0,0", f"psq_l f7,{offset+8}(r3),0,0",
+                         "ps_mul f8,f6,f2", "ps_mul f9,f7,f3", "ps_add f0,f0,f8", "ps_add f1,f1,f9"]
+            else:
+                code += ["ps_mul f6,f4,f2", "ps_mul f7,f5,f3", "ps_add f0,f0,f6", "ps_add f1,f1,f7"]
+    code += [f"ps_sum0 f{i},f{i},f{i},f{i}" for i in range(4 if stereo else 2)]
+    code += ["fadds f0,f0,f1"]
     if stereo:
-        lines += ["fadds f2,f2,f3"]
+        code += ["fadds f2,f2,f3"]
     output = (8 if blended else 6) if stereo else (7 if blended else 5)
-    lines += [f"stfs f0,0(r{output})"]
+    code += [f"stfs f0,0(r{output})"]
     if stereo:
-        lines += [f"stfs f2,4(r{output})"]
-    return lines + ["blr"]
+        code += [f"stfs f2,4(r{output})"]
+    return code + ["blr"]
 
 
 CONTRACTS = {

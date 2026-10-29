@@ -125,7 +125,7 @@ def assemble(tmp_path):
 @needs_container
 def test_only_the_exact_requested_object_has_the_strict_exception(assemble, tmp_path):
     obj = assemble()
-    assert audit.audit(obj) == {"psq_l": 24, "ps_mul": 16, "ps_add": 16, "ps_sum0": 12}
+    assert audit.audit(obj) == {"psq_l": 288, "ps_mul": 192, "ps_add": 192, "ps_sum0": 12}
     normal = subprocess.run([sys.executable, str(CHECKER), "--quiet", str(obj)], capture_output=True, text=True)
     assert normal.returncode == 1 and "psq_l" in normal.stdout
     accepted = subprocess.run([sys.executable, str(CHECKER), "--quiet", "--audio-ps-object", str(obj), str(obj)],
@@ -146,14 +146,16 @@ def test_only_the_exact_requested_object_has_the_strict_exception(assemble, tmp_
     ("ps_mul 6,4,2", "ps_mul 14,4,2"),
     ("ps_mul 6,4,2", "mtspr 896,3"),
     ("ps_mul 6,4,2", '.machine "power7"\n\tfsqrt 6,4\n\t.machine "broadway"'),
-    ("psq_l 2,0(4),0,0", "psq_l 2,0(4),0,1"),
-    ("psq_l 2,0(4),0,0", "psq_st 2,0(4),0,0"),
-    ("psq_l 2,0(4),0,0", "psq_lu 2,0(4),0,0"),
-    ("li 0,12", "li 0,11"),
-    ("addi 3,3,16", "addi 13,3,16"),
+    ("psq_l 2,\\base(4),0,0", "psq_l 2,\\base(4),0,1"),
+    ("psq_l 2,\\base(4),0,0", "psq_st 2,\\base(4),0,0"),
+    ("psq_l 2,\\base(4),0,0", "psq_lu 2,\\base(4),0,0"),
+    (".irp base,0,16,32,48,64,80,96,112,128,144,160,176", ".irp base,0,16,32,48,64,80,96,112,128,144,160,160"),
+    ("lfs 1,wiiu_resampler_ps_zero@l(12)", "lfs 1,wiiu_resampler_ps_zero@l(12)\naddi 13,3,16"),
     ("stfs 0,0(5)", "stfs 0,8(5)"),
     ("wiiu_resampler_ps_zero@ha", "unapproved_external@ha"),
     (".long 0", ".long 1"),
+    (".long 0", ".long unapproved_external"),
+    ("ps_sum0 0,0,0,0", "ps_sum0 0,1,1,1"),
     (".section .rodata.wiiu_resampler_ps", ".long 0\n\t.section .rodata.wiiu_resampler_ps"),
 ])
 def test_audio_audit_rejects_opcode_operand_relocation_and_extent_changes(assemble, before, after):
