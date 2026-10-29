@@ -198,6 +198,14 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
         rspfile="$out.rsp",
         rspfile_content="$in_newline",
     )
+    # One audio-only PS object has a complete instruction/ELF contract. Every
+    # C object retains the ordinary PS/FMA/sqrt prohibition above.
+    n.rule(
+        name="wiiu_audio_ps_asm",
+        command="$wiiu_ld -c -g -mcpu=750 -meabi -mhard-float $in -o $out"
+                " && $python tools/wiiu_check_objects.py --quiet --audio-ps-object $out $out",
+        description="WIIU AUDIO PS ASM $out",
+    )
     n.rule(
         name="wiiu_link",
         command='test -n "$$WUT_ROOT" || { echo "WUT_ROOT is not set: the Wii U build runs in the opence-wiiu container" >&2; exit 1; }'
@@ -305,6 +313,11 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
         else:
             # (the platform layer's flags; the Xbox-facing units that include xgpu.h get a stand-in for SDL's OpenGL header)
             add_object(source, f"{platform_cflags} -I{wiiu_src} -I{WIIU_DIR / 'include'}")
+    # The .c readiness unit and .S kernel intentionally have separate objects.
+    audio_ps_object = obj_dir / wiiu_src / "wiiu_resampler_ps_asm.o"
+    objects.append(audio_ps_object)
+    n.build(outputs=audio_ps_object, rule="wiiu_audio_ps_asm", inputs=wiiu_src / "wiiu_resampler_ps.S",
+            implicit=[Path("tools/wiiu_check_objects.py"), Path("tools/wiiu_resampler_ps_audit.py")])
     # the high-res HUD's, the menus' titles' and buttons' pictures, the fonts and the menus' files: big-endian words, from tools/embed_assets.py --wiiu
     assets_source = build_dir / "generated" / "hud_assets.c"
     n.rule(name="wiiu_embed_assets", command="$python tools/embed_assets.py $out --wiiu", description="WIIU EMBED $out")

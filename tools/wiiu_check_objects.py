@@ -8,21 +8,26 @@ Disassembles each object with devkitPPC's objdump and reports any instruction fr
       compiler's -ffp-contract=off keeps them out; clang is known to ignore it under #pragma optimize("", off),
       which is why source/ai/ai.c has its own pragma);
   fsqrt, fsqrts: Espresso is a 750-class core and does not have them (an illegal instruction);
-  paired singles (ps_*): not what any of this code means, and not in the Linux builds it is compared with.
+  paired singles (ps_*, psq_*): not what any of this code means, and not in the Linux builds it is compared with.
 
 Objects allowed to contain them (one that calls fma() on purpose) are named with --allow. Exit status 1 when
 anything else has one.
 
-    wiiu_check_objects.py [--quiet] [--allow NAME]... OBJECT_OR_FOLDER...
+The audio assembly object has an explicit exact-path --audio-ps-object route
+to a stricter complete instruction/ELF contract. It does not use --allow or
+weaken the PS ban for other objects.
+
+    wiiu_check_objects.py [--quiet] [--allow NAME]... [--audio-ps-object PATH] OBJECT_OR_FOLDER...
 """
 
 import os
 import re
+import struct
 import subprocess
 import sys
 from pathlib import Path
 
-FORBIDDEN = re.compile(r"^(fn?m(add|sub)s?\.?|fsqrts?\.?|ps_\w+)$")
+FORBIDDEN = re.compile(r"^(fn?m(add|sub)s?|fsqrts?|psq?_\w+)\.?$")
 OBJDUMP = os.environ.get("WIIU_OBJDUMP", "powerpc-eabi-objdump")
 
 
@@ -40,7 +45,9 @@ def objects(paths):
 
 
 def forbidden_in(path):
-    listing = subprocess.run([OBJDUMP, "-d", "--no-show-raw-insn", str(path)], capture_output=True, text=True,
+    # Several paired encodings overlap later POWER instructions. Without an
+    # explicit CPU, objdump can call ps_add 'vsel' and psq_l 'lq', hiding them.
+    listing = subprocess.run([OBJDUMP, "-d", "-M", "broadway", "--no-show-raw-insn", str(path)], capture_output=True, text=True,
                              check=True).stdout
     found = {}
     for line in listing.splitlines():
@@ -54,27 +61,53 @@ def forbidden_in(path):
 def main():
     arguments = sys.argv[1:]
     allowed = set()
+    audio_objects = set()
     quiet = False
-    while arguments and arguments[0] in ("--allow", "--quiet"):
+    while arguments and arguments[0] in ("--allow", "--quiet", "--audio-ps-object"):
+        if arguments[0] != "--quiet" and len(arguments) < 2:
+            print(f"{arguments[0]} needs an argument", file=sys.stderr)
+            return 2
         if arguments[0] == "--quiet":
             quiet = True
             arguments = arguments[1:]
-        else:
+        elif arguments[0] == "--allow":
             allowed.add(arguments[1])
+            arguments = arguments[2:]
+        else:
+            audio_objects.add(Path(arguments[1]).resolve())
             arguments = arguments[2:]
     if not arguments:
         print(__doc__)
         return 2
     checked = 0
     bad = 0
+    audited_audio = set()
     for path in objects(arguments):
         checked += 1
+        if path.resolve() in audio_objects:
+            audited_audio.add(path.resolve())
+            try:
+                try:
+                    from .wiiu_resampler_ps_audit import audit
+                except ImportError:
+                    from wiiu_resampler_ps_audit import audit
+                result = audit(path, OBJDUMP)
+            except (OSError, ValueError, UnicodeDecodeError, struct.error, subprocess.CalledProcessError) as error:
+                bad += 1
+                print(f"{path}: strict audio PS audit failed: {error}")
+            else:
+                if not quiet:
+                    print(f"{path}: exact audio PS contract ({result})")
+            continue
         found = forbidden_in(path)
         if found and path.name not in allowed:
             bad += 1
             print(f"{path}: " + ", ".join(f"{name} x{count}" for name, count in sorted(found.items())))
         elif found and not quiet:
             print(f"{path}: allowed ({', '.join(f'{name} x{count}' for name, count in sorted(found.items()))})")
+    if audio_objects - audited_audio:
+        bad += 1
+        print("Audio PS object contract was not satisfied for every requested exact path")
     if not quiet or bad:
         print(f"{checked} objects checked, {bad} with forbidden instructions")
     return 1 if bad else 0

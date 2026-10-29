@@ -76,6 +76,7 @@ static struct sdl_stream *voice_new(const short *samples, unsigned long frames, 
 	stream->packets[0].samples = malloc(frames * channels * sizeof(short));
 	memcpy(stream->packets[0].samples, samples, frames * channels * sizeof(short));
 	stream->packets[0].frames = frames;
+	stream->packets[0].ready = TRUE;
 	stream->packet_count = 1;
 	resampler_reset(stream);
 	return stream;
@@ -427,6 +428,10 @@ static void bench(unsigned long voices, unsigned long silent, BOOL indoor, doubl
 		indoor ? " indoors" : "", 100.0 * elapsed / seconds, elapsed * 1e9 / ((double)chunks * CHUNK));
 }
 
+#ifdef RESAMPLER_GAIN_CACHE_TEST
+#include "mixer_gain_cache.h"
+#endif
+
 int main(int argc, char **argv)
 {
 	char const *case_name = argc > 1 ? argv[1] : "";
@@ -438,6 +443,239 @@ int main(int argc, char **argv)
 
 	resampler_initialize();
 	resampler_phases_initialize();
+
+#ifdef RESAMPLER_GAIN_CACHE_TEST
+	CASE("gain-cache") { gain_cache_dependencies(); return 0; }
+	CASE("gain-config") { gain_cache_config(); return 0; }
+#endif
+	CASE("gain-render")
+	{
+		float output[CHUNK * 2];
+		unsigned step;
+
+		scene(8, 2, TRUE, 1.0);
+		for (step = 0; step < 48; step++)
+		{
+			struct sdl_stream *stream;
+			float volume = step % 3 ? 0.75f : 0.25f;
+			BOOL enabled = step % 4 != 0;
+
+			for (stream = streams; stream; stream = stream->next)
+			{
+				stream->volume = step % 5 ? 0.5f : 1.0f;
+				stream->position[0] += 0.03125f;
+				stream->direct_hf = step % 2 ? -600 : -100;
+				if (stream->channels == 2)
+				{
+					stream->stereo_positioned = step % 3 != 0;
+					stream->stereo_pan = step % 2 ? -0.25f : 0.5f;
+					stream->stereo_distance = 3.0f;
+					stream->stereo_distance_fade = 0.5f;
+				}
+			}
+			listener.position[2] = (float)(step % 3) * 0.125f;
+			environment.flHFReference = step % 2 ? 3500.0f : 5000.0f;
+			environment.lRoomHF = step % 2 ? -100 : -600;
+			environment_serial++;
+#ifdef VOICE_GAIN_CACHE
+			mixer_settings_publish(volume, enabled);
+#else
+			master_volume = volume; reverb_enabled = enabled;
+#endif
+			mix(output, CHUNK);
+			fwrite(output, sizeof(float), CHUNK * 2, stdout);
+		}
+		return 0;
+	}
+
+#ifdef RESAMPLER_CACHE_TEST
+	CASE("cache-pitch-gate")
+	{
+		static const unsigned long common[] = { 8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000 };
+		static const unsigned long uncommon[] = { 16051, 17003, 20011, 22049, 22051, 25013, 30047, 44099, 48001, 60000 };
+		short samples[4096];
+		float output[128];
+		struct sdl_stream *stream;
+		unsigned rate, i;
+
+		for (i = 0; i < 4096; i++)
+			samples[i] = (short)((i * 73) % 10000 - 5000);
+		for (rate = 0; rate < sizeof(common) / sizeof(common[0]); rate++)
+		{
+			resampler_phases_initialize();
+			stream = voice_new(samples, 4096, 1, 22050, common[rate]);
+			render(stream, output, 64, TRUE);
+			CHECK(resampler_cache_hits + resampler_cache_misses == 64, "common frequency did not use cached coefficients");
+			voice_delete(stream);
+		}
+		for (rate = 0; rate < sizeof(uncommon) / sizeof(uncommon[0]); rate++)
+		{
+			resampler_phases_initialize();
+			stream = voice_new(samples, 4096, 1, 22050, uncommon[rate]);
+			render(stream, output, 64, TRUE);
+			CHECK(!resampler_cache_hits && !resampler_cache_misses, "arbitrary pitch touched coefficient cache");
+			voice_delete(stream);
+		}
+		resampler_phases_initialize();
+		stream = voice_new(samples, 4096, 1, 22050, 0);
+		render(stream, output, 64, TRUE);
+		CHECK(resampler_cache_hits + resampler_cache_misses == 64, "default frequency did not use source rate");
+		voice_delete(stream);
+		return 0;
+	}
+	CASE("cache-keys")
+	{
+		static const float blends[] = { 0.0f, 0.25f, 0.5f, 0.75f, 0.875f };
+		unsigned row, value, tap, valid;
+		unsigned long misses;
+		const float *weights;
+		float evicted_blend = 0.0f;
+
+		CHECK(sizeof(resampler_coefficient_cache) < 256 * 1024, "coefficient cache exceeded its memory bound");
+		for (row = 0; row < RESAMPLER_TABLE_STEPS; row++)
+		{
+			for (value = 0; value < sizeof(blends) / sizeof(blends[0]); value++)
+			{
+				if (value == RESAMPLER_CACHE_WAYS)
+					memcpy(&evicted_blend,
+						&resampler_coefficient_cache[row][resampler_cache_victim[row]].blend_bits,
+						sizeof(evicted_blend));
+				misses = resampler_cache_misses;
+				weights = resampler_coefficients(row, blends[value]);
+				CHECK(resampler_cache_misses == misses + 1, "new exact key did not miss at row %u", row);
+				for (tap = 0; tap < RESAMPLER_TAPS; tap++)
+					CHECK(weights[tap] == resampler_phases[row][tap] + resampler_deltas[row][tap] * blends[value],
+						"cached coefficient differs: row %u tap %u", row, tap);
+				weights = resampler_coefficients(row, blends[value]);
+				CHECK(resampler_cache_misses == misses + 1, "repeated exact key did not hit");
+			}
+			valid = 0;
+			for (value = 0; value < RESAMPLER_CACHE_WAYS; value++)
+				valid += resampler_coefficient_cache[row][value].valid != FALSE;
+			CHECK(valid == RESAMPLER_CACHE_WAYS && resampler_cache_victim[row] == 1,
+				"fifth blend did not evict within its bounded row");
+			misses = resampler_cache_misses;
+			/* Check the key selected for eviction without depending on the
+			order in which initially empty entries were populated. */
+			weights = resampler_coefficients(row, evicted_blend);
+			CHECK(resampler_cache_misses == misses + 1 && resampler_cache_victim[row] == 2,
+				"evicted key reused stale coefficients");
+			for (tap = 0; tap < RESAMPLER_TAPS; tap++)
+				CHECK(weights[tap] == resampler_phases[row][tap] + resampler_deltas[row][tap] * evicted_blend,
+					"replacement changed a coefficient");
+		}
+		CHECK(resampler_cache_hits == RESAMPLER_TABLE_STEPS * 5, "hit accounting");
+		return 0;
+	}
+	CASE("cache-reset")
+	{
+		unsigned row, way, tap;
+		const float *weights = resampler_coefficients(255, 0.5f);
+
+		/* Deliberately corrupt the stored value: reinitializing the tables
+		must invalidate it rather than return the old storage as a hit. */
+		((float *)weights)[0] += 1.0f;
+		resampler_phases_initialize();
+		CHECK(!resampler_cache_hits && !resampler_cache_misses, "reset counters");
+		for (row = 0; row < RESAMPLER_TABLE_STEPS; row++)
+		{
+			CHECK(!resampler_cache_victim[row], "reset replacement index");
+			for (way = 0; way < RESAMPLER_CACHE_WAYS; way++)
+				CHECK(!resampler_coefficient_cache[row][way].valid, "reset left an old cache entry valid");
+		}
+		weights = resampler_coefficients(255, 0.5f);
+		CHECK(resampler_cache_misses == 1 && !resampler_cache_hits, "first key after reset must miss");
+		for (tap = 0; tap < RESAMPLER_TAPS; tap++)
+			CHECK(weights[tap] == resampler_phases[255][tap] + resampler_deltas[255][tap] * 0.5f,
+				"stale coefficient after reset");
+		return 0;
+	}
+#endif
+
+	/* A queued packet that has not finished decoding is not end of stream.
+	Wait for it without padding the resampler history with silence, then
+	resume the same samples as an immediately ready two-packet voice. */
+	CASE("pending-packet")
+	{
+		short samples[800];
+		float reference[512], first[256], resumed[512];
+		const unsigned rates[] = { 22050, 48000 };
+		unsigned channels, rate_index, i;
+
+		for (i = 0; i < 800; i++)
+			samples[i] = (short)(1000 + (i * 37) % 12000);
+		for (channels = 1; channels <= 2; channels++)
+		for (rate_index = 0; rate_index < sizeof(rates) / sizeof(rates[0]); rate_index++)
+		{
+			const unsigned rate = rates[rate_index];
+			struct sdl_stream *ready = voice_new(samples, 400, channels, rate, 0);
+			struct sdl_stream *pending = voice_new(samples, 40, channels, rate, 0);
+			unsigned long produced;
+			unsigned long initial_center = pending->center;
+
+			pending->packet_count = 2;
+			pending->packets[1].samples = malloc(360 * channels * sizeof(short));
+			memcpy(pending->packets[1].samples, samples + 40 * channels, 360 * channels * sizeof(short));
+			pending->packets[1].frames = 360;
+			pending->packets[1].ready = FALSE;
+			render(ready, reference, 256, TRUE);
+			render(pending, first, 64, TRUE);
+			render(pending, first + 128, 64, TRUE);
+			produced = (unsigned long)(((pending->center - initial_center) + pending->phase) * 48000.0 / rate + 0.5);
+			CHECK(produced > 0 && produced < 128, "pending packet must stop mid-chunk: %lu frames", produced);
+			CHECK(pending->silence == 0, "pending packet inserted %lu silent source frames", pending->silence);
+			CHECK(pending->history_count == RESAMPLER_ZERO_CROSSINGS * RESAMPLER_MAXIMUM_STRETCH + 40,
+				"pending packet changed history beyond its 40 ready frames");
+			for (i = 0; i < produced * 2; i++)
+				CHECK(fabsf(first[i] - reference[i]) < 1e-5f, "before pending: sample %u", i);
+			pending->packets[1].ready = TRUE;
+			render(pending, resumed, 256 - produced, TRUE);
+			for (i = 0; i < (256 - produced) * 2; i++)
+				CHECK(fabsf(resumed[i] - reference[produced * 2 + i]) < 1e-5f, "after pending: sample %u", i);
+			free(pending->packets[1].samples);
+			voice_delete(pending);
+			voice_delete(ready);
+		}
+		return 0;
+	}
+	CASE("pending-ramp")
+	{
+		short samples[200];
+		float output[128];
+		struct sdl_stream *stream;
+		unsigned long initial_center, produced;
+		float partial_left, partial_right;
+
+		for (index = 0; index < 200; index++)
+			samples[index] = 1000;
+		stream = voice_new(samples, 40, 1, 48000, 0);
+		stream->packets[1].samples = malloc(160 * sizeof(short));
+		memcpy(stream->packets[1].samples, samples + 40, 160 * sizeof(short));
+		stream->packets[1].frames = 160;
+		stream->packets[1].ready = FALSE;
+		stream->packet_count = 2;
+		stream->gains_valid = TRUE;
+		stream->current_left = 0.2f;
+		stream->current_right = 0.4f;
+		initial_center = stream->center;
+		render(stream, output, 64, TRUE);
+		produced = stream->center - initial_center;
+		CHECK(produced > 0 && produced < 64, "expected interruption during the ramp");
+		partial_left = 0.2f + 0.8f * (float)produced / 64.0f;
+		partial_right = 0.4f + 0.6f * (float)produced / 64.0f;
+		CHECK(fabsf(stream->current_left - partial_left) < 1e-5f, "left gain jumped across the interrupted ramp");
+		CHECK(fabsf(stream->current_right - partial_right) < 1e-5f, "right gain jumped across the interrupted ramp");
+		render(stream, output, 64, TRUE);
+		CHECK(fabsf(stream->current_left - partial_left) < 1e-5f, "left gain changed while waiting");
+		CHECK(fabsf(stream->current_right - partial_right) < 1e-5f, "right gain changed while waiting");
+		stream->packets[1].ready = TRUE;
+		render(stream, output, 64, TRUE);
+		CHECK(fabsf(stream->current_left - 1.0f) < 1e-5f, "left gain did not reach its target after resuming");
+		CHECK(fabsf(stream->current_right - 1.0f) < 1e-5f, "right gain did not reach its target after resuming");
+		free(stream->packets[1].samples);
+		voice_delete(stream);
+		return 0;
+	}
 
 	/* the resampler is the low pass worked out exactly: noise at every rate,
 	the error well under 16-bit's */

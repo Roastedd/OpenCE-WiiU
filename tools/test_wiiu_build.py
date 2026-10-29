@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
 
-from tools import linux_build, ninja_syntax, wiiu_build, wiiu_size_report, wiiu_stubs  # noqa: E402
+from tools import linux_build, ninja_syntax, wiiu_build, wiiu_check_objects, wiiu_size_report, wiiu_stubs  # noqa: E402
 
 CONTAINER = shutil.which("wiiu-clang") and shutil.which("powerpc-eabi-objdump") and shutil.which("llvm-nm")
 needs_container = pytest.mark.skipif(not CONTAINER, reason="needs the opence-wiiu container's toolchain")
@@ -145,6 +145,26 @@ def test_every_object_is_checked_and_the_link_is_the_wii_us(monkeypatch):
     assert re.search(r"^build build/linux-wiiu/halo\.wuhb: wiiu_wuhb build/linux-wiiu/halo\.rpx", text, re.M)
 
 
+def test_audio_ps_is_one_explicit_exactly_audited_assembly_object(monkeypatch):
+    text = graph(monkeypatch)
+    obj = "build/linux-wiiu/obj/port/wiiu/src/wiiu_resampler_ps_asm.o"
+    edge = re.search(r"^build " + re.escape(obj) + r": wiiu_audio_ps_asm ([^\n]*)", text, re.M)
+    assert edge and "port/wiiu/src/wiiu_resampler_ps.S" in edge.group(1)
+    assert "tools/wiiu_check_objects.py" in edge.group(1) and "tools/wiiu_resampler_ps_audit.py" in edge.group(1)
+    rule = re.search(r"^rule wiiu_audio_ps_asm\n  command = ([^\n]*)", text, re.M).group(1)
+    assert "-mcpu=750 -meabi -mhard-float" in rule
+    assert "--audio-ps-object $out $out" in rule and "--allow" not in rule
+    assert text.count(": wiiu_audio_ps_asm ") == 1
+    ordinary = re.search(r"^rule wiiu_cc\n  command = ([^\n]*)", text, re.M).group(1)
+    assert "wiiu_check_objects.py --quiet $out" in ordinary
+    assert "--audio-ps-object" not in ordinary
+    assert obj in re.search(r"^build build/linux-wiiu/wiiu_stubs\.c [^\n]*: wiiu_stubs ([^\n]*)", text, re.M).group(1)
+    assert obj in re.search(r"^build build/linux-wiiu/halo\.elf [^\n]*: wiiu_link ([^\n]*)", text, re.M).group(1)
+    cflags = compile_flags(text, "port/wiiu/src/wiiu_resampler_ps.c")
+    assert "-ffp-contract=off" in cflags and "-fshort-wchar" not in cflags
+    assert "wiiu_resampler_ps_asm.o: wiiu_cc" not in text
+
+
 def test_the_games_main_is_the_shells_to_run(monkeypatch):
     """shell_xbox.c's main is halo_game_main, and the shell's units have the native ABI"""
     text = graph(monkeypatch)
@@ -251,6 +271,41 @@ def test_a_fused_multiply_add_is_found_and_not_found_without_one(tmp_path):
                                 capture_output=True, text=True)
         assert (result.returncode == 1) == found, result.stdout
         assert ("fmadd" in result.stdout) == found
+
+
+def test_instruction_disassembly_selects_the_console_cpu(monkeypatch):
+    def disassemble(command, **kwargs):
+        assert command == [wiiu_check_objects.OBJDUMP, "-d", "-M", "broadway", "--no-show-raw-insn", "sample.o"]
+        return SimpleNamespace(stdout="  0:\tpsq_l f2,0(r3),0,0\n  4:\tps_add. f1,f2,f3\n")
+
+    monkeypatch.setattr(wiiu_check_objects.subprocess, "run", disassemble)
+    assert wiiu_check_objects.forbidden_in(Path("sample.o")) == {"psq_l": 1, "ps_add.": 1}
+
+
+@needs_container
+def test_real_forbidden_opcodes_include_paired_loads_and_record_forms(tmp_path):
+    # A real assembled negative control: default objdump can misdecode these
+    # paired opcodes as newer POWER instructions. Optional square roots must
+    # remain visible even when disassembly explicitly selects Broadway.
+    fused = [name + record for name in ("fmadd", "fmadds", "fmsub", "fmsubs", "fnmadd", "fnmadds", "fnmsub", "fnmsubs")
+             for record in ("", ".")]
+    roots = [name + record for name in ("fsqrt", "fsqrts") for record in ("", ".")]
+    paired = [("ps_add", "1,2,3"), ("ps_add.", "1,2,3"), ("ps_mul", "1,2,3"),
+              ("ps_sum0", "1,2,3,4"), ("ps_mr", "1,2")]
+    paired += [(name, "2,0(3),0,0") for name in ("psq_l", "psq_lu", "psq_st", "psq_stu")]
+    paired += [(name, "2,3,4,0,0") for name in ("psq_lx", "psq_lux", "psq_stx", "psq_stux")]
+    source, obj = tmp_path / "forbidden.s", tmp_path / "forbidden.o"
+    source.write_text(".text\n.machine power7\n" +
+                      "".join(f"{name} 1,2,3,4\n" for name in fused) +
+                      "".join(f"{name} 1,2\n" for name in roots) + ".machine broadway\n" +
+                      "".join(f"{name} {operands}\n" for name, operands in paired) + "blr\n")
+    subprocess.run(["powerpc-eabi-as", "-o", str(obj), str(source)], check=True)
+    expected = {name: 1 for name in fused + roots + [name for name, _ in paired]}
+    assert wiiu_check_objects.forbidden_in(obj) == expected
+    result = subprocess.run([sys.executable, str(ROOT / "tools/wiiu_check_objects.py"), "--quiet", str(obj)],
+                            capture_output=True, text=True)
+    assert result.returncode == 1
+    assert all(f"{name} x1" in result.stdout for name in expected)
 
 
 @needs_container

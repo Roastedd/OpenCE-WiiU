@@ -54,6 +54,14 @@ turns the reverb off; audio.enabled = false skips opening a device
 #include <time.h>
 #include <unistd.h>
 
+#ifdef HALO_WIIU
+#include <coreinit/time.h>
+#include "../../wiiu/src/wiiu_shell.h"
+#include "../../wiiu/src/wiiu_decoder_profile.h"
+#include "../../wiiu/src/wiiu_mixer_profile.h"
+#include "wiiu_resampler_ps.h"
+#endif
+
 #define OUTPUT_RATE 48000
 #define OUTPUT_CHANNELS 2
 #define MAXIMUM_STREAM_PACKETS 64
@@ -62,6 +70,10 @@ turns the reverb off; audio.enabled = false skips opening a device
 #ifdef HALO_WIIU
 #define DSOUND_DECODE_THREAD
 #define DSOUND_MIXER_YIELDS
+#endif
+
+#if defined(HALO_WIIU) || defined(RESAMPLER_GAIN_CACHE_TEST)
+#define VOICE_GAIN_CACHE
 #endif
 
 #define XBOX_ADPCM_BLOCK_BYTES 36
@@ -91,6 +103,16 @@ struct voice_packet
 	BOOL ready;               /* decoded (DSOUND_DECODE_THREAD: the decoder sets it) */
 	unsigned long serial;     /* the packet's, among every stream's (the decoder finds it by it) */
 };
+
+#ifdef VOICE_GAIN_CACHE
+/* Every input read by voice_gains, spatialize and distance_attenuation.
+   Byte comparison preserves signed zero and stable NaN payloads. */
+struct voice_gain_inputs
+{
+	float real[25];
+	unsigned long integer[11];
+};
+#endif
 
 struct sdl_stream
 {
@@ -155,6 +177,13 @@ struct sdl_stream
 	float current_left, current_right, current_room;
 	float current_direct_lowpass, current_room_lowpass;
 	BOOL gains_valid;
+#ifdef VOICE_GAIN_CACHE
+	/* Five exact targets, reused until an input changes: 168 bytes a voice
+	on the Wii U. The ramp and filter state are not cached. */
+	BOOL gain_cache_valid;
+	struct voice_gain_inputs gain_cache_inputs;
+	float gain_cache_target[5];
+#endif
 	/* the direct path's low pass, for each channel, and the room send's */
 	float direct_lowpass[2];
 	float room_lowpass;
@@ -162,6 +191,13 @@ struct sdl_stream
 
 static pthread_mutex_t mixer_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct sdl_stream *streams;
+
+#ifdef DSOUND_DECODE_THREAD
+/* the mixes in which a voice waited for its next packet to be decoded (logged by the decoder) */
+static unsigned long decoder_voices_waited;
+/* Caller-side decoding when a queue or allocation is unavailable. */
+static unsigned long decoder_profile_fallbacks;
+#endif
 
 #ifdef DSOUND_MIXER_YIELDS
 /* how many threads other than the mixer wait for its lock, and the voice the
@@ -206,6 +242,18 @@ static DSI3DL2LISTENER environment =
 static unsigned long environment_serial;
 /* audio.reverb */
 static BOOL reverb_enabled = TRUE;
+
+#ifdef VOICE_GAIN_CACHE
+/* Configuration can read files. Read it before calling this publisher;
+   the mixer sees both settings while it holds the same lock as its voices. */
+static void mixer_settings_publish(float volume, BOOL enabled)
+{
+	mixer_lock_take();
+	master_volume = volume;
+	reverb_enabled = enabled;
+	pthread_mutex_unlock(&mixer_lock);
+}
+#endif
 
 static float gain_from_millibels(LONG millibels)
 {
@@ -426,9 +474,21 @@ static void spatialize(const struct sdl_stream *stream, float *left, float *righ
 send to it, as their I3DL2 mix bin did on the Xbox), with the coefficients of
 the low passes of its direct path (3D voices: obstruction and occlusion
 muffle it) and of the send */
+#ifdef RESAMPLER_GAIN_CACHE_TEST
+static unsigned long voice_gain_recalculations;
+#endif
+
+#ifdef VOICE_GAIN_CACHE
+static void voice_gains_uncached(const struct sdl_stream *stream, float *left, float *right, float *room,
+	float *direct_lowpass, float *room_lowpass)
+#else
 static void voice_gains(const struct sdl_stream *stream, float *left, float *right, float *room,
 	float *direct_lowpass, float *room_lowpass)
+#endif
 {
+#ifdef RESAMPLER_GAIN_CACHE_TEST
+	voice_gain_recalculations++;
+#endif
 	*room = 0.0f;
 	*direct_lowpass = 0.0f;
 	*room_lowpass = 0.0f;
@@ -489,6 +549,71 @@ static void voice_gains(const struct sdl_stream *stream, float *left, float *rig
 	*room *= stream->volume * master_volume;
 }
 
+#ifdef VOICE_GAIN_CACHE
+static void voice_gain_inputs_read(const struct sdl_stream *stream, struct voice_gain_inputs *key)
+{
+	/* Initialize padding too (the host tests can have 64-bit longs). */
+	memset(key, 0, sizeof(*key));
+	key->real[0] = stream->volume;
+	key->real[1] = stream->mix_left;
+	key->real[2] = stream->mix_right;
+	key->real[3] = stream->stereo_pan;
+	key->real[4] = stream->stereo_distance;
+	key->real[5] = stream->stereo_distance_fade;
+	key->real[6] = stream->position[0];
+	key->real[7] = stream->position[1];
+	key->real[8] = stream->position[2];
+	key->real[9] = stream->minimum_distance;
+	key->real[10] = stream->maximum_distance;
+	key->real[11] = stream->room_rolloff_factor;
+	key->real[12] = master_volume;
+	key->real[13] = listener.position[0];
+	key->real[14] = listener.position[1];
+	key->real[15] = listener.position[2];
+	key->real[16] = listener.front[0];
+	key->real[17] = listener.front[1];
+	key->real[18] = listener.front[2];
+	key->real[19] = listener.top[0];
+	key->real[20] = listener.top[1];
+	key->real[21] = listener.top[2];
+	key->real[22] = listener.rolloff_factor;
+	key->real[23] = environment.flHFReference;
+	key->real[24] = environment.flRoomRolloffFactor;
+	key->integer[0] = stream->channels;
+	key->integer[1] = stream->has_3d;
+	key->integer[2] = stream->mode;
+	key->integer[3] = stream->stereo_positioned;
+	key->integer[4] = stream->direct;
+	key->integer[5] = stream->direct_hf;
+	key->integer[6] = stream->room;
+	key->integer[7] = stream->room_hf;
+	key->integer[8] = reverb_enabled;
+	key->integer[9] = environment.lRoom;
+	key->integer[10] = environment.lRoomHF;
+}
+
+/* Called with mixer_lock held, as are all setters of the key's inputs. */
+static void voice_gains(struct sdl_stream *stream, float *left, float *right, float *room,
+	float *direct_lowpass, float *room_lowpass)
+{
+	struct voice_gain_inputs key;
+
+	voice_gain_inputs_read(stream, &key);
+	if (!stream->gain_cache_valid || memcmp(&key, &stream->gain_cache_inputs, sizeof(key)))
+	{
+		voice_gains_uncached(stream, &stream->gain_cache_target[0], &stream->gain_cache_target[1],
+			&stream->gain_cache_target[2], &stream->gain_cache_target[3], &stream->gain_cache_target[4]);
+		memcpy(&stream->gain_cache_inputs, &key, sizeof(key));
+		stream->gain_cache_valid = TRUE;
+	}
+	*left = stream->gain_cache_target[0];
+	*right = stream->gain_cache_target[1];
+	*room = stream->gain_cache_target[2];
+	*direct_lowpass = stream->gain_cache_target[3];
+	*room_lowpass = stream->gain_cache_target[4];
+}
+#endif
+
 /* ---------- resampling
 
 Each voice is resampled to the output rate by band-limited interpolation (J.
@@ -513,8 +638,92 @@ rate or slower blends two rows by its phase, which is what the table gave tap
 by tap, a third of the work. resampler_deltas holds each row's step to the
 next, so the blend is a multiply and an add a tap */
 #define RESAMPLER_TAPS (2 * RESAMPLER_ZERO_CROSSINGS)
+#if defined(HALO_WIIU) && RESAMPLER_TAPS != 48
+#error The qualified Wii U audio kernels require exactly 48 resampler taps
+#endif
 static float resampler_phases[RESAMPLER_TABLE_STEPS + 1][RESAMPLER_TAPS] RESAMPLER_ALIGNED;
 static float resampler_deltas[RESAMPLER_TABLE_STEPS][RESAMPLER_TAPS] RESAMPLER_ALIGNED;
+
+#if defined(HALO_WIIU) || defined(RESAMPLER_CACHE_TEST)
+#define RESAMPLER_COEFFICIENT_CACHE
+#define RESAMPLER_CACHE_WAYS 4
+/* The Wii U has no SIMD for blending the same weights at every voice's
+output sample. Keep four exact blends per phase row; a miss computes the
+same coefficients, and replacement only changes how much work is done.
+All access is from the mixer while it holds mixer_lock. */
+struct resampler_coefficient_entry
+{
+	unsigned int blend_bits;
+	BOOL valid;
+	float weights[RESAMPLER_TAPS] RESAMPLER_ALIGNED;
+};
+typedef char resampler_float_key_size[sizeof(float) == sizeof(unsigned int) ? 1 : -1];
+static struct resampler_coefficient_entry resampler_coefficient_cache[RESAMPLER_TABLE_STEPS][RESAMPLER_CACHE_WAYS];
+static unsigned char resampler_cache_victim[RESAMPLER_TABLE_STEPS];
+#ifdef RESAMPLER_CACHE_TEST
+static unsigned long resampler_cache_hits, resampler_cache_misses;
+#endif
+
+/* These exact rates revisit a small set of phases. Arbitrary pitches keep
+the original blending path instead of filling the cache with one-use keys. */
+static BOOL resampler_cache_frequency(unsigned long frequency)
+{
+	switch (frequency)
+	{
+	case 8000: case 11025: case 12000: case 16000: case 22050:
+	case 24000: case 32000: case 44100: case 48000:
+		return TRUE;
+	default:
+		return FALSE;
+	}
+}
+
+/* Keep the uncommon fill call out of the sample loop's register lifetime. */
+static __attribute__((noinline)) const float *resampler_coefficients_fill(unsigned long row, unsigned int bits,
+	float blend, unsigned replace)
+{
+	unsigned tap;
+	struct resampler_coefficient_entry *entry;
+
+#ifdef RESAMPLER_CACHE_TEST
+	resampler_cache_misses++;
+#endif
+	if (replace == RESAMPLER_CACHE_WAYS)
+	{
+		replace = resampler_cache_victim[row];
+		resampler_cache_victim[row] = (replace + 1) % RESAMPLER_CACHE_WAYS;
+	}
+	entry = &resampler_coefficient_cache[row][replace];
+	for (tap = 0; tap < RESAMPLER_TAPS; tap++)
+		entry->weights[tap] = resampler_phases[row][tap] + resampler_deltas[row][tap] * blend;
+	entry->blend_bits = bits;
+	entry->valid = TRUE;
+	return entry->weights;
+}
+
+static __inline__ __attribute__((always_inline)) const float *resampler_coefficients(unsigned long row, float blend)
+{
+	unsigned int bits;
+	unsigned way, replace = RESAMPLER_CACHE_WAYS;
+	struct resampler_coefficient_entry *entry;
+
+	memcpy(&bits, &blend, sizeof(bits));
+	for (way = 0; way < RESAMPLER_CACHE_WAYS; way++)
+	{
+		entry = &resampler_coefficient_cache[row][way];
+		if (entry->valid && entry->blend_bits == bits)
+		{
+#ifdef RESAMPLER_CACHE_TEST
+			resampler_cache_hits++;
+#endif
+			return entry->weights;
+		}
+		if (!entry->valid && replace == RESAMPLER_CACHE_WAYS)
+			replace = way;
+	}
+	return resampler_coefficients_fill(row, bits, blend, replace);
+}
+#endif
 
 static double bessel_i0(double x)
 {
@@ -578,6 +787,19 @@ static void resampler_phases_initialize(void)
 		for (tap = 0; tap < RESAMPLER_TAPS; tap++)
 			resampler_deltas[phase][tap] = resampler_phases[phase + 1][tap] - resampler_phases[phase][tap];
 	}
+#ifdef RESAMPLER_COEFFICIENT_CACHE
+	for (phase = 0; phase < RESAMPLER_TABLE_STEPS; phase++)
+	{
+		unsigned way;
+
+		resampler_cache_victim[phase] = 0;
+		for (way = 0; way < RESAMPLER_CACHE_WAYS; way++)
+			resampler_coefficient_cache[phase][way].valid = FALSE;
+	}
+#ifdef RESAMPLER_CACHE_TEST
+	resampler_cache_hits = resampler_cache_misses = 0;
+#endif
+#endif
 }
 
 /* The low pass over a voice's frames, the sum of each frame times its weight:
@@ -646,6 +868,51 @@ static void resampler_dot2(const float *left_frames, const float *right_frames, 
 #endif
 }
 
+#ifdef RESAMPLER_COEFFICIENT_CACHE
+/* Same accumulation order as resampler_dot and resampler_dot2; only the
+coefficient blending has moved to the bounded cache above. */
+static float resampler_dot_prepared(const float *frames, const float *weights)
+{
+#if RESAMPLER_LANES == 4
+	resampler_vector sum = { 0.0f, 0.0f, 0.0f, 0.0f };
+	int tap;
+
+	for (tap = 0; tap < RESAMPLER_TAPS; tap += 4)
+		sum += *(const resampler_unaligned_vector *)(frames + tap) * *(const resampler_vector *)(weights + tap);
+	return (sum[0] + sum[1]) + (sum[2] + sum[3]);
+#else
+	float sum = 0.0f;
+	int tap;
+
+	for (tap = 0; tap < RESAMPLER_TAPS; tap++)
+		sum += frames[tap] * weights[tap];
+	return sum;
+#endif
+}
+
+static void resampler_dot2_prepared(const float *left_frames, const float *right_frames, const float *weights,
+	float *left, float *right)
+{
+#if RESAMPLER_LANES == 4
+	resampler_vector left_sum = { 0.0f, 0.0f, 0.0f, 0.0f }, right_sum = left_sum;
+	int tap;
+
+	for (tap = 0; tap < RESAMPLER_TAPS; tap += 4)
+	{
+		resampler_vector weight = *(const resampler_vector *)(weights + tap);
+
+		left_sum += *(const resampler_unaligned_vector *)(left_frames + tap) * weight;
+		right_sum += *(const resampler_unaligned_vector *)(right_frames + tap) * weight;
+	}
+	*left = (left_sum[0] + left_sum[1]) + (left_sum[2] + left_sum[3]);
+	*right = (right_sum[0] + right_sum[1]) + (right_sum[2] + right_sum[3]);
+#else
+	*left = resampler_dot_prepared(left_frames, weights);
+	*right = resampler_dot_prepared(right_frames, weights);
+#endif
+}
+#endif
+
 /* a voice starting (over): silence before its first frame, which the output
 starts at */
 static void resampler_reset(struct sdl_stream *stream)
@@ -663,10 +930,12 @@ static float packet_sample(const struct voice_packet *packet, unsigned long fram
 	return packet->samples[frame * channels + channel] * (1.0f / 32768.0f);
 }
 
-/* the voice's next frame, finishing the packets it passes; FALSE once they
-run out */
-static BOOL take_frame(struct sdl_stream *stream, float *frame)
+/* The voice's next frame, finishing packets it passes. A queued packet still
+being decoded is different from the end of the stream: it must not be padded
+with silence in the resampler's history. */
+static BOOL take_frame(struct sdl_stream *stream, float *frame, BOOL *waiting)
 {
+	*waiting = FALSE;
 	for (;;)
 	{
 		struct voice_packet *packet = NULL;
@@ -682,8 +951,13 @@ static BOOL take_frame(struct sdl_stream *stream, float *frame)
 				break;
 			}
 		}
-		if (!packet || !packet->ready)
+		if (!packet)
 			return FALSE;
+		if (!packet->ready)
+		{
+			*waiting = TRUE;
+			return FALSE;
+		}
 		if (stream->cursor < packet->frames)
 		{
 			frame[0] = packet_sample(packet, stream->cursor, 0, stream->channels);
@@ -731,6 +1005,15 @@ static void mix_voice(struct sdl_stream *stream, float *output, float *send, uns
 	float direct_state[2], room_state;
 	long width;
 	unsigned long frame;
+	BOOL waiting = FALSE;
+#ifdef HALO_WIIU
+	/* port: only the qualified audio worker uses the Wii U's paired dots;
+	   the filter, phase and C fallback retain their original arithmetic. */
+	const BOOL paired_dots = wiiu_resampler_ps_ready();
+#endif
+#ifdef RESAMPLER_COEFFICIENT_CACHE
+	BOOL prepared_coefficients;
+#endif
 	/* (a stereo voice panned towards its sound: voice_gains) */
 	BOOL positioned = stream->channels == 2 && stream->stereo_positioned;
 
@@ -747,11 +1030,19 @@ static void mix_voice(struct sdl_stream *stream, float *output, float *send, uns
 			if (packet->finished)
 				continue;
 			if (!packet->ready)
+			{
+#ifdef DSOUND_DECODE_THREAD
+				__atomic_add_fetch(&decoder_voices_waited, 1, __ATOMIC_RELAXED);
+#endif
 				return;
+			}
 			break;
 		}
 	}
 	step = (double)(stream->frequency ? stream->frequency : stream->sample_rate) / OUTPUT_RATE;
+#ifdef RESAMPLER_COEFFICIENT_CACHE
+	prepared_coefficients = resampler_cache_frequency(stream->frequency ? stream->frequency : stream->sample_rate);
+#endif
 	/* the low pass narrowed for a voice taking frames faster than the output
 	rate, and the frames it reaches on each side */
 	scale = step > 1.0 ? (float)(1.0 / (step < RESAMPLER_MAXIMUM_STRETCH ? step : RESAMPLER_MAXIMUM_STRETCH)) : 1.0f;
@@ -806,9 +1097,16 @@ static void mix_voice(struct sdl_stream *stream, float *output, float *send, uns
 			unsigned long slot = stream->history_count % RESAMPLER_HISTORY;
 			float taken[2];
 
-			if (take_frame(stream, taken))
+			if (take_frame(stream, taken, &waiting))
 			{
 				stream->silence = 0;
+			}
+			else if (waiting)
+			{
+#ifdef DSOUND_DECODE_THREAD
+				__atomic_add_fetch(&decoder_voices_waited, 1, __ATOMIC_RELAXED);
+#endif
+				break;
 			}
 			else
 			{
@@ -819,7 +1117,7 @@ static void mix_voice(struct sdl_stream *stream, float *output, float *send, uns
 			stream->history[1][slot] = stream->history[1][slot + RESAMPLER_HISTORY] = taken[1];
 			stream->history_count++;
 		}
-		if (stream->silence > (unsigned long)(2 * width))
+		if (waiting || stream->silence > (unsigned long)(2 * width))
 			break;
 
 		if (!left && !right && !room && !ramp_left && !ramp_right && !ramp_room)
@@ -833,17 +1131,65 @@ static void mix_voice(struct sdl_stream *stream, float *output, float *send, uns
 			unsigned long row = (unsigned long)position;
 			float blend = (float)(position - (double)row);
 			unsigned long first = (stream->center + 1 - RESAMPLER_ZERO_CROSSINGS) % RESAMPLER_HISTORY;
-
-			/* (a mono voice's two channels are the same: take_frame) */
-			if (stream->channels == 1)
+#ifdef RESAMPLER_COEFFICIENT_CACHE
+			if (prepared_coefficients)
 			{
-				sample_left = sample_right = resampler_dot(stream->history[0] + first, resampler_phases[row],
-					resampler_deltas[row], blend);
+				const float *prepared = resampler_coefficients(row, blend);
+
+#ifdef HALO_WIIU
+				if (paired_dots)
+				{
+					if (stream->channels == 1)
+					{
+						wiiu_resampler_ps_dot48(stream->history[0] + first, prepared, &sample_left);
+						sample_right = sample_left;
+					}
+					else
+					{
+						float paired[2];
+
+						wiiu_resampler_ps_dot48_stereo(stream->history[0] + first, stream->history[1] + first, prepared, paired);
+						sample_left = paired[0];
+						sample_right = paired[1];
+					}
+				}
+				else
+#endif
+				if (stream->channels == 1)
+					sample_left = sample_right = resampler_dot_prepared(stream->history[0] + first, prepared);
+				else
+					resampler_dot2_prepared(stream->history[0] + first, stream->history[1] + first, prepared, &sample_left, &sample_right);
 			}
 			else
+#endif
 			{
-				resampler_dot2(stream->history[0] + first, stream->history[1] + first, resampler_phases[row],
-					resampler_deltas[row], blend, &sample_left, &sample_right);
+				/* a mono voice's two channels are the same: take_frame */
+#ifdef HALO_WIIU
+				if (paired_dots)
+				{
+					if (stream->channels == 1)
+					{
+						wiiu_resampler_ps_blended48(stream->history[0] + first, resampler_phases[row], resampler_deltas[row], &blend, &sample_left);
+						sample_right = sample_left;
+					}
+					else
+					{
+						float paired[2];
+
+						wiiu_resampler_ps_blended48_stereo(stream->history[0] + first, stream->history[1] + first,
+							resampler_phases[row], resampler_deltas[row], &blend, paired);
+						sample_left = paired[0];
+						sample_right = paired[1];
+					}
+				}
+				else
+#endif
+				if (stream->channels == 1)
+					sample_left = sample_right = resampler_dot(stream->history[0] + first, resampler_phases[row],
+						resampler_deltas[row], blend);
+				else
+					resampler_dot2(stream->history[0] + first, stream->history[1] + first, resampler_phases[row],
+						resampler_deltas[row], blend, &sample_left, &sample_right);
 			}
 		}
 		else
@@ -916,11 +1262,11 @@ static void mix_voice(struct sdl_stream *stream, float *output, float *send, uns
 	stream->direct_lowpass[0] = direct_state[0];
 	stream->direct_lowpass[1] = direct_state[1];
 	stream->room_lowpass = room_state;
-	stream->current_left = target_left;
-	stream->current_right = target_right;
-	stream->current_room = target_room;
-	stream->current_direct_lowpass = target_direct_lowpass;
-	stream->current_room_lowpass = target_room_lowpass;
+	stream->current_left = waiting ? left : target_left;
+	stream->current_right = waiting ? right : target_right;
+	stream->current_room = waiting ? room : target_room;
+	stream->current_direct_lowpass = waiting ? direct_lowpass : target_direct_lowpass;
+	stream->current_room_lowpass = waiting ? room_lowpass : target_room_lowpass;
 }
 
 /* ---------- reverb
@@ -1309,28 +1655,67 @@ static void mix(float *output, unsigned long frames)
 {
 	struct sdl_stream *stream;
 	DSI3DL2LISTENER properties;
+#ifdef VOICE_GAIN_CACHE
+	BOOL enabled, changed = FALSE;
+#else
 	BOOL enabled = reverb_enabled, changed = FALSE;
+#endif
 	unsigned long serial = 0;
+#ifdef HALO_WIIU
+	const BOOL profile_mix = wiiu_audio_profile_is_enabled();
+	struct wiiu_audio_mix_pressure pressure;
+	uint64_t profile_lock_started = 0, profile_voice_started = 0, profile_stage = 0;
+#endif
 
 	memset(output, 0, frames * OUTPUT_CHANNELS * sizeof(float));
 	memset(reverb.send, 0, frames * sizeof(float));
+#ifdef HALO_WIIU
+	if (profile_mix)
+	{
+		memset(&pressure, 0, sizeof(pressure));
+		profile_voice_started = profile_lock_started = OSGetSystemTime();
+	}
+#endif
 	pthread_mutex_lock(&mixer_lock);
+#ifdef VOICE_GAIN_CACHE
+	enabled = reverb_enabled;
+#endif
+#ifdef HALO_WIIU
+	if (profile_mix)
+		pressure.lock_wait += OSGetSystemTime() - profile_lock_started;
+#endif
 #ifdef DSOUND_MIXER_YIELDS
 	{
 		struct sdl_stream *next;
 
 		for (stream = streams; stream; stream = next)
 		{
+#ifdef HALO_WIIU
+			if (profile_mix)
+			{
+				pressure.streams++;
+				if (!stream->paused && stream->packet_count)
+					pressure.queued++;
+			}
+#endif
 			mix_voice(stream, output, reverb.send, frames);
 			next = stream->next;
 			/* (the game thread waits: the lock is let go until it has had it) */
 			if (next && __atomic_load_n(&mixer_lock_wanted, __ATOMIC_ACQUIRE))
 			{
 				mixer_walk_next = next;
+#ifdef HALO_WIIU
+				if (profile_mix)
+					profile_lock_started = OSGetSystemTime();
+#endif
 				pthread_mutex_unlock(&mixer_lock);
 				while (__atomic_load_n(&mixer_lock_wanted, __ATOMIC_ACQUIRE))
 					sched_yield();
 				pthread_mutex_lock(&mixer_lock);
+#ifdef HALO_WIIU
+				if (profile_mix)
+					pressure.lock_wait += OSGetSystemTime() - profile_lock_started;
+#endif
 				next = mixer_walk_next;
 			}
 		}
@@ -1347,6 +1732,13 @@ static void mix(float *output, unsigned long frames)
 		changed = TRUE;
 	}
 	pthread_mutex_unlock(&mixer_lock);
+#ifdef HALO_WIIU
+	if (profile_mix)
+	{
+		profile_stage = OSGetSystemTime();
+		pressure.stage[WIIU_MIXER_VOICES] = profile_stage - profile_voice_started;
+	}
+#endif
 	if (changed)
 		reverb_update(&properties, serial);
 	/* the reverb runs while something reverberates, and stops once it is
@@ -1357,9 +1749,34 @@ static void mix(float *output, unsigned long frames)
 		if ((!enabled && reverb.level <= 0.0f) || reverb.quiet > REVERB_QUIET_FRAMES)
 			reverb_clear();
 	}
+#ifdef HALO_WIIU
+	if (profile_mix)
+	{
+		const uint64_t now = OSGetSystemTime();
+
+		pressure.stage[WIIU_MIXER_REVERB] = now - profile_stage;
+		profile_stage = now;
+	}
+#endif
 	/* the players' voices (voice_audio.c), dry, under the limiter */
 	voice_audio_mix(output, frames);
+#ifdef HALO_WIIU
+	if (profile_mix)
+	{
+		const uint64_t now = OSGetSystemTime();
+
+		pressure.stage[WIIU_MIXER_CHAT] = now - profile_stage;
+		profile_stage = now;
+	}
+#endif
 	limit(output, frames);
+#ifdef HALO_WIIU
+	if (profile_mix)
+	{
+		pressure.stage[WIIU_MIXER_LIMITER] = OSGetSystemTime() - profile_stage;
+		wiiu_audio_profile_mix_pressure(&pressure);
+	}
+#endif
 }
 
 /* ---------- output */
@@ -1447,11 +1864,17 @@ static void audio_start(void)
 	if (audio_started)
 		return;
 	audio_started = TRUE;
-	master_volume = (float)config_real("audio.volume");
-	reverb_enabled = config_boolean("audio.reverb");
+	{
+		float volume = (float)config_real("audio.volume");
+		BOOL enabled = config_boolean("audio.reverb");
+
+		mixer_settings_publish(volume, enabled);
+	}
 	resampler_initialize();
 	resampler_phases_initialize();
+	mixer_lock_take();
 	reverb_initialize();
+	pthread_mutex_unlock(&mixer_lock);
 #ifdef DSOUND_DECODE_THREAD
 	decoder_start();
 #endif
@@ -1650,6 +2073,11 @@ static ULONG STDMETHODCALLTYPE stream_release(IDirectSoundStream *object)
 
 	stream_flush(object);
 	mixer_lock_take();
+#ifdef DSOUND_MIXER_YIELDS
+	/* (the mixer, having let the lock go, goes on with this voice next: it goes on with the one after) */
+	if (mixer_walk_next == stream)
+		mixer_walk_next = stream->next;
+#endif
 	for (link = &streams; *link; link = &(*link)->next)
 	{
 		if (*link == stream)
@@ -1657,10 +2085,6 @@ static ULONG STDMETHODCALLTYPE stream_release(IDirectSoundStream *object)
 			*link = stream->next;
 			break;
 		}
-#ifdef DSOUND_MIXER_YIELDS
-	if (mixer_walk_next == stream)
-		mixer_walk_next = stream->next;
-#endif
 	}
 	pthread_mutex_unlock(&mixer_lock);
 	free(stream);
@@ -1731,15 +2155,21 @@ static struct
 	pthread_mutex_t lock;
 	pthread_cond_t posted;
 	BOOL started;
+	BOOL profile_enabled; /* immutable after the worker is started */
 	unsigned long first, count;
 	struct decoder_job
 	{
 		struct sdl_stream *stream;
 		unsigned long serial;
-		const unsigned char *source;
+		unsigned char *source; /* a copy of the packet's data, the job's (the game's may be reused once the packet is flushed) */
 		unsigned long size, channels;
 		BOOL adpcm;
+#ifdef HALO_WIIU
+		uint64_t posted_ticks;
+#endif
 	} jobs[DECODER_JOBS];
+	/* for the log: the most jobs waiting at once */
+	unsigned long most_waiting;
 } decoder = { PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER };
 
 static short *packet_decode(BOOL adpcm, const unsigned char *source, unsigned long size, unsigned long channels,
@@ -1750,7 +2180,13 @@ static short *packet_decode(BOOL adpcm, const unsigned char *source, unsigned lo
 
 static void *decoder_thread(void *parameter)
 {
+	struct wiiu_decoder_profile profile = { 0 };
+	uint64_t thresholds[3];
+
 	(void)parameter;
+	thresholds[0] = OSMillisecondsToTicks(2);
+	thresholds[1] = OSMillisecondsToTicks(10);
+	thresholds[2] = OSMillisecondsToTicks(16);
 	{
 		void wiiu_thread_beside_gx2(void);
 
@@ -1761,6 +2197,7 @@ static void *decoder_thread(void *parameter)
 		struct decoder_job job;
 		short *samples;
 		unsigned long frames = 0;
+		uint64_t started_ticks = 0, decoded_ticks = 0, published_ticks = 0;
 
 		pthread_mutex_lock(&decoder.lock);
 		while (!decoder.count)
@@ -1769,10 +2206,52 @@ static void *decoder_thread(void *parameter)
 		decoder.first = (decoder.first + 1) % DECODER_JOBS;
 		decoder.count--;
 		pthread_mutex_unlock(&decoder.lock);
-		/* (the packet's memory is the game's until it is completed; if it was
-		flushed first this reads what is there now, and the samples are dropped) */
+		if (decoder.profile_enabled)
+			started_ticks = OSGetSystemTime();
 		samples = packet_decode(job.adpcm, job.source, job.size, job.channels, &frames);
+		if (decoder.profile_enabled)
+			decoded_ticks = OSGetSystemTime();
+		free(job.source);
 		packet_samples_give(job.stream, job.serial, samples, frames);
+		if (decoder.profile_enabled)
+		{
+			published_ticks = OSGetSystemTime();
+			wiiu_decoder_profile_add(&profile, job.posted_ticks, started_ticks, decoded_ticks, published_ticks, thresholds);
+		}
+		{
+			static time_t told;
+			const time_t now = time(NULL);
+
+			if (now - told >= 10)
+			{
+				unsigned long most_waiting, voices_waited;
+
+				told = now;
+				pthread_mutex_lock(&decoder.lock);
+				most_waiting = decoder.most_waiting;
+				decoder.most_waiting = decoder.count;
+				pthread_mutex_unlock(&decoder.lock);
+				voices_waited = __atomic_exchange_n(&decoder_voices_waited, 0, __ATOMIC_RELAXED);
+				platform_log("audio: the decoder had at most %lu packets waiting; voices waited for a packet in %lu mixes",
+					most_waiting, voices_waited);
+				if (decoder.profile_enabled)
+				{
+					const uint32_t jobs = profile.jobs;
+					const unsigned long fallbacks = __atomic_exchange_n(&decoder_profile_fallbacks, 0, __ATOMIC_RELAXED);
+
+					platform_log("audio profile: %u jobs, queue mean/max %.2f/%.2f ms, decode %.2f/%.2f ms, publish max %.2f ms",
+						(unsigned)jobs, jobs ? (double)OSTicksToMicroseconds(profile.total[0] / jobs) / 1000.0 : 0.0,
+						(double)OSTicksToMicroseconds(profile.maximum[0]) / 1000.0,
+						jobs ? (double)OSTicksToMicroseconds(profile.total[1] / jobs) / 1000.0 : 0.0,
+						(double)OSTicksToMicroseconds(profile.maximum[1]) / 1000.0,
+						(double)OSTicksToMicroseconds(profile.maximum[2]) / 1000.0);
+					platform_log("audio profile: queue >=2/10/16 ms %u/%u/%u, caller fallbacks %lu",
+						(unsigned)profile.queue_at_least[0], (unsigned)profile.queue_at_least[1],
+						(unsigned)profile.queue_at_least[2], fallbacks);
+					memset(&profile, 0, sizeof(profile));
+				}
+			}
+		}
 	}
 	return NULL;
 }
@@ -1780,6 +2259,18 @@ static void *decoder_thread(void *parameter)
 static void decoder_start(void)
 {
 	pthread_t thread;
+	FILE *file = fopen(WIIU_DATA_DIRECTORY "/audio_profile.txt", "r");
+	int enabled = 0;
+
+	if (file)
+	{
+		if (fscanf(file, "%d", &enabled) != 1)
+			enabled = 0;
+		fclose(file);
+	}
+	decoder.profile_enabled = enabled == 1;
+	if (decoder.profile_enabled)
+		platform_log("audio profile: decoder timing enabled (audio_profile.txt)");
 
 	if (pthread_create(&thread, NULL, decoder_thread, NULL) == 0)
 	{
@@ -1792,11 +2283,23 @@ static void decoder_start(void)
 	}
 }
 
-/* FALSE if the queue is full (the caller decodes) */
+/* FALSE if the queue is full or there is no memory for the copy (the caller decodes) */
 static BOOL decoder_post(struct sdl_stream *stream, unsigned long serial, const XMEDIAPACKET *input)
 {
 	BOOL posted = FALSE;
+	/* (the data copied now: the job owns what it reads; a quarter of the decoded size for ADPCM) */
+	unsigned char *copy = malloc(input->dwMaxSize ? input->dwMaxSize : 1);
 
+	if (!copy)
+	{
+#ifdef HALO_WIIU
+		if (decoder.profile_enabled)
+			__atomic_add_fetch(&decoder_profile_fallbacks, 1, __ATOMIC_RELAXED);
+#endif
+		return FALSE;
+	}
+	if (input->dwMaxSize)
+		memcpy(copy, input->pvBuffer, input->dwMaxSize);
 	pthread_mutex_lock(&decoder.lock);
 	if (decoder.count < DECODER_JOBS)
 	{
@@ -1804,15 +2307,26 @@ static BOOL decoder_post(struct sdl_stream *stream, unsigned long serial, const 
 
 		job->stream = stream;
 		job->serial = serial;
-		job->source = input->pvBuffer;
+		job->source = copy;
 		job->size = input->dwMaxSize;
 		job->channels = stream->channels;
 		job->adpcm = stream->adpcm;
+#ifdef HALO_WIIU
+		job->posted_ticks = decoder.profile_enabled ? OSGetSystemTime() : 0;
+#endif
 		decoder.count++;
+		if (decoder.count > decoder.most_waiting)
+			decoder.most_waiting = decoder.count;
 		posted = TRUE;
+		copy = NULL;
 		pthread_cond_signal(&decoder.posted);
 	}
 	pthread_mutex_unlock(&decoder.lock);
+	free(copy);
+#ifdef HALO_WIIU
+	if (!posted && decoder.profile_enabled)
+		__atomic_add_fetch(&decoder_profile_fallbacks, 1, __ATOMIC_RELAXED);
+#endif
 	return posted;
 }
 #endif
@@ -1971,9 +2485,19 @@ VOID WINAPI DirectSoundDoWork(void)
 	would hold) */
 	if (volume_read_at != config_changes())
 	{
+#ifdef VOICE_GAIN_CACHE
+		float volume;
+		BOOL enabled;
+
+		volume_read_at = config_changes();
+		volume = (float)config_real("audio.volume");
+		enabled = config_boolean("audio.reverb");
+		mixer_settings_publish(volume, enabled);
+#else
 		volume_read_at = config_changes();
 		master_volume = (float)config_real("audio.volume");
 		reverb_enabled = config_boolean("audio.reverb");
+#endif
 	}
 	streams_complete_finished();
 }
