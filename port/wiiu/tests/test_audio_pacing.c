@@ -13,6 +13,7 @@ static uint64_t now_us, end_us, mix_us, stall_at_us, stall_us;
 static uint32_t minimum_lead_after_warmup;
 static int stalled, underrun;
 static unsigned mix_calls, sleep_calls;
+static unsigned readiness_begin_calls, readiness_chunk_calls;
 static AXVoice fake_voice;
 static int16_t fake_ring[2][RING_FRAMES];
 
@@ -48,6 +49,30 @@ OSTime OSMillisecondsToTicks(unsigned ms) { return (OSTime)ms * 1000; }
 void OSSleepTicks(OSTime ticks) { sleep_calls++; advance(ticks); }
 void DCFlushRange(void *ptr, size_t length) { (void)ptr; (void)length; }
 void wiiu_log(const char *fmt, ...) { (void)fmt; }
+
+/* This fixture measures pacing with a scalar policy. Native paired-single
+   readiness and numerical equivalence have their own policy/kernel tests. */
+int wiiu_resampler_ps_worker_begin(int requested)
+{
+	assert(requested == 1);
+	readiness_begin_calls++;
+	return 0;
+}
+int wiiu_resampler_ps_check_chunk(void)
+{
+	readiness_chunk_calls++;
+	return 0;
+}
+int wiiu_resampler_ps_take_report(struct wiiu_resampler_ps_status *status)
+{
+	(void)status;
+	return 0;
+}
+const char *wiiu_resampler_ps_reason(unsigned result)
+{
+	(void)result;
+	return "scalar pacing fixture";
+}
 
 static void simulate_mix(float *output, unsigned long frames)
 {
@@ -95,6 +120,7 @@ static void run(uint64_t per_chunk_us, uint64_t injected_stall_us)
 	stall_us = injected_stall_us;
 	stalled = underrun = 0;
 	mix_calls = sleep_calls = 0;
+	readiness_begin_calls = readiness_chunk_calls = 0;
 	minimum_lead_after_warmup = UINT32_MAX;
 	written = AHEAD_LOW;
 	voices[0] = &fake_voice;
@@ -104,6 +130,7 @@ static void run(uint64_t per_chunk_us, uint64_t injected_stall_us)
 	suspended = 0;
 	if (!setjmp(finished))
 		audio_thread(0, NULL);
+	assert(readiness_begin_calls == 1 && readiness_chunk_calls == mix_calls);
 }
 
 int main(void)
