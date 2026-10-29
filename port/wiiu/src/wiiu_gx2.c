@@ -2971,8 +2971,10 @@ static void overlay_refresh(void)
 static void overlay_draw(GX2ColorBuffer *screen, GX2ContextState *context, unsigned scale)
 {
 	const float screen_width = (float)screen->surface.width, screen_height = (float)screen->surface.height;
-	const float margin_x = screen_width * 0.02f, margin_y = screen_height * 0.02f;
+	const float margin_x = screen_width * 0.02f;
 	static unsigned told;
+
+	scale = overlay_scale((unsigned)screen_width, scale);
 
 	if (told < 2)
 	{
@@ -2980,7 +2982,7 @@ static void overlay_draw(GX2ColorBuffer *screen, GX2ContextState *context, unsig
 		wiiu_log("GX2: the overlay on a %ux%u screen, %u pixels to a texel", (unsigned)screen_width, (unsigned)screen_height, scale);
 	}
 	const float x0 = -1.0f + 2.0f * margin_x / screen_width, x1 = x0 + 2.0f * (float)(OVERLAY_WIDTH * scale) / screen_width;
-	const float y1 = 1.0f - 2.0f * margin_y / screen_height, y0 = y1 - 2.0f * (float)(OVERLAY_HEIGHT * scale) / screen_height;
+	const float y1 = 1.0f, y0 = y1 - 2.0f * (float)(OVERLAY_HEIGHT * scale) / screen_height;
 	static const unsigned corner_x[6] = { 0, 1, 0, 1, 1, 0 };
 	static const unsigned corner_y[6] = { 0, 0, 1, 0, 1, 1 };
 	unsigned i;

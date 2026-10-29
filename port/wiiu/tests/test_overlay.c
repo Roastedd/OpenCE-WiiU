@@ -20,7 +20,8 @@ static int failures;
 int main(int argc, char **argv)
 {
 	static struct overlay overlay;
-	static uint8_t pixels[OVERLAY_WIDTH * OVERLAY_HEIGHT * 4];
+	static struct { uint8_t before[16], pixels[OVERLAY_WIDTH * OVERLAY_HEIGHT * 4], after[16]; } guarded;
+	uint8_t *pixels = guarded.pixels;
 	unsigned i;
 
 	overlay_reset(&overlay);
@@ -48,10 +49,20 @@ int main(int argc, char **argv)
 	overlay_update_view(&overlay);
 	CHECK(overlay.view.fps > 44.0f && overlay.view.fps < 46.0f);
 	CHECK(overlay.view.low_fps < 31.0f && overlay.view.low_fps > 29.0f); /* the 99th percentile frame is a 33 ms one */
-	CHECK(overlay.view.cpu_percent == 100.0f); /* 25 ms of 22 */
+	CHECK(overlay.view.cpu_percent > 114.0f && overlay.view.cpu_percent < 116.0f); /* 25 ms of 22 */
 	CHECK(overlay.gpu_average > 7.9f && overlay.gpu_average < 8.1f);
-	/* rendered: the ground over the whole panel, lit text, bars and graph; and nothing outside the panel's buffer (the guard bytes) */
+	/* The strip fits the TV and GamePad at their drawing scales and touches the top edge. */
+	CHECK(OVERLAY_HEIGHT == 7);
+	CHECK(overlay_scale(1920, 3) == 3);
+	CHECK(overlay_scale(854, 2) == 2);
+	CHECK(overlay_scale(720, 3) == 2);
+	CHECK(overlay_scale(522, 3) == 1);
+	CHECK(OVERLAY_WIDTH * 3 + 1920 * 2 / 100 <= 1920 && OVERLAY_HEIGHT * 3 <= 1080);
+	CHECK(OVERLAY_WIDTH * 2 + 854 * 2 / 100 <= 854 && OVERLAY_HEIGHT * 2 <= 480);
+	memset(&guarded, 0x5a, sizeof(guarded));
 	overlay_render(&overlay, pixels);
+	for (i = 0; i < sizeof(guarded.before); i++)
+		CHECK(guarded.before[i] == 0x5a && guarded.after[i] == 0x5a);
 	{
 		unsigned lit = 0, ground = 0, bars = 0;
 
@@ -65,14 +76,53 @@ int main(int argc, char **argv)
 				failures++;
 				break;
 			}
-			if (alpha == 255 && i / OVERLAY_WIDTH < 17)
+			if (alpha == 255 && i % OVERLAY_WIDTH < 220)
 				lit++;
 			if (alpha == 0xb8)
 				ground++;
-			if (alpha == 255 && i / OVERLAY_WIDTH >= 17)
+			if (alpha == 255 && i % OVERLAY_WIDTH >= 220)
 				bars++;
 		}
-		CHECK(lit > 150 && ground > 3000 && bars > 1000);
+		CHECK(lit > 150 && ground > 800 && bars > 20);
+	}
+	/* Extreme field values remain in their allotted space and a recent hitch
+	appears as a red bar at the right of the history graph. */
+	{
+		struct overlay extreme;
+		static uint8_t other[OVERLAY_WIDTH * OVERLAY_HEIGHT * 4];
+		unsigned newest = (5 * OVERLAY_WIDTH + OVERLAY_WIDTH - 2) * 4;
+
+		overlay_reset(&extreme);
+		overlay_push(&extreme, 120.0f, 200.0f, 0.0f, 0.0f, 200.0f, 100000, 0);
+		extreme.render_width = 100000;
+		extreme.render_height = 100000;
+		overlay_update_view(&extreme);
+		overlay_render(&extreme, other);
+		CHECK(other[newest] == 0xe8 && other[newest + 1] == 0x48 && other[newest + 2] == 0x40);
+		CHECK(other[(OVERLAY_WIDTH - 1) * 4 + 3] == 0xb8);
+	}
+	/* An unavailable GPU timestamp has a distinct indicator from a low,
+	but valid, GPU elapsed interval. */
+	{
+		struct overlay empty;
+		static uint8_t absent[OVERLAY_WIDTH * OVERLAY_HEIGHT * 4];
+		static uint8_t present[OVERLAY_WIDTH * OVERLAY_HEIGHT * 4];
+		int differs = 0;
+
+		overlay_reset(&empty);
+		overlay_push(&empty, 16.667f, 10.0f, 0, 0, 0, 0, 0);
+		overlay_update_view(&empty);
+		CHECK(empty.view.gpu_ms == 0.0f);
+		overlay_render(&empty, absent);
+		overlay_push(&empty, 16.667f, 10.0f, 0, 0, 0.01f, 0, 0);
+		overlay_update_view(&empty);
+		CHECK(empty.view.gpu_ms > 0.0f);
+		overlay_render(&empty, present);
+		for (i = 0; i < OVERLAY_HEIGHT; i++)
+			if (memcmp(absent + (i * OVERLAY_WIDTH + 111) * 4,
+				present + (i * OVERLAY_WIDTH + 111) * 4, 20 * 4) != 0)
+				differs = 1;
+		CHECK(differs);
 	}
 	/* the panel is the same size whatever the numbers: the rendering of two very different views touches the same rows and columns of the ground */
 	{

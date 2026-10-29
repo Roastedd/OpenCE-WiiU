@@ -1,15 +1,17 @@
-/* The performance overlay, laid out as the usual ones are (MangoHud, the consoles' and engines' own stat panels): a big frame rate, the frame time and the 1 percent low, bars of how much of
-a frame the CPU and the GPU are busy, a graph of the last frames' times with the 60 and 30 a second lines, and the draw count and resolution. The numbers on the panel are those of the last
-quarter of a second (they are taken at that rate so that they can be read, and every field is a fixed width so that nothing moves); the graph is of every frame.
-It is drawn into an RGBA layer here (no GX2 in this file, so that it runs on a computer's tests) and put at the top left of the TV and the GamePad by wiiu_gx2.c. */
+/* A thin performance strip: frame rate, frame time, 1 percent low, CPU and GPU
+intervals as a percentage of frame time, draws, resolution and a compressed
+frame-time graph. The intervals include scheduling and polling; they are not
+hardware utilization. Percentages over 999 are displayed as 999%; GPU --%
+means no timestamp sample is available.
+Numbers update four times a second. Drawn at the top of the TV and GamePad. */
 #ifndef WIIU_OVERLAY_H
 #define WIIU_OVERLAY_H
 
 #include <stdint.h>
 
 #define OVERLAY_WIDTH 256
-#define OVERLAY_HEIGHT 52
-#define OVERLAY_HISTORY 252 /* the graph's width: a frame a column */
+#define OVERLAY_HEIGHT 7
+#define OVERLAY_HISTORY 252 /* frame-time history, compressed for the graph */
 
 struct overlay_view
 {
@@ -31,6 +33,8 @@ struct overlay
 	struct overlay_view view; /* what the panel shows, until overlay_update_view */
 };
 
+/* Whole-pixel scale that fits the strip alongside the two percent left margin. */
+unsigned overlay_scale(unsigned screen_width, unsigned preferred);
 void overlay_reset(struct overlay *overlay);
 /* a frame was presented: ms from the last present to this one, ms the game thread worked before presenting, ms the present took of which wait ms were for the display, ms the GPU took
 (0: not known), draws made, KB copied into the ring */

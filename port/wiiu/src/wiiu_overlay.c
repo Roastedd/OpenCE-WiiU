@@ -6,6 +6,19 @@
 #include <stdlib.h>
 #include <string.h>
 
+unsigned overlay_scale(unsigned screen_width, unsigned preferred)
+{
+	unsigned margin = screen_width / 50 + (screen_width % 50 != 0);
+	unsigned available = screen_width - margin;
+	unsigned fit = available / OVERLAY_WIDTH;
+
+	if (!fit)
+		fit = 1;
+	if (!preferred)
+		preferred = 1;
+	return preferred < fit ? preferred : fit;
+}
+
 void overlay_reset(struct overlay *overlay)
 {
 	memset(overlay, 0, sizeof(*overlay));
@@ -86,7 +99,7 @@ static float percent_of(float part_ms, float whole_ms)
 	if (whole_ms <= 0.0f)
 		return 0.0f;
 	percent = 100.0f * part_ms / whole_ms;
-	return percent > 100.0f ? 100.0f : percent;
+	return percent;
 }
 
 void overlay_update_view(struct overlay *overlay)
@@ -160,33 +173,17 @@ static int draw_text(uint8_t *pixels, int x, int y, int scale, const uint8_t col
 
 static const uint8_t white[4] = { 0xf0, 0xf0, 0xf0, 0xff };
 static const uint8_t grey[4] = { 0x9a, 0x9a, 0x9a, 0xff };
-static const uint8_t track[4] = { 0x30, 0x30, 0x30, 0xff };
 static const uint8_t ground[4] = { 0x00, 0x00, 0x00, 0xb8 };
 
-static void level_color(float percent, uint8_t color[4])
+/* Keep a fixed-width field when a long pause produces a large interval. */
+static float short_interval(float ms)
 {
-	/* green below 70 percent of a frame, yellow below 90, red above */
-	color[0] = percent < 70.0f ? 0x50 : 0xe8;
-	color[1] = percent < 70.0f ? 0xd0 : percent < 90.0f ? 0xc8 : 0x48;
-	color[2] = percent < 70.0f ? 0x58 : 0x38;
-	color[3] = 0xff;
+	return ms < 0.0f ? 0.0f : ms > 99.9f ? 99.9f : ms;
 }
 
-/* a labelled bar of how busy something is: LABEL, a track of 96 px with the filled part, the percentage and the milliseconds, in fixed places */
-static void draw_bar(uint8_t *pixels, int y, const char *label, float percent, float ms)
+static float short_percent(float percent)
 {
-	char text[16];
-	uint8_t color[4];
-	const int fill = (int)(percent * 96.0f / 100.0f + 0.5f);
-
-	draw_text(pixels, 3, y, 1, grey, label);
-	fill_rectangle(pixels, 20, y, 96, 5, track);
-	level_color(percent, color);
-	fill_rectangle(pixels, 20, y, fill, 5, color);
-	snprintf(text, sizeof(text), "%3.0f%%", (double)percent);
-	draw_text(pixels, 121, y, 1, white, text);
-	snprintf(text, sizeof(text), "%4.1f MS", (double)ms);
-	draw_text(pixels, 145, y, 1, grey, text);
+	return percent < 0.0f ? 0.0f : percent > 999.0f ? 999.0f : percent;
 }
 
 void overlay_render(const struct overlay *overlay, uint8_t *pixels)
@@ -195,61 +192,56 @@ void overlay_render(const struct overlay *overlay, uint8_t *pixels)
 	uint8_t color[4];
 	char text[32];
 	unsigned x;
-	int graph_top = 33, rows = 16;
-	unsigned frames = overlay->count < OVERLAY_HISTORY ? overlay->count : OVERLAY_HISTORY;
-	int fps_whole = (int)(view->fps + 0.5f);
+	const unsigned graph_x = 220, graph_width = OVERLAY_WIDTH - graph_x - 1;
+	const int fps = view->fps < 0.0f ? 0 : view->fps > 999.0f ? 999 : (int)(view->fps + 0.5f);
+	const int low = view->low_fps < 0.0f ? 0 : view->low_fps > 999.0f ? 999 : (int)(view->low_fps + 0.5f);
 
-	/* the ground, and a line under the top rows */
 	fill_rectangle(pixels, 0, 0, OVERLAY_WIDTH, OVERLAY_HEIGHT, ground);
-
-	/* the frame rate, big (two pixels to a font pixel): green at 55 or more, yellow at 28 or more, red below; three digits in a fixed place */
 	color[0] = view->fps >= 55.0f ? 0x60 : 0xff;
 	color[1] = view->fps >= 28.0f ? 0xff : 0x50;
 	color[2] = view->fps >= 55.0f ? 0x60 : view->fps >= 28.0f ? 0x40 : 0x50;
 	color[3] = 0xff;
-	snprintf(text, sizeof(text), "%3d", fps_whole > 999 ? 999 : fps_whole);
-	draw_text(pixels, 3, 3, 2, color, text);
-	draw_text(pixels, 3 + 3 * FONT_CELL_W * 2, 8, 1, grey, "FPS");
+	snprintf(text, sizeof(text), "FPS%3d", fps);
+	draw_text(pixels, 2, 1, 1, color, text);
+	snprintf(text, sizeof(text), "F%4.1f", (double)short_interval(view->frame_ms));
+	draw_text(pixels, 30, 1, 1, white, text);
+	snprintf(text, sizeof(text), "L%3d", low);
+	draw_text(pixels, 55, 1, 1, white, text);
+	/* Elapsed intervals as percentages of frame time, not hardware utilization. */
+	draw_text(pixels, 74, 1, 1, grey, "BUD");
+	snprintf(text, sizeof(text), "C%3.0f%%", (double)short_percent(view->cpu_percent));
+	draw_text(pixels, 88, 1, 1, grey, text);
+	if (view->gpu_ms > 0.0f)
+		snprintf(text, sizeof(text), "G%3.0f%%", (double)short_percent(view->gpu_percent));
+	else
+		snprintf(text, sizeof(text), "G --%%");
+	draw_text(pixels, 111, 1, 1, grey, text);
+	snprintf(text, sizeof(text), "D%4u", view->draws > 9999 ? 9999u : view->draws);
+	draw_text(pixels, 136, 1, 1, grey, text);
+	snprintf(text, sizeof(text), "%ux%u", view->render_width > 9999 ? 9999u : view->render_width,
+		view->render_height > 9999 ? 9999u : view->render_height);
+	draw_text(pixels, 159, 1, 1, grey, text);
+	draw_text(pixels, 198, 1, 1, grey, view->interpolation ? "60HZ" : "30HZ");
 
-	/* the frame time, the 1 percent low, and the game's own numbers, in two small lines each side */
-	snprintf(text, sizeof(text), "FRAME %5.1f MS", (double)view->frame_ms);
-	draw_text(pixels, 58, 3, 1, white, text);
-	snprintf(text, sizeof(text), "1%% LOW %3.0f FPS", (double)view->low_fps);
-	draw_text(pixels, 58, 10, 1, white, text);
-	snprintf(text, sizeof(text), "DRAWS %4u", view->draws > 9999 ? 9999u : view->draws);
-	draw_text(pixels, 150, 3, 1, grey, text);
-	snprintf(text, sizeof(text), "%4ux%-4u %s", view->render_width > 9999 ? 9999u : view->render_width, view->render_height > 9999 ? 9999u : view->render_height,
-		view->interpolation ? "60HZ" : "30HZ");
-	draw_text(pixels, 150, 10, 1, grey, text);
-
-	/* how busy the CPU (the game's thread) and the GPU are, in the frame's time */
-	draw_bar(pixels, 19, "CPU", view->cpu_percent, view->cpu_ms);
-	draw_bar(pixels, 26, "GPU", view->gpu_percent, view->gpu_ms);
-
-	/* the graph: a bar a frame, the newest at the right, 3 ms a row (the top is 48 ms); the dotted lines are 60 a second (16.7 ms) and 30 (33.3) */
-	for (x = 0; x < OVERLAY_HISTORY; x++)
+	/* Preserve the whole history in the short graph: each column shows the
+	worst frame in its group, newest at the right. Each row is 10 ms. */
+	for (x = 0; x < graph_width; x++)
 	{
-		const int has = (OVERLAY_HISTORY - 1 - x) < frames;
-		const float ms = has ? frame_back(overlay, OVERLAY_HISTORY - 1 - x) : 0.0f;
-		int height = (int)(ms / 3.0f + 0.5f), row;
+		const unsigned first = (graph_width - 1 - x) * OVERLAY_HISTORY / graph_width;
+		const unsigned end = (graph_width - x) * OVERLAY_HISTORY / graph_width;
+		float ms = 0.0f;
+		unsigned back, row;
+		int height;
 
-		if (height > rows)
-			height = rows;
-		for (row = 0; row < rows; row++)
-		{
-			const int y = graph_top + rows - 1 - row;
-
-			if (row < height)
-			{
-				if (ms <= 17.5f)
-					put_pixel(pixels, 2 + (int)x, y, 0x48, 0xd0, 0x50, 255);
-				else if (ms <= 34.0f)
-					put_pixel(pixels, 2 + (int)x, y, 0xe8, 0xc4, 0x38, 255);
-				else
-					put_pixel(pixels, 2 + (int)x, y, 0xe8, 0x48, 0x40, 255);
-			}
-			else if ((row == 5 || row == 11) && (x & 3) < 2)
-				put_pixel(pixels, 2 + (int)x, y, 0x90, 0x90, 0x90, 255);
-		}
+		for (back = first; back < end && back < overlay->count; back++)
+			if (frame_back(overlay, back) > ms)
+				ms = frame_back(overlay, back);
+		height = (int)(ms / 10.0f + 0.5f);
+		if (height > 5)
+			height = 5;
+		for (row = 0; row < (unsigned)height; row++)
+			put_pixel(pixels, (int)(graph_x + x), 5 - (int)row,
+				ms <= 17.5f ? 0x48 : 0xe8, ms <= 17.5f ? 0xd0 : ms <= 34.0f ? 0xc4 : 0x48,
+				ms <= 17.5f ? 0x50 : ms <= 34.0f ? 0x38 : 0x40, 255);
 	}
 }
