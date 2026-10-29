@@ -670,7 +670,26 @@ long _rasterizer_dynamic_triangles_new(
 		}
 		else if (!dynamic_triangles_overflow_warning)
 		{
+#ifdef HALO_WIIU
+			/* port: identify the exhausted budget without changing the original
+			allocation limits or adding work to successful allocations. */
+			boolean triangles_full =
+				dynamic_triangles.triangle_count>=RASTERIZER_MAXIMUM_DYNAMIC_TRIANGLES-count;
+			boolean buffers_full =
+				dynamic_triangles.buffer_count>=RASTERIZER_MAXIMUM_DYNAMIC_TRIANGLE_BUFFERS-1;
+			char const *reason = triangles_full ?
+				(buffers_full ? "triangles and buffers" : "triangles") : "buffers";
+
+			error(_error_silent,
+				"### ERROR too many dynamic triangles requested from rasterizer: "
+				"request %ld, triangles %ld/%ld, buffers %ld/%ld, exhausted %s, frame %llu, window %ld",
+				count, dynamic_triangles.triangle_count, (long)RASTERIZER_MAXIMUM_DYNAMIC_TRIANGLES,
+				(long)dynamic_triangles.buffer_count, (long)RASTERIZER_MAXIMUM_DYNAMIC_TRIANGLE_BUFFERS,
+				reason, (unsigned long long)rasterizer_globals.fps_accumulation_frame_index,
+				(long)global_window_parameters.window_index);
+#else
 			error(_error_silent, "### ERROR too many dynamic triangles requested from rasterizer");
+#endif
 			dynamic_triangles_overflow_warning = TRUE;
 		}
 	}
