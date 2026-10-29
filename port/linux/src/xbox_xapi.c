@@ -21,6 +21,9 @@ reported as inserted, so the game runs with no input devices.
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#ifdef HALO_WIIU
+#include <time.h>
+#endif
 
 /* ---------- launch and system settings */
 
@@ -39,7 +42,24 @@ DWORD WINAPI XLaunchNewImageA(LPCSTR image_path, PLAUNCH_DATA launch_data)
 	(void)launch_data;
 	/* On the Xbox this reboots into another executable and never returns */
 	platform_log("XLaunchNewImage(\"%s\"): exiting", image_path ? image_path : "(dashboard)");
+#ifdef HALO_WIIU
+	{
+		void platform_request_quit(void);
+		void wiiu_foreground_gate(int is_game_thread);
+		const struct timespec pause = { 0, 10000000L };
+
+		/* Let ProcUI release the foreground and close the app. exit() from the
+		game thread bypasses that path and can hang during system cleanup. */
+		platform_request_quit();
+		for (;;)
+		{
+			wiiu_foreground_gate(1);
+			nanosleep(&pause, NULL);
+		}
+	}
+#else
 	exit(EXIT_SUCCESS);
+#endif
 }
 
 DWORD WINAPI XGetLanguage(void)

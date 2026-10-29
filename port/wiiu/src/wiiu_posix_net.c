@@ -79,7 +79,8 @@ int mbedtls_platform_entropy_poll(void *data, unsigned char *output, size_t leng
 #define WINSOCK_SO_ERROR 0x1007
 #define WINSOCK_SO_TYPE 0x1008
 
-static int last_error;
+/* Like Winsock's last error, this belongs to the calling thread. */
+static __thread int last_error;
 
 /* the first calls of each kind, in the log: what the game asks of the network, and what nsysnet answers (the sockets have not run on a console before) */
 static void trace(const char *what, int socket, const void *address, int result)
@@ -527,16 +528,18 @@ int posix_socket_select(int *read, int *read_count, int *write, int *write_count
 		polls again at once spun here, hundreds of calls a second, and filled the log with 58 MB */
 		static OSTime last_told;
 		static unsigned int failures;
+		const int poll_error = errno;
 		const OSTime now = OSGetSystemTime();
 
 		failures++;
 		if (now - last_told >= OSSecondsToTicks(1))
 		{
-			wiiu_log("Net: poll failed, errno %d (%u times since the last note)", errno, failures);
+			wiiu_log("Net: poll failed, errno %d (%u times since the last note)", poll_error, failures);
 			last_told = now;
 			failures = 0;
 		}
 		OSSleepTicks(OSMillisecondsToTicks(infinite || milliseconds > 20 ? 20 : milliseconds < 0 ? 0 : (uint32_t)milliseconds));
+		errno = poll_error;
 		if (errno == ECANCELED)
 			errno = ENETDOWN;
 		else if (errno == 81 /* EBADFD */)
