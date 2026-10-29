@@ -1,0 +1,101 @@
+#include "ima_under_test.inc"
+#include <coreinit/thread.h>
+#include <coreinit/time.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <whb/log.h>
+#include <whb/log_console.h>
+#include <whb/proc.h>
+#define FOLDER "/vol/external01/wiiu/apps/halo"
+#define STACK_BYTES (128*1024)
+static OSThread worker;
+static unsigned char stack[STACK_BYTES] __attribute__((aligned(16)));
+static volatile int cancelled,finished;
+struct options {unsigned candidate,profile,channels,blocks,repeat;};
+struct result {uint64_t total_ticks,max_ticks,checksum;unsigned packets,frames,failures,cancelled;};
+static struct options options;
+static struct result result;
+static unsigned char source[36*2*512];
+static unsigned random_state;
+static unsigned random_number(void){random_state=random_state*1664525u+1013904223u;return random_state;}
+static int run(int argc,const char **argv)
+{
+    unsigned i,iteration;
+    const unsigned size=36*options.channels*options.blocks;
+    const unsigned count=1048576u/(64*options.blocks*options.channels);
+    short *(*decode)(const unsigned char*,unsigned long,unsigned long,unsigned long*)=options.candidate?decode_candidate:decode_original;
+    (void)argc;(void)argv;
+    memset(&result,0,sizeof(result));result.checksum=14695981039346656037ULL;
+    random_state=0x412215u;
+    for(i=0;i<size;i++)source[i]=options.profile==2?0:options.profile==1?(unsigned char)(i*17+13):(unsigned char)random_number();
+    for(iteration=0;iteration<count && !__atomic_load_n(&cancelled,__ATOMIC_ACQUIRE);iteration++)
+    {
+        unsigned long frames=0;
+        const OSTime before=OSGetSystemTime();
+        short *samples=decode(source,size,options.channels,&frames);
+        const uint64_t elapsed=(uint64_t)(OSGetSystemTime()-before);
+        const unsigned char *bytes=(const unsigned char*)samples;
+        result.total_ticks+=elapsed;if(elapsed>result.max_ticks)result.max_ticks=elapsed;
+        if(!samples || frames!=64*options.blocks){result.failures++;free(samples);break;}
+        for(i=0;i<frames*options.channels*sizeof(short);i++){result.checksum^=bytes[i];result.checksum*=1099511628211ULL;}
+        result.packets++;result.frames+=(unsigned)frames;
+        free(samples);
+        /* Both variants receive the same one-byte change between packets. */
+        if(options.profile!=2)source[(iteration*17u)%size]^=(unsigned char)(iteration+1);
+    }
+    result.cancelled=__atomic_load_n(&cancelled,__ATOMIC_ACQUIRE)!=0;
+    __atomic_store_n(&finished,1,__ATOMIC_RELEASE);return 0;
+}
+static int start(void)
+{
+    __atomic_store_n(&cancelled,0,__ATOMIC_RELEASE);__atomic_store_n(&finished,0,__ATOMIC_RELEASE);
+    if(!OSCreateThread(&worker,run,0,NULL,stack+STACK_BYTES,STACK_BYTES,7,OS_THREAD_ATTRIB_AFFINITY_CPU2))return 0;
+    OSSetThreadName(&worker,"ADPCM exact LUT probe");OSResumeThread(&worker);return 1;
+}
+static int join(int *gap)
+{
+    int leaving=0;*gap=0;
+    while(!__atomic_load_n(&finished,__ATOMIC_ACQUIRE))
+    {
+        OSTime before=OSGetSystemTime();
+        if(!WHBProcIsRunning()){leaving=1;__atomic_store_n(&cancelled,1,__ATOMIC_RELEASE);}
+        if(OSGetSystemTime()-before>(OSTime)OSMillisecondsToTicks(200)){*gap=1;__atomic_store_n(&cancelled,1,__ATOMIC_RELEASE);}
+        if(leaving)break;
+        OSSleepTicks(OSMillisecondsToTicks(10));
+    }
+    OSJoinThread(&worker,NULL);return leaving;
+}
+int main(void)
+{
+    const unsigned blocks[]={1,16,128,512};
+    const char *profiles[]={"random","pattern","silence"};
+    unsigned p,c,b,r,t,failures=0;
+    char path[192];FILE *report;int leaving=0,gap=0;
+    WHBProcInit();WHBLogConsoleInit();
+    snprintf(path,sizeof(path),FOLDER "/audio-ima-%016llx.txt",(unsigned long long)OSGetSystemTime());
+    report=fopen(path,"wb");if(!report){WHBLogPrint("Cannot open own report.");goto done;}
+    fprintf(report,"Exact IMA decoder LUT comparison v1\nworker_core 2\nworker_priority 7\nlookup_bytes %u\nsource_sha256 " IMA_SOURCE_SHA256 "\n",(unsigned)sizeof(ima_decode_table));
+    fprintf(report,"variant profile channels blocks repeat packets source_frames mean_packet_ms max_packet_ms mean_ns_per_sample checksum cancelled foreground_gap failures\n");
+    WHBLogPrintf("Report: %s",path);WHBLogConsoleDraw();
+    for(p=0;p<3 && !leaving;p++)for(c=1;c<=2 && !leaving;c++)for(b=0;b<4 && !leaving;b++)for(r=0;r<2 && !leaving;r++)
+    {
+        uint64_t expected=0;unsigned count=0;
+        for(t=0;t<2 && !leaving;t++)
+        {
+            options.candidate=r&1?1-t:t;options.profile=p;options.channels=c;options.blocks=blocks[b];options.repeat=r;
+            if(!start()){fprintf(report,"thread_failed\n");failures++;leaving=1;break;}
+            leaving=join(&gap);
+            fprintf(report,"%s %s %u %u %u %u %u %.6f %.6f %.6f %016llx %u %d %u\n",options.candidate?"lookup":"original",profiles[p],c,blocks[b],r+1,result.packets,result.frames,
+                result.packets?(double)result.total_ticks/result.packets/OSMillisecondsToTicks(1):0.0,(double)result.max_ticks/OSMillisecondsToTicks(1),
+                result.frames?1000000.0*(double)result.total_ticks/result.frames/c/OSMillisecondsToTicks(1):0.0,(unsigned long long)result.checksum,result.cancelled,gap,result.failures);
+            if(result.failures || result.cancelled || gap || !result.packets)failures++;
+            else if(t==0){expected=result.checksum;count=result.frames;}
+            else if(expected!=result.checksum || count!=result.frames){fprintf(report,"checksum_mismatch\n");failures++;}
+            fflush(report);fsync(fileno(report));
+        }
+    }
+    fprintf(report,"%s failures %u\n",leaving?"cancelled":"complete",failures);fflush(report);fsync(fileno(report));fclose(report);
+ done:
+    if(!leaving){WHBLogPrint("Finished. HOME leaves.");WHBLogConsoleDraw();while(WHBProcIsRunning())OSSleepTicks(OSMillisecondsToTicks(20));}
+    __atomic_store_n(&cancelled,1,__ATOMIC_RELEASE);WHBLogConsoleFree();WHBProcShutdown();return 0;
+}

@@ -1,0 +1,16 @@
+{
+  "scope": "Native qualified isolated decoder input, read-only table and integer nibble kernel; production packet routine unchanged",
+  "native_artifact_sha256": "4c5b836066d9ca5c2b388d01493ff7da1165aaef43b045e0220c7d73b62d016c",
+  "original_production_source_sha256": "a4744295d693c4d19e1aa6e0d55e8f4dacbeb4b153398bb7ad49b3f545c81abc",
+  "qualified_input_sha256": "7aa9696357c0a07dcb264c4dea02bfdf5a4ad195bd4196f1d0f983e42ad5414b",
+  "native_report": "runs/wiiu/continuation-20261029/audio-ima-native/audio-ima-0000026a15ff7429.txt",
+  "native_report_sha256": "60a552dc88d78b56be7552923f9ac9cd1e34b523f75f82737813ef2bc9f8c9fa",
+  "native_probe_source_sha256": "e191b88f1fbc32215238f1958aafca9e3dc535c74deb17be178c198ac28343d1",
+  "lookup_bytes": 11392,
+  "native_rows": 96,
+  "native_complete_pairs": 48,
+  "caveat": "Standalone core2 priority7; no AX/GX2/game contention; source equality does not imply identical compiler allocation in the full game.",
+  "native_probe_source": "adpcm_qualified_probe.c.txt",
+  "native_probe_identity": "adpcm_qualified_identity.h.txt",
+  "build_c_flags": "-std=gnu11 -O2 -g -mcpu=750 -mhard-float -fshort-wchar -fsigned-char -ffp-contract=off -fno-strict-aliasing -fwrapv -fno-delete-null-pointer-checks -fcommon -ffunction-sections -fdata-sections -Wall -Wextra -Werror -Wno-unused-function -Wno-unused-variable"
+}
