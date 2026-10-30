@@ -117,6 +117,25 @@ struct game_time_globals_struct
 
 static struct game_time_globals_struct *game_time_globals;
 
+#ifdef HALO_WIIU
+/* port: only the game thread reads its clock/menu state; the optional shader-file worker receives an atomic activity flag.
+   Publish before enabling gameplay, and after disabling it. No elapsed-tick or rendering heuristic controls file eligibility. */
+static void game_time_wiiu_capture_activity(
+	boolean active)
+{
+	extern boolean main_menu_is_active(void);
+
+	wiiu_missing_keys_gameplay(active && !main_menu_is_active());
+}
+/* port: main_menu_active can change after the UI clock starts; publish its projected state on the same game thread. */
+void game_time_wiiu_capture_menu(
+	int main_menu)
+{
+	wiiu_missing_keys_gameplay(game_time_globals && game_time_globals->initialized &&
+		game_time_globals->active && !main_menu);
+}
+#endif
+
 /* ---------- public code */
 
 boolean game_time_initialized(
@@ -130,6 +149,10 @@ void game_time_initialize(
 {
 	game_time_globals = (struct game_time_globals_struct *)game_state_malloc("game time globals", NULL, sizeof(*game_time_globals));
 	memset(game_time_globals, 0, sizeof(*game_time_globals));
+#ifdef HALO_WIIU
+	/* port: inactive clock permits optional shader-file work. */
+	game_time_wiiu_capture_activity(FALSE);
+#endif
 
 	return;
 }
@@ -140,6 +163,10 @@ void game_time_initialize_for_new_map(
 	match_assert("c:\\halo\\SOURCE\\game\\game_time.c", 131, game_time_globals && !game_time_globals->initialized);
 	memset(game_time_globals, 0, sizeof(*game_time_globals));
 	game_time_globals->initialized = TRUE;
+#ifdef HALO_WIIU
+	/* port: inactive clock permits optional shader-file work. */
+	game_time_wiiu_capture_activity(FALSE);
+#endif
 
 	return;
 }
@@ -152,6 +179,10 @@ void game_time_dispose_from_old_map(
 		game_time_globals->initialized = FALSE;
 		game_time_globals->active = FALSE;
 	}
+#ifdef HALO_WIIU
+	/* port: inactive clock permits optional shader-file work. */
+	game_time_wiiu_capture_activity(FALSE);
+#endif
 
 	return;
 }
@@ -167,6 +198,10 @@ void game_time_end(
 {
 	match_assert("c:\\halo\\SOURCE\\game\\game_time.c", 196, game_time_globals);
 	game_time_globals->active = FALSE;
+#ifdef HALO_WIIU
+	/* port: inactive clock permits optional shader-file work. */
+	game_time_wiiu_capture_activity(FALSE);
+#endif
 
 	return;
 }
@@ -262,12 +297,22 @@ void game_time_set_paused(
 {
 	match_assert("c:\\halo\\SOURCE\\game\\game_time.c", 541, game_time_globals);
 
+#ifdef HALO_WIIU
+	/* port: close optional file admission before a resume activates the clock. */
+	if (!paused)
+		game_time_wiiu_capture_activity(game_time_globals->initialized);
+#endif
 	if (game_time_globals->initialized)
 	{
 		game_time_globals->active = !paused;
 	}
 
 	game_time_globals->paused = paused;
+#ifdef HALO_WIIU
+	/* port: permit optional file work only after the paused state is stored. */
+	if (paused)
+		game_time_wiiu_capture_activity(FALSE);
+#endif
 
 	return;
 }
@@ -353,6 +398,10 @@ void game_time_start(
 
 	game_time_globals->speed = 1.f;
 	game_time_globals->leftover_dt = 0;
+#ifdef HALO_WIIU
+	/* port: close optional file admission before gameplay starts. */
+	game_time_wiiu_capture_activity(TRUE);
+#endif
 	game_time_globals->active = TRUE;
 
 	connection = game_connection();

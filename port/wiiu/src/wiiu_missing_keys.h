@@ -23,7 +23,7 @@ typedef struct wiiu_missing_keys_counts
 {
     uint32_t accepted, written, full, unavailable, lost_io, io_errors, close_errors;
     uint32_t rejected_producer, rejected_consumer, queue_pending, batch_records;
-    uint32_t phase, gate, io_gate, files, failed, drained, complete;
+    uint32_t phase, gate, io_gate, gameplay, files, failed, drained, complete;
     int last_error;
 } wiiu_missing_keys_counts;
 
@@ -47,6 +47,8 @@ void wiiu_missing_keys_stop(void);
 void wiiu_missing_keys_suspend(void);
 void wiiu_missing_keys_resume(void);
 void wiiu_missing_keys_quiesce(void);
+/* Game-thread authoritative clock/menu transitions only. Active gameplay admits no new file step. */
+void wiiu_missing_keys_gameplay(int active);
 void wiiu_missing_keys_counts_get(wiiu_missing_keys_counts *counts);
 void wiiu_missing_keys_report(const char *reason);
 

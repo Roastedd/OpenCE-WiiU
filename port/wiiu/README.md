@@ -1,10 +1,17 @@
 # Wii U port
 
-Status: **the game does not run on a Wii U yet.** What exists: the whole game compiles for the console's CPU and ABI and
-links into an RPX (with stubs for the platform layer that is not written), a probe measures what Cafe OS allows, and the
-big-endian work that makes the game's data and logic correct on a PowerPC runs (and agrees with x86 tick by tick) on Linux under
-an emulator. The platform layer that would let the RPX start, and the renderer, are not written; nothing here has run on a
-console.
+Status: **experimental game builds run on real Wii U hardware.** Menus,
+campaign gameplay through A30, the native GX2 renderer, controls and sound
+output have hardware test records. Full campaign, multiplayer, HOME edge
+cases and sustained 60 FPS remain qualification work; a successful probe or
+build does not establish those results.
+
+Much of the bring-up text below records the earlier groundwork and retains
+historical limitations. Check the current source and revision-specific test
+records before treating an old "not run" statement as current status. The
+probe directories remain useful hardware and portable regression helpers;
+their sources are reused by later tests and do not need shipping with every
+game build.
 
 | | |
 | --- | --- |
@@ -263,6 +270,24 @@ resume continues the owned job. Final close stops admission, waits at most
 new worker turns. A syscall or producer already active can finish with its
 static storage intact. An expired deadline is reported incomplete and never
 permits a free, reset or blocking join.
+
+Optional capture file steps are deferred throughout active gameplay. Wii U
+hooks in `game_time.c` publish start/resume before enabling the clock and
+pause/end/loading after disabling it; `main_menu_active` publishes menu
+transitions on the same game thread. Only a primitive atomic flag crosses to
+the writer. The gate starts blocked until authoritative initialization, uses no
+tick-gap/draw-count heuristic, and keeps ordinary logging unchanged. Campaign
+cutscenes and co-op pause screens that leave the clock running remain blocked.
+Owned records wait in bounded RAM until a paused, loading or menu state permits
+service; queue overflow remains explicit capture loss. The gameplay bit shares
+the exact worker claim word and preserves HOME and permanent-close bits.
+
+An I/O turn admitted while paused can finish if gameplay resumes during that
+turn; it cannot be revoked without waiting on the filesystem. No subsequent
+optional turn is admitted until an authoritative inactive/menu state returns.
+Capture completion therefore requires an eligible drain interval before quit;
+it is separate from the measured gameplay interval. This policy does not prove
+that optional file work caused any particular frame hitch.
 
 Run `python3 tools/test_wiiu_missing_keys.py -v` for source-based queue,
 producer/formatter, actual shell-close, worker-fairness and sanitizer checks.

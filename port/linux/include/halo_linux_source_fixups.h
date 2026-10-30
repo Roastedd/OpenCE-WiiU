@@ -7,6 +7,13 @@ The port's functions that the game's sources call, declared for them.
 #ifndef __HALO_LINUX_SOURCE_FIXUPS_H
 #define __HALO_LINUX_SOURCE_FIXUPS_H
 
+#ifdef HALO_WIIU
+/* port: authoritative game-thread clock/menu activity for optional shader-file capture (port/wiiu/src/wiiu_missing_keys.c). */
+void wiiu_missing_keys_gameplay(int active);
+/* port: main-menu transitions project the game-thread clock state before changing file eligibility (source/game/game_time.c). */
+void game_time_wiiu_capture_menu(int main_menu);
+#endif
+
 /* frames between the 30 Hz ticks (port/linux/game/render_interpolation.c);
 the platform layer reads the display.interpolation setting */
 struct observer_result;

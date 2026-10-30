@@ -85,6 +85,10 @@ static void sleep_ms(uint32_t ms) { close_waited += ms; }
 #include WIIU_MISSING_PRODUCER_FIXTURE
 #endif
 
+#ifdef WIIU_MISSING_ACTIVITY_FIXTURE
+#include WIIU_MISSING_ACTIVITY_FIXTURE
+#endif
+
 static char directory[200];
 static uint32_t token(void *context) { (void)context; return thread_token; }
 static int allowed(void *context) { (void)context; return io_allowed; }
@@ -98,6 +102,8 @@ static void reset(void)
     config.directory = directory; config.run_high=0x12345678; config.run_low=0xabcdef01;
     config.thread_id=token; config.io_allowed=allowed; config.report=report;
     CHECK(!wiiu_missing_keys_start(&config)); CHECK(wiiu_missing_keys_start(&config)==EBUSY);
+    CHECK(load(&capture.io_gate) == (ACCEPTING | GAMEPLAY));
+    wiiu_missing_keys_gameplay(0);
     thread_token=1; io_calls=max_write=fail_call=short_write=interrupt_write=fault=reports=0; io_allowed=1;
     hold_kind=held=released=0;
 }
@@ -267,6 +273,55 @@ static void *observe_thread(void *unused)
     missing_note(DK_SHADER_STAGE_PIXEL,0x66778899aabbccddull,&pixel_key); return NULL;
 }
 #endif
+#ifdef WIIU_MISSING_ACTIVITY_FIXTURE
+static void test_activity_states(void)
+{
+    unsigned i; int before;
+    reset(); wiiu_missing_keys_gameplay(1); pixel(1); before=io_calls;
+    for(i=0;i<100;i++) CHECK(!step()); CHECK(io_calls==before && counts().accepted==1 && !counts().written);
+    game_time_initialize(); CHECK(!counts().gameplay);
+    game_time_initialize_for_new_map(); CHECK(!counts().gameplay);
+    main_menu_active(FALSE); game_time_start(); CHECK(counts().gameplay);
+    wiiu_missing_keys_suspend(); wiiu_missing_keys_resume(); CHECK(counts().gameplay);
+    for(i=0;i<100;i++) CHECK(!step()); CHECK(io_calls==before);
+    /* A visible co-op pause that leaves the clock active must not admit optional file work. */
+    CHECK(game_time_globals->active && !game_time_globals->paused);
+    game_time_set_paused(TRUE); CHECK(!counts().gameplay && !game_time_globals->active);
+    while(counts().phase!=WRITE) { CHECK(!counts().failed); step(); }
+    game_time_set_paused(FALSE); CHECK(counts().gameplay && game_time_globals->active);
+    before=io_calls; for(i=0;i<100;i++) CHECK(!step()); CHECK(io_calls==before);
+    /* A late UI-menu flag after the clock starts must immediately become eligible. */
+    main_menu_active(TRUE); CHECK(!counts().gameplay && game_time_globals->active);
+    main_menu_active(FALSE); CHECK(counts().gameplay);
+    game_time_end(); CHECK(!counts().gameplay);
+    finish(); CHECK(counts().complete); cleanup();
+
+    reset(); main_menu_active(TRUE); game_time_initialize(); game_time_initialize_for_new_map();
+    game_time_start(); CHECK(!counts().gameplay); pixel(2);
+    game_time_dispose_from_old_map(); CHECK(!counts().gameplay && !game_time_globals->initialized);
+    finish(); CHECK(counts().complete); cleanup();
+
+    reset(); game_time_initialize(); game_time_initialize_for_new_map(); main_menu_active(FALSE); game_time_start();
+    pixel(3); wiiu_missing_keys_quiesce(); game_time_set_paused(TRUE); wiiu_missing_keys_resume();
+    before=io_calls; CHECK(!counts().gameplay && (counts().io_gate&QUIESCED));
+    for(i=0;i<100;i++) CHECK(!step()); CHECK(io_calls==before && counts().queue_pending==1); cleanup();
+}
+static void test_activity_admitted_turn(void)
+{
+    pthread_t thread; int before; unsigned i,kind;
+    for(kind=2;kind<=3;kind++) {
+        reset(); game_time_initialize(); game_time_initialize_for_new_map(); main_menu_active(FALSE); game_time_start();
+        pixel(kind); game_time_set_paused(TRUE);
+        while(counts().phase!=(kind==2 ? FORM : WRITE)) { CHECK(!counts().failed); step(); }
+        hold_kind=(int)kind; CHECK(!pthread_create(&thread,NULL,service_thread,NULL)); wait_held();
+        game_time_set_paused(FALSE); CHECK(counts().gameplay && (counts().io_gate&ACTIVE));
+        release_held(); CHECK(!pthread_join(thread,NULL)); before=io_calls;
+        /* One previously admitted claim/write may finish. Gameplay forbids every subsequent turn. */
+        for(i=0;i<100;i++) CHECK(!step()); CHECK(io_calls==before && counts().batch_records==1 && !counts().written);
+        game_time_set_paused(TRUE); finish(); CHECK(counts().complete); cleanup();
+    }
+}
+#endif
 static void test_stop_schedules(void)
 {
     pthread_t thread; unsigned i; int before;
@@ -310,6 +365,9 @@ int main(void)
     test_format_and_wrap(); test_sequence_rollover();
 #ifdef WIIU_MISSING_PRODUCER_FIXTURE
     test_actual_producer();
+#endif
+#ifdef WIIU_MISSING_ACTIVITY_FIXTURE
+    test_activity_states(); test_activity_admitted_turn();
 #endif
     test_capacity_and_ownership(); test_short_and_home(); test_failures(); test_limits_and_collision(); test_stop_schedules();
     puts("missing-key queue: exact V/P, ownership, wrap/full, fair bounded IO, faults, HOME and ACTIVE/IO-held close passed"); return 0;

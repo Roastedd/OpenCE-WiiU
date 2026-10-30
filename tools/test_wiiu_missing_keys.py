@@ -38,6 +38,36 @@ def producer_code():
             function(source,'dk_shader_program_note')+'\n'+function(source,'missing_note')+'\n')
 
 
+def activity_code():
+    source=(ROOT/'source/game/game_time.c').read_text()
+    ui=(ROOT/'source/interface/ui_widget.c').read_text()
+    prelude = r"""
+#define HALO_WIIU 1
+typedef unsigned char boolean;
+typedef float real;
+#define TRUE 1
+#define FALSE 0
+#define match_assert(file,line,condition) CHECK(condition)
+static boolean we_are_at_the_main_menu;
+void wiiu_missing_keys_gameplay(int active);
+void game_time_wiiu_capture_menu(int main_menu);
+"""
+    storage=structure(source,'game_time_globals_struct')+r"""
+static struct game_time_globals_struct time_storage;
+static struct game_time_globals_struct *game_time_globals;
+static void *game_state_malloc(const char *name,const char *type,long bytes)
+{ (void)name; (void)type; CHECK(bytes==(long)sizeof(time_storage)); return &time_storage; }
+enum { _game_connection_local, _game_connection_network_server, _game_connection_network_client, _game_connection_film_playback };
+static short game_connection(void) { return _game_connection_local; }
+static void update_server_start(void) {}
+static void update_client_start(void) {}
+"""
+    names=['game_time_wiiu_capture_activity','game_time_wiiu_capture_menu','game_time_initialize',
+           'game_time_initialize_for_new_map','game_time_dispose_from_old_map','game_time_end',
+           'game_time_set_paused','game_time_start']
+    return prelude+storage+function(ui,'main_menu_is_active')+'\n'+'\n'.join(function(source,name) for name in names)+'\n'+function(ui,'main_menu_active')+'\n'
+
+
 class MissingKeysTests(unittest.TestCase):
     def fixture(self, shell=False, sanitizer=False):
         with tempfile.TemporaryDirectory(prefix='opence-key-tests-') as directory:
@@ -46,6 +76,8 @@ class MissingKeysTests(unittest.TestCase):
             fixture.write_text(close_block())
             producer=directory/'producer.inc'
             producer.write_text(producer_code())
+            activity=directory/'activity.inc'
+            activity.write_text(activity_code())
             command = [os.environ.get('CC','cc'), *shlex.split(os.environ.get('MISSING_TARGET','')),
                        '-std=gnu11','-O2','-g','-Wall','-Wextra','-Werror','-pthread',
                        '-D_GNU_SOURCE','-D_DARWIN_C_SOURCE','-D_FILE_OFFSET_BITS=64']
@@ -56,7 +88,8 @@ class MissingKeysTests(unittest.TestCase):
                             ['wiiu_shell_log.c','wiiu_shell_watch.c','wiiu_shell_blackbox.c'])]
             else:
                 command += ['-DWIIU_MISSING_CLOSE_FIXTURE="'+str(fixture)+'"',
-                            '-DWIIU_MISSING_PRODUCER_FIXTURE="'+str(producer)+'"',str(TESTS/'test_missing_keys.c')]
+                            '-DWIIU_MISSING_PRODUCER_FIXTURE="'+str(producer)+'"',
+                            '-DWIIU_MISSING_ACTIVITY_FIXTURE="'+str(activity)+'"',str(TESTS/'test_missing_keys.c')]
             command += ['-o',str(directory/'check')]
             result = subprocess.run(command,capture_output=True,text=True,timeout=60)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
@@ -97,6 +130,25 @@ class MissingKeysTests(unittest.TestCase):
         self.assertIn('seen[i].hash == hash && seen[i].stage == stage',note)
         self.assertIn('__atomic_load_n(&program_count, __ATOMIC_ACQUIRE)',note)
         self.assertIn('__atomic_store_n(&program_count, count_now + 1u, __ATOMIC_RELEASE)',source)
+
+
+    def test_authoritative_activity_transition_order_and_primitive_abi(self):
+        source=(ROOT/'source/game/game_time.c').read_text()
+        ui=(ROOT/'source/interface/ui_widget.c').read_text()
+        start=function(source,'game_time_start')
+        self.assertLess(start.index('game_time_wiiu_capture_activity(TRUE)'),start.index('game_time_globals->active = TRUE'))
+        pause=function(source,'game_time_set_paused')
+        self.assertLess(pause.index('game_time_wiiu_capture_activity(game_time_globals->initialized)'),pause.index('game_time_globals->active = !paused'))
+        self.assertGreater(pause.index('game_time_wiiu_capture_activity(FALSE)'),pause.index('game_time_globals->paused = paused'))
+        for name in ['game_time_end','game_time_dispose_from_old_map']:
+            body=function(source,name)
+            self.assertGreater(body.index('game_time_wiiu_capture_activity(FALSE)'),body.index('game_time_globals->active = FALSE'))
+        menu=function(ui,'main_menu_active')
+        self.assertLess(menu.index('game_time_wiiu_capture_menu(FALSE)'),menu.index('we_are_at_the_main_menu = active'))
+        self.assertGreater(menu.index('game_time_wiiu_capture_menu(TRUE)'),menu.index('we_are_at_the_main_menu = active'))
+        fixups=(ROOT/'port/linux/include/halo_linux_source_fixups.h').read_text()
+        self.assertIn('void wiiu_missing_keys_gameplay(int active);',fixups)
+        self.assertIn('void game_time_wiiu_capture_menu(int main_menu);',fixups)
 
 
 if __name__=='__main__':

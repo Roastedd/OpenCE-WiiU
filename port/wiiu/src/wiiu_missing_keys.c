@@ -13,6 +13,7 @@
 #define ACCEPTING 1u
 #define ACTIVE 2u
 #define QUIESCED 4u
+#define GAMEPLAY 8u
 #define FILE_CAP 128u
 #define SCAN_CAP 4096u
 #define WRITE_BYTES 4096u
@@ -81,7 +82,7 @@ int wiiu_missing_keys_start(const wiiu_missing_keys_config *config)
     snprintf(capture.directory, sizeof(capture.directory), "%s", config->directory);
     capture.descriptor = -1;
     store(&capture.gate, ACCEPTING);
-    store(&capture.io_gate, ACCEPTING);
+    store(&capture.io_gate, ACCEPTING | GAMEPLAY); /* blocked until authoritative game initialization */
     store(&capture.initialized, 1);
     return 0;
 }
@@ -211,6 +212,13 @@ void wiiu_missing_keys_quiesce(void)
     wiiu_missing_keys_suspend();
 }
 
+void wiiu_missing_keys_gameplay(int active)
+{
+    /* The same claim word closes the check/next-filesystem-step race. An already claimed syscall retains ownership. */
+    if (active) __atomic_fetch_or(&capture.io_gate, GAMEPLAY, __ATOMIC_ACQ_REL);
+    else __atomic_fetch_and(&capture.io_gate, ~GAMEPLAY, __ATOMIC_ACQ_REL);
+}
+
 void wiiu_missing_keys_counts_get(wiiu_missing_keys_counts *out)
 {
     uint32_t phase, gate, io_gate;
@@ -228,6 +236,7 @@ void wiiu_missing_keys_counts_get(wiiu_missing_keys_counts *out)
     out->queue_pending = load(&capture.write_sequence) - load(&capture.read_sequence);
     out->gate = load(&capture.gate);
     out->io_gate = load(&capture.io_gate);
+    out->gameplay = (out->io_gate & GAMEPLAY) != 0;
     out->phase = load(&capture.phase);
     out->last_error = __atomic_load_n(&capture.last_error, __ATOMIC_ACQUIRE);
     out->drained = !(io_gate & ACTIVE) && !(out->io_gate & ACTIVE) && gate == 0 && out->gate == 0 && !out->queue_pending && phase == IDLE && out->phase == IDLE && !out->failed;
@@ -243,9 +252,9 @@ void wiiu_missing_keys_report(const char *reason)
     if (!load(&capture.initialized) || !capture.config.report)
         return;
     wiiu_missing_keys_counts_get(&counts);
-    snprintf(text, sizeof(text), "Shader capture %s: accepted %u written %u pending %u+%u files %u state %u gates %u/%u drained %u complete %u",
+    snprintf(text, sizeof(text), "Shader capture %s: accepted %u written %u pending %u+%u files %u state %u gates %u/%u play %u drained %u complete %u",
         reason, counts.accepted, counts.written, counts.queue_pending, counts.batch_records, counts.files,
-        counts.phase, counts.gate, counts.io_gate, counts.drained, counts.complete);
+        counts.phase, counts.gate, counts.io_gate, counts.gameplay, counts.drained, counts.complete);
     capture.config.report(capture.config.context, text);
     if (counts.full || counts.unavailable || counts.lost_io || counts.io_errors || counts.close_errors ||
         counts.rejected_producer || counts.rejected_consumer)

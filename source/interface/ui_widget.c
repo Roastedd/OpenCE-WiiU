@@ -1940,7 +1940,17 @@ void widget_free(
 void main_menu_active(
 	boolean active)
 {
+#ifdef HALO_WIIU
+	/* port: close optional shader-file admission before leaving the menu; this clock belongs to the game thread. */
+	if (!active)
+		game_time_wiiu_capture_menu(FALSE);
+#endif
 	we_are_at_the_main_menu = active;
+#ifdef HALO_WIIU
+	/* port: entering the menu permits optional file work only after its authoritative flag is stored. */
+	if (active)
+		game_time_wiiu_capture_menu(TRUE);
+#endif
 
 	return;
 }
