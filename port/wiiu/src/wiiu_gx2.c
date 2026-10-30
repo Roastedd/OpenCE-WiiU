@@ -1750,10 +1750,12 @@ static int composite_derive(struct composite *composite, unsigned level)
 made from anything stays empty). Returns whether it waited for the GPU (and so left the context for the caller to set up again). */
 static void context_resume(void);
 
+/* the composite's levels brought up to date with what was rendered into them; returns whether the GPU's context was changed on the way: GX2CopySurface draws
+with a context of its own and leaves it set (as composite_derive and the screenshot's copy do), so the caller resumes the frame's */
 static int composite_refresh(struct composite *composite, int may_derive)
 {
 	unsigned level;
-	int derived = 0;
+	int changed = 0;
 
 	for (level = 0; level < composite->levels; level++)
 	{
@@ -1766,7 +1768,7 @@ static int composite_refresh(struct composite *composite, int may_derive)
 			{
 				composite->level_derived[level] = composite->level_written[level - 1];
 				composite->level_written[level] = composite->level_written[level - 1] + 1; /* (so that a level after it follows) */
-				derived = 1;
+				changed = 1;
 			}
 			continue;
 		}
@@ -1776,8 +1778,9 @@ static int composite_refresh(struct composite *composite, int may_derive)
 			target->color.surface.imageSize);
 		GX2CopySurface(&target->color.surface, 0, 0, &composite->texture.surface, level, 0);
 		composite->level_written[level] = target->last_used ? target->last_used : 1;
+		changed = 1;
 	}
-	return derived;
+	return changed;
 }
 
 static struct composite *composite_find(uint32_t data, uint32_t levels)
@@ -1794,7 +1797,7 @@ static struct composite *composite_find(uint32_t data, uint32_t levels)
 static void composites_prepare(void)
 {
 	unsigned stage;
-	int derived = 0;
+	int changed = 0;
 
 	for (stage = 0; stage < 4; stage++)
 	{
@@ -1803,9 +1806,12 @@ static void composites_prepare(void)
 
 		if (entry->id || !entry->composite || !(composite = composite_find(entry->target, entry->composite)))
 			continue;
-		derived |= composite_refresh(composite, 1);
+		changed |= composite_refresh(composite, 1);
 	}
-	if (derived)
+	/* (a level copied or derived: the copy left its own context set, and every draw after it went to that context's target until the next targets command. a30's
+	sky water was the first draw to sample a composite each frame - its bump map, rendered a level at a time - and, once its shaders were in the pack, the
+	terrain and objects after it were drawn nowhere: a pale plane where the water's reflection had been drawn, the decals, smoke and HUD on top of it.) */
+	if (changed)
 		context_resume();
 }
 
@@ -1816,7 +1822,7 @@ static const GX2Texture *composite_sampled(uint32_t data, uint32_t levels)
 
 	if (!composite)
 		return NULL;
-	composite_refresh(composite, 0); /* (nearly a no-op after composites_prepare: a level rendered since is copied, none made, as that waits for the GPU) */
+	/* (composites_prepare brought it up to date before this draw's state was set; copying here, in the middle of the draw's setup, would change the context) */
 	return &composite->texture;
 }
 
