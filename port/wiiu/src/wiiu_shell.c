@@ -828,7 +828,23 @@ int wiiu_shell_run(int (*game_main)(void))
 	if (error)
 		game_done = 1;
 	else
-		wiiu_debug_start(memory_line);
+	{
+		/* the debug server (screenshots, button presses, quit, the log) listens on the network to anyone on it, so it is for development only: it
+		starts when halo/debug_server.txt says 1, and a player's card has no such file */
+		int debug_server = 0;
+		FILE *file = fopen(WIIU_DATA_DIRECTORY "/debug_server.txt", "r");
+
+		if (file)
+		{
+			if (fscanf(file, "%d", &debug_server) != 1)
+				debug_server = 0;
+			fclose(file);
+		}
+		if (debug_server == 1)
+			wiiu_debug_start(memory_line);
+		else
+			wiiu_log("Debug server off (halo/debug_server.txt 1 turns it on)");
+	}
 
 	/* the system's loop: HOME and closing. WHBProcIsRunning does not come back while the app is in the background. */
 	while (!game_done && WHBProcIsRunning())

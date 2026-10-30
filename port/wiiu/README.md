@@ -1,5 +1,7 @@
 # Wii U port
 
+Players: see [PLAYING.md](PLAYING.md) for installing and controls.
+
 Status: **experimental game builds run on real Wii U hardware.** Menus,
 campaign gameplay through A30, the native GX2 renderer, controls and sound
 output have hardware test records. Full campaign, multiplayer, HOME edge
@@ -164,7 +166,8 @@ machine. `network.wiiu_sockets` turns the sockets off.
 
 `src/wiiu_debug.c` is a small server inside the game's own shell (TCP port 4310, started once the game's thread runs) so that a change can be
 run, looked at and judged without a person at the console; its client is `tools/wiiu/wiiu_debug.py`. The lines are read by
-`wiiu_debug_protocol.c` (plain C, tested on three machines: `tests/test_debug.c`).
+`wiiu_debug_protocol.c` (plain C, tested on three machines: `tests/test_debug.c`). It answers anyone on the network, so it is for development
+only: it starts when `halo/debug_server.txt` on the card says `1`, and is off without that file (the log says which).
 
 - `hello` (frames, foreground, memory), `log N` (the last lines of the shell's log), `press BUTTONS MS` and `stick LX LY RX RY MS` (merged into
   the GamePad's port in `wiiu_input_read`), `screenshot tv|drc|back [1|2|4]`, `quit`.

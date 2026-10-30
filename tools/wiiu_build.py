@@ -216,10 +216,12 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
         rspfile_content="$in_newline",
     )
     n.rule(name="wiiu_rpx", command="$wiiu_elf2rpl $in $out", description="WIIU RPX $out")
-    # (what Aroma's menu lists with a name; the same program as the RPX)
+    # (what Aroma's menu lists, with its name, icon and splash screens (port/wiiu/meta, made by
+    # tools/app_icon.py --wiiu); the same program as the RPX)
     n.rule(
         name="wiiu_wuhb",
-        command='wuhbtool $in $out --name "OpenCE (Wii U, shell test)" --short-name "OpenCE" --author "OpenCE Wii U port"',
+        command='wuhbtool $in $out --name "Halo" --short-name "Halo" --author "OpenCE"'
+                " --icon=$icon --tv-image=$tv_image --drc-image=$drc_image",
         description="WIIU WUHB $out",
     )
     n.rule(
@@ -375,7 +377,11 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
     )
     rpx = build_dir / "halo.rpx"
     n.build(outputs=rpx, rule="wiiu_rpx", inputs=elf)
-    n.build(outputs=build_dir / "halo.wuhb", rule="wiiu_wuhb", inputs=rpx)
+    meta = Path("port/wiiu/meta")
+    n.build(outputs=build_dir / "halo.wuhb", rule="wiiu_wuhb", inputs=rpx,
+            implicit=[meta / "icon.png", meta / "splash-tv.png", meta / "splash-drc.png"],
+            variables={"icon": meta / "icon.png", "tv_image": meta / "splash-tv.png",
+                       "drc_image": meta / "splash-drc.png"})
     sizes = build_dir / "halo.sizes.txt"
     n.build(outputs=sizes, rule="wiiu_size", inputs=elf, implicit=[Path("tools/wiiu_size_report.py")],
             variables={"map": f"{elf}.map"})
