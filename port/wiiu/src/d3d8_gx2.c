@@ -30,6 +30,9 @@ and presenting go there; a draw and a visibility test do nothing yet.
 #include "wiiu_stream_queue.h"
 #include "dk_shaders.h"
 #include "dk_derive.h"
+
+#include <coreinit/time.h>
+#include <coreinit/systeminfo.h>
 #include "dk_textures.h"
 #include "shader_key_wire.h"
 
@@ -382,6 +385,9 @@ static struct dk_device device;
 /* whether a render state, or a stage's texture states, may have been written since the draw that last told the GX2 thread (state_writes_send): every
 function that writes D3D__RenderState or D3D__TextureState sets them (the XDK's inline SetRenderState calls one of them for every state) */
 static BOOL render_states_touched = TRUE;
+/* changed when a register's current value (SetVertexData) or the byte order the streams were found in (halo_stream_endian_forget) may have: a
+draw's vertex format depends on them (format_for_draw) */
+static unsigned long attributes_serial = 1, endian_serial = 1;
 static unsigned texture_states_touched = 0xf;
 
 static D3DDevice *device_pointer(void)
@@ -2217,10 +2223,12 @@ static struct
 
 static double profile_now_ms(void)
 {
-	struct timespec now;
+	/* (the time base itself, not clock_gettime: this is read twice a draw, and clock_gettime's conversions were a third of a percent of the game thread) */
+	static double ticks_per_ms;
 
-	clock_gettime(CLOCK_MONOTONIC, &now);
-	return (double)now.tv_sec * 1000.0 + (double)now.tv_nsec / 1e6;
+	if (!ticks_per_ms)
+		ticks_per_ms = (double)OSTimerClockSpeed / 1000.0;
+	return (double)OSGetSystemTime() / ticks_per_ms;
 }
 
 /* ---------- drawing (DEKO3D.md, phase 6)
@@ -2576,6 +2584,7 @@ void halo_stream_endian_forget(void);
 
 void halo_stream_endian_forget(void)
 {
+	endian_serial++;
 	memset(sniffed, 0, sizeof(sniffed));
 }
 
@@ -2702,6 +2711,49 @@ static void format_from_declaration(struct dk_vertex_format *format)
 			format->little_endian |= 1UL << element->stream;
 		if (device.streams[element->stream].stride && platform_is_contiguous(PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[element->stream].data)))
 			format->static_streams |= 1UL << element->stream;
+	}
+}
+
+/* format_from_declaration's last result and what it came from: the declaration, every stream's address and stride, the registers' current values and
+the streams' byte order (their serials). Most draws repeat the last one's, which made it again (and sniffed the streams' byte order) for each draw: 2% of
+the game thread in a fight. told: it is what the GX2 thread was last told (draw_format_send). */
+static struct
+{
+	BOOL valid, told;
+	const struct vertex_shader_object *declaration;
+	unsigned long declaration_id, attributes_serial, endian_serial;
+	DWORD data[16];
+	UINT stride[16];
+	struct dk_vertex_format format;
+} format_memo;
+
+static void format_for_draw(void)
+{
+	unsigned long stream;
+	BOOL same = format_memo.valid && format_memo.declaration == device.vertex_shader && format_memo.declaration_id == device.vertex_shader->id &&
+		format_memo.attributes_serial == attributes_serial && format_memo.endian_serial == endian_serial;
+
+	for (stream = 0; same && stream < 16; stream++)
+		same = format_memo.data[stream] == device.streams[stream].data && format_memo.stride[stream] == device.streams[stream].stride;
+	if (!same)
+	{
+		format_from_declaration(&format_memo.format);
+		format_memo.valid = TRUE;
+		format_memo.told = FALSE;
+		format_memo.declaration = device.vertex_shader;
+		format_memo.declaration_id = device.vertex_shader->id;
+		format_memo.attributes_serial = attributes_serial;
+		format_memo.endian_serial = endian_serial;
+		for (stream = 0; stream < 16; stream++)
+		{
+			format_memo.data[stream] = device.streams[stream].data;
+			format_memo.stride[stream] = device.streams[stream].stride;
+		}
+	}
+	if (!format_memo.told)
+	{
+		draw_format_send(&format_memo.format);
+		format_memo.told = TRUE;
 	}
 }
 
@@ -2968,14 +3020,11 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 
 static void D3DDevice_DrawVertices_inner(D3DPRIMITIVETYPE primitive_type, UINT start_vertex, UINT vertex_count)
 {
-	struct dk_vertex_format format;
-
 	if (primitive_type == D3DPT_QUADLIST)
 		vertex_count &= ~3U;
 	if (!vertex_count || !draw_prepare(FALSE))
 		return;
-	format_from_declaration(&format);
-	draw_format_send(&format);
+	format_for_draw();
 	draw_write(primitive_type, vertex_count, start_vertex, vertex_count, NULL, 0);
 }
 
@@ -2994,14 +3043,11 @@ void WINAPI D3DDevice_DrawVertices(D3DPRIMITIVETYPE primitive_type, UINT start_v
 
 static void D3DDevice_DrawIndexedVertices_inner(D3DPRIMITIVETYPE primitive_type, UINT vertex_count, CONST WORD *index_data)
 {
-	struct dk_vertex_format format;
-
 	if (primitive_type == D3DPT_QUADLIST)
 		vertex_count &= ~3U;
 	if (!vertex_count || !index_data || !draw_prepare(FALSE))
 		return;
-	format_from_declaration(&format);
-	draw_format_send(&format);
+	format_for_draw();
 	draw_write(primitive_type, vertex_count, device.base_vertex_index, 0, index_data, 0);
 }
 
@@ -3073,6 +3119,7 @@ static void immediate_format_send(unsigned long mask)
 	format.strides[0] = (uint32_t)(place * 4 * sizeof(float));
 	format.stream_mask = 1;
 	draw_format_send(&format);
+	format_memo.told = FALSE; /* (the GX2 thread's format is this one now) */
 }
 
 #define IMMEDIATE_DRAW_HEADER (sizeof(struct dk_command_draw) + 2 * sizeof(uint32_t))
@@ -3220,6 +3267,7 @@ static void set_attribute(INT reg, float a, float b, float c, float d)
 		wiiu_immediate_write(&device.immediate, (unsigned)reg, device.attributes[reg]);
 	else
 		device.immediate.mask |= 1UL << reg;
+	attributes_serial++;
 	device.attributes[reg][0] = a;
 	device.attributes[reg][1] = b;
 	device.attributes[reg][2] = c;
@@ -3345,6 +3393,7 @@ void wiiu_decal_vertices(const unsigned char *color_bytes, const void *vertices,
 	}
 	device.immediate.count += (unsigned long)count;
 	/* (the registers hold the last vertex's values after, as the calls would have left them) */
+	attributes_serial++;
 	memcpy(device.attributes[0], out - 12, 4 * sizeof(float));
 	memcpy(device.attributes[4], out - 8, 4 * sizeof(float));
 	memcpy(device.attributes[9], out - 4, 4 * sizeof(float));
