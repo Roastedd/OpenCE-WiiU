@@ -3086,10 +3086,13 @@ static void immediate_site_count(uintptr_t site)
 	}
 }
 
+static void decal_batch_forget(void);
+
 void WINAPI D3DDevice_Begin(D3DPRIMITIVETYPE primitive_type)
 {
 	immediate_site_count((uintptr_t)__builtin_return_address(0));
 	device.immediate_active = TRUE;
+	decal_batch_forget();
 	device.immediate_skipped = device.visibility_test_active && !host_gx2_visibility_enabled();
 	device.immediate_type = primitive_type;
 	wiiu_immediate_begin(&device.immediate);
@@ -3186,6 +3189,8 @@ static void immediate_stream_close(unsigned long count)
 	draw_resources_used(FALSE, FALSE);
 }
 
+static BOOL decal_batch_end(void);
+
 static void D3DDevice_End_inner(void)
 {
 	/* only the registers SetVertexData wrote go in the stream (each is four floats of a vertex, at a place of its own in it); the others are the current values, as the
@@ -3196,6 +3201,8 @@ static void D3DDevice_End_inner(void)
 	struct dk_command_draw *command;
 	unsigned registers[XGPU_VERTEX_ATTRIBUTE_COUNT];
 
+	if (decal_batch_end())
+		return;
 	device.immediate_active = FALSE;
 	device.immediate.count = 0;
 	if (type == D3DPT_QUADLIST)
@@ -3342,9 +3349,7 @@ static void decal_vertex_through_registers(const float color[4], const struct wi
 32767) and SetVertexData4f(0, position, 1) make, but written straight into the draw, registers 0, 4 and 9 side by side, once the first vertex has laid the draw out so:
 three calls and the registers' bookkeeping for each of thousands of vertices a frame were 10% of the game thread in a fight. (The texture coordinates are multiplied by
 1/32767, not divided: the last bit may differ, which nothing sees.) */
-void wiiu_decal_vertices(const unsigned char *color_bytes, const void *vertices, long count);
-
-void wiiu_decal_vertices(const unsigned char *color_bytes, const void *vertices, long count)
+static void decal_vertices_expanded(const unsigned char *color_bytes, const void *vertices, long count)
 {
 	const struct wiiu_decal_vertex *vertex = (const struct wiiu_decal_vertex *)vertices;
 	const float *unit = byte_units();
@@ -3398,6 +3403,163 @@ void wiiu_decal_vertices(const unsigned char *color_bytes, const void *vertices,
 	memcpy(device.attributes[4], out - 8, 4 * sizeof(float));
 	memcpy(device.attributes[9], out - 4, 4 * sizeof(float));
 }
+/* A batch's decals as the game gave them (rasterizer_xbox_decals.c), for the GX2 thread to expand (DK_DRAW_DECALS): for each decal its vertex count and
+color's bytes, then its vertices as they are (16 bytes each, a third of what they are expanded to). Expanding them here was 5% of the game thread in a fight,
+with the stream's lines it made for them. The batch is drawn at End as decal_vertices_expanded's vertices would have been: the same vertex format and
+registers, the same arithmetic (wiiu_gx2.c's decals_expand); a batch that cannot be kept so (another register written between, no memory, too big for
+the stream) is expanded here first, in its order. */
+static struct
+{
+	unsigned char *data;
+	unsigned long used, capacity, vertices;
+	struct wiiu_decal_vertex last;
+	unsigned char last_color[4];
+} decal_batch;
+
+static void decal_batch_forget(void)
+{
+	decal_batch.used = 0;
+	decal_batch.vertices = 0;
+}
+
+/* (records: count, color's four bytes, then the vertices) */
+#define DECAL_RECORD_HEADER 8UL
+#define DECAL_BATCH_LIMIT (512UL * 1024UL)
+
+/* the batch kept so far, expanded here into the draw being made, in order */
+static void decal_batch_spill(void)
+{
+	unsigned long at = 0;
+
+	while (at < decal_batch.used)
+	{
+		uint32_t count;
+
+		memcpy(&count, decal_batch.data + at, sizeof(count));
+		decal_batch.vertices -= count;
+		decal_vertices_expanded(decal_batch.data + at + 4, decal_batch.data + at + DECAL_RECORD_HEADER, (long)count);
+		at += DECAL_RECORD_HEADER + count * sizeof(struct wiiu_decal_vertex);
+	}
+	decal_batch.used = 0;
+	decal_batch.vertices = 0;
+}
+
+void wiiu_decal_vertices(const unsigned char *color_bytes, const void *vertices, long count);
+
+void wiiu_decal_vertices(const unsigned char *color_bytes, const void *vertices, long count)
+{
+	unsigned long bytes;
+	uint32_t count32;
+
+	if (count <= 0)
+		return;
+	bytes = DECAL_RECORD_HEADER + (unsigned long)count * sizeof(struct wiiu_decal_vertex);
+	/* (kept only in a QUADLIST Begin that nothing else has written to: anything else goes the way it went) */
+	if (!device.immediate_active || device.immediate_skipped || device.immediate_type != D3DPT_QUADLIST || device.immediate.count ||
+		device.immediate.mask != 1 || decal_batch.used + bytes > DECAL_BATCH_LIMIT)
+	{
+		decal_batch_spill();
+		decal_vertices_expanded(color_bytes, vertices, count);
+		return;
+	}
+	if (decal_batch.used + bytes > decal_batch.capacity)
+	{
+		unsigned long capacity = decal_batch.capacity ? decal_batch.capacity : 64UL * 1024UL;
+		unsigned char *grown;
+
+		while (capacity < decal_batch.used + bytes)
+			capacity *= 2;
+		grown = realloc(decal_batch.data, capacity);
+		if (!grown)
+		{
+			decal_batch_spill();
+			decal_vertices_expanded(color_bytes, vertices, count);
+			return;
+		}
+		decal_batch.data = grown;
+		decal_batch.capacity = capacity;
+	}
+	count32 = (uint32_t)count;
+	memcpy(decal_batch.data + decal_batch.used, &count32, sizeof(count32));
+	memcpy(decal_batch.data + decal_batch.used + 4, color_bytes, 4);
+	memcpy(decal_batch.data + decal_batch.used + DECAL_RECORD_HEADER, vertices, (unsigned long)count * sizeof(struct wiiu_decal_vertex));
+	decal_batch.used += bytes;
+	decal_batch.vertices += (unsigned long)count;
+	decal_batch.last = ((const struct wiiu_decal_vertex *)vertices)[count - 1];
+	memcpy(decal_batch.last_color, color_bytes, 4);
+}
+
+/* End of a Begin whose vertices are a kept decal batch: drawn as DK_DRAW_DECALS. FALSE if there is none (End goes on as it did). */
+static BOOL decal_batch_end(void)
+{
+	const float *unit = byte_units();
+	unsigned long total, bytes = 0, kept = 0;
+	struct dk_command_draw *command;
+
+	if (!decal_batch.vertices)
+	{
+		decal_batch.used = 0;
+		return FALSE;
+	}
+	if (device.immediate.count)
+	{
+		/* (vertices were made another way after the batch began: in order, all of them that way) */
+		decal_batch_spill();
+		return FALSE;
+	}
+	/* the registers as the last vertex's three calls would have left them */
+	attributes_serial++;
+	device.attributes[0][0] = decal_batch.last.position[0];
+	device.attributes[0][1] = decal_batch.last.position[1];
+	device.attributes[0][2] = decal_batch.last.position[2];
+	device.attributes[0][3] = 1.0f;
+	device.attributes[4][0] = (float)(short)(decal_batch.last.texcoord & 0xffff) * (1.0f / 32767.0f);
+	device.attributes[4][1] = (float)(short)(decal_batch.last.texcoord >> 16) * (1.0f / 32767.0f);
+	device.attributes[4][2] = 0.0f;
+	device.attributes[4][3] = 1.0f;
+	device.attributes[9][0] = unit[decal_batch.last_color[0]];
+	device.attributes[9][1] = unit[decal_batch.last_color[1]];
+	device.attributes[9][2] = unit[decal_batch.last_color[2]];
+	device.attributes[9][3] = unit[decal_batch.last_color[3]];
+	device.immediate_active = FALSE;
+	device.immediate.count = 0;
+	total = decal_batch.vertices & ~3UL;
+	decal_batch.vertices = 0;
+	if (!total || (device.visibility_test_active && !host_gx2_visibility_enabled()) || !draw_prepare(TRUE))
+	{
+		decal_batch.used = 0;
+		return TRUE;
+	}
+	immediate_format_send(DECAL_LAYOUT);
+	/* (the records that hold the first total vertices; the last cut short if the batch was not whole quads) */
+	while (bytes < decal_batch.used && kept < total)
+	{
+		uint32_t count;
+
+		memcpy(&count, decal_batch.data + bytes, sizeof(count));
+		if (kept + count > total)
+		{
+			count = (uint32_t)(total - kept);
+			memcpy(decal_batch.data + bytes, &count, sizeof(count));
+		}
+		kept += count;
+		bytes += DECAL_RECORD_HEADER + count * sizeof(struct wiiu_decal_vertex);
+	}
+	command = stream_command(DK_COMMAND_DRAW, sizeof(*command) + 2 * sizeof(uint32_t) + bytes);
+	command->primitive = primitive_of(D3DPT_QUADLIST) | DK_DRAW_DECALS;
+	command->count = (uint32_t)total;
+	command->index_address = 0;
+	command->vertex_offset = 0;
+	command->inline_bytes = (uint32_t)bytes;
+	command->stream_count = 1;
+	command->streams[0][0] = 0;
+	command->streams[0][1] = (uint32_t)(total * 12 * sizeof(float));
+	memcpy(&command->streams[1], decal_batch.data, bytes);
+	decal_batch.used = 0;
+	draw_resources_used(FALSE, FALSE);
+	return TRUE;
+}
+
 /* ---------- clearing */
 
 void WINAPI D3DDevice_Clear(DWORD count, CONST D3DRECT *rectangles, DWORD flags, D3DCOLOR color, float z, DWORD stencil)

@@ -3622,6 +3622,84 @@ uint32_t host_gx2_visibility(uint32_t index);
 unsigned int host_gx2_output_height(void);
 
 
+/* A batch of decals (DK_DRAW_DECALS, d3d8_gx2.c's decal_batch_end) expanded to the draw the game thread made of them before: each vertex registers 0, 4
+and 9 as four floats, position and 1, the texture coordinates times 1/32767 and 0 and 1, the color's bytes / 255 (from a table of the same
+quotients), in a draw command of its own (kept until the next). NULL if there is no memory, or the batch is not what its command says. */
+static const struct dk_command_draw *decals_expand(const struct dk_command_draw *command)
+{
+	static unsigned char *buffer;
+	static unsigned long capacity;
+	static float unit[256];
+	const unsigned char *at = (const unsigned char *)&command->streams[1], *end = at + command->inline_bytes;
+	const unsigned long header_bytes = sizeof(*command) + 2 * sizeof(uint32_t), bytes = header_bytes + (unsigned long)command->count * 12 * sizeof(float);
+	struct dk_command_draw *expanded;
+	float *out;
+	unsigned long made = 0;
+
+	if (command->stream_count != 1 || (unsigned long)command->inline_bytes > command->header.size - header_bytes)
+		return NULL;
+	if (unit[255] == 0.0f)
+	{
+		unsigned i;
+
+		for (i = 0; i < 256; i++)
+			unit[i] = (float)i / 255.0f;
+	}
+	if (bytes > capacity)
+	{
+		unsigned char *grown = realloc(buffer, bytes);
+
+		if (!grown)
+			return NULL;
+		buffer = grown;
+		capacity = bytes;
+	}
+	expanded = (struct dk_command_draw *)(void *)buffer;
+	memcpy(expanded, command, header_bytes);
+	expanded->header.size = (uint32_t)bytes;
+	expanded->primitive = command->primitive & ~DK_DRAW_DECALS;
+	expanded->inline_bytes = command->count * 12 * sizeof(float);
+	expanded->streams[0][0] = 0;
+	expanded->streams[0][1] = expanded->inline_bytes;
+	out = (float *)(void *)(buffer + header_bytes);
+	while (at + 8 <= end && made < command->count)
+	{
+		uint32_t count, index;
+		float color[4];
+
+		memcpy(&count, at, sizeof(count));
+		color[0] = unit[at[4]];
+		color[1] = unit[at[5]];
+		color[2] = unit[at[6]];
+		color[3] = unit[at[7]];
+		at += 8;
+		if (count > command->count - made || (unsigned long)(end - at) < (unsigned long)count * 16)
+			return NULL;
+		for (index = 0; index < count; index++, at += 16, out += 12)
+		{
+			float position[3];
+			uint32_t texcoord;
+
+			memcpy(position, at, sizeof(position));
+			memcpy(&texcoord, at + 12, sizeof(texcoord));
+			out[0] = position[0];
+			out[1] = position[1];
+			out[2] = position[2];
+			out[3] = 1.0f;
+			out[4] = (float)(short)(texcoord & 0xffff) * (1.0f / 32767.0f);
+			out[5] = (float)(short)(texcoord >> 16) * (1.0f / 32767.0f);
+			out[6] = 0.0f;
+			out[7] = 1.0f;
+			out[8] = color[0];
+			out[9] = color[1];
+			out[10] = color[2];
+			out[11] = color[3];
+		}
+		made += count;
+	}
+	return made == command->count ? expanded : NULL;
+}
+
 /* what the game thread's states and the draw's facts come to (dk_derive.c, which d3d8_gx2.c's draw_prepare did for every draw on the game thread), applied
 where it differs from the last: the commands it sent before (STATE, SHADER_KEYS, TEXTURES, the parameters) did the same */
 static void derive_apply(void)
@@ -3771,7 +3849,15 @@ static void run_stream(const unsigned char *at, const unsigned char *end)
 
 			if (dk_derive_pending(dk_derive_get()))
 				derive_apply();
-			draw((const struct dk_command_draw *)header);
+			if (((const struct dk_command_draw *)header)->primitive & DK_DRAW_DECALS)
+			{
+				const struct dk_command_draw *expanded = decals_expand((const struct dk_command_draw *)header);
+
+				if (expanded)
+					draw(expanded);
+			}
+			else
+				draw((const struct dk_command_draw *)header);
 			gx.draw_ticks += OSGetSystemTime() - draw_start;
 			break;
 		}

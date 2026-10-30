@@ -508,6 +508,10 @@ not when the host or the GPU get to it */
 /* in dk_command_draw's primitive (the Wii U's): the draw's inline indices' range is found by the host. Its streams then give the address of the
 draw's first vertex and the stride (not a size), and the host reads from the lowest vertex the indices name to the highest, as the game thread did before */
 #define DK_DRAW_RANGE_LATER 0x80000000u
+/* in primitive: the inline data is a batch of decals as the game gave them (d3d8_gx2.c, decal_batch_end): for each, a 32-bit vertex count, the
+color's four bytes (red, green, blue, alpha) and the vertices (three floats of position and the two signed 16-bit texture coordinates in a 32-bit
+word); the host expands them to registers 0, 4 and 9 as four floats each (wiiu_gx2.c, decals_expand) and draws those as inline vertices */
+#define DK_DRAW_DECALS 0x40000000u
 
 struct dk_command_draw
 {
