@@ -90,13 +90,45 @@ static struct dk_pixel_parameters legacy_pixel;
 #undef pixel_parameters_told
 #undef stream_command
 
-static struct wiiu_uniform_cache draw_uniform_cache;
+/* the current derivation (dk_derive.c: parameter_inputs and derive_parameters, which the GX2 thread runs before a draw; wiiu_gx2.c's derive_apply
+takes the changed blocks as the commands did), its inputs taken from the same globals the legacy oracle reads */
+#include "dk_derive.h"
+struct dk_derive
+{
+	DWORD rs[64];
+	DWORD ts[4][6];
+	struct dk_draw_facts facts;
+	struct wiiu_uniform_cache uniforms;
+};
+static struct dk_derive derive_for_test;
+#define draw_uniform_cache derive_for_test.uniforms
 static BOOL parameters_known;
-#define draw_parameters_send candidate_send
-#define stream_command candidate_command
 #include "current_uniform.inc"
-#undef draw_parameters_send
-#undef stream_command
+static void candidate_send(float texture_scale[4][4])
+{
+	unsigned changed;
+
+	memcpy(derive_for_test.rs, D3D__RenderState, sizeof(derive_for_test.rs));
+	memcpy(derive_for_test.ts, D3D__TextureState, sizeof(derive_for_test.ts));
+	memcpy(derive_for_test.facts.viewport_scale, device.viewport_scale, sizeof(device.viewport_scale));
+	memcpy(derive_for_test.facts.viewport_offset, device.viewport_offset, sizeof(device.viewport_offset));
+	derive_for_test.facts.ui_offset = ui_offset;
+	memcpy(derive_for_test.facts.texture_clip, texture_clip, sizeof(texture_clip));
+	changed = derive_parameters(&derive_for_test, texture_scale, !parameters_known);
+	if (changed & DK_DERIVED_VERTEX_PARAMETERS)
+	{
+		struct dk_command_vertex_parameters *command = candidate_command(DK_COMMAND_VERTEX_PARAMETERS, sizeof(*command));
+
+		command->parameters = derive_for_test.uniforms.vertex;
+	}
+	if (changed & DK_DERIVED_PIXEL_PARAMETERS)
+	{
+		struct dk_command_pixel_parameters *command = candidate_command(DK_COMMAND_PIXEL_PARAMETERS, sizeof(*command));
+
+		command->parameters = derive_for_test.uniforms.pixel;
+	}
+	parameters_known = TRUE;
+}
 
 static uint32_t float_bits(float value) { uint32_t bits; memcpy(&bits, &value, 4); return bits; }
 static void input_defaults(uint32_t *input)

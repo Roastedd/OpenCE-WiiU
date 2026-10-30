@@ -16,6 +16,7 @@ Not run on a console.
 */
 
 #include "dk_commands.h"
+#include "dk_derive.h"
 #include "wiiu_debug.h"
 #include "wiiu_shell.h"
 #include "port_config.h"
@@ -3621,6 +3622,119 @@ uint32_t host_gx2_visibility(uint32_t index);
 unsigned int host_gx2_output_height(void);
 
 
+/* A batch of decals (DK_DRAW_DECALS, d3d8_gx2.c's decal_batch_end) expanded to the draw the game thread made of them before: each vertex registers 0, 4
+and 9 as four floats, position and 1, the texture coordinates times 1/32767 and 0 and 1, the color's bytes / 255 (from a table of the same
+quotients), in a draw command of its own (kept until the next). NULL if there is no memory, or the batch is not what its command says. */
+static const struct dk_command_draw *decals_expand(const struct dk_command_draw *command)
+{
+	static unsigned char *buffer;
+	static unsigned long capacity;
+	static float unit[256];
+	const unsigned char *at = (const unsigned char *)&command->streams[1], *end = at + command->inline_bytes;
+	const unsigned long header_bytes = sizeof(*command) + 2 * sizeof(uint32_t), bytes = header_bytes + (unsigned long)command->count * 12 * sizeof(float);
+	struct dk_command_draw *expanded;
+	float *out;
+	unsigned long made = 0;
+
+	if (command->stream_count != 1 || (unsigned long)command->inline_bytes > command->header.size - header_bytes)
+		return NULL;
+	if (unit[255] == 0.0f)
+	{
+		unsigned i;
+
+		for (i = 0; i < 256; i++)
+			unit[i] = (float)i / 255.0f;
+	}
+	if (bytes > capacity)
+	{
+		unsigned char *grown = realloc(buffer, bytes);
+
+		if (!grown)
+			return NULL;
+		buffer = grown;
+		capacity = bytes;
+	}
+	expanded = (struct dk_command_draw *)(void *)buffer;
+	memcpy(expanded, command, header_bytes);
+	expanded->header.size = (uint32_t)bytes;
+	expanded->primitive = command->primitive & ~DK_DRAW_DECALS;
+	expanded->inline_bytes = command->count * 12 * sizeof(float);
+	expanded->streams[0][0] = 0;
+	expanded->streams[0][1] = expanded->inline_bytes;
+	out = (float *)(void *)(buffer + header_bytes);
+	while (at + 8 <= end && made < command->count)
+	{
+		uint32_t count, index;
+		float color[4];
+
+		memcpy(&count, at, sizeof(count));
+		color[0] = unit[at[4]];
+		color[1] = unit[at[5]];
+		color[2] = unit[at[6]];
+		color[3] = unit[at[7]];
+		at += 8;
+		if (count > command->count - made || (unsigned long)(end - at) < (unsigned long)count * 16)
+			return NULL;
+		for (index = 0; index < count; index++, at += 16, out += 12)
+		{
+			float position[3];
+			uint32_t texcoord;
+
+			memcpy(position, at, sizeof(position));
+			memcpy(&texcoord, at + 12, sizeof(texcoord));
+			out[0] = position[0];
+			out[1] = position[1];
+			out[2] = position[2];
+			out[3] = 1.0f;
+			out[4] = (float)(short)(texcoord & 0xffff) * (1.0f / 32767.0f);
+			out[5] = (float)(short)(texcoord >> 16) * (1.0f / 32767.0f);
+			out[6] = 0.0f;
+			out[7] = 1.0f;
+			out[8] = color[0];
+			out[9] = color[1];
+			out[10] = color[2];
+			out[11] = color[3];
+		}
+		made += count;
+	}
+	return made == command->count ? expanded : NULL;
+}
+
+/* what the game thread's states and the draw's facts come to (dk_derive.c, which d3d8_gx2.c's draw_prepare did for every draw on the game thread), applied
+where it differs from the last: the commands it sent before (STATE, SHADER_KEYS, TEXTURES, the parameters) did the same */
+static void derive_apply(void)
+{
+	struct dk_derive *derive = dk_derive_get();
+	const unsigned changed = dk_derive_run(derive);
+
+	if (changed & DK_DERIVED_STATE)
+	{
+		gx.state = *dk_derive_state(derive);
+		gx.state_dirty = 1;
+	}
+	if (changed & DK_DERIVED_KEYS)
+	{
+		uint32_t dk_shader_for_draw(uint32_t stage, const void *key_data);
+
+		gx.vs_handle = dk_shader_for_draw(0 /* DK_SHADER_STAGE_VERTEX */, dk_derive_vertex_key(derive));
+		gx.ps_handle = dk_shader_for_draw(1 /* DK_SHADER_STAGE_PIXEL */, dk_derive_pixel_key(derive));
+		if (!gx.vs_handle || !gx.ps_handle)
+			gx.shader_key_misses++;
+	}
+	if (changed & DK_DERIVED_TEXTURES)
+		textures_set(dk_derive_textures(derive));
+	if (changed & DK_DERIVED_VERTEX_PARAMETERS)
+	{
+		gx.vertex_parameters = *dk_derive_vertex_parameters(derive);
+		gx.vertex_parameters_dirty = 1;
+	}
+	if (changed & DK_DERIVED_PIXEL_PARAMETERS)
+	{
+		gx.pixel_parameters = *dk_derive_pixel_parameters(derive);
+		gx.pixel_parameters_dirty = 1;
+	}
+}
+
 /* runs the commands of a stream; replaying (the GPU test) leaves out those that make or free resources and the present */
 static void run_stream(const unsigned char *at, const unsigned char *end)
 {
@@ -3722,11 +3836,28 @@ static void run_stream(const unsigned char *at, const unsigned char *end)
 		case DK_COMMAND_COMPOSITE:
 			composite_receive((const struct dk_command_composite *)header);
 			break;
+		case DK_COMMAND_STATE_WRITES:
+			dk_derive_writes(dk_derive_get(), (const struct dk_command_state_writes *)header);
+			break;
+		case DK_COMMAND_DRAW_FACTS:
+			if (header->size >= sizeof(struct dk_command_draw_facts))
+				dk_derive_facts(dk_derive_get(), &((const struct dk_command_draw_facts *)header)->facts);
+			break;
 		case DK_COMMAND_DRAW:
 		{
 			const OSTime draw_start = OSGetSystemTime();
 
-			draw((const struct dk_command_draw *)header);
+			if (dk_derive_pending(dk_derive_get()))
+				derive_apply();
+			if (((const struct dk_command_draw *)header)->primitive & DK_DRAW_DECALS)
+			{
+				const struct dk_command_draw *expanded = decals_expand((const struct dk_command_draw *)header);
+
+				if (expanded)
+					draw(expanded);
+			}
+			else
+				draw((const struct dk_command_draw *)header);
 			gx.draw_ticks += OSGetSystemTime() - draw_start;
 			break;
 		}

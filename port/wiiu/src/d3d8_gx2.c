@@ -29,7 +29,10 @@ and presenting go there; a draw and a visibility test do nothing yet.
 #include "wiiu_pending_reads.h"
 #include "wiiu_stream_queue.h"
 #include "dk_shaders.h"
-#include "wiiu_uniform_cache.h"
+#include "dk_derive.h"
+
+#include <coreinit/time.h>
+#include <coreinit/systeminfo.h>
 #include "dk_textures.h"
 #include "shader_key_wire.h"
 
@@ -378,6 +381,14 @@ struct dk_device
 };
 
 static struct dk_device device;
+
+/* whether a render state, or a stage's texture states, may have been written since the draw that last told the GX2 thread (state_writes_send): every
+function that writes D3D__RenderState or D3D__TextureState sets them (the XDK's inline SetRenderState calls one of them for every state) */
+static BOOL render_states_touched = TRUE;
+/* changed when a register's current value (SetVertexData) or the byte order the streams were found in (halo_stream_endian_forget) may have: a
+draw's vertex format depends on them (format_for_draw) */
+static unsigned long attributes_serial = 1, endian_serial = 1;
+static unsigned texture_states_touched = 0xf;
 
 static D3DDevice *device_pointer(void)
 {
@@ -1139,6 +1150,8 @@ HRESULT WINAPI Direct3D_CreateDevice(UINT adapter, D3DDEVTYPE device_type, void 
 		device.viewport.Height = height;
 		device.viewport.MaxZ = 1.0f;
 		device.next_vertex_shader_id = 1;
+		render_states_touched = TRUE;
+		texture_states_touched = 0xf;
 		D3D__RenderState[D3DRS_ZENABLE] = TRUE;
 		D3D__RenderState[D3DRS_ZWRITEENABLE] = TRUE;
 		D3D__RenderState[D3DRS_ZFUNC] = D3DCMP_LESSEQUAL;
@@ -1595,10 +1608,12 @@ void D3DFASTCALL D3DDevice_SetRenderState_Simple(DWORD method, DWORD value)
 	/* callers also store the value in D3D__RenderState themselves */
 	(void)method;
 	(void)value;
+	render_states_touched = TRUE;
 }
 
 void D3DFASTCALL D3DDevice_SetRenderState_Deferred(D3DRENDERSTATETYPE state, DWORD value)
 {
+	render_states_touched = TRUE;
 	if ((unsigned long)state < D3DRS_MAX)
 		D3D__RenderState[state] = value;
 }
@@ -1607,6 +1622,7 @@ void WINAPI D3DDevice_SetRenderState_ZBias(DWORD value);
 
 void WINAPI D3DDevice_SetRenderStateNotInline(D3DRENDERSTATETYPE state, DWORD value)
 {
+	render_states_touched = TRUE;
 	if (state == D3DRS_ZBIAS)
 		D3DDevice_SetRenderState_ZBias(value);
 	else if ((unsigned long)state < D3DRS_MAX)
@@ -1623,6 +1639,7 @@ void WINAPI D3DDevice_SetRenderState_ZBias(DWORD value)
 	float slope = offset * 0.25f;
 	DWORD enable = value != 0;
 
+	render_states_touched = TRUE;
 	memcpy(&D3D__RenderState[D3DRS_POLYGONOFFSETZSLOPESCALE], &slope, sizeof(slope));
 	memcpy(&D3D__RenderState[D3DRS_POLYGONOFFSETZOFFSET], &offset, sizeof(offset));
 	D3D__RenderState[D3DRS_POINTOFFSETENABLE] = enable;
@@ -1632,7 +1649,7 @@ void WINAPI D3DDevice_SetRenderState_ZBias(DWORD value)
 }
 
 #define COMPLEX_RENDER_STATE(name, state) \
-	void WINAPI D3DDevice_SetRenderState_##name(DWORD value) { D3D__RenderState[state] = value; }
+	void WINAPI D3DDevice_SetRenderState_##name(DWORD value) { render_states_touched = TRUE; D3D__RenderState[state] = value; }
 
 COMPLEX_RENDER_STATE(PSTextureModes, D3DRS_PSTEXTUREMODES)
 COMPLEX_RENDER_STATE(VertexBlend, D3DRS_VERTEXBLEND)
@@ -1664,6 +1681,8 @@ COMPLEX_RENDER_STATE(DoNotCullUncompressed, D3DRS_DONOTCULLUNCOMPRESSED)
 
 void D3DFASTCALL D3DDevice_SetTextureState_Deferred(DWORD stage, D3DTEXTURESTAGESTATETYPE type, DWORD value)
 {
+	if (stage < D3DTSS_MAXSTAGES)
+		texture_states_touched |= 1u << stage;
 	if (stage < D3DTSS_MAXSTAGES && (unsigned long)type < D3DTSS_MAX)
 		D3D__TextureState[stage][type] = value;
 }
@@ -1671,11 +1690,15 @@ void D3DFASTCALL D3DDevice_SetTextureState_Deferred(DWORD stage, D3DTEXTURESTAGE
 void WINAPI D3DDevice_SetTextureState_TexCoordIndex(DWORD stage, DWORD value)
 {
 	if (stage < D3DTSS_MAXSTAGES)
+		texture_states_touched |= 1u << stage;
+	if (stage < D3DTSS_MAXSTAGES)
 		D3D__TextureState[stage][D3DTSS_TEXCOORDINDEX] = value;
 }
 
 void WINAPI D3DDevice_SetTextureState_BorderColor(DWORD stage, DWORD value)
 {
+	if (stage < D3DTSS_MAXSTAGES)
+		texture_states_touched |= 1u << stage;
 	if (stage < D3DTSS_MAXSTAGES)
 		D3D__TextureState[stage][D3DTSS_BORDERCOLOR] = value;
 }
@@ -1683,11 +1706,15 @@ void WINAPI D3DDevice_SetTextureState_BorderColor(DWORD stage, DWORD value)
 void WINAPI D3DDevice_SetTextureState_ColorKeyColor(DWORD stage, DWORD value)
 {
 	if (stage < D3DTSS_MAXSTAGES)
+		texture_states_touched |= 1u << stage;
+	if (stage < D3DTSS_MAXSTAGES)
 		D3D__TextureState[stage][D3DTSS_COLORKEYCOLOR] = value;
 }
 
 void WINAPI D3DDevice_SetTextureState_BumpEnv(DWORD stage, D3DTEXTURESTAGESTATETYPE type, DWORD value)
 {
+	if (stage < D3DTSS_MAXSTAGES)
+		texture_states_touched |= 1u << stage;
 	if (stage < D3DTSS_MAXSTAGES && (unsigned long)type < D3DTSS_MAX)
 		D3D__TextureState[stage][type] = value;
 }
@@ -1709,6 +1736,7 @@ void WINAPI D3DDevice_SetPixelShaderProgram(D3DPIXELSHADERDEF *definition)
 	/* the definition's members are the pixel shader render states */
 	if (!definition)
 		return;
+	render_states_touched = TRUE;
 	memcpy(&D3D__RenderState[D3DRS_PSALPHAINPUTS0], definition->PSAlphaInputs, sizeof(definition->PSAlphaInputs));
 	D3D__RenderState[D3DRS_PSFINALCOMBINERINPUTSABCD] = definition->PSFinalCombinerInputsABCD;
 	D3D__RenderState[D3DRS_PSFINALCOMBINERINPUTSEFG] = definition->PSFinalCombinerInputsEFG;
@@ -2195,10 +2223,12 @@ static struct
 
 static double profile_now_ms(void)
 {
-	struct timespec now;
+	/* (the time base itself, not clock_gettime: this is read twice a draw, and clock_gettime's conversions were a third of a percent of the game thread) */
+	static double ticks_per_ms;
 
-	clock_gettime(CLOCK_MONOTONIC, &now);
-	return (double)now.tv_sec * 1000.0 + (double)now.tv_nsec / 1e6;
+	if (!ticks_per_ms)
+		ticks_per_ms = (double)OSTimerClockSpeed / 1000.0;
+	return (double)OSGetSystemTime() / ticks_per_ms;
 }
 
 /* ---------- drawing (DEKO3D.md, phase 6)
@@ -2215,23 +2245,19 @@ static struct
 } stats;
 
 /* what the host holds */
-static struct dk_draw_state state_told;
-static BOOL state_known;
-static uint32_t shaders_told[2];
-static BOOL shaders_known;
-static struct wiiu_uniform_cache draw_uniform_cache;
-static BOOL parameters_known;
 static struct dk_vertex_format format_told;
 static BOOL format_known;
-static struct dk_command_textures textures_told;
-static BOOL textures_known;
 static unsigned long long constants_told;
 
-/* the state the uniform blocks above come from: when none of it has changed
-they need no converting (most draws share it with the draw before) */
-#define DRAW_UNIFORM_INPUT_COUNT (4 + 4 + 16 + 1 + 16 + 2 + 4 + 1 + 1 + 3 + 6 * D3DTSS_MAXSTAGES)
-
-typedef char draw_uniform_input_count_check[DRAW_UNIFORM_INPUT_COUNT == WIIU_UNIFORM_INPUT_WORDS ? 1 : -1];
+/* what the GX2 thread holds a copy of (dk_derive.h): the render and texture stage states it was last told, and the draw's facts. It derives the draw's
+state, shader keys, samplers and uniforms from them; on this thread a draw only finds its textures and tells what changed. The copy is sent whole again
+after each present (states_resync), which also finds a state written by a way that did not set render_states_touched or texture_states_touched. */
+static DWORD render_states_told[D3DRS_MAX];
+static DWORD texture_states_told[D3DTSS_MAXSTAGES][D3DTSS_MAX];
+static BOOL states_told_valid;
+static struct dk_draw_facts facts_told;
+static BOOL facts_known;
+static unsigned long states_missed;
 
 static unsigned long stage_texture_mode(int stage)
 {
@@ -2245,99 +2271,181 @@ static int target_pixel(float coordinate, int axis)
 	return (int)floorf(coordinate * target_scale[axis] + 0.5f);
 }
 
-static uint32_t blend_equation(DWORD operation)
+/* the state words that differ from the GX2 thread's copy, written as one command (a stage's or the render states' only if a setter touched them) */
+static void state_writes_send(void)
 {
-	switch (operation)
+	uint32_t writes[2 * (D3DRS_MAX + D3DTSS_MAXSTAGES * D3DTSS_MAX)];
+	unsigned long count = 0, index;
+	unsigned stage;
+	struct dk_command_state_writes *command;
+
+	if (!states_told_valid)
 	{
-	case D3DBLENDOP_SUBTRACT: return DK_BLEND_SUBTRACT;
-	case D3DBLENDOP_REVSUBTRACT:
-	case D3DBLENDOP_REVSUBTRACTSIGNED: return DK_BLEND_REVERSE_SUBTRACT;
-	case D3DBLENDOP_MIN: return DK_BLEND_MIN;
-	case D3DBLENDOP_MAX: return DK_BLEND_MAX;
-	default: return DK_BLEND_ADD;
+		render_states_touched = TRUE;
+		texture_states_touched = (1u << D3DTSS_MAXSTAGES) - 1;
 	}
-}
-
-/* d3d8_gl.c's apply_raster_state, as a description of what it would set */
-static void draw_state_make(BOOL has_depth, struct dk_draw_state *state)
-{
-	DWORD *rs = D3D__RenderState;
-	DWORD write = rs[D3DRS_COLORWRITEENABLE];
-	BOOL depth_test = has_depth && rs[D3DRS_ZENABLE];
-
-	memset(state, 0, sizeof(*state));
-	state->viewport[0] = target_pixel((float)device.viewport.X, 0);
-	state->viewport[1] = target_pixel((float)device.viewport.Y, 1);
-	state->viewport[2] = target_pixel((float)(device.viewport.X + device.viewport.Width), 0) - state->viewport[0];
-	state->viewport[3] = target_pixel((float)(device.viewport.Y + device.viewport.Height), 1) - state->viewport[1];
-	state->depth_range[0] = device.viewport.MinZ;
-	state->depth_range[1] = device.viewport.MaxZ;
-	/* the game never issues a scissor rectangle, and the NV2A scissor register
-	defaults to the viewport, so fragment clipping follows the viewport: this is
-	what keeps a split-screen window's geometry from bleeding across the divider */
-	memcpy(state->scissor, state->viewport, sizeof(state->scissor));
-
-	state->depth_test = depth_test;
-	if (depth_test)
+	if (render_states_touched)
 	{
-		state->depth_function = rs[D3DRS_ZFUNC] ? rs[D3DRS_ZFUNC] : D3DCMP_NEVER;
-		state->depth_write = rs[D3DRS_ZWRITEENABLE] != 0;
+		for (index = 0; index < D3DRS_MAX; index++)
+		{
+			if (states_told_valid && D3D__RenderState[index] == render_states_told[index])
+				continue;
+			render_states_told[index] = D3D__RenderState[index];
+			writes[count * 2] = (uint32_t)index;
+			writes[count * 2 + 1] = D3D__RenderState[index];
+			count++;
+		}
 	}
-
-	state->stencil_test = has_depth && rs[D3DRS_STENCILENABLE];
-	if (state->stencil_test)
+	for (stage = 0; stage < D3DTSS_MAXSTAGES; stage++)
 	{
-		state->stencil_function = rs[D3DRS_STENCILFUNC] ? rs[D3DRS_STENCILFUNC] : D3DCMP_NEVER;
-		state->stencil_reference = rs[D3DRS_STENCILREF];
-		state->stencil_mask = rs[D3DRS_STENCILMASK];
-		state->stencil_write_mask = rs[D3DRS_STENCILWRITEMASK];
-		state->stencil_fail = rs[D3DRS_STENCILFAIL];
-		state->stencil_depth_fail = rs[D3DRS_STENCILZFAIL];
-		state->stencil_pass = rs[D3DRS_STENCILPASS];
+		if (!(texture_states_touched & (1u << stage)))
+			continue;
+		for (index = 0; index < D3DTSS_MAX; index++)
+		{
+			if (states_told_valid && D3D__TextureState[stage][index] == texture_states_told[stage][index])
+				continue;
+			texture_states_told[stage][index] = D3D__TextureState[stage][index];
+			writes[count * 2] = DK_DERIVE_TEXTURE_STATE_INDEX(stage, index);
+			writes[count * 2 + 1] = D3D__TextureState[stage][index];
+			count++;
+		}
 	}
-
-	state->blend = rs[D3DRS_ALPHABLENDENABLE] != 0;
-	if (state->blend)
-	{
-		state->blend_source = rs[D3DRS_SRCBLEND];
-		state->blend_destination = rs[D3DRS_DESTBLEND];
-		state->blend_equation = blend_equation(rs[D3DRS_BLENDOP]);
-		color_to_vec4(rs[D3DRS_BLENDCOLOR], state->blend_color);
-	}
-	state->color_mask = ((write & D3DCOLORWRITEENABLE_RED) ? 1 : 0) | ((write & D3DCOLORWRITEENABLE_GREEN) ? 2 : 0) |
-		((write & D3DCOLORWRITEENABLE_BLUE) ? 4 : 0) | ((write & D3DCOLORWRITEENABLE_ALPHA) ? 8 : 0);
-
-	/* the cull mode names the winding to discard; FRONTFACE names the front
-	winding */
-	if (rs[D3DRS_CULLMODE] != D3DCULL_NONE)
-		state->cull = rs[D3DRS_CULLMODE] == rs[D3DRS_FRONTFACE] ? DK_CULL_FRONT : DK_CULL_BACK;
-	state->front_face_ccw = rs[D3DRS_FRONTFACE] == D3DFRONT_CCW;
-	state->fill_mode = rs[D3DRS_FILLMODE] == D3DFILL_WIREFRAME ? DK_FILL_LINE :
-		rs[D3DRS_FILLMODE] == D3DFILL_POINT ? DK_FILL_POINT : DK_FILL_SOLID;
-
-	/* D3DRS_ZBIAS is expressed in these states (D3DDevice_SetRenderState_ZBias) */
-	state->offset_enable = rs[D3DRS_SOLIDOFFSETENABLE] != 0;
-	if (state->offset_enable)
-	{
-		state->offset_slope = dword_to_float(rs[D3DRS_POLYGONOFFSETZSLOPESCALE]);
-		state->offset_units = dword_to_float(rs[D3DRS_POLYGONOFFSETZOFFSET]);
-	}
-}
-
-static void draw_state_send(BOOL has_depth)
-{
-	struct dk_draw_state state;
-
-	draw_state_make(has_depth, &state);
-	if (state_known && words_equal(&state, &state_told, sizeof(state)))
+	render_states_touched = FALSE;
+	texture_states_touched = 0;
+	states_told_valid = TRUE;
+	if (!count)
 		return;
-	{
-		struct dk_command_state *command = stream_command(DK_COMMAND_STATE, sizeof(*command));
+	command = stream_command(DK_COMMAND_STATE_WRITES, sizeof(*command) + count * 2 * sizeof(uint32_t));
+	command->count = (uint32_t)count;
+	memcpy(command->writes, writes, count * 2 * sizeof(uint32_t));
+}
 
-		command->state = state;
+/* after a present: the GX2 thread's copy is sent whole with the next draw (what a stream it never ran - none is dropped - or a setter that did not say so
+could have left wrong is right again a frame later), and a state found changed that no setter flagged is logged */
+static void states_resync(void)
+{
+	if (states_told_valid)
+	{
+		unsigned long index;
+		unsigned stage;
+
+		if (!render_states_touched)
+			for (index = 0; index < D3DRS_MAX; index++)
+				states_missed += D3D__RenderState[index] != render_states_told[index];
+		for (stage = 0; stage < D3DTSS_MAXSTAGES; stage++)
+			if (!(texture_states_touched & (1u << stage)))
+				for (index = 0; index < D3DTSS_MAX; index++)
+					states_missed += D3D__TextureState[stage][index] != texture_states_told[stage][index];
 	}
-	state_told = state;
-	state_known = TRUE;
+	if (states_missed)
+	{
+		static unsigned long told;
+
+		if (states_missed >= told * 2 + 1)
+		{
+			told = states_missed;
+			platform_log("draw states: %lu state words found changed with no setter having said so (put right at the frame's end)", states_missed);
+		}
+	}
+	states_told_valid = FALSE;
+	facts_known = FALSE;
+}
+
+/* what the draw's textures are, found as pixel_key_make found them (finding one may send its texels to the host), and the rest of its facts */
+static void facts_make(struct dk_draw_facts *facts, BOOL has_depth, const struct vertex_shader_object *program, BOOL immediate)
+{
+	int stage;
+
+	memset(facts, 0, sizeof(*facts));
+	facts->has_depth = has_depth != FALSE;
+	facts->target_scale[0] = target_scale[0];
+	facts->target_scale[1] = target_scale[1];
+	facts->viewport_x = device.viewport.X;
+	facts->viewport_y = device.viewport.Y;
+	facts->viewport_width = device.viewport.Width;
+	facts->viewport_height = device.viewport.Height;
+	facts->viewport_min_z = device.viewport.MinZ;
+	facts->viewport_max_z = device.viewport.MaxZ;
+	memcpy(facts->viewport_scale, device.viewport_scale, sizeof(facts->viewport_scale));
+	memcpy(facts->viewport_offset, device.viewport_offset, sizeof(facts->viewport_offset));
+	facts->ui_offset = (int32_t)UI_OFFSET;
+	memcpy(facts->texture_clip, texture_clip, sizeof(facts->texture_clip));
+	facts->warp_blend = warp_blend != 0;
+	facts->program_hash[0] = (uint32_t)(program->program_hash >> 32);
+	facts->program_hash[1] = (uint32_t)program->program_hash;
+	facts->packed_mask = immediate ? 0 : (uint32_t)device.vertex_shader->packed_mask;
+	for (stage = 0; stage < D3DTSS_MAXSTAGES; stage++)
+	{
+		struct dk_stage_facts *found = &facts->stages[stage];
+		D3DBaseTexture *texture = device.textures[stage];
+		unsigned long mode = stage_texture_mode(stage);
+
+		found->scale[0] = found->scale[1] = 1.0f;
+		if (!texture || !texture->Data || mode == 0 || mode == 0x04 || mode == 0x05 || mode == 0x11)
+			continue;
+		{
+			const D3DCOLOR *palette = device.palettes[stage] && device.palettes[stage]->Data ?
+				(const D3DCOLOR *)PLATFORM_PHYSICAL_TO_VIRTUAL(device.palettes[stage]->Data) : NULL;
+			struct xgpu_texture_description description;
+			int kind = DK_TEXTURE_2D;
+
+			const struct rendered *target = rendered_find(texture->Data);
+
+			memset(&description, 0, sizeof(description));
+			if (target)
+			{
+				/* a render target: the host's image of it */
+				xgpu_texture_describe(texture->Format, texture->Size, &description);
+				found->target = texture->Data;
+				/* (rendered a level at a time: the levels as one image, as
+				bind_textures in d3d8_gl.c makes them) */
+				if (!description.linear && !description.cube_map && description.levels > 1 &&
+					description.levels <= DK_COMPOSITE_LEVELS && target->width == description.width &&
+					target->height == description.height)
+				{
+					composite_tell(&description, texture->Data);
+					found->composite = (uint32_t)description.levels;
+				}
+				else
+					description.levels = 1;
+				if (description.linear)
+				{
+					found->scale[0] = 1.0f / (float)target->width;
+					found->scale[1] = 1.0f / (float)target->height;
+				}
+			}
+			else
+			{
+				found->id = dk_texture_get((const DWORD *)texture, palette, &kind, &description);
+				{
+					static unsigned long logged;
+					static unsigned long seen[64];
+					unsigned long i;
+
+					for (i = 0; i < logged && i < 64 && seen[i] != found->id; i++)
+						;
+					if (i == logged && logged < 64)
+					{
+						seen[logged++] = found->id;
+						platform_log("texture %lu: format word %08lx size word %08lx: %lux%lux%lu, %lu levels, linear %d cube %d, kind %d, palette %d",
+							(unsigned long)found->id, (unsigned long)((const DWORD *)texture)[3], (unsigned long)((const DWORD *)texture)[4],
+							(unsigned long)description.width, (unsigned long)description.height, (unsigned long)description.depth, (unsigned long)description.levels,
+							(int)description.linear, (int)description.cube_map, kind, palette != NULL);
+					}
+				}
+				if (description.linear)
+				{
+					found->scale[0] = 1.0f / (float)description.width;
+					found->scale[1] = 1.0f / (float)description.height;
+				}
+			}
+			found->present = 1;
+			found->kind = (uint32_t)kind;
+			found->mipmapped = description.levels > 1;
+			found->hires = description.hires != FALSE;
+			found->hires_coverage = description.hires_coverage != FALSE;
+		}
+	}
 }
 
 /* the vertex constants the host does not have yet: the registers changed since
@@ -2390,106 +2498,6 @@ static void draw_constants_send(void)
 	memcpy(command->data, device.constants[first], (last - first + 1) * 4 * sizeof(float));
 }
 
-/* the uniforms that are not the vertex constants (d3d8_gl.c's
-draw_uniforms), converted when the state they come from has changed, and
-written when the host does not hold the result */
-static void draw_parameters_send(float texture_scale[4][4])
-{
-	DWORD inputs[DRAW_UNIFORM_INPUT_COUNT];
-	unsigned long count = 0;
-	int stage;
-	unsigned changed;
-
-	memcpy(&inputs[count], device.viewport_scale, sizeof(device.viewport_scale));
-	count += 4;
-	memcpy(&inputs[count], device.viewport_offset, sizeof(device.viewport_offset));
-	count += 4;
-	memcpy(&inputs[count], texture_scale, 16 * sizeof(float));
-	count += 16;
-	inputs[count++] = D3D__RenderState[D3DRS_POINTSIZE];
-	for (stage = 0; stage < 8; stage++)
-	{
-		inputs[count++] = D3D__RenderState[D3DRS_PSCONSTANT0_0 + stage];
-		inputs[count++] = D3D__RenderState[D3DRS_PSCONSTANT1_0 + stage];
-	}
-	inputs[count++] = D3D__RenderState[D3DRS_PSFINALCOMBINERCONSTANT0];
-	inputs[count++] = D3D__RenderState[D3DRS_PSFINALCOMBINERCONSTANT1];
-	inputs[count++] = D3D__RenderState[D3DRS_FOGCOLOR];
-	inputs[count++] = D3D__RenderState[D3DRS_FOGSTART];
-	inputs[count++] = D3D__RenderState[D3DRS_FOGEND];
-	inputs[count++] = D3D__RenderState[D3DRS_FOGDENSITY];
-	inputs[count++] = D3D__RenderState[D3DRS_ALPHAREF];
-	inputs[count++] = (DWORD)UI_OFFSET;
-	memcpy(&inputs[count], texture_clip, 3 * sizeof(float));
-	count += 3;
-	for (stage = 0; stage < D3DTSS_MAXSTAGES; stage++)
-	{
-		DWORD *state = D3D__TextureState[stage];
-
-		inputs[count++] = state[D3DTSS_BUMPENVMAT00];
-		inputs[count++] = state[D3DTSS_BUMPENVMAT01];
-		inputs[count++] = state[D3DTSS_BUMPENVMAT10];
-		inputs[count++] = state[D3DTSS_BUMPENVMAT11];
-		inputs[count++] = state[D3DTSS_BUMPENVLSCALE];
-		inputs[count++] = state[D3DTSS_BUMPENVLOFFSET];
-	}
-	/* The CPU cache owns converted groups. GPU state can be forgotten
-	   independently, so even a CPU cache hit must resend unknown blocks. */
-	changed = wiiu_uniform_cache_update(&draw_uniform_cache, inputs);
-	if (!parameters_known || (changed & WIIU_UNIFORM_VERTEX_CHANGED))
-	{
-		struct dk_command_vertex_parameters *command = stream_command(DK_COMMAND_VERTEX_PARAMETERS, sizeof(*command));
-
-		command->parameters = draw_uniform_cache.vertex;
-	}
-	if (!parameters_known || (changed & WIIU_UNIFORM_PIXEL_CHANGED))
-	{
-		struct dk_command_pixel_parameters *command = stream_command(DK_COMMAND_PIXEL_PARAMETERS, sizeof(*command));
-
-		command->parameters = draw_uniform_cache.pixel;
-	}
-	parameters_known = TRUE;
-}
-
-/* the shaders' keys, sent when they change (most draws repeat the last ones: a compare of the keys, not a hash and a search of the pack, on the game thread) */
-static struct dk_vertex_key vertex_key_told;
-static struct nv2a_pixel_shader_key pixel_key_told;
-static BOOL keys_known;
-
-static void draw_shader_keys_send(const struct dk_vertex_key *vertex, const struct nv2a_pixel_shader_key *pixel)
-{
-	struct dk_command_shader_keys *command;
-	unsigned char *data;
-
-	if (keys_known && words_equal(vertex, &vertex_key_told, sizeof(*vertex)) && words_equal(pixel, &pixel_key_told, sizeof(*pixel)))
-		return;
-	command = stream_command(DK_COMMAND_SHADER_KEYS, sizeof(*command) + sizeof(*vertex) + sizeof(*pixel));
-	command->vertex_size = (uint32_t)sizeof(*vertex);
-	command->pixel_size = (uint32_t)sizeof(*pixel);
-	data = (unsigned char *)(command + 1);
-	memcpy(data, vertex, sizeof(*vertex));
-	memcpy(data + sizeof(*vertex), pixel, sizeof(*pixel));
-	vertex_key_told = *vertex;
-	pixel_key_told = *pixel;
-	keys_known = TRUE;
-	shaders_known = FALSE;
-}
-
-static void draw_shaders_send(uint32_t vertex, uint32_t pixel)
-{
-	if (shaders_known && shaders_told[0] == vertex && shaders_told[1] == pixel)
-		return;
-	{
-		struct dk_command_shaders *command = stream_command(DK_COMMAND_SHADERS, sizeof(*command));
-
-		command->vertex = vertex;
-		command->pixel = pixel;
-	}
-	shaders_told[0] = vertex;
-	shaders_told[1] = pixel;
-	shaders_known = TRUE;
-}
-
 static void draw_format_send(const struct dk_vertex_format *format)
 {
 	if (format_known && words_equal(format, &format_told, sizeof(*format)))
@@ -2503,173 +2511,13 @@ static void draw_format_send(const struct dk_vertex_format *format)
 	format_known = TRUE;
 }
 
-static uint32_t address_mode(DWORD mode)
-{
-	switch (mode)
-	{
-	case D3DTADDRESS_MIRROR: return DK_WRAP_MIRROR;
-	case D3DTADDRESS_CLAMP:
-	case D3DTADDRESS_CLAMPTOEDGE: return DK_WRAP_CLAMP;
-	case D3DTADDRESS_BORDER: return DK_WRAP_BORDER;
-	default: return DK_WRAP_REPEAT;
-	}
-}
-
-/* what d3d8_gl.c's configure_sampler decides for a stage, as values for the
-host's sampler. mipmapped: the texture has more than one level. hires: it is
-a high-res replacement (xbox_textures_dk.c), drawn smaller than it is, so
-filtered and from its mip levels whatever the game asks. */
-static void sampler_make(int stage, BOOL mipmapped, BOOL hires, struct dk_sampler *sampler)
-{
-	DWORD *state = D3D__TextureState[stage];
-	DWORD min_filter = hires ? D3DTEXF_LINEAR : state[D3DTSS_MINFILTER];
-	DWORD mip_filter = hires ? D3DTEXF_LINEAR : mipmapped ? state[D3DTSS_MIPFILTER] : D3DTEXF_NONE;
-
-	memset(sampler, 0, sizeof(*sampler));
-	sampler->min_linear = min_filter != D3DTEXF_POINT;
-	sampler->mag_linear = hires || state[D3DTSS_MAGFILTER] != D3DTEXF_POINT;
-	sampler->mip_filter = mip_filter == D3DTEXF_NONE ? DK_MIP_NONE : mip_filter == D3DTEXF_POINT ? DK_MIP_NEAREST :
-		DK_MIP_LINEAR;
-	sampler->wrap[0] = address_mode(state[D3DTSS_ADDRESSU]);
-	sampler->wrap[1] = address_mode(state[D3DTSS_ADDRESSV]);
-	sampler->wrap[2] = address_mode(state[D3DTSS_ADDRESSW]);
-	sampler->lod_bias = hires ? 0.0f : dword_to_float(state[D3DTSS_MIPMAPLODBIAS]);
-	sampler->lod_minimum = hires ? 0.0f : (float)state[D3DTSS_MAXMIPLEVEL];
-	sampler->anisotropy = (min_filter == D3DTEXF_ANISOTROPIC && state[D3DTSS_MAXANISOTROPY] > 1) ?
-		(float)state[D3DTSS_MAXANISOTROPY] : 1.0f;
-	color_to_vec4(state[D3DTSS_BORDERCOLOR], sampler->border);
-}
-
-/* The pixel shader's key as prepare_draw builds it, and with it what the
-stages sample: every stage's texture is found here (finding one may send its
-texels to the host), as bind_textures does. */
-static void pixel_key_make(struct nv2a_pixel_shader_key *key, float texture_scale[4][4],
-	struct dk_command_textures *textures)
-{
-	int stage;
-
-	memset(key, 0, sizeof(*key));
-	memset(textures, 0, sizeof(*textures));
-	memcpy(key->combiner_state, D3D__RenderState, sizeof(key->combiner_state));
-	/* constants are uniforms, not part of the program */
-	memset(&key->combiner_state[D3DRS_PSCONSTANT0_0], 0, 16 * sizeof(DWORD));
-	key->combiner_state[D3DRS_PSFINALCOMBINERCONSTANT0] = 0;
-	key->combiner_state[D3DRS_PSFINALCOMBINERCONSTANT1] = 0;
-	key->texture_modes = D3D__RenderState[D3DRS_PSTEXTUREMODES];
-	if (texture_clip[2] != 0.0f)
-		key->texture_modes |= NV2A_PIXEL_KEY_CLIP;
-	if (warp_blend)
-		key->texture_modes |= NV2A_PIXEL_KEY_WARP_BLEND;
-	for (stage = 0; stage < D3DTSS_MAXSTAGES; stage++)
-	{
-		D3DBaseTexture *texture = device.textures[stage];
-		unsigned long mode = stage_texture_mode(stage);
-
-		texture_scale[stage][0] = texture_scale[stage][1] = 1.0f;
-		texture_scale[stage][2] = texture_scale[stage][3] = 1.0f;
-		key->alpha_kill[stage] = D3D__TextureState[stage][D3DTSS_ALPHAKILL] == D3DTALPHAKILL_ENABLE;
-		key->color_sign[stage] = (unsigned char)((D3D__TextureState[stage][D3DTSS_COLORSIGN] >> 28) & 0xf);
-		if (!texture || !texture->Data || mode == 0 || mode == 0x04 || mode == 0x05 || mode == 0x11)
-		{
-			key->sampler_type[stage] = mode == 0x11 ? _xgpu_sampler_2d : _xgpu_sampler_none;
-			continue;
-		}
-		{
-			const D3DCOLOR *palette = device.palettes[stage] && device.palettes[stage]->Data ?
-				(const D3DCOLOR *)PLATFORM_PHYSICAL_TO_VIRTUAL(device.palettes[stage]->Data) : NULL;
-			struct xgpu_texture_description description;
-			int kind = DK_TEXTURE_2D;
-
-			const struct rendered *target = rendered_find(texture->Data);
-
-			memset(&description, 0, sizeof(description));
-			if (target)
-			{
-				/* a render target: the host's image of it */
-				xgpu_texture_describe(texture->Format, texture->Size, &description);
-				textures->stages[stage].target = texture->Data;
-				/* (rendered a level at a time: the levels as one image, as
-				bind_textures in d3d8_gl.c makes them) */
-				if (!description.linear && !description.cube_map && description.levels > 1 &&
-					description.levels <= DK_COMPOSITE_LEVELS && target->width == description.width &&
-					target->height == description.height)
-				{
-					composite_tell(&description, texture->Data);
-					textures->stages[stage].composite = (uint32_t)description.levels;
-				}
-				else
-					description.levels = 1;
-				if (description.linear)
-				{
-					texture_scale[stage][0] = 1.0f / (float)target->width;
-					texture_scale[stage][1] = 1.0f / (float)target->height;
-				}
-			}
-			else
-			{
-				textures->stages[stage].id = dk_texture_get((const DWORD *)texture, palette, &kind, &description);
-				{
-					static unsigned long logged;
-					static unsigned long seen[64];
-					unsigned long i;
-
-					for (i = 0; i < logged && i < 64 && seen[i] != textures->stages[stage].id; i++)
-						;
-					if (i == logged && logged < 64)
-					{
-						seen[logged++] = textures->stages[stage].id;
-						platform_log("texture %lu: format word %08lx size word %08lx: %lux%lux%lu, %lu levels, linear %d cube %d, kind %d, palette %d",
-							(unsigned long)textures->stages[stage].id, (unsigned long)((const DWORD *)texture)[3], (unsigned long)((const DWORD *)texture)[4],
-							(unsigned long)description.width, (unsigned long)description.height, (unsigned long)description.depth, (unsigned long)description.levels,
-							(int)description.linear, (int)description.cube_map, kind, palette != NULL);
-					}
-				}
-				if (description.linear)
-				{
-					texture_scale[stage][0] = 1.0f / (float)description.width;
-					texture_scale[stage][1] = 1.0f / (float)description.height;
-				}
-			}
-			if (stage == 0)
-				key->coverage_alpha = description.hires_coverage != FALSE;
-			key->sampler_type[stage] = kind == DK_TEXTURE_CUBE ? _xgpu_sampler_cube : kind == DK_TEXTURE_3D ?
-				_xgpu_sampler_3d : _xgpu_sampler_2d;
-			sampler_make(stage, description.levels > 1, description.hires, &textures->stages[stage].sampler);
-		}
-	}
-	/* (only with the meter's blend: hud_hires.h, nv2a_pixel_shader_key) */
-	key->coverage_alpha = key->coverage_alpha && D3D__RenderState[D3DRS_ALPHABLENDENABLE] &&
-		D3D__RenderState[D3DRS_SRCBLEND] == D3DBLEND_CONSTANTCOLOR &&
-		D3D__RenderState[D3DRS_DESTBLEND] == D3DBLEND_SRCALPHA;
-	key->alpha_test_function = D3D__RenderState[D3DRS_ALPHATESTENABLE] ? D3D__RenderState[D3DRS_ALPHAFUNC] : 0;
-	key->fog_enable = D3D__RenderState[D3DRS_FOGENABLE] != 0;
-	key->fog_table_mode = (unsigned char)D3D__RenderState[D3DRS_FOGTABLEMODE];
-}
-
-static void draw_textures_send(const struct dk_command_textures *textures)
-{
-	if (textures_known && words_equal(&textures->stages, &textures_told.stages, sizeof(textures->stages)))
-		return;
-	{
-		struct dk_command_textures *command = stream_command(DK_COMMAND_TEXTURES, sizeof(*command));
-
-		memcpy(command->stages, textures->stages, sizeof(command->stages));
-	}
-	textures_told = *textures;
-	textures_known = TRUE;
-}
-
-/* d3d8_gl.c's prepare_draw: everything a draw needs but its vertices, written
-to the stream. FALSE if there is nothing to draw into, or a shader the draw
+/* d3d8_gl.c's prepare_draw: everything a draw needs but its vertices, told the
+GX2 thread, which derives the rest (dk_derive.c). FALSE if there is nothing to draw into, or a shader the draw
 needs is not ready (skipped, as decided: DEKO3D.md, "Decisions"). */
 static BOOL draw_prepare(BOOL immediate)
 {
 	struct vertex_shader_object *program = current_program();
-	struct dk_vertex_key vertex_key;
-	struct nv2a_pixel_shader_key pixel_key;
-	struct dk_command_textures textures;
-	float texture_scale[4][4];
-	uint32_t vertex_shader, pixel_shader;
+	struct dk_draw_facts facts;
 	BOOL has_depth = FALSE;
 
 	if (!program || !device.vertex_shader || !program->instructions)
@@ -2682,23 +2530,21 @@ static BOOL draw_prepare(BOOL immediate)
 		stats.skipped_no_target++;
 		return FALSE;
 	}
-	pixel_key_make(&pixel_key, texture_scale, &textures);
-	memset(&vertex_key, 0, sizeof(vertex_key));
-	vertex_key.program_hash = program->program_hash;
-	vertex_key.packed_mask = immediate ? 0 : (uint32_t)device.vertex_shader->packed_mask;
-	(void)vertex_shader;
-	(void)pixel_shader;
-	(void)draw_shaders_send;
 	if (immediate)
 		stats.immediate_draws++;
 	else
 		stats.draws++;
-	draw_state_send(has_depth);
-	/* (the keys go to the host's thread, which finds the shaders in the pack and skips a draw whose shader it has not: GX2's 'no shader' count) */
-	draw_shader_keys_send(&vertex_key, &pixel_key);
+	state_writes_send();
+	facts_make(&facts, has_depth, program, immediate);
+	if (!facts_known || !words_equal(&facts, &facts_told, sizeof(facts)))
+	{
+		struct dk_command_draw_facts *command = stream_command(DK_COMMAND_DRAW_FACTS, sizeof(*command));
+
+		command->facts = facts;
+		facts_told = facts;
+		facts_known = TRUE;
+	}
 	draw_constants_send();
-	draw_parameters_send(texture_scale);
-	draw_textures_send(&textures);
 	return TRUE;
 }
 
@@ -2738,6 +2584,7 @@ void halo_stream_endian_forget(void);
 
 void halo_stream_endian_forget(void)
 {
+	endian_serial++;
 	memset(sniffed, 0, sizeof(sniffed));
 }
 
@@ -2864,6 +2711,49 @@ static void format_from_declaration(struct dk_vertex_format *format)
 			format->little_endian |= 1UL << element->stream;
 		if (device.streams[element->stream].stride && platform_is_contiguous(PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[element->stream].data)))
 			format->static_streams |= 1UL << element->stream;
+	}
+}
+
+/* format_from_declaration's last result and what it came from: the declaration, every stream's address and stride, the registers' current values and
+the streams' byte order (their serials). Most draws repeat the last one's, which made it again (and sniffed the streams' byte order) for each draw: 2% of
+the game thread in a fight. told: it is what the GX2 thread was last told (draw_format_send). */
+static struct
+{
+	BOOL valid, told;
+	const struct vertex_shader_object *declaration;
+	unsigned long declaration_id, attributes_serial, endian_serial;
+	DWORD data[16];
+	UINT stride[16];
+	struct dk_vertex_format format;
+} format_memo;
+
+static void format_for_draw(void)
+{
+	unsigned long stream;
+	BOOL same = format_memo.valid && format_memo.declaration == device.vertex_shader && format_memo.declaration_id == device.vertex_shader->id &&
+		format_memo.attributes_serial == attributes_serial && format_memo.endian_serial == endian_serial;
+
+	for (stream = 0; same && stream < 16; stream++)
+		same = format_memo.data[stream] == device.streams[stream].data && format_memo.stride[stream] == device.streams[stream].stride;
+	if (!same)
+	{
+		format_from_declaration(&format_memo.format);
+		format_memo.valid = TRUE;
+		format_memo.told = FALSE;
+		format_memo.declaration = device.vertex_shader;
+		format_memo.declaration_id = device.vertex_shader->id;
+		format_memo.attributes_serial = attributes_serial;
+		format_memo.endian_serial = endian_serial;
+		for (stream = 0; stream < 16; stream++)
+		{
+			format_memo.data[stream] = device.streams[stream].data;
+			format_memo.stride[stream] = device.streams[stream].stride;
+		}
+	}
+	if (!format_memo.told)
+	{
+		draw_format_send(&format_memo.format);
+		format_memo.told = TRUE;
 	}
 }
 
@@ -3130,14 +3020,11 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 
 static void D3DDevice_DrawVertices_inner(D3DPRIMITIVETYPE primitive_type, UINT start_vertex, UINT vertex_count)
 {
-	struct dk_vertex_format format;
-
 	if (primitive_type == D3DPT_QUADLIST)
 		vertex_count &= ~3U;
 	if (!vertex_count || !draw_prepare(FALSE))
 		return;
-	format_from_declaration(&format);
-	draw_format_send(&format);
+	format_for_draw();
 	draw_write(primitive_type, vertex_count, start_vertex, vertex_count, NULL, 0);
 }
 
@@ -3156,14 +3043,11 @@ void WINAPI D3DDevice_DrawVertices(D3DPRIMITIVETYPE primitive_type, UINT start_v
 
 static void D3DDevice_DrawIndexedVertices_inner(D3DPRIMITIVETYPE primitive_type, UINT vertex_count, CONST WORD *index_data)
 {
-	struct dk_vertex_format format;
-
 	if (primitive_type == D3DPT_QUADLIST)
 		vertex_count &= ~3U;
 	if (!vertex_count || !index_data || !draw_prepare(FALSE))
 		return;
-	format_from_declaration(&format);
-	draw_format_send(&format);
+	format_for_draw();
 	draw_write(primitive_type, vertex_count, device.base_vertex_index, 0, index_data, 0);
 }
 
@@ -3202,10 +3086,13 @@ static void immediate_site_count(uintptr_t site)
 	}
 }
 
+static void decal_batch_forget(void);
+
 void WINAPI D3DDevice_Begin(D3DPRIMITIVETYPE primitive_type)
 {
 	immediate_site_count((uintptr_t)__builtin_return_address(0));
 	device.immediate_active = TRUE;
+	decal_batch_forget();
 	device.immediate_skipped = device.visibility_test_active && !host_gx2_visibility_enabled();
 	device.immediate_type = primitive_type;
 	wiiu_immediate_begin(&device.immediate);
@@ -3235,6 +3122,7 @@ static void immediate_format_send(unsigned long mask)
 	format.strides[0] = (uint32_t)(place * 4 * sizeof(float));
 	format.stream_mask = 1;
 	draw_format_send(&format);
+	format_memo.told = FALSE; /* (the GX2 thread's format is this one now) */
 }
 
 #define IMMEDIATE_DRAW_HEADER (sizeof(struct dk_command_draw) + 2 * sizeof(uint32_t))
@@ -3301,6 +3189,8 @@ static void immediate_stream_close(unsigned long count)
 	draw_resources_used(FALSE, FALSE);
 }
 
+static BOOL decal_batch_end(void);
+
 static void D3DDevice_End_inner(void)
 {
 	/* only the registers SetVertexData wrote go in the stream (each is four floats of a vertex, at a place of its own in it); the others are the current values, as the
@@ -3311,6 +3201,8 @@ static void D3DDevice_End_inner(void)
 	struct dk_command_draw *command;
 	unsigned registers[XGPU_VERTEX_ATTRIBUTE_COUNT];
 
+	if (decal_batch_end())
+		return;
 	device.immediate_active = FALSE;
 	device.immediate.count = 0;
 	if (type == D3DPT_QUADLIST)
@@ -3382,6 +3274,7 @@ static void set_attribute(INT reg, float a, float b, float c, float d)
 		wiiu_immediate_write(&device.immediate, (unsigned)reg, device.attributes[reg]);
 	else
 		device.immediate.mask |= 1UL << reg;
+	attributes_serial++;
 	device.attributes[reg][0] = a;
 	device.attributes[reg][1] = b;
 	device.attributes[reg][2] = c;
@@ -3456,9 +3349,7 @@ static void decal_vertex_through_registers(const float color[4], const struct wi
 32767) and SetVertexData4f(0, position, 1) make, but written straight into the draw, registers 0, 4 and 9 side by side, once the first vertex has laid the draw out so:
 three calls and the registers' bookkeeping for each of thousands of vertices a frame were 10% of the game thread in a fight. (The texture coordinates are multiplied by
 1/32767, not divided: the last bit may differ, which nothing sees.) */
-void wiiu_decal_vertices(const unsigned char *color_bytes, const void *vertices, long count);
-
-void wiiu_decal_vertices(const unsigned char *color_bytes, const void *vertices, long count)
+static void decal_vertices_expanded(const unsigned char *color_bytes, const void *vertices, long count)
 {
 	const struct wiiu_decal_vertex *vertex = (const struct wiiu_decal_vertex *)vertices;
 	const float *unit = byte_units();
@@ -3507,10 +3398,168 @@ void wiiu_decal_vertices(const unsigned char *color_bytes, const void *vertices,
 	}
 	device.immediate.count += (unsigned long)count;
 	/* (the registers hold the last vertex's values after, as the calls would have left them) */
+	attributes_serial++;
 	memcpy(device.attributes[0], out - 12, 4 * sizeof(float));
 	memcpy(device.attributes[4], out - 8, 4 * sizeof(float));
 	memcpy(device.attributes[9], out - 4, 4 * sizeof(float));
 }
+/* A batch's decals as the game gave them (rasterizer_xbox_decals.c), for the GX2 thread to expand (DK_DRAW_DECALS): for each decal its vertex count and
+color's bytes, then its vertices as they are (16 bytes each, a third of what they are expanded to). Expanding them here was 5% of the game thread in a fight,
+with the stream's lines it made for them. The batch is drawn at End as decal_vertices_expanded's vertices would have been: the same vertex format and
+registers, the same arithmetic (wiiu_gx2.c's decals_expand); a batch that cannot be kept so (another register written between, no memory, too big for
+the stream) is expanded here first, in its order. */
+static struct
+{
+	unsigned char *data;
+	unsigned long used, capacity, vertices;
+	struct wiiu_decal_vertex last;
+	unsigned char last_color[4];
+} decal_batch;
+
+static void decal_batch_forget(void)
+{
+	decal_batch.used = 0;
+	decal_batch.vertices = 0;
+}
+
+/* (records: count, color's four bytes, then the vertices) */
+#define DECAL_RECORD_HEADER 8UL
+#define DECAL_BATCH_LIMIT (512UL * 1024UL)
+
+/* the batch kept so far, expanded here into the draw being made, in order */
+static void decal_batch_spill(void)
+{
+	unsigned long at = 0;
+
+	while (at < decal_batch.used)
+	{
+		uint32_t count;
+
+		memcpy(&count, decal_batch.data + at, sizeof(count));
+		decal_batch.vertices -= count;
+		decal_vertices_expanded(decal_batch.data + at + 4, decal_batch.data + at + DECAL_RECORD_HEADER, (long)count);
+		at += DECAL_RECORD_HEADER + count * sizeof(struct wiiu_decal_vertex);
+	}
+	decal_batch.used = 0;
+	decal_batch.vertices = 0;
+}
+
+void wiiu_decal_vertices(const unsigned char *color_bytes, const void *vertices, long count);
+
+void wiiu_decal_vertices(const unsigned char *color_bytes, const void *vertices, long count)
+{
+	unsigned long bytes;
+	uint32_t count32;
+
+	if (count <= 0)
+		return;
+	bytes = DECAL_RECORD_HEADER + (unsigned long)count * sizeof(struct wiiu_decal_vertex);
+	/* (kept only in a QUADLIST Begin that nothing else has written to: anything else goes the way it went) */
+	if (!device.immediate_active || device.immediate_skipped || device.immediate_type != D3DPT_QUADLIST || device.immediate.count ||
+		device.immediate.mask != 1 || decal_batch.used + bytes > DECAL_BATCH_LIMIT)
+	{
+		decal_batch_spill();
+		decal_vertices_expanded(color_bytes, vertices, count);
+		return;
+	}
+	if (decal_batch.used + bytes > decal_batch.capacity)
+	{
+		unsigned long capacity = decal_batch.capacity ? decal_batch.capacity : 64UL * 1024UL;
+		unsigned char *grown;
+
+		while (capacity < decal_batch.used + bytes)
+			capacity *= 2;
+		grown = realloc(decal_batch.data, capacity);
+		if (!grown)
+		{
+			decal_batch_spill();
+			decal_vertices_expanded(color_bytes, vertices, count);
+			return;
+		}
+		decal_batch.data = grown;
+		decal_batch.capacity = capacity;
+	}
+	count32 = (uint32_t)count;
+	memcpy(decal_batch.data + decal_batch.used, &count32, sizeof(count32));
+	memcpy(decal_batch.data + decal_batch.used + 4, color_bytes, 4);
+	memcpy(decal_batch.data + decal_batch.used + DECAL_RECORD_HEADER, vertices, (unsigned long)count * sizeof(struct wiiu_decal_vertex));
+	decal_batch.used += bytes;
+	decal_batch.vertices += (unsigned long)count;
+	decal_batch.last = ((const struct wiiu_decal_vertex *)vertices)[count - 1];
+	memcpy(decal_batch.last_color, color_bytes, 4);
+}
+
+/* End of a Begin whose vertices are a kept decal batch: drawn as DK_DRAW_DECALS. FALSE if there is none (End goes on as it did). */
+static BOOL decal_batch_end(void)
+{
+	const float *unit = byte_units();
+	unsigned long total, bytes = 0, kept = 0;
+	struct dk_command_draw *command;
+
+	if (!decal_batch.vertices)
+	{
+		decal_batch.used = 0;
+		return FALSE;
+	}
+	if (device.immediate.count)
+	{
+		/* (vertices were made another way after the batch began: in order, all of them that way) */
+		decal_batch_spill();
+		return FALSE;
+	}
+	/* the registers as the last vertex's three calls would have left them */
+	attributes_serial++;
+	device.attributes[0][0] = decal_batch.last.position[0];
+	device.attributes[0][1] = decal_batch.last.position[1];
+	device.attributes[0][2] = decal_batch.last.position[2];
+	device.attributes[0][3] = 1.0f;
+	device.attributes[4][0] = (float)(short)(decal_batch.last.texcoord & 0xffff) * (1.0f / 32767.0f);
+	device.attributes[4][1] = (float)(short)(decal_batch.last.texcoord >> 16) * (1.0f / 32767.0f);
+	device.attributes[4][2] = 0.0f;
+	device.attributes[4][3] = 1.0f;
+	device.attributes[9][0] = unit[decal_batch.last_color[0]];
+	device.attributes[9][1] = unit[decal_batch.last_color[1]];
+	device.attributes[9][2] = unit[decal_batch.last_color[2]];
+	device.attributes[9][3] = unit[decal_batch.last_color[3]];
+	device.immediate_active = FALSE;
+	device.immediate.count = 0;
+	total = decal_batch.vertices & ~3UL;
+	decal_batch.vertices = 0;
+	if (!total || (device.visibility_test_active && !host_gx2_visibility_enabled()) || !draw_prepare(TRUE))
+	{
+		decal_batch.used = 0;
+		return TRUE;
+	}
+	immediate_format_send(DECAL_LAYOUT);
+	/* (the records that hold the first total vertices; the last cut short if the batch was not whole quads) */
+	while (bytes < decal_batch.used && kept < total)
+	{
+		uint32_t count;
+
+		memcpy(&count, decal_batch.data + bytes, sizeof(count));
+		if (kept + count > total)
+		{
+			count = (uint32_t)(total - kept);
+			memcpy(decal_batch.data + bytes, &count, sizeof(count));
+		}
+		kept += count;
+		bytes += DECAL_RECORD_HEADER + count * sizeof(struct wiiu_decal_vertex);
+	}
+	command = stream_command(DK_COMMAND_DRAW, sizeof(*command) + 2 * sizeof(uint32_t) + bytes);
+	command->primitive = primitive_of(D3DPT_QUADLIST) | DK_DRAW_DECALS;
+	command->count = (uint32_t)total;
+	command->index_address = 0;
+	command->vertex_offset = 0;
+	command->inline_bytes = (uint32_t)bytes;
+	command->stream_count = 1;
+	command->streams[0][0] = 0;
+	command->streams[0][1] = (uint32_t)(total * 12 * sizeof(float));
+	memcpy(&command->streams[1], decal_batch.data, bytes);
+	decal_batch.used = 0;
+	draw_resources_used(FALSE, FALSE);
+	return TRUE;
+}
+
 /* ---------- clearing */
 
 void WINAPI D3DDevice_Clear(DWORD count, CONST D3DRECT *rectangles, DWORD flags, D3DCOLOR color, float z, DWORD stencil)
@@ -3764,6 +3813,7 @@ static void D3DDevice_Present_inner(CONST RECT *source_rectangle, CONST RECT *de
 	}
 	/* the host starts the next frame with nothing bound */
 	targets_known = FALSE;
+	states_resync();
 	/* the stand-in window's swap: holds the frame to the display's rate
 	until the host presents, after which its swapchain does */
 	platform_video_swap();
