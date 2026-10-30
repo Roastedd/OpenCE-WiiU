@@ -421,8 +421,10 @@ int host_gx2_visibility_enabled(void);
 
 #define STREAM_SIZE (1024 * 1024)
 
-/* the buffers the stream is written into: one when the host runs a stream as it is handed over, STREAM_SLOTS when the GX2 thread runs them while the game goes on (host_gx2_async) */
-#define STREAM_SLOTS 3
+/* the buffers the stream is written into: one when the host runs a stream as it is handed over, STREAM_SLOTS when the GX2 thread runs them while the game goes on (host_gx2_async).
+Six: a stream is handed over every 40 draws, about twenty a frame, and with three the game thread could be only two ahead of the GX2 thread - it waited
+for a slot whenever that thread waited for the display's flip or had a frame's worth of work queued (6% of the game thread standing) */
+#define STREAM_SLOTS 6
 /* (on cache lines: the lines made in a slot, stream_lines_make, are whole lines of it) */
 static uint32_t stream_buffers[STREAM_SLOTS][STREAM_SIZE / 4] __attribute__((aligned(64)));
 static uint32_t *stream = stream_buffers[0];
