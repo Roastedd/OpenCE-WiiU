@@ -20,12 +20,23 @@ static int zeroable(const void *address)
 	return (uintptr_t)address >= 0x10000000u && (uintptr_t)address < 0x50000000u;
 }
 
+/* Whether the two ranges share a byte. The game's code copies structures onto themselves (a = *f(&a, ...), f returning its argument), some of a hundred bytes
+and more: debug.network_test's hosting made its game type with game_engine_get_variant_by_name so, 112 bytes, and every game the Wii U hosted had none (no
+game engine: the players spawned as in the campaign, "playing to 0"). dcbz clears the destination's line before the source's bytes in it are read, so such a
+copy, and one partly over itself, which memcpy need not handle but newlib's (forward, a word at a time) did, is copied as newlib's is. */
+static int overlapping(const void *destination, const void *source, size_t size)
+{
+	const uintptr_t d = (uintptr_t)destination, s = (uintptr_t)source;
+
+	return d < s + size && s < d + size;
+}
+
 void *memcpy(void *destination, const void *source, size_t size)
 {
 	volatile uint8_t *d = (volatile uint8_t *)destination;
 	const volatile uint8_t *s = (const volatile uint8_t *)source;
 
-	if (size >= 96 && zeroable(destination))
+	if (size >= 96 && zeroable(destination) && !overlapping(destination, source, size))
 	{
 		size_t head = (size_t)((0u - (uintptr_t)destination) & (CACHE_LINE - 1));
 
@@ -106,7 +117,8 @@ void *memset(void *destination, int value, size_t size)
 	return destination;
 }
 
-/* every size to 300 at every misalignment of both addresses, against a copy a byte at a time, and the memset's the same; returns the number of wrong results */
+/* every size to 300 at every misalignment of both addresses, against a copy a byte at a time, a copy onto itself and one to a lower address over its own source
+(as a byte at a time forward), and the memset's the same; returns the number of wrong results */
 int wiiu_memcpy_selftest(void);
 
 int wiiu_memcpy_selftest(void)
@@ -133,6 +145,27 @@ int wiiu_memcpy_selftest(void)
 						break;
 					}
 			}
+	for (size = 0; size <= 300; size += 4)
+		for (to = 0; to < 8; to++)
+		{
+			static const unsigned ahead[] = { 0, 4, 32, 33 };
+			unsigned k;
+
+			for (k = 0; k < sizeof(ahead) / sizeof(ahead[0]); k++)
+			{
+				for (i = 0; i < sizeof(target); i++)
+					target[i] = reference[i] = (uint8_t)(i * 13u + 5u);
+				for (i = 0; i < size; i++)
+					((volatile uint8_t *)reference)[to + i] = ((volatile uint8_t *)reference)[to + ahead[k] + i];
+				memcpy(target + to, target + to + ahead[k], size);
+				for (i = 0; i < sizeof(target); i++)
+					if (target[i] != reference[i])
+					{
+						wrong++;
+						break;
+					}
+			}
+		}
 	for (size = 0; size <= 300; size += 3)
 		for (to = 0; to < 8; to++)
 		{

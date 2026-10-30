@@ -527,7 +527,7 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
     )
 
     # the high-res HUD's textures (port/assets/hud; port/linux/src/hud_hires.c)
-    embedded_assets = hud_assets_build(n, "linux", build_dir / "generated" / "hud_hires_assets.c")
+    embedded_assets = hud_assets_build(n, "linux", build_dir / "generated" / "hud_hires_assets.c", big_endian=big_endian)
 
     # the portable build's system root and SDL3, or the build machine's
     if getattr(sln, "port_portable", False):
