@@ -1,0 +1,24 @@
+{
+  "baseline_revision": "b5af9cf3cb4d0beefb7149418b4b7f181e85225d",
+  "baseline_source_sha256": "f99c3eacd86332f059e8bd7782dc43ffac30f2b6f6aee66c38fded7434865827",
+  "legacy_oracle_sha256": "4fbbafc2c544f22aec8dafd49b6d00daa744794c6059e45201787430259abe57",
+  "proposed_source_sha256": "585367d0e13348a8fda203b05aa469e09047589419429867232130f09215001a",
+  "native_gate": "isolated fast probe passed; game/output/HOME/performance acceptance remains separate",
+  "source": "port/wiiu/src/wiiu_gx2.c",
+  "contract": "Complete generated count/eight-word descriptors; existing initializer tuple, cap and lifetime; conservative VS-switch rebind",
+  "previous_proposed_source_sha256": "d71caad08a8a883a2f83f7aad4435dade27f839954776ba002f267c6bcccd627",
+  "qualified_cache_input_sha256": "0e683dcebdef3ab905e749a40521ae0c67292430746f5fa7a3c898d3dbabfbb8",
+  "qualified_attribute_spec_sha256": "1076e7079563d1a346b729b29da46aecef0ec5e40c7c14fff5da52e7c396ed35",
+  "native_probe": {
+    "wuhb_sha256": "7bdb42e20bb10483e85db4f8af777f02019a71d035f2f6416af4bcd8712b200a",
+    "report": "runs/wiiu/fetch-cache-20261029/fast-native-probe/fetch-fast-qual-00000348b4ad5542.txt",
+    "report_sha256": "f78b1fd05afa3c075e031f33e9de0b8e1f62c3fcad493a97909f85c1860fdc0c",
+    "warm_rows": 72,
+    "cold_rows": 72,
+    "GPU_output_cases": 36,
+    "sharing_sequences": 12,
+    "VS_output_sequences": 12,
+    "endian_comparisons": 9,
+    "scope": "Raw getter bypasses game draw memo; cold initializer owner core differs from game worker; selected output cases only, no game FPS or complete HOME guarantee"
+  }
+}
