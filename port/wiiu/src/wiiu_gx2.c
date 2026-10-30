@@ -16,6 +16,7 @@ Not run on a console.
 */
 
 #include "dk_commands.h"
+#include "dk_derive.h"
 #include "wiiu_debug.h"
 #include "wiiu_shell.h"
 #include "port_config.h"
@@ -3621,6 +3622,41 @@ uint32_t host_gx2_visibility(uint32_t index);
 unsigned int host_gx2_output_height(void);
 
 
+/* what the game thread's states and the draw's facts come to (dk_derive.c, which d3d8_gx2.c's draw_prepare did for every draw on the game thread), applied
+where it differs from the last: the commands it sent before (STATE, SHADER_KEYS, TEXTURES, the parameters) did the same */
+static void derive_apply(void)
+{
+	struct dk_derive *derive = dk_derive_get();
+	const unsigned changed = dk_derive_run(derive);
+
+	if (changed & DK_DERIVED_STATE)
+	{
+		gx.state = *dk_derive_state(derive);
+		gx.state_dirty = 1;
+	}
+	if (changed & DK_DERIVED_KEYS)
+	{
+		uint32_t dk_shader_for_draw(uint32_t stage, const void *key_data);
+
+		gx.vs_handle = dk_shader_for_draw(0 /* DK_SHADER_STAGE_VERTEX */, dk_derive_vertex_key(derive));
+		gx.ps_handle = dk_shader_for_draw(1 /* DK_SHADER_STAGE_PIXEL */, dk_derive_pixel_key(derive));
+		if (!gx.vs_handle || !gx.ps_handle)
+			gx.shader_key_misses++;
+	}
+	if (changed & DK_DERIVED_TEXTURES)
+		textures_set(dk_derive_textures(derive));
+	if (changed & DK_DERIVED_VERTEX_PARAMETERS)
+	{
+		gx.vertex_parameters = *dk_derive_vertex_parameters(derive);
+		gx.vertex_parameters_dirty = 1;
+	}
+	if (changed & DK_DERIVED_PIXEL_PARAMETERS)
+	{
+		gx.pixel_parameters = *dk_derive_pixel_parameters(derive);
+		gx.pixel_parameters_dirty = 1;
+	}
+}
+
 /* runs the commands of a stream; replaying (the GPU test) leaves out those that make or free resources and the present */
 static void run_stream(const unsigned char *at, const unsigned char *end)
 {
@@ -3722,10 +3758,19 @@ static void run_stream(const unsigned char *at, const unsigned char *end)
 		case DK_COMMAND_COMPOSITE:
 			composite_receive((const struct dk_command_composite *)header);
 			break;
+		case DK_COMMAND_STATE_WRITES:
+			dk_derive_writes(dk_derive_get(), (const struct dk_command_state_writes *)header);
+			break;
+		case DK_COMMAND_DRAW_FACTS:
+			if (header->size >= sizeof(struct dk_command_draw_facts))
+				dk_derive_facts(dk_derive_get(), &((const struct dk_command_draw_facts *)header)->facts);
+			break;
 		case DK_COMMAND_DRAW:
 		{
 			const OSTime draw_start = OSGetSystemTime();
 
+			if (dk_derive_pending(dk_derive_get()))
+				derive_apply();
 			draw((const struct dk_command_draw *)header);
 			gx.draw_ticks += OSGetSystemTime() - draw_start;
 			break;

@@ -43,6 +43,8 @@ enum
 	DK_COMMAND_VISIBILITY_END,
 	DK_COMMAND_MARKER,
 	DK_COMMAND_SHADER_KEYS,
+	DK_COMMAND_STATE_WRITES, /* dk_derive.h */
+	DK_COMMAND_DRAW_FACTS,
 };
 
 /* a surface's kind, as the host makes its image */

@@ -18,10 +18,16 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 from harness import function
 
-SOURCE = ROOT / "port/wiiu/src/d3d8_gx2.c"
+SOURCE = ROOT / "port/wiiu/src/dk_derive.c"
 HEADER = ROOT / "port/wiiu/src/wiiu_uniform_cache.h"
 TEST = ROOT / "port/wiiu/tests/test_uniform_cache.c"
 LEGACY = ROOT / "port/wiiu/tests/uniform_legacy.inc"
+
+
+def current_code():
+    """dk_derive.c's input capture and uniform step, as the GX2 thread runs them"""
+    source = SOURCE.read_text()
+    return function(source, "parameter_inputs") + "\n" + function(source, "derive_parameters")
 
 
 class UniformCacheTest(unittest.TestCase):
@@ -29,8 +35,7 @@ class UniformCacheTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="opence-uniform-cache-") as folder:
             folder = Path(folder)
             (folder / "wiiu_uniform_cache.h").write_text(HEADER.read_text() if header is None else header)
-            (folder / "current_uniform.inc").write_text(
-                function(SOURCE.read_text(), "draw_parameters_send") if current is None else current)
+            (folder / "current_uniform.inc").write_text(current_code() if current is None else current)
             command = [os.environ.get("CC", "cc"), *shlex.split(os.environ.get("UNIFORM_CACHE_TARGET", "")),
                        "-std=gnu11", "-O2", "-g", "-Wall", "-Wextra", "-Werror", "-ffp-contract=off",
                        "-fno-strict-aliasing", "-I" + str(folder), "-I" + str(HEADER.parent),
@@ -84,9 +89,9 @@ class UniformCacheTest(unittest.TestCase):
         self.assertIn("uniform check failed", result.stderr)
 
     def test_gpu_forget_on_cpu_cache_hit_is_detected(self):
-        current = function(SOURCE.read_text(), "draw_parameters_send")
-        self.assertEqual(current.count("if (!parameters_known ||"), 2)
-        result = self.run_fixture(current=current.replace("if (!parameters_known ||", "if ("))
+        current = current_code()
+        self.assertEqual(current.count("if (first ||"), 2)
+        result = self.run_fixture(current=current.replace("if (first ||", "if (first * 0 ||"))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("uniform check failed", result.stderr)
 
