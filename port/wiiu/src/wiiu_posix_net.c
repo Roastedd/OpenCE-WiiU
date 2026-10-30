@@ -165,6 +165,19 @@ static struct
 	uint32_t quiet_until;
 } listeners[LISTENERS];
 
+/* A datagram socket's receive longer than some length nsysnet refuses with EMSGSIZE, whatever is waiting, where Linux and Windows take any length: internet
+play's tunnel reads into 2048 bytes, so every STUN answer and every packet from a peer was lost (the console never learned its public address, and a peer
+reached by its pings could not answer them), while the game's 1200 bytes are taken (the console behaviour the warthog-wiiu port's logs found, 2026-10-22). No
+datagram on these networks is longer than an Ethernet frame's 1472 bytes of UDP (the tunnel's packets are at most 1431, p2p.c; the game's 1200), so a datagram
+socket's receive asks for no more than that, and one still refused is asked again 8 bytes shorter, down to 512: the longest taken is the limit from then on,
+logged. Refused at 512 too, it fails as Winsock's WSAEMSGSIZE (a datagram dropped). */
+#define DATAGRAM_RECEIVE_MOST 1472
+#define DATAGRAM_RECEIVE_LEAST 512
+#define DATAGRAM_RECEIVE_STEP 8
+static int datagram_receive_limit = DATAGRAM_RECEIVE_MOST;
+/* which sockets are datagram sockets (made by posix_socket) */
+static unsigned char datagram_sockets[LISTENERS];
+
 static uint32_t clock_ms(void)
 {
 	return (uint32_t)OSTicksToMilliseconds(OSGetSystemTime());
@@ -192,6 +205,8 @@ int posix_socket(int family, int type, int protocol)
 		int result = socket(family, type, protocol);
 
 		trace(type == SOCK_STREAM ? "socket (stream)" : "socket (datagram)", result, NULL, result);
+		if (result >= 0 && result < LISTENERS)
+			datagram_sockets[result] = type == SOCK_DGRAM;
 		return succeed(result);
 	}
 }
@@ -200,7 +215,10 @@ int posix_socket(int family, int type, int protocol)
 int posix_socket_close(int socket)
 {
 	if (socket >= 0 && socket < LISTENERS)
+	{
 		memset(&listeners[socket], 0, sizeof(listeners[socket]));
+		datagram_sockets[socket] = 0;
+	}
 	return succeed(close(socket));
 }
 
@@ -258,6 +276,8 @@ int posix_socket_accept(int socket, void *address, int *address_length)
 	result = accept(socket, address, address_length ? &length : NULL);
 	if (address_length)
 		*address_length = (int)length;
+	if (result >= 0 && result < LISTENERS)
+		datagram_sockets[result] = 0;
 	if (result >= 0 || errno != EBUSY)
 		trace("accept", socket, NULL, result);
 	if (socket >= 0 && socket < LISTENERS && listeners[socket].listening)
@@ -312,6 +332,52 @@ int posix_socket_sendto(int socket, const void *buffer, int length, int flags, c
 	}
 }
 
+/* recv, or recvfrom (from_call), with a datagram socket's length kept to what nsysnet takes (datagram_receive_limit); errno is the call's */
+static int receive(int socket, void *buffer, int length, int flags, int from_call, void *address, socklen_t *address_length)
+{
+	static unsigned int told;
+	static int told_taken;
+	const int datagram = socket >= 0 && socket < LISTENERS && datagram_sockets[socket];
+	const socklen_t address_space = address_length ? *address_length : 0;
+	const int asked = length;
+	int refused = 0;
+	int result, error;
+
+	for (;;)
+	{
+		if (datagram && length > datagram_receive_limit)
+			length = datagram_receive_limit;
+		result = from_call ? (int)recvfrom(socket, buffer, (size_t)length, flags, address, address_length) : (int)recv(socket, buffer, (size_t)length, flags);
+		if (result >= 0 || errno != EMSGSIZE || !datagram || length - DATAGRAM_RECEIVE_STEP < DATAGRAM_RECEIVE_LEAST)
+			break;
+		/* refused: shorter, this receive and every one after it */
+		refused = length;
+		length -= DATAGRAM_RECEIVE_STEP;
+		if (length < datagram_receive_limit)
+			datagram_receive_limit = length;
+		if (address_length)
+			*address_length = address_space;
+	}
+	error = errno;
+	if (refused && told < 8u)
+	{
+		told++;
+		if (result >= 0 || error != EMSGSIZE)
+			wiiu_log("Net: socket %d: a datagram receive of %d bytes refused (EMSGSIZE); %d taken (%s), the most asked of a datagram socket from now on",
+				socket, refused, length, result >= 0 ? "a datagram read" : "none waiting");
+		else
+			wiiu_log("Net: socket %d: a datagram receive refused (EMSGSIZE) at every length from %d down to %d", socket, asked, length);
+	}
+	else if (datagram && !refused && asked > length && result >= 0 && !told_taken)
+	{
+		/* (once: that the longest asked is taken with a datagram waiting) */
+		told_taken = 1;
+		wiiu_log("Net: socket %d: a datagram receive of %d bytes asked for %d, and took a datagram of %d", socket, asked, length, result);
+	}
+	errno = error;
+	return result;
+}
+
 int posix_socket_recv(int socket, void *buffer, int length, int flags)
 {
 	{
@@ -320,11 +386,14 @@ int posix_socket_recv(int socket, void *buffer, int length, int flags)
 
 		if (unusable())
 			return -1;
-		result = (int)recv(socket, buffer, (size_t)length, flags);
+		result = receive(socket, buffer, length, flags, 0, NULL, NULL);
 		if ((result < 0 && errno != EAGAIN && errno != EBUSY) || result == 0)
 		{
+			const int error = errno;
+
 			if (told++ < 20u)
-				wiiu_log("Net: recv socket %d, %d bytes -> %d (errno %d)", socket, length, result, result < 0 ? errno : 0);
+				wiiu_log("Net: recv socket %d, %d bytes -> %d (errno %d)", socket, length, result, result < 0 ? error : 0);
+			errno = error;
 		}
 		return succeed(result);
 	}
@@ -334,12 +403,21 @@ int posix_socket_recvfrom(int socket, void *buffer, int length, int flags, void 
 {
 	socklen_t socket_length = address_length ? (socklen_t)*address_length : 0;
 	int result;
+	static unsigned int told;
 
 	if (unusable())
 		return -1;
-	result = (int)recvfrom(socket, buffer, (size_t)length, flags, address && address_length ? address : NULL, address && address_length ? &socket_length : NULL);
+	result = receive(socket, buffer, length, flags, 1, address && address_length ? address : NULL, address && address_length ? &socket_length : NULL);
 	if (address_length)
 		*address_length = (int)socket_length;
+	if (result < 0 && errno != EAGAIN && errno != EBUSY && told < 20u)
+	{
+		const int error = errno;
+
+		told++;
+		wiiu_log("Net: recvfrom socket %d, %d bytes -> %d (errno %d)", socket, length, result, error);
+		errno = error;
+	}
 	return succeed(result);
 }
 
