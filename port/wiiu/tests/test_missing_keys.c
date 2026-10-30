@@ -306,6 +306,22 @@ static void test_activity_states(void)
     before=io_calls; CHECK(!counts().gameplay && (counts().io_gate&QUIESCED));
     for(i=0;i<100;i++) CHECK(!step()); CHECK(io_calls==before && counts().queue_pending==1); cleanup();
 }
+static void test_always_mode(void)
+{
+    unsigned i; int before;
+    /* gameplay holds file steps back, unless the development sweep's "always" is on */
+    reset(); wiiu_missing_keys_gameplay(1); pixel(1); before=io_calls;
+    for(i=0;i<100;i++) CHECK(!step()); CHECK(io_calls==before && !counts().written);
+    wiiu_missing_keys_always(1); CHECK(!counts().gameplay);
+    for(i=0;i<100 && counts().written<1;i++) step(); CHECK(counts().written==1);
+    wiiu_missing_keys_gameplay(1); CHECK(!counts().gameplay); pixel(2);
+    for(i=0;i<100 && counts().written<2;i++) step(); CHECK(counts().written==2);
+    wiiu_missing_keys_always(0); wiiu_missing_keys_gameplay(1); CHECK(counts().gameplay); pixel(3); before=io_calls;
+    for(i=0;i<100;i++) CHECK(!step()); CHECK(io_calls==before && counts().written==2);
+    wiiu_missing_keys_gameplay(0);
+    for(i=0;i<100 && counts().written<3;i++) step(); CHECK(counts().written==3);
+    cleanup();
+}
 static void test_activity_admitted_turn(void)
 {
     pthread_t thread; int before; unsigned i,kind;
@@ -369,6 +385,7 @@ int main(void)
 #ifdef WIIU_MISSING_ACTIVITY_FIXTURE
     test_activity_states(); test_activity_admitted_turn();
 #endif
+    test_always_mode();
     test_capacity_and_ownership(); test_short_and_home(); test_failures(); test_limits_and_collision(); test_stop_schedules();
     puts("missing-key queue: exact V/P, ownership, wrap/full, fair bounded IO, faults, HOME and ACTIVE/IO-held close passed"); return 0;
 }

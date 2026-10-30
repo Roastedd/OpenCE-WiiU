@@ -216,7 +216,8 @@ void wiiu_debug_present(const GX2ColorBuffer *back, const GX2ColorBuffer *tv, co
 	if (quit_asked && !quit_made)
 	{
 		quit_made = 1;
-		wiiu_launch_menu();
+		/* (the game's own quit: pending shader-capture records are written first, then the Menu is asked for) */
+		wiiu_request_exit();
 	}
 	if (shot.state != SHOT_REQUESTED)
 		return;
@@ -496,7 +497,7 @@ static void do_quit(void)
 	if (!quit_made)
 	{
 		quit_made = 1;
-		wiiu_launch_menu();
+		wiiu_request_exit();
 	}
 }
 

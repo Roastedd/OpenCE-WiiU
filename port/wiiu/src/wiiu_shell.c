@@ -321,6 +321,26 @@ void wiiu_request_exit(void)
 	if (asked)
 		return;
 	asked = 1;
+	/* the missing shaders' records are written only outside gameplay (wiiu_missing_keys.c), and once the Menu is asked for the app is in
+	the background, where the close does not write them: the quit, which is not gameplay, gives them up to five seconds first (64 records
+	took several on the console's SD card: a scan of the folder, then a file per 8 records, each flushed). As "always", a gameplay flag the
+	game raises again meanwhile no longer holds them back. With nothing pending (a complete shader pack) the quit does not wait at all. */
+	{
+		wiiu_missing_keys_counts counts;
+		uint32_t waited = 0;
+
+		wiiu_missing_keys_always(1);
+		do
+		{
+			wiiu_missing_keys_counts_get(&counts);
+			if ((!counts.queue_pending && !counts.batch_records && counts.phase == 0) || counts.failed || waited >= 5000u)
+				break;
+			sleep_ms(5);
+			waited += 5u;
+		} while (1);
+		if (counts.accepted)
+			wiiu_log("Quit: shader capture written %u of %u after %u ms", (unsigned)counts.written, (unsigned)counts.accepted, (unsigned)waited);
+	}
 	wiiu_launch_menu();
 }
 
@@ -801,6 +821,21 @@ int wiiu_shell_run(int (*game_main)(void))
 	error = wiiu_missing_keys_start(&missing_config);
 	if (error)
 		OSReport("Shader capture cannot be started (error %d)\n", error);
+	else
+	{
+		/* (halo/shader_capture.txt "always": for sweeps that collect the keys a level needs; players never need it) */
+		char mode[16] = "";
+		FILE *file = fopen(WIIU_DATA_DIRECTORY "/shader_capture.txt", "r");
+
+		if (file)
+		{
+			if (!fgets(mode, sizeof(mode), file))
+				mode[0] = 0;
+			fclose(file);
+		}
+		if (!strncmp(mode, "always", 6))
+			wiiu_missing_keys_always(1);
+	}
 	memset(&log_config, 0, sizeof(log_config));
 	log_config.service = wiiu_missing_keys_service;
 	log_config.path = LOG_FILE;

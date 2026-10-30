@@ -38,7 +38,7 @@ static struct
     uint32_t initialized, gate, io_gate, observing, producer, consumer, write_sequence, read_sequence;
     uint32_t accepted, written, full, unavailable, lost_io, io_errors, close_errors;
     uint32_t rejected_producer, rejected_consumer, phase, batch_records, files, failed;
-    uint32_t scanned, owned_files, sequence;
+    uint32_t scanned, owned_files, sequence, always;
     size_t text_size, text_written;
     DIR *scan;
     int descriptor, last_error;
@@ -215,8 +215,14 @@ void wiiu_missing_keys_quiesce(void)
 void wiiu_missing_keys_gameplay(int active)
 {
     /* The same claim word closes the check/next-filesystem-step race. An already claimed syscall retains ownership. */
-    if (active) __atomic_fetch_or(&capture.io_gate, GAMEPLAY, __ATOMIC_ACQ_REL);
+    if (active && !load(&capture.always)) __atomic_fetch_or(&capture.io_gate, GAMEPLAY, __ATOMIC_ACQ_REL);
     else __atomic_fetch_and(&capture.io_gate, ~GAMEPLAY, __ATOMIC_ACQ_REL);
+}
+
+void wiiu_missing_keys_always(int on)
+{
+    store(&capture.always, on ? 1u : 0u);
+    if (on) __atomic_fetch_and(&capture.io_gate, ~GAMEPLAY, __ATOMIC_ACQ_REL);
 }
 
 void wiiu_missing_keys_counts_get(wiiu_missing_keys_counts *out)

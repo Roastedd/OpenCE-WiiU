@@ -49,6 +49,9 @@ void wiiu_missing_keys_resume(void);
 void wiiu_missing_keys_quiesce(void);
 /* Game-thread authoritative clock/menu transitions only. Active gameplay admits no new file step. */
 void wiiu_missing_keys_gameplay(int active);
+/* Development key sweeps only (halo/shader_capture.txt "always"): gameplay no longer holds file steps back, so a run that never pauses
+   keeps its keys and the 64 slots do not fill. Called once at start, before the game thread runs. */
+void wiiu_missing_keys_always(int on);
 void wiiu_missing_keys_counts_get(wiiu_missing_keys_counts *counts);
 void wiiu_missing_keys_report(const char *reason);
 
