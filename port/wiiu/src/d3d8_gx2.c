@@ -421,8 +421,10 @@ int host_gx2_visibility_enabled(void);
 
 #define STREAM_SIZE (1024 * 1024)
 
-/* the buffers the stream is written into: one when the host runs a stream as it is handed over, STREAM_SLOTS when the GX2 thread runs them while the game goes on (host_gx2_async) */
-#define STREAM_SLOTS 3
+/* the buffers the stream is written into: one when the host runs a stream as it is handed over, STREAM_SLOTS when the GX2 thread runs them while the game goes on (host_gx2_async).
+Six: a stream is handed over every 40 draws, about twenty a frame, and with three the game thread could be only two ahead of the GX2 thread - it waited
+for a slot whenever that thread waited for the display's flip or had a frame's worth of work queued (6% of the game thread standing) */
+#define STREAM_SLOTS 6
 /* (on cache lines: the lines made in a slot, stream_lines_make, are whole lines of it) */
 static uint32_t stream_buffers[STREAM_SLOTS][STREAM_SIZE / 4] __attribute__((aligned(64)));
 static uint32_t *stream = stream_buffers[0];
@@ -993,18 +995,50 @@ static BOOL targets_known;
 /* tells the host the current targets, if they are not what it has; FALSE if
 there is nothing to draw into. has_depth (if not NULL) says whether there is
 a depth buffer. */
+/* the surfaces' description and scale as targets_bind last made them, and what they came from: the two surfaces, their data, format and size
+words, and the screen's width and scale. Every draw binds the targets, nearly always the ones before (0.8% of the game thread in a fight). */
+static struct
+{
+	BOOL valid;
+	const D3DSurface *color, *depth;
+	DWORD words[6];
+	long screen_width;
+	float screen_scale[2];
+	struct dk_command_targets targets;
+	float scale[2];
+} targets_memo;
+
 static BOOL targets_bind(BOOL *has_depth)
 {
+	const D3DSurface *color = device.render_target, *depth = device.depth_stencil;
+	const DWORD words[6] = { color ? color->Data : 0, color ? color->Format : 0, color ? color->Size : 0,
+		depth ? depth->Data : 0, depth ? depth->Format : 0, depth ? depth->Size : 0 };
+	const long width = halo_screen_width();
 	struct dk_command_targets targets;
-	float color_scale[2], depth_scale[2];
 
-	memset(&targets, 0, sizeof(targets));
-	surface_describe(device.render_target, FALSE, &targets.color, color_scale);
-	surface_describe(device.depth_stencil, TRUE, &targets.depth, depth_scale);
+	if (!targets_memo.valid || targets_memo.color != color || targets_memo.depth != depth || !words_equal(words, targets_memo.words, sizeof(words)) ||
+		targets_memo.screen_width != width || targets_memo.screen_scale[0] != screen_scale[0] || targets_memo.screen_scale[1] != screen_scale[1])
+	{
+		float color_scale[2], depth_scale[2];
+
+		memset(&targets_memo.targets, 0, sizeof(targets_memo.targets));
+		surface_describe(color, FALSE, &targets_memo.targets.color, color_scale);
+		surface_describe(depth, TRUE, &targets_memo.targets.depth, depth_scale);
+		targets_memo.scale[0] = targets_memo.targets.color.kind != DK_SURFACE_NONE ? color_scale[0] : depth_scale[0];
+		targets_memo.scale[1] = targets_memo.targets.color.kind != DK_SURFACE_NONE ? color_scale[1] : depth_scale[1];
+		targets_memo.valid = TRUE;
+		targets_memo.color = color;
+		targets_memo.depth = depth;
+		memcpy(targets_memo.words, words, sizeof(words));
+		targets_memo.screen_width = width;
+		targets_memo.screen_scale[0] = screen_scale[0];
+		targets_memo.screen_scale[1] = screen_scale[1];
+	}
+	targets = targets_memo.targets;
 	if (targets.color.kind == DK_SURFACE_NONE && targets.depth.kind == DK_SURFACE_NONE)
 		return FALSE;
-	target_scale[0] = targets.color.kind != DK_SURFACE_NONE ? color_scale[0] : depth_scale[0];
-	target_scale[1] = targets.color.kind != DK_SURFACE_NONE ? color_scale[1] : depth_scale[1];
+	target_scale[0] = targets_memo.scale[0];
+	target_scale[1] = targets_memo.scale[1];
 	if (has_depth)
 		*has_depth = targets.depth.kind != DK_SURFACE_NONE;
 	if (!targets_known || !words_equal(&targets.color, &targets_told.color, sizeof(targets.color)) ||
