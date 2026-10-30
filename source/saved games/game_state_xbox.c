@@ -144,6 +144,10 @@ static void game_state_header_terminate(
 	long header_size);
 static HANDLE game_state_open_persistent_storage(
 	const char *directory);
+static void *game_state_image_get(
+	unsigned long size);
+static void game_state_image_release(
+	void *image);
 
 /* ---------- globals */
 
@@ -201,6 +205,9 @@ void *game_state_allocate_buffer(
 	xbox_game_state_globals.buffer_allocated = TRUE;
 	xbox_game_state_globals.buffer = (void *)address;
 	xbox_game_state_globals.buffer_size = cpu_size+gpu_size;
+	/* port: the image a saved game is read into before it is taken, made now
+	while the heap is whole (game_state_image_get) */
+	game_state_image_release(game_state_image_get(cpu_size+gpu_size));
 
 	return result;
 }
@@ -308,6 +315,9 @@ boolean game_state_read_from_file(
 	unsigned long bytes_read;
 	boolean result = FALSE;
 	void *image;
+	/* port: which step failed, in the message (1 no image, 2 seek, 3 read,
+	4 short, 5 not accepted) */
+	int stage = 1;
 
 	match_assert(
 		"c:\\halo\\SOURCE\\saved games\\game_state_xbox.c",
@@ -323,13 +333,17 @@ boolean game_state_read_from_file(
 		xbox_game_state_globals.file_valid_for_read || recover_saved_games_hack);
 
 	/* port: read beside the game state, and taken once checked */
-	image = malloc(xbox_game_state_globals.buffer_size);
+	image = game_state_image_get(xbox_game_state_globals.buffer_size);
 	if (image &&
+		++stage &&
 		SetFilePointer(xbox_game_state_globals.handle, 0, NULL, FILE_BEGIN) !=
 			INVALID_SET_FILE_POINTER &&
+		++stage &&
 		ReadFile(xbox_game_state_globals.handle, image,
 			xbox_game_state_globals.buffer_size, &bytes_read, NULL) &&
+		++stage &&
 		bytes_read == xbox_game_state_globals.buffer_size &&
+		++stage &&
 		game_state_image_accept(image, xbox_game_state_globals.buffer_size))
 	{
 		result = TRUE;
@@ -340,9 +354,9 @@ boolean game_state_read_from_file(
 			"c:\\halo\\SOURCE\\saved games\\game_state_xbox.c",
 			156,
 			FALSE,
-			csprintf(temporary, "couldn't read saved game file (#%d)", GetLastError()));
+			csprintf(temporary, "couldn't read saved game file (#%d, step %d)", GetLastError(), stage));
 	}
-	free(image);
+	game_state_image_release(image);
 
 	return result;
 }
@@ -410,7 +424,7 @@ void game_state_read_core(
 	HANDLE file;
 	unsigned long bytes_read;
 
-	void *image = malloc(buffer_size);
+	void *image = game_state_image_get(buffer_size);
 
 	sprintf(path, "d:\\core\\%s", name);
 	file = CreateFileA(path, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
@@ -426,7 +440,7 @@ void game_state_read_core(
 		"game state has been corrupted (thank you, come again)");
 	(void)buffer;
 	CloseHandle(file);
-	free(image);
+	game_state_image_release(image);
 
 	return;
 }
@@ -672,7 +686,7 @@ void game_state_read_from_persistent_storage(
 	if (file != INVALID_HANDLE_VALUE)
 	{
 		/* port: read beside the game state, and taken once checked */
-		void *image = malloc(buffer_size);
+		void *image = game_state_image_get(buffer_size);
 
 		if (!image ||
 			SetFilePointer(file, 0, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER ||
@@ -689,7 +703,7 @@ void game_state_read_from_persistent_storage(
 			delete_persistent_storage();
 		}
 		(void)buffer;
-		free(image);
+		game_state_image_release(image);
 		CloseHandle(file);
 	}
 
@@ -709,3 +723,42 @@ void game_state_create_persistent_storage(
 }
 
 /* ---------- private code */
+
+/* port: the image a saved game is read into and checked in before it is taken
+(game_state_image_accept). The Wii U keeps one for the whole session, made at
+start: made again at each revert, the 20 MiB block could not always be had late
+in a session, and Save and Quit halted at "couldn't read saved game file (#8)".
+The other builds make it each time, as before. */
+#ifdef HALO_WIIU
+static void *game_state_image;
+static unsigned long game_state_image_size;
+#endif
+
+static void *game_state_image_get(
+	unsigned long size)
+{
+#ifdef HALO_WIIU
+	if (game_state_image_size < size)
+	{
+		free(game_state_image);
+		game_state_image = malloc(size);
+		game_state_image_size = game_state_image ? size : 0;
+	}
+
+	return game_state_image;
+#else
+	return malloc(size);
+#endif
+}
+
+static void game_state_image_release(
+	void *image)
+{
+#ifdef HALO_WIIU
+	(void)image;
+#else
+	free(image);
+#endif
+
+	return;
+}
