@@ -9,7 +9,8 @@ This is the guide for players. How the port is built and how it works are in [RE
 - Your own **Halo: Combat Evolved for the original Xbox**: the `maps` folder from its disc (`a10.map` to `d40.map`, `ui.map`
   and the multiplayer maps). The port includes no game data.
 - A computer with **Python 3**, to convert the maps once.
-- From the release: `halo.wuhb` (the app) and `shaders.pack` (the graphics shaders, compiled for the Wii U's GPU).
+- From the release: `halo.wuhb` (the app), `shaders.pack` (the graphics shaders, compiled for the Wii U's GPU) and `brokers.txt`
+  (the servers through which internet games find each other).
 
 ## Installing
 
@@ -23,6 +24,7 @@ This is the guide for players. How the port is built and how it works are in [RE
 2. On the SD card, make the folder `wiiu/apps/halo/` and put in it:
    - `halo.wuhb`
    - `shaders.pack`
+   - `brokers.txt` (needed for internet games only; system link works without it)
    - a folder `data/maps/` holding every converted map.
 3. Put the card in the Wii U and start **Halo** from the Aroma menu. The first start takes longer while the cache files are made.
 
