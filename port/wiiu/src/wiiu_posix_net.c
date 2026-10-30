@@ -483,6 +483,43 @@ static int translate_option(int level, int name, int *host_level, int *host_name
 	}
 }
 
+/* A socket's buffer size over its limit nsysnet refuses (EINVAL), where Linux sets the most it allows: the game and internet play's tunnel ask for 1 MB
+(transport_endpoint_winsock.c, p2p.c) and kept nsysnet's own sizes, a few datagrams (1492 bytes to send and 4096 to receive, as warthog-wiiu's console logs
+read them), on the one socket that carries every peer's traffic. A size refused is asked again at 64 KB, then half as much each time down to 8 KB; the
+first taken is set, logged with the size it reads for the first sockets. None taken leaves the system's, and the call fails as it did. */
+#define BUFFER_SIZE_MOST 65536
+#define BUFFER_SIZE_LEAST 8192
+
+static int set_buffer_size(int socket, int host_name, int asked)
+{
+	static unsigned int told;
+	int size = asked;
+	int result = setsockopt(socket, SOL_SOCKET, host_name, &size, sizeof(size));
+	const int error = errno;
+	int tried;
+
+	for (tried = BUFFER_SIZE_MOST; result < 0 && tried >= BUFFER_SIZE_LEAST; tried /= 2)
+	{
+		if (tried >= asked)
+			continue;
+		size = tried;
+		result = setsockopt(socket, SOL_SOCKET, host_name, &size, sizeof(size));
+	}
+	if (size != asked && told < 12u)
+	{
+		int current = 0;
+		socklen_t current_length = sizeof(current);
+
+		told++;
+		if (getsockopt(socket, SOL_SOCKET, host_name, &current, &current_length) != 0)
+			current = -1;
+		wiiu_log("Net: socket %d: %s %d refused (errno %d); %s %d (it reads %d)", socket, host_name == SO_SNDBUF ? "SO_SNDBUF" : "SO_RCVBUF", asked, error,
+			result >= 0 ? "set to" : "none taken down to", size, current);
+	}
+	errno = error;
+	return result;
+}
+
 int posix_socket_setsockopt(int socket, int level, int name, const void *value, int length)
 {
 	int host_level, host_name;
@@ -494,6 +531,13 @@ int posix_socket_setsockopt(int socket, int level, int name, const void *value, 
 		/* Xbox-only options such as SO_ENCRYPT have nothing to do here */
 		last_error = 0;
 		return 0;
+	}
+	if (host_level == SOL_SOCKET && (host_name == SO_SNDBUF || host_name == SO_RCVBUF) && value && length == (int)sizeof(int))
+	{
+		int asked;
+
+		memcpy(&asked, value, sizeof(asked));
+		return succeed(set_buffer_size(socket, host_name, asked));
 	}
 	return succeed(setsockopt(socket, host_level, host_name, value, (socklen_t)length));
 }
