@@ -205,9 +205,11 @@ void *game_state_allocate_buffer(
 	xbox_game_state_globals.buffer_allocated = TRUE;
 	xbox_game_state_globals.buffer = (void *)address;
 	xbox_game_state_globals.buffer_size = cpu_size+gpu_size;
+#ifdef HALO_WIIU
 	/* port: the image a saved game is read into before it is taken, made now
 	while the heap is whole (game_state_image_get) */
-	game_state_image_release(game_state_image_get(cpu_size+gpu_size));
+	game_state_image_get(cpu_size+gpu_size);
+#endif
 
 	return result;
 }
@@ -740,7 +742,11 @@ static void *game_state_image_get(
 #ifdef HALO_WIIU
 	if (game_state_image_size < size)
 	{
-		free(game_state_image);
+		/* (the game's free halts on a null pointer: debug_memory.c) */
+		if (game_state_image)
+		{
+			free(game_state_image);
+		}
 		game_state_image = malloc(size);
 		game_state_image_size = game_state_image ? size : 0;
 	}
@@ -757,7 +763,10 @@ static void game_state_image_release(
 #ifdef HALO_WIIU
 	(void)image;
 #else
-	free(image);
+	if (image)
+	{
+		free(image);
+	}
 #endif
 
 	return;

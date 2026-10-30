@@ -48,7 +48,8 @@ static void *test_malloc(size_t size) {
     allocations++;
     return fail_allocation ? NULL : calloc(1, size);
 }
-static void test_free(void *pointer) { if (pointer) frees++; free(pointer); }
+/* as the game's free (debug_memory.c), a null pointer is an error */
+static void test_free(void *pointer) { if (!pointer) abort(); frees++; free(pointer); }
 static unsigned SetFilePointer(void *file, long distance, void *high, unsigned mode) {
     (void)file; (void)distance; (void)high; (void)mode;
     seeks++;
