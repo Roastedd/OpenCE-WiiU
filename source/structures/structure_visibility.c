@@ -657,10 +657,69 @@ static short bounding_rectangles_intersect(
 	return result;
 }
 
+#ifdef HALO_WIIU
+/* port: on the Wii U each plane is tested at the two corners of the box that
+lie farthest behind it and farthest in front of it, not at all eight: the
+corner whose every product is the greatest has the greatest distance as the
+floating point computes it too (each product and sum rounds monotonically),
+so all eight corners are behind exactly when it is, and one is behind
+exactly when the least one is - the same answer for every finite input; any
+infinity or NaN goes the original way (planes_intersect_rectangle_corners).
+A twentieth of the cost of the BSP's visibility in a fight
+(port/wiiu/tests/test_planes_rectangle.c compares the two). */
+static long planes_intersect_rectangle_corners(
+	real_rectangle3d const *bounds,
+	short cull_plane_count,
+	real_plane3d const *cull_planes);
+
 static long planes_intersect_rectangle(
 	real_rectangle3d const *bounds,
 	short cull_plane_count,
 	real_plane3d const *cull_planes)
+{
+	boolean any_behind = FALSE;
+	short plane_index;
+
+	for (plane_index = 0; plane_index < cull_plane_count; plane_index++)
+	{
+		real_plane3d const *plane = &cull_planes[plane_index];
+		real ix0 = plane->n.i * bounds->x0, ix1 = plane->n.i * bounds->x1;
+		real jy0 = plane->n.j * bounds->y0, jy1 = plane->n.j * bounds->y1;
+		real kz0 = plane->n.k * bounds->z0, kz1 = plane->n.k * bounds->z1;
+		real most_i, least_i, most_j, least_j, most_k, least_k;
+
+		/* (x - x is 0 for every finite x, NaN for an infinity or a NaN) */
+		if ((ix0 - ix0) != 0.0f || (ix1 - ix1) != 0.0f || (jy0 - jy0) != 0.0f || (jy1 - jy1) != 0.0f ||
+			(kz0 - kz0) != 0.0f || (kz1 - kz1) != 0.0f || (plane->d - plane->d) != 0.0f)
+		{
+			return planes_intersect_rectangle_corners(bounds, cull_plane_count, cull_planes);
+		}
+		if (ix0 > ix1) { most_i = ix0; least_i = ix1; } else { most_i = ix1; least_i = ix0; }
+		if (jy0 > jy1) { most_j = jy0; least_j = jy1; } else { most_j = jy1; least_j = jy0; }
+		if (kz0 > kz1) { most_k = kz0; least_k = kz1; } else { most_k = kz1; least_k = kz0; }
+		if (most_i + most_j + most_k - plane->d < 0.0f)
+		{
+			return _intersection_out;
+		}
+		if (least_i + least_j + least_k - plane->d < 0.0f)
+		{
+			any_behind = TRUE;
+		}
+	}
+
+	return any_behind ? _intersection_spanning : _intersection_in;
+}
+
+static long planes_intersect_rectangle_corners(
+	real_rectangle3d const *bounds,
+	short cull_plane_count,
+	real_plane3d const *cull_planes)
+#else
+static long planes_intersect_rectangle(
+	real_rectangle3d const *bounds,
+	short cull_plane_count,
+	real_plane3d const *cull_planes)
+#endif
 {
 	short accumulated_behind = 0;
 	real_rectangle3d local_bounds = *bounds;
