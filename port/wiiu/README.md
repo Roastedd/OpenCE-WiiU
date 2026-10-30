@@ -220,3 +220,62 @@ A unit that replaces an excluded source goes in `src/` (its README says how), an
 ## What does not wait
 
 The files (`posix_files.c`'s `UTIME_OMIT`, `pread` and `pwrite`), the null renderer, and the Wii U's input; each replaces stubs.
+
+## Owned missing-shader capture
+
+`gx2_shaders.c` queues one attempt per `(stage, lookup hash)` from its single
+GX2 command consumer. The entire seen-table/program scan and copy is covered by
+a nonblocking observation gate. Pixel records own the canonical 256-byte wire;
+vertex records own up to 136 four-word instructions and retain the raw program
+hash separately from the lookup hash. The existing program registry publishes
+immutable, process-lifetime data with a release/acquire count. No file work,
+allocation, sleeping or mutex waits occur in the missing-key producer.
+
+The main shell log worker services one bounded capture turn after each normal
+log batch, including idle turns. The independent error-log worker has no capture
+hook. Static storage holds 64 records (2240 bytes each) and a 16 KiB text batch.
+A turn selects at most eight records or performs one filesystem operation;
+individual writes are at most 4 KiB. Kernel filesystem latency itself remains
+unbounded. Ordinary log batches always receive the next turn.
+
+Complete batches are synced, closed and renamed from
+`shader-misses-<16 hex run ticks>-<4 decimal batch>.txt.part` to `.txt` in the
+application directory. V/P record text remains compatible with the shader pack
+generator. A unique run/batch namespace and exclusive part creation avoid
+reusing old batches. The directory scan is capped at 4096 entries, and 128 files
+with this owned prefix (including incomplete parts) stop further capture.
+Nothing is automatically deleted. The application owns this namespace; do not
+write competing files into it while the game runs.
+
+A full queue drops new unique keys; a missing vertex payload, ownership
+violation or storage failure is counted. Deduplication records attempts, not
+persistence. Summaries distinguish accepted, written, loss, drained and complete;
+`complete=1` requires producer stop, no active observation or I/O turn, an empty
+queue/batch and no recorded capture loss. It certifies only observations admitted
+before stop, rather than campaign-wide shader coverage. A storage failure stops
+capture and leaves any incomplete part as evidence. Only the main thread emits
+the capture summary before `Closed`; worker turns never queue automatic summaries
+that could resume behind that final attestation.
+
+HOME atomically suspends new capture turns and retains all buffers/descriptors;
+resume continues the owned job. Final close stops admission, waits at most
+300 ms for capture independently of normal log flush, then permanently quiesces
+new worker turns. A syscall or producer already active can finish with its
+static storage intact. An expired deadline is reported incomplete and never
+permits a free, reset or blocking join.
+
+Run `python3 tools/test_wiiu_missing_keys.py -v` for source-based queue,
+producer/formatter, actual shell-close, worker-fairness and sanitizer checks.
+The test accepts `MISSING_TARGET` and `MISSING_RUNNER` for PowerPC Linux/qemu;
+Linux32 tests use 64-bit file metadata to avoid host inode overflow. Production
+Wii U units require the existing strict object audit too. Native gameplay,
+HOME/close and hitch/audio comparison remain separate deployment gates.
+
+The development repository's `tools/wiiu/gx2_run.py --collect-only` collects
+committed `.txt` batches into `runs/wiiu/last-run/shader-misses/` and merges unique
+validated lines into `runs/wiiu/missing.txt`, the existing shader-pack input.
+It excludes `.part`, preserves remote files and older backups, and reports
+collection errors. `tools/wiiu/test_missing_keys.py` tests that host workflow
+offline. Manual collection must follow the same final-file-only rule; fetch
+complete batches after the game has closed, inspect capture status, and retain
+incomplete parts separately for diagnosis.

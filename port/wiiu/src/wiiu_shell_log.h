@@ -30,6 +30,9 @@ typedef struct wiiu_shell_log_config
 	const char *path;                /* the file to append to */
 	uint32_t (*now_ms)(void);        /* a monotonic clock in milliseconds (the lines carry it) */
 	void (*thread_setup)(const char *name); /* names, prioritises the worker; may be NULL */
+	/* Optional bounded service on this worker only, after every normal batch and on idle turns. */
+	int (*service)(void *context);
+	void *service_context;
 	void (*echo)(const char *line);  /* each line also goes here, from the writer's thread (the system's debug log); may be NULL */
 } wiiu_shell_log_config;
 

@@ -25,6 +25,7 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 #include "wiiu_debug.h"
 #include "wiiu_shell_blackbox.h"
 #include "wiiu_shell_log.h"
+#include "wiiu_missing_keys.h"
 #include "wiiu_shell_watch.h"
 
 #include <coreinit/core.h>
@@ -379,6 +380,7 @@ static uint32_t on_release(void *unused)
 {
 	(void)unused;
 	wiiu_phase("HOME: in our release callback");
+	wiiu_missing_keys_suspend();
 	foreground = 0;
 	wiiu_shell_watch_background(&shell_watch, 1, shell_ms());
 	wiiu_log("HOME pressed: the foreground is given up");
@@ -408,6 +410,7 @@ static uint32_t on_acquire(void *unused)
 	(void)unused;
 	wiiu_audio_resume();
 	foreground = 1;
+	wiiu_missing_keys_resume();
 	wiiu_shell_watch_background(&shell_watch, 0, shell_ms());
 	wiiu_phase("back in the foreground");
 	wiiu_log("Back in the foreground");
@@ -427,6 +430,7 @@ static uint32_t on_acquire_late(void *unused)
 static uint32_t on_close(void *unused)
 {
 	(void)unused;
+	wiiu_missing_keys_stop(); /* nonblocking even if the GX2 producer has not parked */
 	exit_requested = 1;
 	wiiu_shell_watch_arm_exit(&shell_watch, shell_ms(), WIIU_WATCH_CLOSE_MS);
 	wiiu_phase("closing");
@@ -733,11 +737,32 @@ void wiiu_launch_menu(void)
 	SYSLaunchMenu();
 }
 
+/* Shader harvesting belongs to the main log worker, never the independent error-log worker. */
+static uint32_t missing_thread_id(void *unused)
+{
+	(void)unused;
+	return (uint32_t)(uintptr_t)OSGetCurrentThread();
+}
+
+static int missing_io_allowed(void *unused)
+{
+	(void)unused;
+	return foreground != 0; /* a close in background is reported incomplete; no callback does file I/O */
+}
+
+static void missing_report(void *unused, const char *text)
+{
+	(void)unused;
+	wiiu_log_text(text);
+}
+
 /* ---------- the shell */
 
 int wiiu_shell_run(int (*game_main)(void))
 {
 	wiiu_shell_log_config log_config;
+	wiiu_missing_keys_config missing_config;
+	uint64_t run_id;
 	char text[160];
 	int error;
 
@@ -765,6 +790,19 @@ int wiiu_shell_run(int (*game_main)(void))
 	make_directories();
 	unlink(LOG_PREVIOUS_FILE);
 	rename(LOG_FILE, LOG_PREVIOUS_FILE);
+	memset(&missing_config, 0, sizeof(missing_config));
+	run_id = OSGetSystemTime();
+	missing_config.directory = WIIU_DATA_DIRECTORY;
+	missing_config.run_high = (uint32_t)(run_id >> 32);
+	missing_config.run_low = (uint32_t)run_id;
+	missing_config.thread_id = missing_thread_id;
+	missing_config.io_allowed = missing_io_allowed;
+	missing_config.report = missing_report;
+	error = wiiu_missing_keys_start(&missing_config);
+	if (error)
+		OSReport("Shader capture cannot be started (error %d)\n", error);
+	memset(&log_config, 0, sizeof(log_config));
+	log_config.service = wiiu_missing_keys_service;
 	log_config.path = LOG_FILE;
 	log_config.now_ms = shell_ms;
 	log_config.thread_setup = setup_thread;
@@ -798,6 +836,7 @@ int wiiu_shell_run(int (*game_main)(void))
 		wiiu_phase("in the system's process loop");
 		sleep_ms(20);
 	}
+	wiiu_missing_keys_stop();
 	wiiu_log("Leaving: %s", game_done ? "the game has ended" : exit_requested ? "the app is closing" : "the system is stopping the app");
 
 	/* the game cannot be asked to finish yet (its quit comes with the input layer): a moment for one that is about to */
@@ -832,6 +871,23 @@ int wiiu_shell_run(int (*game_main)(void))
 			sleep_ms(10);
 		if (!box_busy)
 			wiiu_shell_blackbox_stop(&shell_box);
+	}
+	/* Bounded wait only: an ACTIVE producer or slow/absent card never blocks ProcUI indefinitely.
+	   All queue/batch storage remains process-lifetime if the deadline expires. Normal log flush is separate. */
+	{
+		uint32_t waited = 0;
+		wiiu_missing_keys_counts counts;
+
+		do
+		{
+			wiiu_missing_keys_counts_get(&counts);
+			if (counts.drained || counts.failed || !foreground || waited >= 300u)
+				break;
+			sleep_ms(5);
+			waited += 5u;
+		} while (1);
+		wiiu_missing_keys_quiesce(); /* no new worker turn may race FS teardown */
+		wiiu_missing_keys_report("close");
 	}
 	wiiu_log("Closed");
 	if (error_log_started)

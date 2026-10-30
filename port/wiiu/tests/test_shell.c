@@ -14,6 +14,7 @@ Exit status 0 when everything holds; a failing check says which and exits 1.
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 static int failures;
@@ -203,6 +204,7 @@ static void test_log(void)
 	char long_line[1000];
 	int i;
 
+	memset(&config, 0, sizeof(config));
 	path_in_folder(path, sizeof(path), "log.txt");
 	unlink(path);
 	config.path = path;
@@ -254,6 +256,7 @@ static void test_log_card_trouble(void)
 	uint32_t pending, queued, written, dropped;
 
 	/* a card that is not there: the lines are lost, counted, and nothing waits */
+	memset(&config, 0, sizeof(config));
 	config.path = "/nonexistent-folder/log.txt";
 	config.now_ms = fake_now;
 	config.thread_setup = NULL;
@@ -263,6 +266,73 @@ static void test_log_card_trouble(void)
 	CHECK(wiiu_shell_log_flush(&broken, 5000));
 	wiiu_shell_log_counts(&broken, &pending, &queued, &written, &dropped);
 	CHECK(queued == 1 && written == 0 && broken.lost == 1 && broken.write_errors == 1);
+}
+
+/* A permanently nonempty normal queue still services capture once per batch, with no lock held. */
+static struct
+{
+	wiiu_shell_log main_log, error_log;
+	uint32_t enabled, calls, lock_failure;
+	pthread_t owner;
+} service_test;
+
+static int fair_service(void *context)
+{
+	unsigned i;
+	uint32_t call;
+	(void)context;
+	if (!__atomic_load_n(&service_test.enabled, __ATOMIC_ACQUIRE))
+		return 0;
+	if (pthread_mutex_trylock(&service_test.main_log.lock) != 0)
+	{
+		__atomic_store_n(&service_test.lock_failure, 1, __ATOMIC_RELEASE);
+		return 0;
+	}
+	pthread_mutex_unlock(&service_test.main_log.lock);
+	call = __atomic_add_fetch(&service_test.calls, 1, __ATOMIC_ACQ_REL);
+	if (call == 1)
+		service_test.owner = pthread_self();
+	else if (!pthread_equal(service_test.owner, pthread_self()))
+		__atomic_store_n(&service_test.lock_failure, 1, __ATOMIC_RELEASE);
+	if (call < 30)
+		for (i = 0; i < WIIU_LOG_BATCH - 1; i++)
+			wiiu_shell_log_write(&service_test.main_log, "continuous %u %u", call, i);
+	return call < 30;
+}
+
+static void test_log_service_fairness(void)
+{
+	wiiu_shell_log_config config;
+	char path[300];
+	uint32_t pending, queued, written, dropped;
+	unsigned waited;
+	struct timespec pause = { 0, 1000000 };
+
+	memset(&config, 0, sizeof(config));
+	path_in_folder(path, sizeof(path), "service-main.txt");
+	config.path = path;
+	config.service = fair_service;
+	CHECK(wiiu_shell_log_start(&service_test.main_log, &config) == 0);
+	/* The separate engine error logger has no service callback or context. */
+	memset(&config, 0, sizeof(config));
+	path_in_folder(path, sizeof(path), "service-error.txt");
+	config.path = path;
+	CHECK(wiiu_shell_log_start(&service_test.error_log, &config) == 0);
+	wiiu_shell_log_text(&service_test.main_log, "seed");
+	__atomic_store_n(&service_test.enabled, 1, __ATOMIC_RELEASE);
+	for (waited = 0; waited < 5000 && __atomic_load_n(&service_test.calls, __ATOMIC_ACQUIRE) < 30; waited++)
+	{
+		wiiu_shell_log_text(&service_test.error_log, "independent error log");
+		nanosleep(&pause, NULL);
+	}
+	__atomic_store_n(&service_test.enabled, 0, __ATOMIC_RELEASE);
+	CHECK(waited < 5000 && !__atomic_load_n(&service_test.lock_failure, __ATOMIC_ACQUIRE));
+	CHECK(wiiu_shell_log_flush(&service_test.main_log, 5000));
+	CHECK(wiiu_shell_log_flush(&service_test.error_log, 5000));
+	wiiu_shell_log_counts(&service_test.main_log, &pending, &queued, &written, &dropped);
+	CHECK(!pending && written == queued && !dropped && written == 1 + 29 * (WIIU_LOG_BATCH - 1));
+	wiiu_shell_log_counts(&service_test.error_log, &pending, &queued, &written, &dropped);
+	CHECK(!pending && written == queued && written > 0);
 }
 
 /* ---------- the black box */
@@ -378,6 +448,7 @@ int main(void)
 	test_watch_describes();
 	test_log();
 	test_log_card_trouble();
+	test_log_service_fairness();
 	test_blackbox();
 
 	if (failures)

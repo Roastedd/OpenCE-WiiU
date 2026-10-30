@@ -109,9 +109,12 @@ static void *worker(void *context)
 			}
 			log->busy = 0;
 			pthread_mutex_unlock(&log->lock);
-			continue;
 		}
-		sleep_ms(WIIU_LOG_PERIOD_MS);
+		/* No log mutex is held. One service turn cannot starve normal batches, even under continuous logging. */
+		if (log->config.service && log->config.service(log->config.service_context))
+			sleep_ms(1);
+		else if (!size)
+			sleep_ms(WIIU_LOG_PERIOD_MS);
 	}
 	return NULL;
 }
