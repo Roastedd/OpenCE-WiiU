@@ -227,7 +227,9 @@ them. Each run: read `log.txt` afterwards.
    - water (a30's shore) and active camouflage (Blood Gulch's power-up, or an Elite that has it in the campaign): the water's ripples
      and the camouflage's refraction line up with what is behind them;
    - the log: no `GX2: color target` or `GX2: depth target` line after the map's first frames, and every target of the screen's size
-     (1280x720 or 1920x1080 pixels) says `in the eDRAM`; the 5 s line says `N of M lines (halo/drs_lines.txt)`.
+     (1280x720 or 1920x1080 pixels) says `in the eDRAM` as it does in a run without the note (at 1080 lines the three screen targets and
+     the TV's buffers may not all fit in the 32 MB, before this as now: what matters is that the note changes nothing there); the 5 s line
+     says `N of M lines (halo/drs_lines.txt; the controller is off)`.
 2. **Two players at each step.** Controllers SEPARATE and a Pro Controller (or the PS4 one through Bloopair); split screen in Blood Gulch with
    each forced step: each player's view and HUD stay in their half, the black line between the halves is where it is, nothing of one half
    shows in the other.
