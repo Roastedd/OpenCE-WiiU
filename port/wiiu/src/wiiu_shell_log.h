@@ -51,6 +51,8 @@ typedef struct wiiu_shell_log
 	uint32_t write_errors;
 	uint32_t busy;    /* the worker is writing a batch */
 	uint32_t started;
+	uint32_t stopping; /* asked to stop (wiiu_shell_log_stop) */
+	uint32_t stopped;  /* the worker has ended: nothing of the log's touches the card */
 	char batch[WIIU_LOG_BATCH * WIIU_LOG_LINE_BYTES];
 	wiiu_shell_log_config config;
 	char path[192];
@@ -68,5 +70,10 @@ void wiiu_shell_log_counts(wiiu_shell_log *log, uint32_t *pending, uint32_t *que
 
 /* Waits up to timeout_ms for the queue to be empty and the worker idle. Returns 1 if it is. */
 int wiiu_shell_log_flush(wiiu_shell_log *log, uint32_t timeout_ms);
+
+/* Ends the worker once the batch it is writing is done (and its service with it): lines queued after that stay in memory, unwritten. For a close, after
+the last flush, so that nothing of the log's writes to the card while the system takes the card away. Waits up to timeout_ms for the worker to end
+(it looks every WIIU_LOG_PERIOD_MS); returns 1 if it has (or never started), 0 if not yet. */
+int wiiu_shell_log_stop(wiiu_shell_log *log, uint32_t timeout_ms);
 
 #endif

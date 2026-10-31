@@ -90,7 +90,17 @@ static void *worker(void *context)
 		log->config.thread_setup("log");
 	for (;;)
 	{
-		size_t size = take_batch(log);
+		size_t size;
+
+		pthread_mutex_lock(&log->lock);
+		if (log->stopping)
+		{
+			log->stopped = 1;
+			pthread_mutex_unlock(&log->lock);
+			return NULL;
+		}
+		pthread_mutex_unlock(&log->lock);
+		size = take_batch(log);
 
 		if (size)
 		{
@@ -210,6 +220,31 @@ int wiiu_shell_log_flush(wiiu_shell_log *log, uint32_t timeout_ms)
 		done = log->count == 0 && !log->busy;
 		pthread_mutex_unlock(&log->lock);
 		if (done)
+			return 1;
+		if (waited >= timeout_ms)
+			return 0;
+		sleep_ms(10);
+		waited += 10;
+	}
+}
+
+int wiiu_shell_log_stop(wiiu_shell_log *log, uint32_t timeout_ms)
+{
+	uint32_t waited = 0;
+
+	if (!log->started)
+		return 1;
+	pthread_mutex_lock(&log->lock);
+	log->stopping = 1;
+	pthread_mutex_unlock(&log->lock);
+	for (;;)
+	{
+		int stopped;
+
+		pthread_mutex_lock(&log->lock);
+		stopped = log->stopped != 0;
+		pthread_mutex_unlock(&log->lock);
+		if (stopped)
 			return 1;
 		if (waited >= timeout_ms)
 			return 0;
