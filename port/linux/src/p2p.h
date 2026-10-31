@@ -69,6 +69,98 @@ void p2p_port_taken(int stream, unsigned short port);
 /* the game closes a socket, a datagram one of this local port (0: none, or
 a stream's) */
 void p2p_socket_closed(int socket, unsigned short datagram_port);
+/* the game connected a datagram socket to address and port (as it named
+them, a peer's or not): what peers send it in the process (below) is only
+that one's, as the system passes a connected socket only its peer's */
+void p2p_socket_connected(int socket, unsigned long address, unsigned short port);
+
+/* ---- in the process (network.tunnel_in_process): the peers' datagrams and
+connections are handed to the game's sockets here, not through stand-in
+sockets of their own (a UDP socket for each port of each peer, and two
+sockets for each connection), so a host's sockets do not grow with its
+peers (the Wii U gives a program 27). Nothing another machine sees changes.
+xnet.c asks these before the system's sockets; each takes the p2p lock, or
+the inboxes' own */
+
+/* whether internet play hands the game its peers' traffic in the process */
+int p2p_in_process(void);
+/* the oldest datagram a peer sent the game's datagram socket, waiting in
+its inbox: copied (as much as length takes), with the peer's address and
+port; its whole size (more than length: cut short), or -1 if none waits */
+int p2p_datagram_receive(int socket, void *buffer, int length, unsigned long *address, unsigned short *port);
+/* how many datagrams wait in the socket's inbox, and through bytes (if not
+NULL) their bytes, as Winsock's FIONREAD counts them */
+int p2p_datagram_waiting(int socket, int *bytes);
+/* whether a connection a peer opened to this listening socket of the
+game's waits to be taken */
+int p2p_stream_waiting(int listening_socket);
+/* takes the oldest: the number the game knows it by (no system socket has
+it, p2p_stream_socket), the peer's address and port; -1 if none waits */
+int p2p_stream_accept(int listening_socket, unsigned long *address, unsigned short *port);
+/* whether the number is a connection taken in the process (one closed, or
+not known, too: none of them is the system's) */
+int p2p_stream_socket(int socket);
+/* such a connection's calls, as Winsock's, a failure the negative of its
+Winsock error: bytes read (0: the peer closed it, or it ended), bytes taken
+(as many as the tunnel's window has room for), and closing it */
+int p2p_stream_receive(int socket, void *buffer, int length);
+int p2p_stream_send(int socket, const void *buffer, int length);
+int p2p_stream_close(int socket);
+/* whether reads and sends wait (they do not by default, as an accepted
+socket of a listening socket that does not block) */
+int p2p_stream_set_blocking(int socket, int blocking);
+/* what a select would say of it: something to read (or its end), room to
+send; 0, or the negative of the error if the number is none */
+int p2p_stream_ready(int socket, int *readable, int *writeable);
+/* ... and of each of a select's list of the game's sockets (list 0 read, 1
+write, 2 error): such a connection's, and in the read list a datagram
+socket's inbox and a listening socket's connections waiting, into ready
+(one byte each). Whether any is ready; -1 if a connection's number is none */
+int p2p_select_ready(const int *sockets, int count, int list, unsigned char *ready);
+/* the bytes waiting to be read */
+int p2p_stream_waiting_bytes(int socket);
+/* its addresses: the peer's (peer), or this end's (the listening port, on
+the address the game's stand-ins have) */
+int p2p_stream_address(int socket, int peer, unsigned long *address, unsigned short *port);
+
+/* what internet play has done since the game started, for the netcode's
+"net:" lines (network_distributed.c) */
+struct p2p_statistics
+{
+	/* the machines the tunnel reaches (not the server browser's probes) */
+	int peers;
+	/* the tunnel's packets to and from every peer, sealed, and their bytes;
+	sends the system refused (the packet is lost) */
+	unsigned long packets_sent;
+	unsigned long bytes_sent;
+	unsigned long packets_received;
+	unsigned long bytes_received;
+	unsigned long send_failures;
+	/* in the process: datagrams handed to the game's sockets, and lost (a
+	full inbox, no socket of the game's with the port, or a socket connected
+	elsewhere); the connections the game holds */
+	unsigned long datagrams_delivered;
+	unsigned long datagrams_lost;
+	int streams;
+};
+void p2p_statistics(struct p2p_statistics *statistics);
+/* ... and the game's own traffic with other machines, which xnet.c counts
+at the game's Winsock calls (not its own client's over the loopback):
+datagrams and their bytes each way, its connections' bytes each way, and
+its sends the system refused (the datagram lost), the last one's Winsock
+error */
+struct xnet_statistics
+{
+	unsigned long datagrams_sent;
+	unsigned long datagram_bytes_sent;
+	unsigned long datagrams_received;
+	unsigned long datagram_bytes_received;
+	unsigned long stream_bytes_sent;
+	unsigned long stream_bytes_received;
+	unsigned long send_failures;
+	int last_send_error;
+};
+void xnet_statistics(struct xnet_statistics *statistics);
 
 /* text for the clipboard (a new invite link), once; NULL if none. Called
 from the main thread */

@@ -89,6 +89,15 @@ Ctrl+D, which moving and crouching would press, from the browser) */
 #define CROUCH_KEYS "\"Left Ctrl, C\""
 #endif
 
+/* network.tunnel_in_process's default: on the Wii U, whose system gives a
+program 27 sockets, where internet play's stand-ins took four or five for
+each peer of a host */
+#ifdef HALO_WIIU
+#define TUNNEL_IN_PROCESS "true"
+#else
+#define TUNNEL_IN_PROCESS "false"
+#endif
+
 /* display.resolution_scaling's default: on Android the Xbox's 480 lines, which
 a phone's GPU draws with time to spare, elsewhere the window's resolution */
 #ifdef HALO_ANDROID
@@ -701,6 +710,13 @@ static const struct config_setting config_settings[] =
 	{ "network.tunnel_port", _config_integer, "0", "HALO_NET_TUNNEL_PORT", _environment_value, _platform_all,
 		"The UDP port internet play uses; 0 picks one. A fixed one can be\n"
 		"forwarded on the router, for networks whose NAT stops connections." },
+	{ "network.tunnel_in_process", _config_boolean, TUNNEL_IN_PROCESS, "HALO_NET_TUNNEL_IN_PROCESS",
+		_environment_value, _platform_all,
+		"Internet play hands the game what its peers send inside the program,\n"
+		"rather than through local sockets standing in for each peer (two or\n"
+		"three for each, and two for each connection), so a host's sockets do\n"
+		"not grow with its players. Nothing the other machines see changes. On\n"
+		"by default on the Wii U, whose system gives a program 27 sockets." },
 	{ "network.client_timeout_seconds", _config_integer, "15", "HALO_NET_CLIENT_TIMEOUT_SECONDS", _environment_value,
 		_platform_all,
 		"Seconds a host waits for a machine it hears nothing from before it\n"

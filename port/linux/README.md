@@ -593,6 +593,7 @@ the setting for one start of the game. It has priority over the file.
 | `network.online` | `true` | `HALO_NET_ONLINE` | `true`: internet play. `false`: system link on the local network only. |
 | `network.join_from_clipboard` | `true` | `HALO_NET_JOIN_FROM_CLIPBOARD` | `true`: when the game comes to the front, it joins the game of an invite link on the clipboard. |
 | `network.tunnel_port` | `0` | `HALO_NET_TUNNEL_PORT` | The UDP port for internet play. `0`: the game selects a port. Refer to "Internet play". |
+| `network.tunnel_in_process` | `false` (`true` on the Wii U) | `HALO_NET_TUNNEL_IN_PROCESS` | Internet play hands the game what its peers send inside the program, instead of through local sockets that stand in for each peer (two or three for each peer, and two for each connection). A host's sockets then do not increase with its players. The other machines see no difference. It is on by default on the Wii U, whose system gives a program 27 sockets. Refer to "Internet play". |
 | `network.allow_upnp` | `true` | `HALO_NET_ALLOW_UPNP` | `true`: internet play can ask the router to forward its port (UPnP). `false`: the game does not ask. Refer to "Internet play". |
 | `network.public_lobby` | `true` | `HALO_NET_PUBLIC_LOBBY` | `true`: the server browser. Public games are listed, and Join Game > Server Browser shows them. `false`: no games are listed or shown. Refer to "Server browser". |
 | `network.host_public` | `true` | `HALO_NET_HOST_PUBLIC` | `true`: a new game of Create Game > Internet starts as PUBLIC. `false`: it starts as PRIVATE. LISTING in Server Setup changes it for each game. Refer to "Server browser". |
@@ -1482,6 +1483,20 @@ In the game, each machine has an address in 100.64.0.0/10:
   as they are. TCP connections go as KCP streams (`port/third_party/kcp`).
 - The broadcasts of the game go to all the machines. Thus the game of the
   host shows on the other machines.
+
+The local sockets cost a host three sockets for each machine that plays
+(four while one joins). With `network.tunnel_in_process` (the default on
+the Wii U, whose system gives a program 27 sockets), what the other
+machines send comes to the game without them: a datagram goes into a queue
+of the game's socket that has its port, which `src/xnet.c` reads before the
+socket itself, and a connection to a port where the game listens waits
+there for the game's `accept`, which gives it a number that no socket has.
+`src/xnet.c` then reads and writes that connection through `src/p2p.c`.
+The sockets of a host then do not increase with its players (measured on
+a Linux host with 16 machines joined by invite: 8, against 56 without). What the game sends to other
+machines, and the connections that it makes to them, still go through the
+local sockets: a machine that joins has a few for its host. The packets of
+the tunnel do not change.
 
 ### Discord
 
