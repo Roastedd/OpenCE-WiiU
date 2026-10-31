@@ -960,6 +960,8 @@ int wiiu_shell_run(int (*game_main)(void))
 		if (!box_busy)
 			wiiu_shell_blackbox_stop(&shell_box);
 	}
+	/* the updater's worker, which looks at its flags every 50 ms (and its transfers every 100), before the sockets close and the card goes */
+	exit_note(wiiu_update_stop(500) ? "the updater's worker ended" : "the updater's worker still running after 500 ms");
 	/* Bounded wait only: an ACTIVE producer or slow/absent card never blocks ProcUI indefinitely.
 	   All queue/batch storage remains process-lifetime if the deadline expires. Normal log flush is separate. */
 	{
@@ -977,8 +979,6 @@ int wiiu_shell_run(int (*game_main)(void))
 		wiiu_missing_keys_quiesce(); /* no new worker turn may race FS teardown */
 		wiiu_missing_keys_report("close");
 	}
-	/* the updater's worker, which looks at its flags every 50 ms (and its transfers every 100), before the sockets close and the card goes */
-	exit_note(wiiu_update_stop(500) ? "the updater's worker ended" : "the updater's worker still running after 500 ms");
 	wiiu_log("Closed");
 	if (error_log_started)
 		wiiu_shell_log_flush(&error_log, 500);
