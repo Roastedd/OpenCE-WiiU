@@ -234,19 +234,19 @@ BOOL OSTryLockMutex(OSMutex *mutex)
 	return pthread_mutex_trylock(&mutex->lock) == 0;
 }
 
-static int invalidations;
+static int flushes;
 
 void DCFlushRange(void *address, uint32_t size)
 {
 	(void)address;
 	(void)size;
+	__atomic_add_fetch(&flushes, 1, __ATOMIC_RELAXED);
 }
 
 void DCInvalidateRange(void *address, uint32_t size)
 {
 	(void)address;
 	(void)size;
-	__atomic_add_fetch(&invalidations, 1, __ATOMIC_RELAXED);
 }
 
 /* ---------- mic.rpl: a 440 Hz tone at a quarter of full scale, 32 kHz, big-endian, into the app's ring */
@@ -270,8 +270,11 @@ static struct
 	OSTime opened_at;
 	uint64_t made_since_open, made;
 	int init_failures;
+	/* (MICInit taking this long: HOME while it runs) */
+	uint32_t init_delay_ms;
 	int inits, opens, closes, uninits, consumptions;
 	OSTime init_times[16];
+	OSTime opened_last, closed_last;
 } mic;
 
 static int16_t mic_tone(uint64_t index)
@@ -310,6 +313,8 @@ static void mic_hear(void)
 MICHandle MICInit(MICInstance instance, int unused, MICWorkMemory *work_memory, MICError *error)
 {
 	(void)unused;
+	if (mic.init_delay_ms)
+		OSSleepTicks(OSMillisecondsToTicks(mic.init_delay_ms));
 	pthread_mutex_lock(&mic_lock);
 	if (mic.inits < 16)
 		mic.init_times[mic.inits] = OSGetSystemTime();
@@ -341,7 +346,7 @@ MICError MICOpen(MICHandle handle)
 	}
 	mic.open = 1;
 	mic.opens++;
-	mic.opened_at = OSGetSystemTime();
+	mic.opened_at = mic.opened_last = OSGetSystemTime();
 	mic.made_since_open = 0;
 	mic.read = mic.waiting = mic.write = 0;
 	pthread_mutex_unlock(&mic_lock);
@@ -418,6 +423,7 @@ MICError MICClose(MICHandle handle)
 	}
 	mic.open = 0;
 	mic.closes++;
+	mic.closed_last = OSGetSystemTime();
 	pthread_mutex_unlock(&mic_lock);
 	return MIC_ERROR_OK;
 }
@@ -631,17 +637,23 @@ static double mix(uint32_t milliseconds)
 	return count ? sum / count : 0.0;
 }
 
-/* frames of the game, 20 ms apart, with the mixer's 20 ms after each */
-static void play_for(uint32_t milliseconds, int wanted, int talking, int speaker, int other_speaker)
+/* frames of the game, frame_ms apart, with the mixer's as long after each */
+static void play_at(uint32_t milliseconds, uint32_t frame_ms, int wanted, int talking, int speaker, int other_speaker)
 {
 	uint32_t at;
 
-	for (at = 0; at < milliseconds; at += 20)
+	for (at = 0; at < milliseconds; at += frame_ms)
 	{
 		game_frame(wanted, talking, speaker, other_speaker);
-		mix(20);
-		advance(20);
+		mix(frame_ms);
+		advance(frame_ms);
 	}
+}
+
+/* at 50 frames a second, the microphone's own rate */
+static void play_for(uint32_t milliseconds, int wanted, int talking, int speaker, int other_speaker)
+{
+	play_at(milliseconds, 20, wanted, talking, speaker, other_speaker);
 }
 
 static double mean_level(void)
@@ -764,9 +776,12 @@ int main(int argc, char **argv)
 		CHECK(fabs(sqrt(game.mixed_sum / game.mixed) - TONE_LEVEL) < 0.2 * TONE_LEVEL, "played back at %.4f, the tone at %.4f",
 			sqrt(game.mixed_sum / game.mixed), TONE_LEVEL);
 		CHECK(voice_audio_speaking(7) && !voice_audio_speaking(8), "speaking: 7 %d, 8 %d", voice_audio_speaking(7), voice_audio_speaking(8));
-		CHECK(invalidations > 0 && mic.consumptions > 0, "the ring read %d times, consumed %d", invalidations, mic.consumptions);
-		/* (talking stopped: the backlog drops to five frames) */
+		CHECK(flushes > 1 && mic.consumptions > 0, "the ring flushed %d times, consumed %d", flushes, mic.consumptions);
+		/* (the game stopped taking frames: five wait, the newest; counted with the voice thread held asleep, which would otherwise
+		add one while they are taken) */
 		advance(500);
+		hold(voice_thread.host, 1);
+		advance(15);
 		{
 			float frame[VOICE_FRAME_SAMPLES];
 			uint32_t waiting = 0;
@@ -776,6 +791,7 @@ int main(int argc, char **argv)
 				waiting++;
 			CHECK(waiting == 5, "%u frames waited after half a second", waiting);
 		}
+		hold(voice_thread.host, 0);
 		return 0;
 	}
 	if (!strcmp(case_name, "stale"))
@@ -789,8 +805,8 @@ int main(int argc, char **argv)
 		voice_audio_microphone(TRUE);
 		CHECK(voice_audio_read_frame(frame), "no frame");
 		voice_audio_encode(frame, 24000, packet, 136);
-		/* the game stops for 100 ms: that frame's packet, ready meanwhile, is not sent when it comes back */
-		advance(100);
+		/* the game stops for 200 ms: that frame's packet, ready meanwhile, is not sent when it comes back */
+		advance(200);
 		voice_audio_microphone(TRUE);
 		CHECK(voice_audio_read_frame(frame), "no frame");
 		length = voice_audio_encode(frame, 24000, packet, 136);
@@ -799,6 +815,46 @@ int main(int argc, char **argv)
 		voice_audio_microphone(TRUE);
 		CHECK(voice_audio_read_frame(frame), "no frame");
 		CHECK(voice_audio_encode(frame, 24000, packet, 136) > 0, "no packet after the stall's");
+		return 0;
+	}
+	if (!strcmp(case_name, "slow-frames"))
+	{
+		/* the game at 30 frames a second (two microphone frames in some of its frames, one in others), then at 15: every
+		packet sent, none waiting long enough to be dropped as stale */
+		uint32_t calls, packets;
+
+		play_at(3000, 33, TRUE, TRUE, 7, -1);
+		CHECK(stale_dropped == 0 && game.packets + 2 >= game.calls, "at 30 frames a second: %u packets for %u frames, %u stale",
+			game.packets, game.calls, stale_dropped);
+		calls = game.calls;
+		packets = game.packets;
+		play_at(3000, 66, TRUE, TRUE, 7, -1);
+		CHECK(stale_dropped == 0 && game.packets - packets + 3 >= game.calls - calls, "at 15 frames a second: %u packets for %u frames, %u stale",
+			game.packets - packets, game.calls - calls, stale_dropped);
+		CHECK(game.mixed > 0 && fabs(sqrt(game.mixed_sum / game.mixed) - TONE_LEVEL) < 0.25 * TONE_LEVEL, "played back at %.4f",
+			game.mixed ? sqrt(game.mixed_sum / game.mixed) : 0.0);
+		return 0;
+	}
+	if (!strcmp(case_name, "home-while-opening"))
+	{
+		/* HOME while MICInit takes 150 ms: the release callback cannot close a microphone that is being opened (it is under the
+		lock), and the voice thread closes it the moment MICOpen returns */
+		mic.init_delay_ms = 150;
+		game_frame(TRUE, FALSE, -1, -1);
+		advance(20);
+		wiiu_voice_suspend();
+		CHECK(logged("is in a microphone call: the microphone is left to the system"), "the callback did not find it in its call");
+		advance(100);
+		CHECK(mic.opens == 1 && !mic.open && mic.closes == 1 && mic.uninits == 1, "opened %d, open %d, closed %d, uninitialised %d",
+			mic.opens, mic.open, mic.closes, mic.uninits);
+		CHECK(mic.closed_last == mic.opened_last, "closed %lld ms after it opened, not at once",
+			(long long)OSTicksToMilliseconds(mic.closed_last - mic.opened_last));
+		CHECK(__atomic_load_n(&acknowledged, __ATOMIC_ACQUIRE) == __atomic_load_n(&request, __ATOMIC_ACQUIRE), "HOME not answered after");
+		CHECK(!logged("Voice chat: the GamePad's microphone is open"), "said to be open");
+		mic.init_delay_ms = 0;
+		wiiu_voice_resume();
+		play_for(100, TRUE, FALSE, -1, -1);
+		CHECK(mic.open && mic.opens == 2, "not opened after HOME (opened %d times)", mic.opens);
 		return 0;
 	}
 	if (!strcmp(case_name, "home"))
@@ -868,7 +924,7 @@ int main(int argc, char **argv)
 			(long long)OSTicksToMilliseconds(mic.init_times[1] - mic.init_times[0]));
 		CHECK(mic.init_times[2] - mic.init_times[1] >= OSMillisecondsToTicks(10000), "tried a third time after %lld ms",
 			(long long)OSTicksToMilliseconds(mic.init_times[2] - mic.init_times[1]));
-		CHECK(logged("could not be set up (MICInit: handle -1, error -5); again in 10 s") == 2, "the failures not logged");
+		CHECK(logged("could not be set up (MICInit: error -5); again in 10 s") == 2, "the failures not logged");
 		CHECK(logged("Voice chat: the GamePad's microphone is open (tried again"), "the opening not logged");
 		CHECK(game.frames > 0, "no frames once open");
 		return 0;

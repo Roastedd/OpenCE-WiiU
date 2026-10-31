@@ -1,8 +1,9 @@
 """The Wii U's voice chat as the console would run it (port/wiiu/src/wiiu_voice_audio.c, with wiiu_voice_core.c and the real
 Opus) over stand-ins for Cafe OS (port/wiiu/tests/voice_mock, port/wiiu/tests/test_voice_audio.c): threads on pthreads and a
 clock that moves only when every thread sleeps, and mic.rpl in either of its readings, playing a tone. The microphone's frames
-encoded and played back, the packet of the frame before and none stale, HOME (answered, and not), the close, a microphone that
-does not open, a speaker forgotten, debug.voice_test, what the host is told, and the probe; and a fault in each that a case
+encoded and played back, the packet of the frame before, none stale at 50, 30 or 15 game frames a second and none sent after
+a stall, HOME (answered,
+not answered, and while the microphone opens), the close, a microphone that does not open, a speaker forgotten, debug.voice_test, what the host is told, and the probe; and a fault in each that a case
 must catch.
 
     HALO_HARNESS_TARGET='--target=powerpc-linux-gnu -fsigned-char -fuse-ld=lld -no-pie' HALO_HARNESS_RUNNER=qemu-ppc \\
@@ -24,8 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import CHECK_FAILED, ROOT, mutated, read, runner, timeout_scale  # noqa: E402
 from tools import linux_build  # noqa: E402
 
-CASES = ["round-trip", "stale", "home", "home-unanswered", "close", "retry", "position", "position-auto", "forget", "voice-test",
-         "hears", "no-thread", "probe", "probe-position"]
+CASES = ["round-trip", "stale", "slow-frames", "home", "home-unanswered", "home-while-opening", "close", "retry", "position",
+         "position-auto", "forget", "voice-test", "hears", "no-thread", "probe", "probe-position"]
 
 # a fault in wiiu_voice_audio.c, and the case that must catch it
 NEGATIVE_CONTROLS = {
@@ -36,7 +37,11 @@ NEGATIVE_CONTROLS = {
     "not-reopened": (("\t\t\t\t/* (open again at once when the foreground is back) */\n\t\t\t\tmicrophone_failed = 0;\n",
                       "\t\t\t\tmicrophone_failed = 1;\n\t\t\t\tmicrophone_failed_ms = now_ms();\n"), "home"),
     # (a packet sent however late it comes back)
-    "stale-sent": (("#define VOICE_STALE_MS 60u", "#define VOICE_STALE_MS 60000u"), "stale"),
+    "stale-sent": (("#define VOICE_STALE_MS 150u", "#define VOICE_STALE_MS 60000u"), "stale"),
+    # (the limit as it was first written: at 30 frames a second a packet that waits a game frame is dropped)
+    "stale-limit-short": (("#define VOICE_STALE_MS 150u", "#define VOICE_STALE_MS 60u"), "slow-frames"),
+    # (HOME while the microphone opens not looked for after MICOpen: it stays open until the voice thread's next turn)
+    "open-unguarded": (("\tif (opened != MIC_ERROR_OK || asked_to_stop())\n", "\tif (opened != MIC_ERROR_OK)\n"), "home-while-opening"),
     # (the close not joining the thread)
     "close-not-joined": (("\tOSJoinThread(&voice_thread, NULL);\n", ""), "close"),
     # (a microphone that would not open tried again every second)

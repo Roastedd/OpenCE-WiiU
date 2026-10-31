@@ -67,8 +67,10 @@ buffered (the network's jitter); frames made up for when packets are lost, at mo
 #define VOICE_MAXIMUM_CONCEALED 3
 /* the microphone's frames kept for the game thread (the desktop's VOICE_MAXIMUM_BACKLOG) */
 #define VOICE_BACKLOG_FRAMES 5u
-/* a packet finished this long after its frame was given is not sent (it is of a pause, or of before the talking stopped) */
-#define VOICE_STALE_MS 60u
+/* a packet taken this long after its frame was given is not sent (it is of a pause, or of before the talking stopped). Each
+call takes one packet, of a frame given before, so at a slow frame rate one can wait a game frame more: two game frames at
+15 frames a second and a voice thread's turn are 143 ms (60 ms lost a fifth of the packets at 30 frames a second) */
+#define VOICE_STALE_MS 150u
 /* a microphone that would not open is tried again this often (ms) */
 #define VOICE_RETRY_MS 10000u
 /* the voice thread's turns: every 10 ms while the game asks for voice chat (in the last second), else every 50 ms */
@@ -184,8 +186,8 @@ static struct
 	uint32_t heard_ms, logged_ms;
 } slots[VOICE_SLOTS];
 
-/* the system's ring: 0x40-aligned and a whole number of cache lines, which are thrown away before each reading (the
-system writes it behind the cache) and never written by the app but before MICInit */
+/* the system's ring: 0x40-aligned and a whole number of cache lines, flushed before each reading (the system writes it behind
+this core's cache, or through another's) and never written by the app but before MICInit */
 static unsigned char microphone_ring[MIC_RING_SAMPLES * 2] __attribute__((aligned(64)));
 static MICWorkMemory microphone_work;
 static int microphone_handle = -1;
@@ -193,6 +195,10 @@ static int microphone_failed;
 static uint32_t microphone_failed_ms;
 static uint32_t microphone_errors;
 static struct wiiu_mic_reader reader;
+/* the reading, chosen at the first opening (reading_choose) or by the probe's finding */
+static int reading_mode = -1;
+static uint32_t reading_unit;
+static const char *reading_source;
 static struct wiiu_voice_capture capture;
 static uint32_t tone_started_ms, tone_frames;
 static OpusEncoder *encoder;
@@ -225,7 +231,8 @@ static int running(void)
 /* ---------- the microphone */
 
 /* audio.wiiu_microphone_read: "auto" (the probe's finding, mic_probe_result.txt, else consume), "consume", "position", or a
-mode and a unit as the probe writes them ("consume samples", "position bytes") */
+mode and a unit as the probe writes them ("consume samples", "position bytes"); read once, at the first opening (an opening
+must not wait for the card: HOME may come meanwhile) */
 static const char *reading_chosen(int *mode, uint32_t *unit_bytes)
 {
 	const char *setting = config_string("audio.wiiu_microphone_read");
@@ -263,51 +270,84 @@ static const char *reading_chosen(int *mode, uint32_t *unit_bytes)
 	return source;
 }
 
-static int microphone_open_now(const char *why)
+/* whether the shell asks the voice thread for anything but its turns (HOME, the close) */
+static int asked_to_stop(void)
 {
-	MICError error = MIC_ERROR_OK;
-	MICHandle handle;
-	int mode;
-	uint32_t unit_bytes;
-	const char *source = reading_chosen(&mode, &unit_bytes);
-	const OSTime started = OSGetSystemTime();
+	return (__atomic_load_n(&request, __ATOMIC_ACQUIRE) & 3u) != REQUEST_RUN;
+}
 
+/* MICInit and MICOpen, under the microphone's lock (so that HOME's last resort cannot find it half open, wiiu_voice_suspend), and
+not when HOME or the close has come meanwhile: the handle, or -1 (*error says what failed, MIC_ERROR_OK if it was HOME) */
+static int microphone_open_locked(MICError *error, const char **failed)
+{
+	MICHandle handle;
+	MICError opened;
+
+	*error = MIC_ERROR_OK;
+	*failed = NULL;
+	OSLockMutex(&microphone_lock);
+	if (asked_to_stop())
+	{
+		OSUnlockMutex(&microphone_lock);
+		return -1;
+	}
 	/* (written back now: a dirty line the cache wrote back later would land on the system's samples) */
 	memset(microphone_ring, 0, sizeof(microphone_ring));
 	DCFlushRange(microphone_ring, sizeof(microphone_ring));
 	microphone_work.sampleMaxCount = MIC_RING_SAMPLES;
 	microphone_work.sampleBuffer = microphone_ring;
-	handle = MICInit(MIC_INSTANCE_0, 0, &microphone_work, &error);
-	if (error != MIC_ERROR_OK || handle < 0)
+	handle = MICInit(MIC_INSTANCE_0, 0, &microphone_work, error);
+	if (*error != MIC_ERROR_OK || handle < 0)
 	{
-		wiiu_log("Voice chat: the GamePad's microphone could not be set up (MICInit: handle %d, error %d); again in %u s", (int)handle,
-			(int)error, (unsigned)(VOICE_RETRY_MS / 1000u));
-		microphone_failed = 1;
-		microphone_failed_ms = now_ms();
-		return 0;
+		if (*error == MIC_ERROR_OK)
+			*error = MIC_ERROR_INIT;
+		*failed = "MICInit";
+		OSUnlockMutex(&microphone_lock);
+		return -1;
 	}
-	error = MICOpen(handle);
-	if (error != MIC_ERROR_OK)
+	opened = MICOpen(handle);
+	if (opened != MIC_ERROR_OK || asked_to_stop())
 	{
-		const MICError uninit = MICUninit(handle);
-
-		wiiu_log("Voice chat: the GamePad's microphone did not open (MICOpen: error %d; MICUninit %d); again in %u s", (int)error,
-			(int)uninit, (unsigned)(VOICE_RETRY_MS / 1000u));
-		microphone_failed = 1;
-		microphone_failed_ms = now_ms();
-		return 0;
+		/* (MICOpen failed, or HOME came while it opened: closed again at once, before the release callback looks) */
+		if (opened == MIC_ERROR_OK)
+			MICClose(handle);
+		MICUninit(handle);
+		*error = opened;
+		*failed = opened != MIC_ERROR_OK ? "MICOpen" : NULL;
+		OSUnlockMutex(&microphone_lock);
+		return -1;
 	}
-	OSLockMutex(&microphone_lock);
 	microphone_handle = handle;
 	OSUnlockMutex(&microphone_lock);
+	return handle;
+}
+
+static int microphone_open_now(const char *why)
+{
+	MICError error;
+	const char *failed;
+	const OSTime started = OSGetSystemTime();
+
+	if (reading_mode < 0)
+		reading_source = reading_chosen(&reading_mode, &reading_unit);
+	if (microphone_open_locked(&error, &failed) < 0)
+	{
+		if (!failed)
+			return 0;
+		wiiu_log("Voice chat: the GamePad's microphone could not be %s (%s: error %d); again in %u s",
+			!strcmp(failed, "MICInit") ? "set up" : "opened", failed, (int)error, (unsigned)(VOICE_RETRY_MS / 1000u));
+		microphone_failed = 1;
+		microphone_failed_ms = now_ms();
+		return 0;
+	}
 	microphone_failed = 0;
 	microphone_errors = 0;
-	wiiu_mic_reader_init(&reader, mode, unit_bytes, MIC_RING_SAMPLES);
+	wiiu_mic_reader_init(&reader, reading_mode, reading_unit, MIC_RING_SAMPLES);
 	wiiu_voice_capture_reset(&capture);
 	__atomic_store_n(&microphone_open, 1u, __ATOMIC_RELEASE);
 	wiiu_log("Voice chat: the GamePad's microphone is open (%s; %s; its ring read as %s %s, by %s; %.1f ms)", why,
 		wiiu_input_headset() > 0 ? "a headset is in its jack" : wiiu_input_headset() == 0 ? "no headset in its jack" : "its jack not read yet",
-		mode == WIIU_MIC_POSITION ? "position" : "consume", unit_bytes == 1 ? "bytes" : "samples", source,
+		reading_mode == WIIU_MIC_POSITION ? "position" : "consume", reading_unit == 1 ? "bytes" : "samples", reading_source,
 		ticks_ms((uint64_t)(OSGetSystemTime() - started)));
 	if (wiiu_input_headset() == 0)
 	{
@@ -374,7 +414,9 @@ static void microphone_poll(void)
 	{
 		float samples[512];
 
-		DCInvalidateRange(microphone_ring, sizeof(microphone_ring));
+		/* (flushed, not only thrown away: lines the system wrote through a core's cache are written back first, and the app's own,
+		never written since MICInit, are only thrown away; either way the reading comes from memory) */
+		DCFlushRange(microphone_ring, sizeof(microphone_ring));
 		while (count)
 		{
 			const uint32_t take = count < 512u ? count : 512u;
@@ -1044,32 +1086,29 @@ static MICError probe_status(MICStatus *status)
 	return error;
 }
 
+/* the microphone opened as voice chat opens it (microphone_open_locked); 1 if it opened, 0 if it failed, -1 if HOME or the close
+came meanwhile (it is closed again then) */
 static int probe_open(const char *why)
 {
-	MICError error = MIC_ERROR_OK, opened;
-	MICHandle handle;
+	MICError error;
+	const char *failed;
 	const OSTime started = OSGetSystemTime();
+	const int handle = microphone_open_locked(&error, &failed);
+	const double took = ticks_ms((uint64_t)(OSGetSystemTime() - started));
 
-	memset(microphone_ring, 0, sizeof(microphone_ring));
-	DCFlushRange(microphone_ring, sizeof(microphone_ring));
-	microphone_work.sampleMaxCount = MIC_RING_SAMPLES;
-	microphone_work.sampleBuffer = microphone_ring;
-	handle = MICInit(MIC_INSTANCE_0, 0, &microphone_work, &error);
-	wiiu_log("mic probe: %s: MICInit(instance 0, ring of %u samples at %08x): handle %d, error %d (%.2f ms)", why, (unsigned)MIC_RING_SAMPLES,
-		(unsigned)(uintptr_t)microphone_ring, (int)handle, (int)error, ticks_ms((uint64_t)(OSGetSystemTime() - started)));
-	if (error != MIC_ERROR_OK || handle < 0)
-		return 0;
-	opened = MICOpen(handle);
-	wiiu_log("mic probe: MICOpen: error %d (%.2f ms since MICInit)", (int)opened, ticks_ms((uint64_t)(OSGetSystemTime() - started)));
-	if (opened != MIC_ERROR_OK)
+	if (handle >= 0)
 	{
-		wiiu_log("mic probe: MICUninit: %d", (int)MICUninit(handle));
+		wiiu_log("mic probe: %s: MICInit (instance 0, a ring of %u samples at %08x) and MICOpen: handle %d (%.2f ms)", why,
+			(unsigned)MIC_RING_SAMPLES, (unsigned)(uintptr_t)microphone_ring, handle, took);
+		return 1;
+	}
+	if (failed)
+	{
+		wiiu_log("mic probe: %s: %s failed: error %d (%.2f ms)", why, failed, (int)error, took);
 		return 0;
 	}
-	OSLockMutex(&microphone_lock);
-	microphone_handle = handle;
-	OSUnlockMutex(&microphone_lock);
-	return 1;
+	wiiu_log("mic probe: %s: HOME or the close came while it opened: closed again (%.2f ms)", why, took);
+	return -1;
 }
 
 static void probe_close(const char *why)
@@ -1123,7 +1162,7 @@ static int probe_requests(void)
 	}
 	else
 	{
-		wiiu_log("mic probe: %s before the microphone was opened", (wanted & 3u) == REQUEST_STOP ? "the close" : "HOME");
+		wiiu_log("mic probe: %s with the microphone closed", (wanted & 3u) == REQUEST_STOP ? "the close" : "HOME");
 	}
 	__atomic_store_n(&acknowledged, wanted, __ATOMIC_RELEASE);
 	asleep_ms = now_ms();
@@ -1139,7 +1178,7 @@ static int probe_requests(void)
 	wiiu_log("mic probe: back in the foreground after %u ms", (unsigned)(now_ms() - asleep_ms));
 	if (!was_open)
 		return 0;
-	if (!probe_open("again after HOME"))
+	if (probe_open("again after HOME") <= 0)
 		return -1;
 	error = probe_status(&status);
 	wiiu_log("mic probe: the first status after HOME (error %d): state %d, availableData %d, bufferPos %d", (int)error, status.state,
@@ -1181,6 +1220,7 @@ static void probe_wav_write(const unsigned char *samples, uint32_t count)
 	unsigned char header[44];
 	const uint32_t bytes = count * 2u, rate = 32000u;
 	const OSTime started = OSGetSystemTime();
+	uint32_t written, piece = 0;
 	FILE *file;
 	int index;
 	/* (RIFF's little-endian fields) */
@@ -1201,13 +1241,34 @@ static void probe_wav_write(const unsigned char *samples, uint32_t count)
 		header[40 + index] = (unsigned char)(fields[6] >> (8 * index));
 	}
 	file = fopen(PROBE_WAV_FILE, "wb");
-	if (!file || fwrite(header, 1, sizeof(header), file) != sizeof(header) || fwrite(samples, 1, bytes, file) != bytes)
+	if (!file || fwrite(header, 1, sizeof(header), file) != sizeof(header))
+	{
 		wiiu_log("mic probe: %s could not be written", PROBE_WAV_FILE);
-	else
-		wiiu_log("mic probe: %u samples (%.2f s at 32 kHz) written to %s in %.0f ms", (unsigned)count, count / 32000.0, PROBE_WAV_FILE,
-			ticks_ms((uint64_t)(OSGetSystemTime() - started)));
-	if (file)
-		fclose(file);
+		if (file)
+			fclose(file);
+		return;
+	}
+	/* (32 KB at a time, HOME and the close answered between: the card is not written in the background, nor once the close has
+	moved on to taking it away) */
+	for (written = 0; written < bytes; written += piece)
+	{
+		piece = bytes - written < 32768u ? bytes - written : 32768u;
+		if (probe_requests() < 0)
+		{
+			wiiu_log("mic probe: %s left at %u of %u bytes: the app closes", PROBE_WAV_FILE, (unsigned)written, (unsigned)bytes);
+			fclose(file);
+			return;
+		}
+		if (fwrite(samples + written, 1, piece, file) != piece)
+		{
+			wiiu_log("mic probe: %s could not be written", PROBE_WAV_FILE);
+			fclose(file);
+			return;
+		}
+	}
+	fclose(file);
+	wiiu_log("mic probe: %u samples (%.2f s at 32 kHz) written to %s in %.0f ms", (unsigned)count, count / 32000.0, PROBE_WAV_FILE,
+		ticks_ms((uint64_t)(OSGetSystemTime() - started)));
 }
 
 static void probe_run(void)
@@ -1238,11 +1299,23 @@ static void probe_run(void)
 	wiiu_log("mic probe: the voice thread on core %u at priority %d; the GamePad's jack: %s (VPADStatus.usingHeadphones as the game "
 		"thread last read it), microphone status 0x%02x", (unsigned)OSGetCoreId(), (int)OSGetThreadPriority(OSGetCurrentThread()),
 		wiiu_input_headset() > 0 ? "a headset" : wiiu_input_headset() == 0 ? "empty" : "not read yet", wiiu_input_mic_status());
-	if (!probe_open("first"))
+	for (;;)
 	{
-		wiiu_log("mic probe: the microphone does not open: nothing more to learn");
-		wiiu_input_take_tv_button(0);
-		return;
+		const int opened = probe_open("first");
+
+		if (opened > 0)
+			break;
+		if (!opened)
+		{
+			wiiu_log("mic probe: the microphone does not open: nothing more to learn");
+			wiiu_input_take_tv_button(0);
+			return;
+		}
+		if (probe_requests() < 0)
+		{
+			wiiu_input_take_tv_button(0);
+			return;
+		}
 	}
 	/* the states (Cemu's names, partly guessed) */
 	for (index = 0; index < 9; index++)
@@ -1271,7 +1344,7 @@ static void probe_run(void)
 			position_highest = status.bufferPos;
 		if (index < PROBE_LOGGED || index == PROBE_POLLS - 1)
 		{
-			DCInvalidateRange(microphone_ring, sizeof(microphone_ring));
+			DCFlushRange(microphone_ring, sizeof(microphone_ring));
 			wiiu_log("mic probe: unconsumed %u: error %d, state %d, availableData %d, bufferPos %d; samples at bufferPos %d %d %d %d, at "
 				"bufferPos/2 %d %d %d %d", (unsigned)index, (int)error, status.state, status.availableData, status.bufferPos,
 				probe_sample((uint32_t)status.bufferPos), probe_sample((uint32_t)status.bufferPos + 1), probe_sample((uint32_t)status.bufferPos + 2),
@@ -1329,7 +1402,7 @@ static void probe_run(void)
 	verdict = wiiu_mic_probe_finding(probe.position, probe.available, PROBE_POLLS, ring, consumed_highest, &mode, &unit_bytes);
 	wiiu_log("mic probe: the reading is \"%s\" (%s)", verdict, !strcmp(verdict, "unknown") ? "nothing moved: no sound came, the "
 		"recording reads by consuming" : "written to mic_probe_result.txt, which audio.wiiu_microphone_read \"auto\" follows");
-	file = fopen(PROBE_RESULT_FILE, "w");
+	file = asked_to_stop() ? NULL : fopen(PROBE_RESULT_FILE, "w");
 	if (file)
 	{
 		fprintf(file, "%s\n", verdict);
@@ -1375,7 +1448,7 @@ static void probe_run(void)
 		if (probe_status(&status) == MIC_ERROR_OK)
 		{
 			wiiu_mic_reader_span(&reader, status.availableData, status.bufferPos, &first, &count, &consume);
-			DCInvalidateRange(microphone_ring, sizeof(microphone_ring));
+			DCFlushRange(microphone_ring, sizeof(microphone_ring));
 			for (index = 0; index < count && recorded < PROBE_SECONDS * 32000u; index++)
 			{
 				const int value = probe_sample(first + index);

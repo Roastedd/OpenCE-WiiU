@@ -183,8 +183,9 @@ on 32-bit x86 and big-endian (`tools/harness/tests/test_wiiu_voice.py`: the queu
   sixteen speakers, its concealment of up to three lost frames and its 60 ms of buffering). The mixer adds a ring for each speaker and never waits
   for the voice thread. `halo/voice_core.txt` `2` puts the voice thread on core 2 at the GX2 thread's priority, as DirectSound's packet decoder
   is, should the mixer miss chunks with it on core 0.
-- **Latency**: a frame's packet comes back at the next frame, 20 ms later; a packet more than 60 ms old by then is not sent (the tail of a talk
-  that ended, or of a stall).
+- **Latency**: a frame's packet comes back at the next call, 20 ms or a game frame later; a packet more than 150 ms old by then is not
+  sent (the tail of a talk that ended, or of a stall). Each call takes back one packet, so at a slow frame rate one can wait a game frame
+  more: 150 ms keeps every packet down to 15 game frames a second (60 ms lost a fifth of them at 30).
 - **HOME**: the voice thread closes the microphone and drops what waits before the sound is given up (the release callback waits 100 ms at most;
   a thread that does not answer has the microphone closed for it by the callback, if it is between microphone calls), and opens it again when
   the foreground is back, every 10 s while that fails. The close ends the thread within 300 ms, and `exit-trail.txt` says "the voice thread
@@ -251,7 +252,8 @@ it was.
    range (a second of MICGetStatus failing closes the microphone; it is tried again every 10 s, "tried again" when it opens).
 
 What only a console can settle: whether mic.rpl opens from core 0 under Aroma; which reading is right, the rate, the byte order, and whether
-throwing the ring's cache lines away (`DCInvalidateRange`) is what makes the samples visible; what states 0 to 8 hold; that a headset in the jack
+flushing the ring's cache lines before each reading (`DCFlushRange`, right whether the system writes it by DMA or through a core's
+cache) is enough to see the samples; what states 0 to 8 hold; that a headset in the jack
 replaces the built-in microphone on the same stream; whether the TV button reaches the game with the TV menu off, and whether the system gives the
 menu back at the close; whether the voice thread runs during HOME's release callback, and whether the microphone opens again after HOME and after
 the GamePad goes out of range; what Opus costs on Espresso (estimated at 1.4 to 2.3 ms to encode a frame and a fifth of that to decode one, from

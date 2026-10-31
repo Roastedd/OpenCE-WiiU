@@ -122,8 +122,9 @@ void wiiu_voice_ring_restart(struct wiiu_voice_ring *ring, int in_use)
 {
 	const uint32_t state = __atomic_load_n(&ring->state, __ATOMIC_RELAXED);
 
-	/* (where the new generation's samples begin, stored before the generation that tells the mixer to look) */
-	__atomic_store_n(&ring->flush_at, __atomic_load_n(&ring->write, __ATOMIC_RELAXED), __ATOMIC_RELAXED);
+	/* (where the new generation's samples begin, stored before the generation that tells the mixer to look; released after the
+	writing it is taken from, so that a mixer on another core that sees it sees that writing too) */
+	__atomic_store_n(&ring->flush_at, __atomic_load_n(&ring->write, __ATOMIC_RELAXED), __ATOMIC_RELEASE);
 	__atomic_store_n(&ring->state, (((state >> 1) + 1u) << 1) | (in_use ? 1u : 0u), __ATOMIC_RELEASE);
 }
 
@@ -159,7 +160,7 @@ uint32_t wiiu_voice_ring_mix(struct wiiu_voice_ring *ring, float *output, uint32
 
 	if ((state >> 1) != ring->generation)
 	{
-		const uint32_t flush_at = __atomic_load_n(&ring->flush_at, __ATOMIC_RELAXED);
+		const uint32_t flush_at = __atomic_load_n(&ring->flush_at, __ATOMIC_ACQUIRE);
 
 		/* (a new speaker, or none: the last one's samples skipped, never the new one's, so the reading only moves on) */
 		ring->generation = state >> 1;
@@ -173,6 +174,9 @@ uint32_t wiiu_voice_ring_mix(struct wiiu_voice_ring *ring, float *output, uint32
 	write = __atomic_load_n(&ring->write, __ATOMIC_ACQUIRE);
 	read = ring->read;
 	count = write - read;
+	/* (a reading ahead of the writing would be a fault of the ordering above: nothing played rather than a ring's worth) */
+	if ((int32_t)count < 0)
+		return 0;
 	/* (the network's jitter: played once prebuffer samples wait, and waiting again once they have run out) */
 	if (!ring->playing && count >= prebuffer)
 		__atomic_store_n(&ring->playing, 1u, __ATOMIC_RELAXED);
