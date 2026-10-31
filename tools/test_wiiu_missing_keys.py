@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / 'port/wiiu/src'
 TESTS = ROOT / 'port/wiiu/tests'
 sys.path.insert(0,str(ROOT/'tools'))
-from harness import function, structure, constant
+from harness import function, structure, enum_with
 
 
 def close_block():
@@ -32,7 +32,8 @@ def producer_code():
     pdb=(ROOT/'port/include/xdk/xdk_pdb.h').read_text()
     declarations=source[source.index('static struct\n{'):source.index('static uint32_t big32')]
     return ('#include "'+str(SRC/'dk_shaders.h')+'"\n'
-            'typedef uint32_t DWORD;\n#define D3DRS_PS_MAX '+str(constant(pdb,'D3DRS_PS_MAX'))+'\n' +
+            'typedef uint32_t DWORD;\n'+enum_with(pdb,'D3DRS_PSALPHAINPUTS0')+'\n'+enum_with(pdb,'D3DCMP_NEVER')+'\n'+
+            enum_with(pdb,'D3DFOG_NONE')+'\n'+enum_with(xgpu,'_xgpu_sampler_none')+'\n'+
             structure(xgpu,'nv2a_pixel_shader_key')+'\n#include "'+str(SRC/'shader_key_wire.h')+'"\n'
             '#define PROGRAM_LIMIT 512\n#define SEEN_LIMIT 4096\n'+declarations+'\n'+
             function(source,'dk_shader_program_note')+'\n'+function(source,'missing_note')+'\n')
@@ -123,7 +124,7 @@ class MissingKeysTests(unittest.TestCase):
         self.assertNotIn('config.report(',worker)
         self.assertLess(shell.index('wiiu_missing_keys_report("close");'),shell.index('wiiu_log("Closed");'))
         source=(SRC/'gx2_shaders.c').read_text()
-        note=source[source.index('static void missing_note('):source.index('/* the keys of the last draws')]
+        note=source[source.index('static int missing_note('):source.index("/* the handle of the pack's entry")]
         for banned in ['fopen(', 'fprintf(', 'fclose(', 'malloc(', 'pthread_', 'OSYieldThread', 'sleep(']:
             self.assertNotIn(banned,note)
         self.assertLess(note.index('wiiu_missing_keys_observe()'),note.index('seen_count'))
