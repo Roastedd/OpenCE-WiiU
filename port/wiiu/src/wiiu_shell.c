@@ -27,6 +27,7 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 #include "wiiu_shell_log.h"
 #include "wiiu_missing_keys.h"
 #include "wiiu_shell_watch.h"
+#include "wiiu_update.h"
 
 #include <coreinit/core.h>
 #include <sysapp/launch.h>
@@ -502,27 +503,27 @@ static void make_directories(void)
 	mkdir(WIIU_DATA_DIRECTORY, 0755);
 }
 
-/* the last run's file out of the way, and its lines into this run's log */
-static void report_file(const char *previous, const char *what);
+/* the last run's file out of the way, and its lines into this run's log; 1 if it had any */
+static int report_file(const char *previous, const char *what);
 
-static void report_previous(const char *path, const char *previous, const char *what)
+static int report_previous(const char *path, const char *previous, const char *what)
 {
 	if (!strcmp(what, "black box"))
 	{
 		if (wiiu_shell_blackbox_take_previous(path, previous) == 0)
-			return;
+			return 0;
 	}
 	else
 	{
 		unlink(previous);
 		if (rename(path, previous) != 0)
-			return;
+			return 0;
 	}
-	report_file(previous, what);
+	return report_file(previous, what);
 }
 
-/* the lines of a file the last run left (an empty one says nothing) */
-static void report_file(const char *previous, const char *what)
+/* the lines of a file the last run left (an empty one says nothing); 1 if it had any */
+static int report_file(const char *previous, const char *what)
 {
 	static char text[4096];
 	size_t size = 0;
@@ -531,7 +532,7 @@ static void report_file(const char *previous, const char *what)
 
 	file = open(previous, O_RDONLY);
 	if (file < 0)
-		return;
+		return 0;
 	for (;;)
 	{
 		ssize_t got = read(file, text + size, sizeof(text) - 1 - size);
@@ -543,10 +544,11 @@ static void report_file(const char *previous, const char *what)
 	close(file);
 	text[size] = 0;
 	if (!size)
-		return;
+		return 0;
 	wiiu_log("The last run left a %s (%s), its lines follow:", what, previous);
 	for (line = strtok(text, "\n"); line; line = strtok(NULL, "\n"))
 		wiiu_log("  %.200s", line);
+	return 1;
 }
 
 /* ---------- the memory, in a line */
@@ -805,7 +807,7 @@ int wiiu_shell_run(int (*game_main)(void))
 	wiiu_missing_keys_config missing_config;
 	uint64_t run_id;
 	char text[160];
-	int error;
+	int error, crash_note, relaunching;
 
 	base_ms = system_ms();
 	{
@@ -882,14 +884,20 @@ int wiiu_shell_run(int (*game_main)(void))
 		wiiu_log("%s", text);
 	report_file(EXIT_TRAIL_PREVIOUS_FILE, "close trail");
 	report_previous(BLACKBOX_FILE, BLACKBOX_PREVIOUS_FILE, "black box");
-	report_previous(CRASH_FILE, CRASH_PREVIOUS_FILE, "crash note");
+	crash_note = report_previous(CRASH_FILE, CRASH_PREVIOUS_FILE, "crash note");
 	wiiu_crash_install(CRASH_FILE, &shell_watch.phase, last_beat);
 
 	if (start_monitor(watchdog_main) || start_monitor(blackbox_main))
 		wiiu_log("A monitor thread could not be started");
-	error = start_game();
+	/* the self-updater (wiiu_update.c), which counts a new build's starts, crash notes among them, and may put the old build back before
+	the game starts: then the files on the card are another build's, which is being started in place of this one, and the game is not */
+	wiiu_phase("the updater's start");
+	relaunching = wiiu_update_startup(crash_note);
+	error = relaunching ? 0 : start_game();
 	if (error)
 		game_done = 1;
+	else if (relaunching)
+		wiiu_log("Another build is being started in place of this one: the game does not start");
 	else
 	{
 		/* the debug server (screenshots, button presses, quit, the log) listens on the network to anyone on it, so it is for development only: it
@@ -935,8 +943,9 @@ int wiiu_shell_run(int (*game_main)(void))
 		}
 		wiiu_log("Closing: the game thread is %s after %u ms", game_gate_held ? "held" : "NOT held", (unsigned)waited);
 		wiiu_audio_suspend();
-		/* (in the background the GPU is the system's: waiting for it there never ends, and it was drained when it was given up) */
-		if (foreground)
+		/* (in the background the GPU is the system's: waiting for it there never ends, and it was drained when it was given up; and a run
+		whose game never started has not used it) */
+		if (foreground && started_game)
 			GX2DrawDone();
 	}
 	wiiu_phase("shutting down");
@@ -968,6 +977,8 @@ int wiiu_shell_run(int (*game_main)(void))
 		wiiu_missing_keys_quiesce(); /* no new worker turn may race FS teardown */
 		wiiu_missing_keys_report("close");
 	}
+	/* the updater's worker, which looks at its flags every 50 ms (and its transfers every 100), before the sockets close and the card goes */
+	exit_note(wiiu_update_stop(500) ? "the updater's worker ended" : "the updater's worker still running after 500 ms");
 	wiiu_log("Closed");
 	if (error_log_started)
 		wiiu_shell_log_flush(&error_log, 500);

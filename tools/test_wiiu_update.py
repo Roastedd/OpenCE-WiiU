@@ -13,7 +13,7 @@
   loops and oversized headers.
 - With OPENCE_GITHUB_TEST=1, a few read-only requests to GitHub with the console's own roots (wiiu_update_roots.h): the API's
   latest release of OpenCommunityEdition/OpenCE (one of the 60 an hour), and a release asset's redirect to its file host.
-- The roots' header against its fingerprints.
+- The roots' header against its fingerprints, and the maps' format against the converter and the memory window.
 """
 
 import hashlib
@@ -518,6 +518,91 @@ class SourceTests(unittest.TestCase):
             der = bytes(int(value, 16) for value in re.findall(r"0x([0-9a-f]{2})", body))
             self.assertEqual(len(der), int(size), name)
             self.assertEqual(hashlib.sha256(der).hexdigest(), fingerprint, name)
+
+    def test_the_shell_starts_it_after_the_last_runs_notes_and_waits_for_it_before_the_sockets_close(self):
+        shell = (SRC / "wiiu_shell.c").read_text()
+        run = shell[shell.index("int wiiu_shell_run("):]
+        crash = run.index("crash_note = report_previous(CRASH_FILE, CRASH_PREVIOUS_FILE")
+        self.assertLess(run.index('report_file(EXIT_TRAIL_PREVIOUS_FILE, "close trail")'), crash)
+        startup = run.index("relaunching = wiiu_update_startup(crash_note);")
+        self.assertLess(crash, startup)
+        self.assertLess(startup, run.index("error = relaunching ? 0 : start_game();"))
+        stop = run.index("wiiu_update_stop(500)")
+        self.assertLess(stop, run.index('wiiu_log("Closed");'))
+        self.assertLess(stop, run.index("wiiu_posix_net_close_all()"))
+        # (a run that never started the game never used the GPU)
+        self.assertIn("if (foreground && started_game)\n\t\t\tGX2DrawDone();", run)
+
+    def test_the_worker_waits_in_steps_of_a_quarter_of_a_second_at_most(self):
+        for name in ("wiiu_update.c", "wiiu_update_http.c"):
+            source = (SRC / name).read_text()
+            for value in re.findall(r"sleep_ms\((\d+)\)", source):
+                self.assertLessEqual(int(value), 250, name)
+        http = (SRC / "wiiu_update_http.c").read_text()
+        self.assertLessEqual(int(re.search(r"#define WAIT_STEP_MS (\d+)", http).group(1)), 100)
+        # (the waits between pieces of a body that never waits are asked too)
+        give = http[http.index("static int give("):http.index("static int read_body(")]
+        self.assertLess(give.index("hooks->stop("), give.index("hooks->body("))
+
+    def test_the_network_card_and_menus_gate_it(self):
+        source = (SRC / "wiiu_update.c").read_text()
+        network = source[source.index("static int may_use_network(void)"):]
+        self.assertIn("wiiu_network_allowed() && wiiu_in_foreground()", network[:200])
+        writes = source[source.index("static int download_may_write("):]
+        self.assertIn("may_use_network() && at_main_menu()", writes[:300])
+        menu = source[source.index("static int at_main_menu(void)"):]
+        self.assertIn("wiiu_in_foreground() && load(&main_menu_now) && load(&menus_now)", menu[:200])
+        # HOME off around the swap, and on again before the new build is started
+        update = source[source.index("static void update_now("):source.index("static void offer_update(")]
+        self.assertLess(update.index("OSEnableHomeButtonMenu(FALSE);"), update.index("wiiu_update_commit("))
+        self.assertLess(update.index("wiiu_update_commit("), update.index("OSEnableHomeButtonMenu(TRUE);"))
+        self.assertLess(update.index("OSEnableHomeButtonMenu(TRUE);"), update.index("relaunch();"))
+        # off unless the build was given all three
+        off = source[source.index("static const char *off_reason(void)"):]
+        for needed in ("HALO_BUILD_NUMBER <= 0", "REPOSITORY[0]", "wiiu_update_key_from_hex(PUBLIC_KEY, key)"):
+            self.assertIn(needed, off[:600])
+        startup = source[source.index("int wiiu_update_startup(int crash_note)"):]
+        self.assertLess(startup.index("if (off)"), startup.index("mkdir("))
+
+    def test_the_controllers_and_the_renderer_have_the_panel(self):
+        xinput = (SRC / "xinput_wiiu.c").read_text()
+        state = xinput[xinput.index("DWORD WINAPI XInputGetState("):]
+        self.assertLess(state.index("wiiu_update_menus(port_main_menu_active(), port_menus_active());"), state.index("wiiu_update_panel_input("))
+        self.assertLess(state.index("wiiu_update_panel_input("), state.index("pad_state(&pad, &state->Gamepad);"))
+        self.assertIn("int port_main_menu_active(void)\n{\n\treturn main_menu_is_active() && ui_widgets_active() ? 1 : 0;",
+                      (ROOT / "port/linux/game/hud_hires_tags.c").read_text())
+        gx2 = (SRC / "wiiu_gx2.c").read_text()
+        present = gx2[gx2.index("static void present(const struct dk_command_present *command)"):]
+        for screen in ("TV", "DRC"):
+            blit = present.index(f"blit_to(back, WHBGfxGet{screen}ColourBuffer()")
+            panel = present.index(f"panel_draw(WHBGfxGet{screen}ColourBuffer()")
+            copy = present.index(f"GX2CopyColorBufferToScanBuffer(WHBGfxGet{screen}ColourBuffer()")
+            self.assertTrue(blit < panel < copy, screen)
+        self.assertLess(present.index("panel_update();"), present.index("blit_to(back, WHBGfxGetTVColourBuffer()"))
+
+    def test_the_panels_lines_fit_its_62_columns(self):
+        """every line the panel shows (wiiu_gx2.c draws 64 cells of the 3x5 font, one at each side left empty), with numbers of six
+        digits and names of a dozen letters"""
+        source = (SRC / "wiiu_update.c").read_text()
+        texts = re.findall(r'(?:panel_show\(1, |tell_and_wait\(answer, [^"]*)((?:"(?:[^"\\]|\\.)*"\s*)+)', source)
+        texts += re.findall(r'\? ("[A-Z][A-Z \':,.]+\.")', source)
+        self.assertGreater(len(texts), 12)
+        for text in texts:
+            joined = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', text)).replace("\\n", "\n")
+            for line in joined.replace("%u.%u", "123456.7").replace("%u", "123456").replace("%s", "shaders.pack").split("\n"):
+                self.assertLessEqual(len(line), 62, line)
+
+    def test_the_maps_format_is_the_converters_and_the_windows(self):
+        sys.path.insert(0, str(ROOT / "tools/wiiu"))
+        source = (SRC / "wiiu_update.c").read_text()
+        token = re.search(r'#define MAPS_FORMAT "([0-9a-f]+)"', source).group(1)
+        converter = (ROOT / "tools/wiiu/convert_maps.py").read_text()
+        rebase = re.search(r"WIIU_REBASE = \((0x[0-9A-Fa-f]+) - 0x80000000\) & 0xFFFFFFFF", converter).group(1)
+        self.assertEqual(int(token, 16), (int(rebase, 16) - 0x80000000) & 0xFFFFFFFF)
+        capacity = (ROOT / "port/linux/include/halo_port_capacity.h").read_text()
+        window = re.search(r"#elif defined\(HALO_WIIU\)\n#define HALO_PORT_WINDOW_BASE (0x[0-9A-F]+)UL", capacity).group(1)
+        self.assertEqual(int(window, 16), int(rebase, 16))
+        self.assertIn(f"#define WINDOW_BASE {window}u", (SRC / "wiiu_window.c").read_text())
 
 
 if __name__ == "__main__":

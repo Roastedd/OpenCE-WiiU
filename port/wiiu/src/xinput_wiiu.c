@@ -23,6 +23,7 @@ while no menu has the screen.
 #include "port_config.h"
 #include "wiiu_shell.h"
 #include "wiiu_input.h"
+#include "wiiu_update.h"
 
 #include <coreinit/time.h>
 #include <string.h>
@@ -57,8 +58,9 @@ static SHORT stick(float value)
 /* input.wiiu_face_buttons: "label" (matched by letter), "position" (by place), or "auto" (the default: by letter in the menus, where the prompts name the
 letter and Nintendo's A accepts, by place in the game, where the thumb knows where jump is) */
 int wiiu_face_buttons_by_label(void);
-/* (hud_hires_tags.c's: 1 while a menu has the screen) */
+/* (hud_hires_tags.c's: 1 while a menu has the screen; 1 while it is the main menu's) */
 int port_menus_active(void);
+int port_main_menu_active(void);
 
 int wiiu_face_buttons_by_label(void)
 {
@@ -375,12 +377,24 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 {
 	int port = controller_port(device);
 	struct wiiu_pad pad;
+	int have_pad;
 
 	memset(state, 0, sizeof(*state));
 	if (port < 0)
 		return ERROR_DEVICE_NOT_CONNECTED;
 	layout_apply();
-	if (wiiu_input_read((unsigned int)port, &pad))
+	memset(&pad, 0, sizeof(pad));
+	have_pad = wiiu_input_read((unsigned int)port, &pad);
+	/* the updater's panel at the main menu (wiiu_update.c) is told where the game is, and has the pads' buttons while it is up: the menu
+	under it sees none */
+	if (port == 0)
+		wiiu_update_menus(port_main_menu_active(), port_menus_active());
+	if (wiiu_update_panel_input((unsigned int)port, have_pad ? pad.buttons : 0u))
+	{
+		memset(&pad, 0, sizeof(pad));
+		have_pad = 0;
+	}
+	if (have_pad)
 		pad_state(&pad, &state->Gamepad);
 	hold_to_skip((unsigned int)port, &state->Gamepad);
 	if (port == 0)

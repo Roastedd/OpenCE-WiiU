@@ -340,6 +340,15 @@ int port_menus_active(void)
 {
 	return ui_widgets_active() ? 1 : 0;
 }
+
+/* (for the updater, port/wiiu/src/wiiu_update.c: does the main menu have the screen? Its panel is shown there, and a new build on
+trial is kept once it gets there) */
+int port_main_menu_active(void);
+
+int port_main_menu_active(void)
+{
+	return main_menu_is_active() && ui_widgets_active() ? 1 : 0;
+}
 #endif
 
 /* The icon a button's prompt shows. The Wii U's face buttons are matched to the Xbox's by place (xinput_wiiu.c: the Xbox's A, at the bottom, is the
