@@ -21,7 +21,7 @@ game build.
 | `probe/` | A Wii U application that measures the console (memory mapping, FPU, unaligned access, speed). See its README. |
 | `probe_gx2/` | A Wii U application that asks the GPU's questions: CafeGLSL on the console, BC1/BC2/BC3 byte order, little-endian vertex streams, index types. See its README. |
 | `src/` | The Wii U's own units: the shell (lifecycle, log, black box, watchdog), thread-local storage, 64-bit atomics, the C library's gaps. See its README. |
-| `tests/` | Desktop tests of the shell's portable parts (`tools/wiiu/shell_tests.sh`: ARM64, x86, big-endian PowerPC). |
+| `tests/` | Desktop tests of the shell's portable parts (`tools/wiiu/shell_tests.sh`: ARM64, x86, big-endian PowerPC), and of voice chat over stand-ins for Cafe OS (`test_voice_audio.c`, `voice_mock/`; run by `tools/harness/tests/test_wiiu_voice_audio.py`). |
 | `stubbed_symbols.txt` | The symbols the link still lacks, as the build last found them. |
 
 ## Building
@@ -166,8 +166,10 @@ machine. `network.wiiu_sockets` turns the sockets off.
 ## Voice chat
 
 `src/wiiu_voice_audio.c` is voice chat's sound for the Wii U (`voice_audio.h`; the other builds' is `port/linux/src/voice_audio.c`), and
-`port/linux/game/network_voice.c` decides who hears whom, as on every build. Written, built and tested on the build machine
-(`tools/harness/tests/test_wiiu_voice.py`); not run on a console.
+`port/linux/game/network_voice.c` decides who hears whom, as on every build. Written, built and tested on the build machine, natively,
+on 32-bit x86 and big-endian (`tools/harness/tests/test_wiiu_voice.py`: the queues, rings, resampler and microphone readings;
+`test_wiiu_voice_audio.py`: `wiiu_voice_audio.c` itself with the real Opus over stand-ins for Cafe OS and mic.rpl,
+`tests/test_voice_audio.c`); not run on a console.
 
 - **Talking**: into the GamePad's microphone, or a headset plugged into the GamePad's jack, which takes the built-in microphone's place on
   the same stream (`MIC_INSTANCE_0`; the log says which, from `VPADStatus.usingHeadphones`). The Pro Controller has no jack, and a USB headset
