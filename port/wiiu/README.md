@@ -133,6 +133,7 @@ three (split screen). `src/wiiu_input.c` reads VPAD and KPAD; `src/xinput_wiiu.c
 | Crouch / zoom | Click the left stick / the right stick | |
 | Pause (Start) | + | |
 | Back (Xbox's Back) | − | |
+| Talk in voice chat (push to talk) | TV, held (the GamePad's) | |
 
 In the game the face buttons are the Xbox's by **place**, so that jump is under the thumb where it is on an Xbox pad; the prompts on the screen show
 the Wii U's letter for each place (`port_button_icon` in `hud_hires_tags.c` swaps the icons: the prompt for the bottom button says B). In the menus
@@ -162,6 +163,99 @@ end to end over the loopback (the host's own client connects to its listening so
 match that starts, with the HUD and the controls answering (ZR fires, the stick moves and turns). Not measured: a game found or joined from a second
 machine. `network.wiiu_sockets` turns the sockets off.
 
+## Voice chat
+
+`src/wiiu_voice_audio.c` is voice chat's sound for the Wii U (`voice_audio.h`; the other builds' is `port/linux/src/voice_audio.c`), and
+`port/linux/game/network_voice.c` decides who hears whom, as on every build. Written, built and tested on the build machine
+(`tools/harness/tests/test_wiiu_voice.py`); not run on a console.
+
+- **Talking**: into the GamePad's microphone, or a headset plugged into the GamePad's jack, which takes the built-in microphone's place on
+  the same stream (`MIC_INSTANCE_0`; the log says which, from `VPADStatus.usingHeadphones`). The Pro Controller has no jack, and a USB headset
+  has no way in (`nsysuhs` has no isochronous transfers). VOICE CHAT in Settings > Audio Setup: PUSH TO TALK, the default, is the GamePad's **TV**
+  button held (every other button is the game's; while a voice session asks for it the system's TV menu is off, `VPADSetTVMenuInvalid`, and it
+  is back a second after); OPEN MIC sends whenever the microphone hears speech, and is best with a headset: the GamePad's own microphone hears
+  its speaker. VOICE VOLUME sets the others' voices.
+- **Threads**: the game thread only copies (a frame taken, a frame given to be encoded and the packet of the one before taken back, a packet
+  heard queued). A voice thread on core 0 at priority 20, below the mixer's 10, with 128 KB of stack, reads the microphone every 10 ms,
+  resamples its 32 kHz to Opus's 48 kHz, keeps at most five frames (100 ms) waiting, encodes and decodes (the desktop's Opus settings, its
+  sixteen speakers, its concealment of up to three lost frames and its 60 ms of buffering). The mixer adds a ring for each speaker and never waits
+  for the voice thread. `halo/voice_core.txt` `2` puts the voice thread on core 2 at the GX2 thread's priority, as DirectSound's packet decoder
+  is, should the mixer miss chunks with it on core 0.
+- **Latency**: a frame's packet comes back at the next frame, 20 ms later; a packet more than 60 ms old by then is not sent (the tail of a talk
+  that ended, or of a stall).
+- **HOME**: the voice thread closes the microphone and drops what waits before the sound is given up (the release callback waits 100 ms at most;
+  a thread that does not answer has the microphone closed for it by the callback, if it is between microphone calls), and opens it again when
+  the foreground is back, every 10 s while that fails. The close ends the thread within 300 ms, and `exit-trail.txt` says "the voice thread
+  ended".
+- **What the host is told**: a machine says it hears voices only while it can play them (`voice_audio_hears`: the voice thread running, in the
+  foreground, with the sound mixing), so a host sends none to a Wii U that cannot play them; a microphone that does not open does not stop it
+  hearing.
+- **The microphone's ring**: the system fills a ring in the app's memory, and `MICGetStatus` says how far; the published sources disagree on what
+  its numbers mean. Consume: `availableData` samples wait from the read index `bufferPos`, and `MICSetDataConsumed` moves it on (Cemu, and
+  capitalistspz's wiiu_audio_examples). Position: `bufferPos` is where the system writes, in bytes, followed by the app, which never consumes
+  (WiiUCamera). Both are written (`src/wiiu_voice_core.c`, tested over simulated rings, in either unit), and `audio.wiiu_microphone_read` chooses:
+  `"auto"` (the default) is what the probe found, else consume.
+- **The log**: "Voice chat:" lines when the microphone opens and closes and why, and every 10 s of a session two "Voice:" lines: frames encoded
+  and packets decoded with their mean and longest times, frames made up, speakers, the slowest turn, and what was dropped. The mixer's
+  profile (`halo/audio_profile.txt` 1) times the voices' mix as its "chat" stage.
+- `debug.voice_test` works as on the other builds: a 440 Hz tone in place of the microphone, and a "voice test: speaker N level L gain G pan P
+  bytes B" line each second for each voice heard.
+
+### The microphone probe
+
+Put `1` in `halo/mic_probe.txt` and start the game. Ten seconds after the start (for the menus to be up and the GamePad read), the voice thread
+opens the microphone, logs "mic probe:" lines for two seconds, then records ten. Speak into the GamePad, or the headset, while it records; press
+TV a few times; and, to test the background, press HOME during the recording and come back. Then close the game and take `log.txt`,
+`mic_probe_result.txt` and `mic_probe.wav` from `wiiu/apps/halo/`. Remove `mic_probe.txt` afterwards: the probe runs at every start while it is
+there. (It writes the recording to the card from the voice thread, after recording it into memory.)
+
+| Lines | What they say |
+| --- | --- |
+| `MICInit(instance 0, ...): handle H, error E`, `MICOpen: error E` | whether the microphone opens from the voice thread's core (error 0), and how long that takes |
+| `state N (name): error E, value V` | mic.rpl's states 0 to 8 (Cemu's names, partly guessed: 0 the rate, 1 the gain, 2 to 4 its range, 5 mute, 7 echo cancellation, 8 auto selection) |
+| `unconsumed N: ... availableData A, bufferPos P; samples at bufferPos ...` | a second with nothing consumed: `P` moving by itself from the start is a write position; `A` growing while `P` stands is a read index. The samples show where the sound is |
+| `consumed N: before ...; MICSetDataConsumed(n) e; after ...` | a second consuming each reading: a read index moves on by `n` (samples) or `2n` (bytes), and `availableData` falls |
+| `the reading is "consume samples"` (or `consume bytes`, `position bytes`, `position samples`, `unknown`) | the finding, which is also the first line of `mic_probe_result.txt`; `audio.wiiu_microphone_read` `"auto"` reads by it from then on (`unknown`: nothing moved, no sound came) |
+| `N samples in M ms, level L of full scale, peak P` | each second of the recording: about 32000 samples a second if the rate is 32 kHz and the reading right, and a level that rises as you speak |
+| `the TV button is down` / `up` | the TV button reaches the game with the system's TV menu off |
+| `HOME during the probe: the last status ...`, `closed (HOME): MICClose E, MICUninit E`, `back in the foreground after N ms`, `the first status after HOME` | what HOME does to an open microphone, and whether it opens again; the shell's "Voice chat: given up for the background after N ms" (or "did not answer") says whether the voice thread ran during the release callback |
+| `N samples (S s at 32 kHz) written to .../mic_probe.wav` | play it on a computer: the voice at its own pitch and speed. Too fast or too slow: the rate is not 32 kHz; noise: the byte order or the reading is wrong |
+
+### Testing voice chat on a console
+
+For the session that has the console. Each step names what to set on the card, what to do, and the lines that answer. Put the card's
+`config.toml` back afterwards and read it back (as `runs/lan-20261030/lan_test.sh` in the development repository does), and leave the card as
+it was.
+
+1. **The probe**, above. It settles the reading, the rate, the byte order, the TV button and HOME with the microphone open. If it finds anything
+   but `consume samples`, the runs after it read by its finding.
+2. **A tone against an x86 build on the LAN.** On the Wii U: `debug.voice_test = true`, `audio.voice_chat = "open_mic"` (the tone is always above
+   the open mic's level) and `debug.network_test = "host:bloodgulch"`. The x86 build of the same commit joins from the bridged Colima machine, as
+   `lan_test.sh` has it, with `HALO_VOICE_TEST=1 HALO_VOICE_CHAT=open_mic HALO_NETWORK_TEST=join`. Each side's log has a line each second, `voice
+   test: speaker N level 0.212 ...`, for the other's tone (0.212 is the tone's 0.3 over the square root of 2; `gain 1.00 pan 0.00` in the
+   lobby, others when the game's proximity places the speaker), and the Wii U's "Voice:" lines count about 500 frames encoded and 500 packets
+   decoded in 10 s. Then the other way round: the x86 build hosts and the Wii U joins (`debug.network_test = "join"`).
+3. **Eight x86 talkers.** The Wii U hosts as in 2, and eight x86 copies with `HALO_VOICE_TEST=1 HALO_VOICE_CHAT=open_mic` join, each with an
+   address of its own on the LAN (copies on one address cannot all bind the game's ports, and one bound to a single address hears no broadcasts:
+   a macvlan Docker network on the bridged machine gives each container a LAN address of its own; not tried yet). The host relays at most 8
+   talkers. Read every 10 s: the voice thread's "Voice:" lines (encoding and decoding times, the slowest turn, what was dropped), the mixer's
+   "Audio ring: N apparent overtakes, M at deadline" (its missed chunks; with `halo/audio_profile.txt` 1, "Audio mix profile" and its chat stage),
+   and the heartbeat's frame rate, against a run without the talkers. If the mixer misses chunks, run it again with `halo/voice_core.txt` 2.
+4. **Real voice.** `debug.voice_test` off on the Wii U, a headset in the GamePad's jack, VOICE CHAT on PUSH TO TALK, and an x86 copy listening
+   with `HALO_VOICE_TEST=1` (its "voice test:" level for the Wii U rises when the player speaks). Look for "Input: the GamePad's jack: a headset",
+   "Input: the GamePad's TV button is push to talk", the microphone opening at the first press of TV, speech heard while TV is held and not
+   after; OPEN MIC with the headset and without it (without, the log warns, and the other side hears the game through the GamePad's speaker);
+   HOME in a session ("Voice chat: given up for the background", the microphone closed, open again on return); and the GamePad taken out of
+   range (a second of MICGetStatus failing closes the microphone; it is tried again every 10 s, "tried again" when it opens).
+
+What only a console can settle: whether mic.rpl opens from core 0 under Aroma; which reading is right, the rate, the byte order, and whether
+throwing the ring's cache lines away (`DCInvalidateRange`) is what makes the samples visible; what states 0 to 8 hold; that a headset in the jack
+replaces the built-in microphone on the same stream; whether the TV button reaches the game with the TV menu off, and whether the system gives the
+menu back at the close; whether the voice thread runs during HOME's release callback, and whether the microphone opens again after HOME and after
+the GamePad goes out of range; what Opus costs on Espresso (estimated at 1.4 to 2.3 ms to encode a frame and a fifth of that to decode one, from
+instruction counts under qemu-ppc) and whether eight talkers cost the mixer chunks or the game frames; and how much of the GamePad's speaker its
+microphone hears.
+
 ## The debug server
 
 `src/wiiu_debug.c` is a small server inside the game's own shell (TCP port 4310, started once the game's thread runs) so that a change can be
@@ -169,7 +263,7 @@ run, looked at and judged without a person at the console; its client is `tools/
 `wiiu_debug_protocol.c` (plain C, tested on three machines: `tests/test_debug.c`). It answers anyone on the network, so it is for development
 only: it starts when `halo/debug_server.txt` on the card says `1`, and is off without that file (the log says which).
 
-- `hello` (frames, foreground, memory), `log N` (the last lines of the shell's log), `press BUTTONS MS` and `stick LX LY RX RY MS` (merged into
+- `hello` (frames, foreground, memory), `log N` (the last lines of the shell's log), `press BUTTONS MS` (`TV` is voice chat's push to talk) and `stick LX LY RX RY MS` (merged into
   the GamePad's port in `wiiu_input_read`), `screenshot tv|drc|back [1|2|4]`, `quit`.
 - **A picture** is taken by the game's own thread, at the start of its next present (`wiiu_debug_present`, called from `wiiu_gx2.c`'s
   `present`), because only it may use the GPU: the GPU copies the colour buffer into a linear surface and the server sends the pixels. The
@@ -188,7 +282,8 @@ only: it starts when `halo/debug_server.txt` on the card says `1`, and is off wi
 Compiled, linked and tested on the build machine where it can be, not run on the Wii U: the high-res text (`text_hires.c`: the fonts in the maps' tags replaced by
 Overpass at the display's resolution; `tools/wiiu/shell_tests.sh` rasterizes glyphs from the big-endian embedded fonts under qemu), UPnP (miniupnpc built with
 `include/wiiu_net_compat.h`; a router's port forwarding for internet play, and `posix_upnp.c`'s port and address byte order fixed for big-endian), the GamePad's
-gyro aim (`input.wiiu_gyro_aim`), tap-to-skip and Classic Controllers. The high-res HUD and menu pictures (`hud_hires.c`, `menu_files.c`) are not ported: they
+gyro aim (`input.wiiu_gyro_aim`), tap-to-skip, Classic Controllers, and voice chat (above: its queues, rings, resampler and microphone readings
+tested on three machines, the rest built). The high-res HUD and menu pictures (`hud_hires.c`, `menu_files.c`) are not ported: they
 draw meters through shader variants that are not in the shader pack, which is made from what a console run asked for (`halo/shaders_missing.txt`).
 
 ## What it takes to run
@@ -199,7 +294,7 @@ linker's own count:
 | Symbols | What | Approach |
 | --- | --- | --- |
 | 108 | Direct3D 8 (`D3DDevice_*`, `Direct3DCreate8` and the rest) | a null renderer first (the headless milestone), then GX2 (plan 6.4) |
-| 50 | DirectSound (41, `dsound_sdl.c`) and voice chat (9, `voice_audio.c`) | AX; voice later |
+| 50 | DirectSound (41, `dsound_sdl.c`) and voice chat (9, `voice_audio.c`) | AX; voice chat is `src/wiiu_voice_audio.c` |
 | 43 | `posix_*`: files, the command line, network, Discord | newlib's devoptab has most; the network is nsysnet |
 | 19 | the port platform layer (`platform_*`, `halo_linux_*`: input, audio devices, bindings) | VPAD/KPAD |
 | 21 | `halo_*` hooks the SDL and GL files provide (screen size, menus, keyboard) | with the renderer and input |
