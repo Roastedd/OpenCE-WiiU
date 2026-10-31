@@ -151,6 +151,11 @@ class D3D8ReplayTest(unittest.TestCase):
         self.assertNotEqual(values["digest"], DIGEST)
         self.assertNotEqual(values["states-missed"], "0")
 
+    def test_targets_not_bound_again_after_setrendertarget_change_the_pictures(self):
+        mutation = ("port/wiiu/src/d3d8_gx2.c", "\tdevice.depth_stencil = depth_stencil;\n\ttargets_dirty = TRUE;", "\tdevice.depth_stencil = depth_stencil;")
+        reference, mutated = self.mutated_digests([], [("sync", "lag", 1)]) + self.mutated_digests([mutation], [("sync", "lag", 1)])
+        self.assertNotEqual(reference, mutated)
+
     def test_facts_not_sent_when_they_change_change_the_pictures(self):
         mutation = ("port/wiiu/src/d3d8_gx2.c", "if (!facts_known || !words_equal(&facts, &facts_told, sizeof(facts)))", "if (!facts_known)")
         reference, mutated = self.mutated_digests([], [("sync", "lag", 1)]) + self.mutated_digests([mutation], [("sync", "lag", 1)])

@@ -412,8 +412,10 @@ static inline void texture_state_mark(DWORD stage, unsigned long type)
 }
 
 /* changed when a register's current value (SetVertexData) or the byte order the streams were found in (halo_stream_endian_forget) may have: a
-draw's vertex format depends on them (format_for_draw) */
-static unsigned long attributes_serial = 1, endian_serial = 1;
+draw's vertex format depends on them (format_for_draw); and when a stream is set (SetStreamSource), which it depends on too */
+static unsigned long attributes_serial = 1, endian_serial = 1, streams_serial = 1;
+/* changed when a resource a draw stamps is bound (draw_resources_used): the targets, a stage's texture or palette, a stream, the index buffer */
+static unsigned long resources_serial = 1;
 
 static D3DDevice *device_pointer(void)
 {
@@ -1019,9 +1021,6 @@ starts there anew */
 static struct dk_command_targets targets_told;
 static BOOL targets_known;
 
-/* tells the host the current targets, if they are not what it has; FALSE if
-there is nothing to draw into. has_depth (if not NULL) says whether there is
-a depth buffer. */
 /* the surfaces' description and scale as targets_bind last made them, and what they came from: the two surfaces, their data, format and size
 words, and the screen's width and scale. Every draw binds the targets, nearly always the ones before (0.8% of the game thread in a fight). */
 static struct
@@ -1035,14 +1034,32 @@ static struct
 	float scale[2];
 } targets_memo;
 
-static BOOL targets_bind(BOOL *has_depth)
+/* Set when what targets_bind made may no longer hold: the targets set (SetRenderTarget), the screen's width or scale changed (halo_screen_commit), or a
+frame presented, after which the host starts with nothing bound and the game sizes its surfaces again in place (rasterizer_screen_width_update). Between
+those the surfaces bound are as targets_bind found them - the game makes a surface's header before it binds it - and a draw does not read them again
+(their six words, two surfaces' cache lines a draw); the frame's end checks that they are (targets_check). targets_drawable: targets_bind's answer. */
+static BOOL targets_dirty = TRUE, targets_drawable;
+static unsigned long targets_missed;
+
+static void targets_words(const D3DSurface *color, const D3DSurface *depth, DWORD words[6])
+{
+	words[0] = color ? color->Data : 0;
+	words[1] = color ? color->Format : 0;
+	words[2] = color ? color->Size : 0;
+	words[3] = depth ? depth->Data : 0;
+	words[4] = depth ? depth->Format : 0;
+	words[5] = depth ? depth->Size : 0;
+}
+
+/* tells the host the current targets, if they are not what it has; FALSE if there is nothing to draw into */
+static BOOL targets_bind_again(void)
 {
 	const D3DSurface *color = device.render_target, *depth = device.depth_stencil;
-	const DWORD words[6] = { color ? color->Data : 0, color ? color->Format : 0, color ? color->Size : 0,
-		depth ? depth->Data : 0, depth ? depth->Format : 0, depth ? depth->Size : 0 };
 	const long width = halo_screen_width();
+	DWORD words[6];
 	struct dk_command_targets targets;
 
+	targets_words(color, depth, words);
 	if (!targets_memo.valid || targets_memo.color != color || targets_memo.depth != depth || !words_equal(words, targets_memo.words, sizeof(words)) ||
 		targets_memo.screen_width != width || targets_memo.screen_scale[0] != screen_scale[0] || targets_memo.screen_scale[1] != screen_scale[1])
 	{
@@ -1066,8 +1083,6 @@ static BOOL targets_bind(BOOL *has_depth)
 		return FALSE;
 	target_scale[0] = targets_memo.scale[0];
 	target_scale[1] = targets_memo.scale[1];
-	if (has_depth)
-		*has_depth = targets.depth.kind != DK_SURFACE_NONE;
 	if (!targets_known || !words_equal(&targets.color, &targets_told.color, sizeof(targets.color)) ||
 		!words_equal(&targets.depth, &targets_told.depth, sizeof(targets.depth)))
 	{
@@ -1080,6 +1095,45 @@ static BOOL targets_bind(BOOL *has_depth)
 		targets_known = TRUE;
 	}
 	return TRUE;
+}
+
+/* the targets for a draw or a clear (targets_bind_again's, made again only when targets_dirty says it must be); has_depth (if not NULL): whether there
+is a depth buffer */
+static BOOL targets_bind(BOOL *has_depth)
+{
+	if (targets_dirty)
+	{
+		targets_drawable = targets_bind_again();
+		targets_dirty = FALSE;
+	}
+	if (targets_drawable && has_depth)
+		*has_depth = targets_memo.targets.depth.kind != DK_SURFACE_NONE;
+	return targets_drawable;
+}
+
+/* at a frame's end: the surfaces bound are still those targets_bind described (a bound surface's header rewritten in place without SetRenderTarget
+would have been drawn into as it was: logged), and from now on targets_bind looks at them again */
+static void targets_check(void)
+{
+	if (!targets_dirty && targets_memo.valid)
+	{
+		DWORD words[6];
+
+		targets_words(device.render_target, device.depth_stencil, words);
+		if (device.render_target != targets_memo.color || device.depth_stencil != targets_memo.depth ||
+			!words_equal(words, targets_memo.words, sizeof(words)))
+		{
+			static unsigned long told;
+
+			if (++targets_missed >= told * 2 + 1)
+			{
+				told = targets_missed;
+				platform_log("render targets: %lu times a bound surface was found changed with no SetRenderTarget having said so (drawn as it was until the frame's end)",
+					targets_missed);
+			}
+		}
+	}
+	targets_dirty = TRUE;
 }
 
 struct xgpu_render_target *xgpu_render_target_find(unsigned long data)
@@ -1391,6 +1445,7 @@ long halo_screen_commit(void)
 		screen_width = width;
 		screen_scale[0] = scale[0];
 		screen_scale[1] = scale[1];
+		targets_dirty = TRUE;
 #ifndef HALO_ANDROID
 		if (device.created)
 		{
@@ -1455,6 +1510,8 @@ void WINAPI D3DDevice_SetRenderTarget(D3DSurface *render_target, D3DSurface *dep
 	if (render_target)
 		device.render_target = render_target;
 	device.depth_stencil = depth_stencil;
+	targets_dirty = TRUE;
+	resources_serial++;
 	/* like Direct3D, reset the viewport to the whole new target */
 	if (device.render_target)
 	{
@@ -1527,11 +1584,36 @@ static void targets_used(void)
 	resource_used(device.depth_stencil);
 }
 
+/* what draw_resources_used stamped last and in which submission: a draw with the same bindings in the same submission has nothing to stamp, each of its
+resources' Lock holding the submission already (the stamps were up to nine stores a draw into the resources' headers, which are the game's, in lines
+the draw does not otherwise touch). indexed, streamed: whether the index buffer and the streams' buffers were stamped too */
+static struct
+{
+	unsigned long serial, submission;
+	const struct vertex_shader_object *declaration;
+	DWORD texture_modes;
+	BOOL indexed, streamed;
+} resources_stamped;
+
 static void draw_resources_used(BOOL indexed, BOOL streamed)
 {
 	unsigned long index;
 	int stage;
 
+	if (resources_stamped.serial == resources_serial && resources_stamped.submission == submission && resources_stamped.declaration == device.vertex_shader &&
+		resources_stamped.texture_modes == D3D__RenderState[D3DRS_PSTEXTUREMODES])
+	{
+		if ((resources_stamped.indexed || !indexed) && (resources_stamped.streamed || !streamed))
+			return;
+		indexed = indexed || resources_stamped.indexed;
+		streamed = streamed || resources_stamped.streamed;
+	}
+	resources_stamped.serial = resources_serial;
+	resources_stamped.submission = submission;
+	resources_stamped.declaration = device.vertex_shader;
+	resources_stamped.texture_modes = D3D__RenderState[D3DRS_PSTEXTUREMODES];
+	resources_stamped.indexed = indexed;
+	resources_stamped.streamed = streamed;
 	targets_used();
 	for (stage = 0; stage < D3DTSS_MAXSTAGES; stage++)
 	{
@@ -1810,12 +1892,14 @@ void WINAPI D3DDevice_SetTexture(DWORD stage, D3DBaseTexture *texture)
 {
 	if (stage < D3DTSS_MAXSTAGES)
 		device.textures[stage] = texture;
+	resources_serial++;
 }
 
 void WINAPI D3DDevice_SetPalette(DWORD stage, D3DPalette *palette)
 {
 	if (stage < D3DTSS_MAXSTAGES)
 		device.palettes[stage] = palette;
+	resources_serial++;
 }
 
 void WINAPI D3DDevice_SetPixelShaderProgram(D3DPIXELSHADERDEF *definition)
@@ -2291,12 +2375,15 @@ void WINAPI D3DDevice_SetStreamSource(UINT stream_number, D3DVertexBuffer *strea
 	device.streams[stream_number].data = stream_data ? stream_data->Data : 0;
 	device.streams[stream_number].stride = stride;
 	device.streams[stream_number].buffer = stream_data;
+	streams_serial++;
+	resources_serial++;
 }
 
 void WINAPI D3DDevice_SetIndices(D3DIndexBuffer *index_data, UINT base_vertex_index)
 {
 	device.base_vertex_index = base_vertex_index;
 	device.index_buffer = index_data;
+	resources_serial++;
 	/* an index buffer's Data is a window address, not an offset within one:
 	from a map file it is the address the window was linked at, and from
 	CreateIndexBuffer ordinary memory, which the move leaves alone */
@@ -2838,27 +2925,22 @@ static void format_from_declaration(struct dk_vertex_format *format)
 	}
 }
 
-/* format_from_declaration's last result and what it came from: the declaration, every stream's address and stride, the registers' current values and
+/* format_from_declaration's last result and what it came from: the declaration, the streams' addresses and strides, the registers' current values and
 the streams' byte order (their serials). Most draws repeat the last one's, which made it again (and sniffed the streams' byte order) for each draw: 2% of
 the game thread in a fight. told: it is what the GX2 thread was last told (draw_format_send). */
 static struct
 {
 	BOOL valid, told;
 	const struct vertex_shader_object *declaration;
-	unsigned long declaration_id, attributes_serial, endian_serial;
-	DWORD data[16];
-	UINT stride[16];
+	unsigned long declaration_id, attributes_serial, endian_serial, streams_serial;
 	struct dk_vertex_format format;
 } format_memo;
 
 static void format_for_draw(void)
 {
-	unsigned long stream;
-	BOOL same = format_memo.valid && format_memo.declaration == device.vertex_shader && format_memo.declaration_id == device.vertex_shader->id &&
-		format_memo.attributes_serial == attributes_serial && format_memo.endian_serial == endian_serial;
+	const BOOL same = format_memo.valid && format_memo.declaration == device.vertex_shader && format_memo.declaration_id == device.vertex_shader->id &&
+		format_memo.attributes_serial == attributes_serial && format_memo.endian_serial == endian_serial && format_memo.streams_serial == streams_serial;
 
-	for (stream = 0; same && stream < 16; stream++)
-		same = format_memo.data[stream] == device.streams[stream].data && format_memo.stride[stream] == device.streams[stream].stride;
 	if (!same)
 	{
 		format_from_declaration(&format_memo.format);
@@ -2868,11 +2950,7 @@ static void format_for_draw(void)
 		format_memo.declaration_id = device.vertex_shader->id;
 		format_memo.attributes_serial = attributes_serial;
 		format_memo.endian_serial = endian_serial;
-		for (stream = 0; stream < 16; stream++)
-		{
-			format_memo.data[stream] = device.streams[stream].data;
-			format_memo.stride[stream] = device.streams[stream].stride;
-		}
+		format_memo.streams_serial = streams_serial;
 	}
 	if (!format_memo.told)
 	{
@@ -3921,6 +3999,7 @@ static void D3DDevice_Present_inner(CONST RECT *source_rectangle, CONST RECT *de
 		screenshot_pixels = NULL;
 	}
 	/* the host starts the next frame with nothing bound */
+	targets_check();
 	targets_known = FALSE;
 	states_resync();
 	/* the stand-in window's swap: holds the frame to the display's rate
