@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="256" viewBox="0 0 512 256">
+  <title>Item Options: a rifle, and a grenade, rounds and a health pack in their places</title>
+  <!-- The gametype editor's picture of Item Options (gametype_options frame 3), drawn for this
+       port in place of the PC version's: its widget shows the top left 284x208 of the frame,
+       beside the list. tools/render_menu_art.py draws it at twice this size. -->
+  <defs>
+    <!-- the glow: the drawing's silhouette blurred in the menus' blue, and
+         its lines' own bloom, under it -->
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="512" height="256" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="4.5" result="wide"/>
+      <feFlood flood-color="#2895FF" flood-opacity="0.7"/>
+      <feComposite in2="wide" operator="in" result="halo"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="1.4" result="bloom"/>
+      <feMerge>
+        <feMergeNode in="halo"/>
+        <feMergeNode in="bloom"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- a softer glow for the lines alone -->
+    <filter id="soft" filterUnits="userSpaceOnUse" x="0" y="0" width="512" height="256" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2.2" result="bloom"/>
+      <feMerge>
+        <feMergeNode in="bloom"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- the projection's light, and its grid, fading out from the middle -->
+    <radialGradient id="pool" gradientUnits="userSpaceOnUse" cx="145" cy="96" r="132" gradientTransform="translate(145 96) scale(1 0.73) translate(-145 -96)">
+      <stop offset="0" stop-color="#1667C8" stop-opacity="0.42"/>
+      <stop offset="0.55" stop-color="#0E4FA6" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#0A3C86" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="fade" gradientUnits="userSpaceOnUse" cx="145" cy="96" r="132" gradientTransform="translate(145 96) scale(1 0.73) translate(-145 -96)">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="1"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <mask id="fading" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="256">
+      <rect width="512" height="256" fill="url(#fade)"/>
+    </mask>
+    <pattern id="grid" patternUnits="userSpaceOnUse" x="5" y="12" width="14" height="14">
+      <path d="M14 0H0V14" fill="none" stroke="#2F8EF0" stroke-width="0.6"/>
+    </pattern>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0D3B78"/>
+      <stop offset="1" stop-color="#04173A"/>
+    </linearGradient>
+    <linearGradient id="brass" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#4AA8F5"/>
+      <stop offset="0.45" stop-color="#C4EEFF"/>
+      <stop offset="1" stop-color="#2F86DA"/>
+    </linearGradient>
+  </defs>
+  <!-- the projection: a pool of light and a faint grid -->
+  <ellipse cx="145" cy="96" rx="132" ry="96" fill="url(#pool)"/>
+  <rect x="13" y="0" width="264" height="192" fill="url(#grid)" opacity="0.22" mask="url(#fading)"/>
+  <!-- the rifle -->
+  <g filter="url(#glow)">
+    <path d="M24,52 L58,47 L64,47 L64,70 L52,70 L44,76 L24,76 Q20,76 20,72 L20,56 Q20,52 24,52 Z" fill="url(#body)" stroke="#55BEFF" stroke-width="2.2" stroke-linejoin="round"/>
+    <path d="M30,58 H52 L48,68 H30 Z" fill="#020C20" stroke="#2A7FD4" stroke-width="1.2"/>
+    <path d="M64,44 H176 L182,50 V64 L176,68 H64 Z" fill="url(#body)" stroke="#55BEFF" stroke-width="2.2" stroke-linejoin="round"/>
+    <path d="M100,68 L114,68 L108,94 Q107,98 103,98 L96,98 Q92,98 93,94 Z" fill="url(#body)" stroke="#55BEFF" stroke-width="2" stroke-linejoin="round"/>
+    <path d="M116,68 Q117,80 128,80 L134,80" fill="none" stroke="#55BEFF" stroke-width="2"/>
+    <path d="M136,68 L156,68 L166,100 L148,104 Z" fill="url(#body)" stroke="#55BEFF" stroke-width="2" stroke-linejoin="round"/>
+    <path d="M140,76 L158,74 M143,84 L161,82 M146,92 L164,90" stroke="#2A7FD4" stroke-width="1.2"/>
+    <path d="M182,48 H230 L234,52 V60 L230,64 H182 Z" fill="url(#body)" stroke="#55BEFF" stroke-width="2" stroke-linejoin="round"/>
+    <path d="M192,52 H222 M192,56 H222 M192,60 H222" stroke="#2A7FD4" stroke-width="1.1"/>
+    <path d="M234,53 H256 V59 H234 Z" fill="url(#body)" stroke="#55BEFF" stroke-width="1.8"/>
+    <path d="M254,50 H266 V62 H254 Z" fill="url(#body)" stroke="#A8E6FF" stroke-width="1.8"/>
+    <path d="M258,52 V60 M262,52 V60" stroke="#55BEFF" stroke-width="1.2"/>
+    <path d="M78,44 V38 H168 V44" fill="none" stroke="#55BEFF" stroke-width="1.6"/>
+    <path d="M86,38 v6 M96,38 v6 M106,38 v6 M150,38 v6 M160,38 v6" stroke="#2A7FD4" stroke-width="1"/>
+    <path d="M112,38 V32 M140,38 V32" stroke="#55BEFF" stroke-width="2"/>
+    <rect x="104" y="20" width="44" height="12" rx="6" fill="url(#body)" stroke="#55BEFF" stroke-width="2"/>
+    <ellipse cx="148" cy="26" rx="3" ry="6" fill="#A8E6FF"/>
+    <path d="M72,52 H170" stroke="#A8E6FF" stroke-width="1.2" opacity="0.8"/>
+  </g>
+  <!-- the items' places -->
+  <g filter="url(#soft)">
+    <path d="M40,125 V116 H49 M97,116 H106 V125 M106,171 V180 H97 M49,180 H40 V171" fill="none" stroke="#55BEFF" stroke-width="2" stroke-linecap="round"/>
+    <rect x="43" y="119" width="60" height="58" rx="3" fill="#041634" fill-opacity="0.6"/>
+    <path d="M112,125 V116 H121 M169,116 H178 V125 M178,171 V180 H169 M121,180 H112 V171" fill="none" stroke="#55BEFF" stroke-width="2" stroke-linecap="round"/>
+    <rect x="115" y="119" width="60" height="58" rx="3" fill="#041634" fill-opacity="0.6"/>
+    <path d="M184,125 V116 H193 M241,116 H250 V125 M250,171 V180 H241 M193,180 H184 V171" fill="none" stroke="#55BEFF" stroke-width="2" stroke-linecap="round"/>
+    <rect x="187" y="119" width="60" height="58" rx="3" fill="#041634" fill-opacity="0.6"/>
+  </g>
+  <!-- a grenade, rounds and a health pack -->
+  <g filter="url(#glow)">
+    <ellipse cx="73" cy="152" rx="15" ry="17" fill="url(#body)" stroke="#55BEFF" stroke-width="2.2"/>
+    <path d="M58,152 H88" stroke="#55BEFF" stroke-width="1.6"/>
+    <path d="M61,143 H85 M61,161 H85" stroke="#2A7FD4" stroke-width="1.2"/>
+    <rect x="67" y="128" width="12" height="8" rx="2" fill="url(#body)" stroke="#55BEFF" stroke-width="1.8"/>
+    <path d="M79,130 q10,2 9,16" fill="none" stroke="#A8E6FF" stroke-width="2.2" stroke-linecap="round"/>
+    <circle cx="63" cy="128" r="4.5" fill="none" stroke="#A8E6FF" stroke-width="1.8"/>
+    <path d="M127.5,168 V142 Q127.5,130 132,126 Q136.5,130 136.5,142 V168 Z" fill="url(#brass)" stroke="#E6F9FF" stroke-width="1.4"/>
+    <path d="M127.5,144 H136.5 M127.5,163 H136.5" stroke="#0B3A78" stroke-width="1.4"/>
+    <path d="M140.5,168 V142 Q140.5,130 145,126 Q149.5,130 149.5,142 V168 Z" fill="url(#brass)" stroke="#E6F9FF" stroke-width="1.4"/>
+    <path d="M140.5,144 H149.5 M140.5,163 H149.5" stroke="#0B3A78" stroke-width="1.4"/>
+    <path d="M153.5,168 V142 Q153.5,130 158,126 Q162.5,130 162.5,142 V168 Z" fill="url(#brass)" stroke="#E6F9FF" stroke-width="1.4"/>
+    <path d="M153.5,144 H162.5 M153.5,163 H162.5" stroke="#0B3A78" stroke-width="1.4"/>
+    <rect x="196" y="134" width="42" height="32" rx="5" fill="url(#body)" stroke="#55BEFF" stroke-width="2.2"/>
+    <path d="M209,134 v-5 h16 v5" fill="none" stroke="#55BEFF" stroke-width="2"/>
+    <path d="M213,139 h8 v7 h7 v8 h-7 v7 h-8 v-7 h-7 v-8 h7 Z" fill="#E6F9FF"/>
+  </g>
+</svg>

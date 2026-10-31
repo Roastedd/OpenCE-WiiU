@@ -9,8 +9,9 @@ controller, the keyboard and the mouse, on every port.
 | Path | Contents |
 | --- | --- |
 | `ce/*.xml` | The PC version's screens, one file for each folder of its tags, laid out as it has them; `ce/strings.xml` their text, `ce/bitmaps.xml` their pictures |
-| `ce/shell/...png` | The pictures, drawn from the high-res redraws in `svg/` (up to 4x), else a placeholder |
-| `NON_HANDDRAWN.md` | The pictures that are not redraws: those drawn from the Xbox's map (the player's own), and the placeholders, to be redrawn |
+| `ce/shell/...png` | The pictures, drawn from the high-res redraws in `svg/` (up to 4x), else from this port's drawings in `drawn/` (2x), else a placeholder |
+| `drawn/shell/...svg` | This port's own drawings of the pictures that have no redraw and that the Xbox's map has not (the PC version's renders and screenshots), each under its frame's path; `tools/render_menu_art.py` draws them |
+| `NON_HANDDRAWN.md` | The pictures that are not redraws: those drawn from the Xbox's map (the player's own), those drawn for this port, and any placeholders, to be redrawn |
 | `UNWIRED.md` | The menus' functions that do nothing yet: the lists they fill are empty, and the settings they change do not change |
 | `menus.json` | The files the game embeds |
 
@@ -49,8 +50,8 @@ python3 tools/ce_menus.py \
 - `--definitions`: Invader's tag definitions, which say how the tags are
   laid out.
 - `--redraws`: the hand-made SVG redraws, copied to `svg/`.
-- `--placeholder`: the picture drawn where a picture has no redraw and the
-  Xbox's map has not got it.
+- `--placeholder`: the picture drawn where a picture has no redraw, no
+  drawing in `drawn/`, and the Xbox's map has not got it.
 - `--pictures` (optional): the PC version's pictures, of which only where
   each sits in its frame is read.
 
@@ -61,6 +62,11 @@ It needs `rsvg-convert`, Pillow, NumPy and SciPy. It writes every file, so
 A settings screen (Controls Setup, Gamepads, Mouse, Audio, Video or Network
 Setup) is changed in `tools/port_settings.py`, not in its XML, and written
 with the command above.
+
+A drawing in `drawn/` is drawn again on its own, without the PC version's
+tags, by `python3 tools/render_menu_art.py` (every one, or the SVGs named),
+which needs only `rsvg-convert`: each SVG's size is its frame's, and its PNG
+(the path `ce/bitmaps.xml` names, at twice the size) is written over.
 
 ## Elements
 
@@ -202,7 +208,14 @@ number).
 `tools/ce_menus.py` draws each frame from its redraw in `svg/` (copied from
 ui-svg-handmade) at up to 4x its size. A picture with no redraw is the
 Xbox's map's, where it has the same one (a whole bitmap, or a `<frame
-map=...>`), else a placeholder, placed where the PC version's picture is in
-its frame (`--pictures`: only where, not the picture, is read);
-`NON_HANDDRAWN.md` lists both. It needs `rsvg-convert`, Pillow, NumPy and
-SciPy.
+map=...>`), else this port's own drawing of it in `drawn/` (an original
+picture of what the item is for, in the menus' blue line style, drawn at 2x
+as `tools/render_menu_art.py` draws it), else a placeholder, placed where
+the PC version's picture is in its frame (`--pictures`: only where, not the
+picture, is read); `NON_HANDDRAWN.md` lists them all. It needs
+`rsvg-convert`, Pillow, NumPy and SciPy.
+
+A drawing shows only what its widget shows of the frame: a widget draws its
+bitmap from the top left, cut to its size (the profile settings' picture
+279x202 of 512x256, Multiplayer's 307x244, the gametype editor's 284x208),
+with the description's text below it.

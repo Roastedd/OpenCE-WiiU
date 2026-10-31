@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="256" viewBox="0 0 512 256">
+  <title>Save Changes: the gametype going onto a memory card, and a tick</title>
+  <!-- The gametype editor's picture of Save Changes, its OK and Cancel (gametype_options frame 7),
+       drawn for this port in place of the PC version's: its widget shows the top left 284x208 of
+       the frame, beside the list. tools/render_menu_art.py draws it at twice this size. -->
+  <defs>
+    <!-- the glow: the drawing's silhouette blurred in the menus' blue, and
+         its lines' own bloom, under it -->
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="512" height="256" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="4.5" result="wide"/>
+      <feFlood flood-color="#2895FF" flood-opacity="0.7"/>
+      <feComposite in2="wide" operator="in" result="halo"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="1.4" result="bloom"/>
+      <feMerge>
+        <feMergeNode in="halo"/>
+        <feMergeNode in="bloom"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- a softer glow for the lines alone -->
+    <filter id="soft" filterUnits="userSpaceOnUse" x="0" y="0" width="512" height="256" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2.2" result="bloom"/>
+      <feMerge>
+        <feMergeNode in="bloom"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- the projection's light, and its grid, fading out from the middle -->
+    <radialGradient id="pool" gradientUnits="userSpaceOnUse" cx="145" cy="96" r="132" gradientTransform="translate(145 96) scale(1 0.73) translate(-145 -96)">
+      <stop offset="0" stop-color="#1667C8" stop-opacity="0.42"/>
+      <stop offset="0.55" stop-color="#0E4FA6" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#0A3C86" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="fade" gradientUnits="userSpaceOnUse" cx="145" cy="96" r="132" gradientTransform="translate(145 96) scale(1 0.73) translate(-145 -96)">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="1"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <mask id="fading" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="256">
+      <rect width="512" height="256" fill="url(#fade)"/>
+    </mask>
+    <pattern id="grid" patternUnits="userSpaceOnUse" x="5" y="12" width="14" height="14">
+      <path d="M14 0H0V14" fill="none" stroke="#2F8EF0" stroke-width="0.6"/>
+    </pattern>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0D3B78"/>
+      <stop offset="1" stop-color="#04173A"/>
+    </linearGradient>
+    <linearGradient id="lit" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#C4EEFF"/>
+      <stop offset="1" stop-color="#4AB0FF"/>
+    </linearGradient>
+  </defs>
+  <!-- the projection: a pool of light and a faint grid -->
+  <ellipse cx="145" cy="96" rx="132" ry="96" fill="url(#pool)"/>
+  <rect x="13" y="0" width="264" height="192" fill="url(#grid)" opacity="0.22" mask="url(#fading)"/>
+  <!-- the memory card -->
+  <g filter="url(#glow)">
+    <path d="M96,56 H152 L174,78 V158 q0,6 -6,6 H96 q-6,0 -6,-6 V62 q0,-6 6,-6 Z" fill="url(#body)" stroke="#55BEFF" stroke-width="2.4" stroke-linejoin="round"/>
+    <rect x="100" y="64" width="6" height="16" rx="1.5" fill="#A8E6FF" opacity="0.9"/>
+    <rect x="110" y="64" width="6" height="16" rx="1.5" fill="#A8E6FF" opacity="0.9"/>
+    <rect x="120" y="64" width="6" height="16" rx="1.5" fill="#A8E6FF" opacity="0.9"/>
+    <rect x="130" y="64" width="6" height="16" rx="1.5" fill="#A8E6FF" opacity="0.9"/>
+    <rect x="140" y="64" width="6" height="16" rx="1.5" fill="#A8E6FF" opacity="0.9"/>
+    <rect x="100" y="104" width="64" height="48" rx="4" fill="#041634" stroke="#2A7FD4" stroke-width="1.2"/>
+    <path d="M108,118 H148 M108,128 H140 M108,138 H144" stroke="#2A7FD4" stroke-width="2" stroke-linecap="round"/>
+  </g>
+  <!-- what goes onto it -->
+  <g filter="url(#soft)">
+    <path d="M132,10 V20 M132,27 V33" stroke="#55BEFF" stroke-width="3" stroke-linecap="round" opacity="0.7"/>
+    <path d="M132,40 V90 M114,72 L132,90 L150,72" fill="none" stroke="#E6F9FF" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <!-- the tick -->
+  <g filter="url(#glow)">
+    <circle cx="184" cy="154" r="24" fill="url(#lit)" stroke="#E6F9FF" stroke-width="2.4"/>
+    <path d="M173,155 L181,163 L196,146" fill="none" stroke="#06265A" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
