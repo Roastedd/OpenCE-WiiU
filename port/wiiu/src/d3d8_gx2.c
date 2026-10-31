@@ -117,6 +117,10 @@ unsigned int host_gx2_drs_lines(void);
 controller is off while one has: the present command's DK_PRESENT_MENUS) */
 int port_menus_active(void);
 
+/* port/linux/game/gamepad_window.c's: the first split-screen window's pixels
+(x0, y0, x1, y1) and the windows' count, 1 for the whole screen */
+short gamepad_window_bounds(short bounds[4]);
+
 #ifdef HALO_SWITCH
 /* the host's (host_dk.c): the height it presents at, 1080 docked and 720 in
 handheld */
@@ -3839,6 +3843,38 @@ static void draw_statistics_log(void)
 
 static void D3DDevice_Present_inner(CONST RECT *source_rectangle, CONST RECT *destination_rectangle, void *unused, void *unused2);
 
+/* input.wiiu_gamepad_view: what the GamePad shows of the back buffer (wiiu_gx2.c's blit_to), x, y, width and height in its pixels at the
+frame's scale (drawn: the back buffer's, at dynamic resolution's step). "tv": what the TV shows, all the frame drew (a width of 0).
+"player1": the first window while the screen is split for the local players; the rest of the time all of it too, and while a menu has the
+screen, whose taps on the GamePad are read against the whole picture (halo_ui_pointer_update). It costs no drawing: the GamePad's blit
+samples a part of the frame instead of all of it. */
+static void gamepad_view_make(const float drawn[2], uint32_t gamepad[4])
+{
+	static int player1 = -1;
+	static unsigned long read_at;
+	short bounds[4];
+	long x0, y0, x1, y1;
+
+	gamepad[0] = gamepad[1] = gamepad[2] = gamepad[3] = 0;
+	if (player1 < 0 || read_at != config_changes())
+	{
+		read_at = config_changes();
+		player1 = !strcmp(config_string("input.wiiu_gamepad_view"), "player1");
+	}
+	if (!player1 || port_menus_active() || gamepad_window_bounds(bounds) <= 1)
+		return;
+	x0 = (long)floorf(bounds[0] * drawn[0] + 0.5f);
+	y0 = (long)floorf(bounds[1] * drawn[1] + 0.5f);
+	x1 = (long)floorf(bounds[2] * drawn[0] + 0.5f);
+	y1 = (long)floorf(bounds[3] * drawn[1] + 0.5f);
+	if (x0 < 0 || y0 < 0 || x1 <= x0 || y1 <= y0)
+		return;
+	gamepad[0] = (uint32_t)x0;
+	gamepad[1] = (uint32_t)y0;
+	gamepad[2] = (uint32_t)(x1 - x0);
+	gamepad[3] = (uint32_t)(y1 - y0);
+}
+
 void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destination_rectangle,
 	void *unused, void *unused2)
 {
@@ -3914,6 +3950,7 @@ static void D3DDevice_Present_inner(CONST RECT *source_rectangle, CONST RECT *de
 		float scale[2];
 
 		surface_describe(&device.back_buffer, FALSE, &command->back_buffer, scale);
+		gamepad_view_make(scale, command->gamepad);
 		command->screenshot = 0;
 		/* (for dynamic resolution's controller, which runs where the frame's GPU time is measured, on the GX2 thread: whether the frame is a menu's,
 		and the frame rate it has to keep) */

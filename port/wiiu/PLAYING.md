@@ -63,6 +63,9 @@ Connect a Pro Controller, then in Settings → your profile → Gamepad Setup �
 player 1 and the Pro Controller player 2. With **Merged** (the default) a Pro Controller plays as player 1 alongside the GamePad, for playing on
 the TV alone. Start split screen from the Multiplayer menu, or a campaign with two players.
 
+On the same screen, **GamePad Shows: Player 1** puts player 1's view alone on the GamePad while the screen is split, so that the GamePad's player
+can look at their own screen; the menus are still shown whole. **TV** (the default) shows the TV's picture.
+
 ## System link and online
 
 System Link in the Multiplayer menu finds and hosts games on your local network, with other Wii Us and with OpenCE on PC built from the same

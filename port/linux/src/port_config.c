@@ -299,6 +299,10 @@ static const struct config_setting config_settings[] =
 		"system numbered them: for split screen with the GamePad and a Pro Controller." },
 	{ "input.wiiu_rumble", _config_boolean, "true", "HALO_WIIU_RUMBLE", _environment_value, _platform_wiiu,
 		"The GamePad and the Pro Controllers rumble as the game asks." },
+	{ "input.wiiu_gamepad_view", _config_string, "\"tv\"", "HALO_WIIU_GAMEPAD_VIEW", _environment_value, _platform_wiiu,
+		"What the GamePad's screen shows. \"tv\": the TV's picture. \"player1\": in split\n"
+		"screen, player 1's window alone, scaled to the GamePad (the menus, and a game of\n"
+		"one player, are shown whole)." },
 	{ "input.gamepad_vertical_look", _config_real, "1.0", "HALO_GAMEPAD_VERTICAL_LOOK", _environment_value, _platform_all,
 		"How fast a controller's stick looks up and down, against the game's own\n"
 		"rate: 1 is the game's (it looks up and down more slowly than it turns);\n"

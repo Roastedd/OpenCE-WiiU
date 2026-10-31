@@ -278,7 +278,7 @@ SCREENS["video_settings/detail"] = {
 
 # the Wii U's GamePad and controllers, a screen of their own from Controller Setup (port/wiiu/src/xinput_wiiu.c)
 SCREENS["gamepad_setup"]["categories"] = [
-    ("WII U GAMEPAD:", "gamepad_setup/wiiu", "The GamePad's gyro aim, its buttons and the\nPro Controllers.", "wiiu"),
+    ("WII U GAMEPAD:", "gamepad_setup/wiiu", "The GamePad's gyro aim, its buttons, what its\nscreen shows and the Pro Controllers.", "wiiu"),
 ]
 SCREENS["gamepad_setup/wiiu"] = {
     "screen": "wiiu_gamepad_settings_screen", "header": SCREENS["gamepad_setup"]["header"], "spacing": 30,
@@ -298,6 +298,9 @@ SCREENS["gamepad_setup/wiiu"] = {
              "Auto: by letter in the menus, by place in the\ngame (B jumps). From the next start.", None),
             ("CONTROLLERS:", "input.wiiu_controller_layout", [("MERGED", "merged"), ("SEPARATE", "separate")],
              "Separate: a Pro Controller is player 2, for\nsplit screen. From the next start.", None),
+            # (port/wiiu/src/d3d8_gx2.c's gamepad_view_make, wiiu_gx2.c's blit_to)
+            ("GAMEPAD SHOWS:", "input.wiiu_gamepad_view", [("TV", "tv"), ("PLAYER 1", "player1")],
+             "Player 1: in split screen, player 1's view alone\non the GamePad. The menus are shown whole.", None),
     ],
 }
 

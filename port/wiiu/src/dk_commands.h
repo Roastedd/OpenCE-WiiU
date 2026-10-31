@@ -117,8 +117,10 @@ struct dk_command_clear
 screenshot is asked for by a guest address of active_width * active_height * 4
 bytes (debug.screenshot_every), which the host fills with those pixels of the
 back buffer, R G B A in memory, once the GPU has drawn them (the frame waits
-for it); 0 asks for none. flags: what dynamic resolution's controller is to
-know of the frame (DK_PRESENT_*). */
+for it); 0 asks for none. The GamePad shows the rectangle gamepad (x, y,
+width, height in the back buffer's pixels: input.wiiu_gamepad_view's first
+split-screen window), or with a width of 0 what the TV shows. flags: what
+dynamic resolution's controller is to know of the frame (DK_PRESENT_*). */
 enum
 {
 	/* a menu has the screen: the controller is off, and the frames are
@@ -134,6 +136,7 @@ struct dk_command_present
 	struct dk_command_header header;
 	struct dk_surface back_buffer;
 	uint32_t screenshot;
+	uint32_t gamepad[4];
 	uint32_t flags;
 };
 

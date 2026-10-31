@@ -3677,6 +3677,10 @@ static void present(const struct dk_command_present *command)
 	const OSTime cpu_ticks = gx.overlay_previous_end ? present_start - gx.overlay_previous_end : 0;
 	/* the part of the back buffer the frame drew, which the screens show: all of it, but at a lower step of dynamic resolution */
 	const uint32_t drawn[4] = { 0, 0, SURFACE_ACTIVE_WIDTH(&command->back_buffer), SURFACE_ACTIVE_HEIGHT(&command->back_buffer) };
+	/* and the part the GamePad shows: input.wiiu_gamepad_view's window (d3d8_gx2.c's gamepad_view_make), if the command names one within what the
+	frame drew, else the TV's */
+	const uint32_t *gamepad = command->gamepad[2] && command->gamepad[3] && command->gamepad[0] < drawn[2] && command->gamepad[1] < drawn[3] &&
+		command->gamepad[2] <= drawn[2] - command->gamepad[0] && command->gamepad[3] <= drawn[3] - command->gamepad[1] ? command->gamepad : drawn;
 
 	gpu_frame_end(drawn[3]);
 	gpu_poll();
@@ -3715,7 +3719,7 @@ static void present(const struct dk_command_present *command)
 	GX2CopyColorBufferToScanBuffer(WHBGfxGetTVColourBuffer(), GX2_SCAN_TARGET_TV);
 	if (back)
 	{
-		blit_to(back, drawn, blit_quad(), WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState());
+		blit_to(back, gamepad, blit_quad(), WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState());
 		if (gx.overlay_shown)
 			overlay_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState(), 2); /* (512 of the GamePad's 854) */
 		if (skip_progress > 0.0f)
