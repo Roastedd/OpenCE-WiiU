@@ -593,6 +593,7 @@ the setting for one start of the game. It has priority over the file.
 | `network.online` | `true` | `HALO_NET_ONLINE` | `true`: internet play. `false`: system link on the local network only. |
 | `network.join_from_clipboard` | `true` | `HALO_NET_JOIN_FROM_CLIPBOARD` | `true`: when the game comes to the front, it joins the game of an invite link on the clipboard. |
 | `network.tunnel_port` | `0` | `HALO_NET_TUNNEL_PORT` | The UDP port for internet play. `0`: the game selects a port. Refer to "Internet play". |
+| `network.tunnel_in_process` | `false` (`true` on the Wii U) | `HALO_NET_TUNNEL_IN_PROCESS` | Internet play hands the game what its peers send inside the program, instead of through local sockets that stand in for each peer (two or three for each peer, and two for each connection). A host's sockets then do not increase with its players. The other machines see no difference. It is on by default on the Wii U, whose system gives a program 27 sockets. Refer to "Internet play". |
 | `network.allow_upnp` | `true` | `HALO_NET_ALLOW_UPNP` | `true`: internet play can ask the router to forward its port (UPnP). `false`: the game does not ask. Refer to "Internet play". |
 | `network.public_lobby` | `true` | `HALO_NET_PUBLIC_LOBBY` | `true`: the server browser. Public games are listed, and Join Game > Server Browser shows them. `false`: no games are listed or shown. Refer to "Server browser". |
 | `network.host_public` | `true` | `HALO_NET_HOST_PUBLIC` | `true`: a new game of Create Game > Internet starts as PUBLIC. `false`: it starts as PRIVATE. LISTING in Server Setup changes it for each game. Refer to "Server browser". |
@@ -717,6 +718,7 @@ the setting for one start of the game. It has priority over the file.
 | `debug.bot_trace` | `0` | `HALO_BOT_TRACE` | Every this many seconds, each bot's state is written to the log: where it is and where it goes, its path, its target and its weapon. `0`: never. |
 | `debug.touch_targets` | `false` | `HALO_TOUCH_TARGETS` | Outlines the tap targets of the menus (item green, value blue, list slot yellow, legend button red, the band beside the slots of a list orange, keys of the on-screen keyboard white), marks where the last finger went down and the last tap landed for 3 seconds, and logs each tap with the target that it hit (for a value, also where it splits into previous and next): to judge the accuracy of touch. |
 | `debug.log_addresses` | `false` | `HALO_LOG_ADDRESSES=1` sets `true` | `true`: other machines' internet addresses are written whole in `debug.txt` and the console, for debugging your own network. `false`: a public address is written as a tag (`addr#3f2a9c`) that matches up only within one run; local network addresses are always whole. Do not post a `debug.txt` written with this on. |
+| `debug.network_statistics` | `false` (`true` on the Wii U) | `HALO_NETWORK_STATISTICS` | Each second of a network game, the log gets `net:` lines: the machines and players, the game's datagrams and bytes in each direction, the sends that the system refused, the tunnel's packets, the sockets open and the highest socket number, the netcode's time for each tick, each client machine's input gaps (the host's ticks with no new input from it), the corrections, and the longest round trip. Each line has 199 characters at most, which the Wii U's log keeps. |
 | `debug.network_latency`, `debug.network_loss`, `debug.network_corrupt`, `debug.network_corrupt_stream`, `debug.network_corrupt_after` | `0` | `HALO_NETWORK_LATENCY`, `HALO_NETWORK_LOSS`, `HALO_NETWORK_CORRUPT`, `HALO_NETWORK_CORRUPT_STREAM`, `HALO_NETWORK_CORRUPT_AFTER` | The game holds all the data that it receives for this number of milliseconds, ignores this percentage of the datagrams, and damages this percentage of the datagrams it receives, and this percentage of its reads of streams, at random (bytes changed, cut short, stretched or replaced), from this many seconds after the start. Use the first two to test the netcode as on the internet, and the others to test that nothing another machine sends can crash the game (a damaged stream is closed, so a little goes a long way; a host's messages to its own client are damaged too, so start damaging once the game has started). |
 | `debug.voice_test` | `false` | `HALO_VOICE_TEST` | Automatic tests of voice chat: a tone replaces the microphone, and each voice that the game hears is written to the log once each second. |
 | `debug.telnet_console`, `debug.telnet_console_port` | `false`, `2323` | `HALO_TELNET_CONSOLE`, `HALO_TELNET_CONSOLE_PORT` | The game listens on 127.0.0.1, on this port, for a script console (connect with telnet). The console has no password, so only this computer can reach it. |
@@ -1482,6 +1484,20 @@ In the game, each machine has an address in 100.64.0.0/10:
   as they are. TCP connections go as KCP streams (`port/third_party/kcp`).
 - The broadcasts of the game go to all the machines. Thus the game of the
   host shows on the other machines.
+
+The local sockets cost a host three sockets for each machine that plays
+(four while one joins). With `network.tunnel_in_process` (the default on
+the Wii U, whose system gives a program 27 sockets), what the other
+machines send comes to the game without them: a datagram goes into a queue
+of the game's socket that has its port, which `src/xnet.c` reads before the
+socket itself, and a connection to a port where the game listens waits
+there for the game's `accept`, which gives it a number that no socket has.
+`src/xnet.c` then reads and writes that connection through `src/p2p.c`.
+The sockets of a host then do not increase with its players (measured on
+a Linux host with 16 machines joined by invite: 8, against 56 without). What the game sends to other
+machines, and the connections that it makes to them, still go through the
+local sockets: a machine that joins has a few for its host. The packets of
+the tunnel do not change.
 
 ### Discord
 

@@ -115,6 +115,11 @@ Linux); each list is rewritten in place to hold only the ready descriptors,
 in the order given, and its count updated */
 int posix_socket_select(int *read, int *read_count, int *write, int *write_count,
 	int *error, int *error_count, posix_long timeout_seconds, posix_long timeout_microseconds, int infinite);
+/* the sockets this program has open (made or accepted here, not closed):
+their count, and through highest the highest number among them (on the
+Wii U nsysnet's own, whose poll takes those up to 31; -1 where the numbers
+say nothing of a limit, as Windows' handles) */
+int posix_socket_census(int *highest);
 /* this machine's IPv4 address on its local network (network byte order):
 the one its default route leaves from (on Android, first that of an
 interface with broadcasts: Wi-Fi, not mobile data), else the first of an

@@ -306,6 +306,27 @@ int posix_socket_close(int socket)
 	return succeed(close(socket));
 }
 
+/* the sockets open, and the highest of nsysnet's numbers among them (wut's descriptors are newlib's, which files share; the limit is
+nsysnet's: 27 sockets, numbered 3 to 31, measured 2026-10-31) */
+int posix_socket_census(int *highest)
+{
+	int socket, count = 0;
+
+	*highest = -1;
+	for (socket = 0; socket < LISTENERS; socket++)
+	{
+		if (open_sockets[socket])
+		{
+			const int number = __wut_get_nsysnet_fd(socket);
+
+			count++;
+			if (number > *highest)
+				*highest = number;
+		}
+	}
+	return count;
+}
+
 int wiiu_posix_net_close_all(void);
 
 int wiiu_posix_net_close_all(void)
@@ -640,10 +661,29 @@ int posix_socket_setsockopt(int socket, int level, int name, const void *value, 
 	}
 	if (host_level == SOL_SOCKET && (host_name == SO_SNDBUF || host_name == SO_RCVBUF) && value && length == (int)sizeof(int))
 	{
-		int asked;
+		/* (the first few streams' sizes, before and after: the game raises a stream's to 32 KB, transport_endpoint_winsock.c, from what
+		nsysnet gives it, which no console has said yet) */
+		static unsigned int told_streams;
+		const int stream = socket >= 0 && socket < LISTENERS && !datagram_sockets[socket];
+		int asked, before = -1, after = -1, result, error;
+		socklen_t size_length = sizeof(before);
 
 		memcpy(&asked, value, sizeof(asked));
-		return succeed(set_buffer_size(socket, host_name, asked));
+		if (stream && told_streams < 4u && getsockopt(socket, SOL_SOCKET, host_name, &before, &size_length) != 0)
+			before = -1;
+		result = set_buffer_size(socket, host_name, asked);
+		error = errno;
+		if (stream && told_streams < 4u)
+		{
+			told_streams++;
+			size_length = sizeof(after);
+			if (getsockopt(socket, SOL_SOCKET, host_name, &after, &size_length) != 0)
+				after = -1;
+			wiiu_log("Net: stream socket %d: %s was %d, %d asked, now %d", socket, host_name == SO_SNDBUF ? "SO_SNDBUF" : "SO_RCVBUF", before, asked,
+				after);
+		}
+		errno = error;
+		return succeed(result);
 	}
 	return succeed(setsockopt(socket, host_level, host_name, value, (socklen_t)length));
 }

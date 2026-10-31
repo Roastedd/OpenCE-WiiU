@@ -54,6 +54,7 @@ machine (their datum identifiers need not be).
 */
 
 #include "cseries.h"
+#include "cseries/cseries_windows.h" /* (the performance counter: the net: lines) */
 #include "memory/byte_swapping.h"
 #include "cseries/errors.h"
 #include "cache/cache_files.h"
@@ -89,6 +90,7 @@ machine (their datum identifiers need not be).
 #include "latency_meter.h"
 #include "profile_sections.h"
 #include "server_director.h"
+#include "../src/p2p.h" /* port: port/linux/src/p2p.c, xnet.c (the net: lines) */
 
 #include <limits.h>
 #include <stdio.h>
@@ -123,6 +125,9 @@ unsigned long p2p_peer_endpoint_address(unsigned long virtual_address);
 boolean network_connection_last_read_was_unreliable(void);
 unsigned long system_milliseconds(void);
 void platform_log(char const *format, ...);
+/* port_config.c's, and the sockets' (posix.h: the net: lines) */
+int config_boolean(const char *name);
+int posix_socket_census(int *highest);
 /* main.c's and port_mods.c's: this build, and the mods it plays */
 void main_build_identity(long *number, char *flavor, size_t flavor_size, char *repository, size_t repository_size,
 	char *version, size_t version_size);
@@ -3914,10 +3919,245 @@ void network_distributed_new_game(
 }
 
 /* after each tick (game_time.c) */
+/* ---------- the net: lines (debug.network_statistics) */
+
+/* once a second of a network game, what the netcode and the network did in
+it (debug.network_statistics, the Wii U's default), on lines the Wii U's
+log takes whole (it keeps 199 characters of one): the machines and players;
+the game's datagrams and its connections' bytes each way with other
+machines, and its sends the system refused; the tunnel's packets each way
+and those refused, what it handed the game in the process and lost; the
+sockets open and the highest number of them (the Wii U's limit is
+nsysnet's 27, numbered up to 31); the netcode's time a tick (its frame
+work, network_distributed_time_begin, and its ticks); and the host's ticks
+without new input from each client machine, the corrections and the
+longest round trip */
+enum
+{
+	NET_LINE_INTERVAL_MILLISECONDS = 1000,
+	/* (the Wii U's platform_log keeps 199 characters) */
+	NET_LINE_SIZE = 200,
+	NET_LINE_BREAK = 180,
+};
+
+static struct
+{
+	/* -1: not read yet */
+	short enabled;
+	unsigned long time;
+	long tick;
+	long corrections;
+	struct p2p_statistics tunnel;
+	struct xnet_statistics game;
+	/* the netcode's time since the last lines (microseconds), its frame
+	work's start (0: none under way), and the longest of a tick's */
+	LONGLONG total;
+	LONGLONG frame_start;
+	LONGLONG longest_tick;
+} distributed_net_lines = { -1 };
+
+static LONGLONG distributed_microseconds(
+	void)
+{
+	LARGE_INTEGER counter;
+
+	/* (the port's counter counts microseconds: xbox_kernel.c) */
+	QueryPerformanceCounter(&counter);
+	return counter.QuadPart;
+}
+
+static boolean distributed_net_lines_enabled(
+	void)
+{
+	if (distributed_net_lines.enabled < 0)
+		distributed_net_lines.enabled = config_boolean("debug.network_statistics") ? 1 : 0;
+	return distributed_net_lines.enabled > 0;
+}
+
+void network_distributed_time_begin(
+	void)
+{
+	if (distributed_net_lines_enabled())
+		distributed_net_lines.frame_start = distributed_microseconds();
+}
+
+void network_distributed_time_end(
+	void)
+{
+	if (distributed_net_lines.frame_start)
+	{
+		distributed_net_lines.total += distributed_microseconds() - distributed_net_lines.frame_start;
+		distributed_net_lines.frame_start = 0;
+	}
+}
+
+/* KB of bytes, for the lines */
+static unsigned long distributed_kilobytes(
+	unsigned long bytes)
+{
+	return (bytes + 512) / 1024;
+}
+
+static void distributed_log_net_lines(
+	void)
+{
+	short connection = game_connection();
+	unsigned long now = system_milliseconds();
+	struct p2p_statistics tunnel;
+	struct xnet_statistics game;
+	unsigned char machine_seen[(HALO_PORT_MAXIMUM_NETWORK_MACHINES + 7) / 8];
+	long gaps[MAXIMUM_TRACKED_PLAYERS];
+	long machine_gaps[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
+	char line[NET_LINE_SIZE];
+	long ticks, machines = 0, players = 0, longest_round_trip = NONE, longest_machine = NONE;
+	int open_sockets, highest_socket;
+	short player_index;
+	long machine_index;
+	int length;
+
+	if (!distributed_net_lines_enabled() ||
+		(distributed_net_lines.time && now - distributed_net_lines.time < NET_LINE_INTERVAL_MILLISECONDS))
+	{
+		return;
+	}
+	p2p_statistics(&tunnel);
+	xnet_statistics(&game);
+	csmemset(gaps, 0, sizeof(gaps));
+	if (connection == _game_connection_network_server)
+		update_server_distributed_input_gaps(gaps, MAXIMUM_TRACKED_PLAYERS);
+	/* (the first: the counts start from here) */
+	if (!distributed_net_lines.time || game_time_get() < distributed_net_lines.tick)
+	{
+		distributed_net_lines.time = now;
+		distributed_net_lines.tick = game_time_get();
+		distributed_net_lines.corrections = distributed_statistics.corrections;
+		distributed_net_lines.tunnel = tunnel;
+		distributed_net_lines.game = game;
+		distributed_net_lines.total = 0;
+		distributed_net_lines.longest_tick = 0;
+		return;
+	}
+	ticks = game_time_get() - distributed_net_lines.tick;
+	csmemset(machine_seen, 0, sizeof(machine_seen));
+	csmemset(machine_gaps, 0, sizeof(machine_gaps));
+	for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
+	{
+		struct player_datum *player = distributed_player(player_index);
+
+		if (!player)
+			continue;
+		players++;
+		machine_index = player->network_player_data.machine_index;
+		if (machine_index < 0 || machine_index >= HALO_PORT_MAXIMUM_NETWORK_MACHINES)
+			continue;
+		if (!(machine_seen[machine_index / 8] & (1 << (machine_index % 8))))
+		{
+			machine_seen[machine_index / 8] |= (unsigned char)(1 << (machine_index % 8));
+			machines++;
+		}
+		machine_gaps[machine_index] += gaps[player_index];
+	}
+	if (connection == _game_connection_network_server)
+	{
+		for (machine_index = 0; machine_index < HALO_PORT_MAXIMUM_NETWORK_MACHINES; machine_index++)
+		{
+			long ping;
+
+			/* (the game's machines' now: one gone keeps its last) */
+			if (!(machine_seen[machine_index / 8] & (1 << (machine_index % 8))) ||
+				!distributed_round_trips[machine_index].milliseconds_valid)
+			{
+				continue;
+			}
+			ping = (long)(distributed_round_trips[machine_index].milliseconds + 0.5f);
+			if (ping > longest_round_trip)
+			{
+				longest_round_trip = ping;
+				longest_machine = machine_index;
+			}
+		}
+	}
+	else if (distributed_own_ping_valid)
+	{
+		longest_round_trip = (long)(distributed_own_ping_milliseconds + 0.5f);
+	}
+	open_sockets = posix_socket_census(&highest_socket);
+
+	length = snprintf(line, sizeof(line), "net: %s, %ld machines, %ld players | datagrams out %lu (%lu KB) in %lu "
+		"(%lu KB) | streams out %lu KB in %lu KB | sends refused %lu",
+		connection == _game_connection_network_server ? "host" : "client", machines, players,
+		game.datagrams_sent - distributed_net_lines.game.datagrams_sent,
+		distributed_kilobytes(game.datagram_bytes_sent - distributed_net_lines.game.datagram_bytes_sent),
+		game.datagrams_received - distributed_net_lines.game.datagrams_received,
+		distributed_kilobytes(game.datagram_bytes_received - distributed_net_lines.game.datagram_bytes_received),
+		distributed_kilobytes(game.stream_bytes_sent - distributed_net_lines.game.stream_bytes_sent),
+		distributed_kilobytes(game.stream_bytes_received - distributed_net_lines.game.stream_bytes_received),
+		game.send_failures - distributed_net_lines.game.send_failures);
+	if (game.send_failures != distributed_net_lines.game.send_failures && length > 0 && length < (int)sizeof(line))
+		snprintf(line + length, sizeof(line) - (size_t)length, " (Winsock error %d)", game.last_send_error);
+	platform_log("%s", line);
+	platform_log("net: tunnel %d peers, out %lu (%lu KB) in %lu (%lu KB), refused %lu | in the process %lu, lost %lu, "
+		"%d connections | sockets %d open, highest %d",
+		tunnel.peers, tunnel.packets_sent - distributed_net_lines.tunnel.packets_sent,
+		distributed_kilobytes(tunnel.bytes_sent - distributed_net_lines.tunnel.bytes_sent),
+		tunnel.packets_received - distributed_net_lines.tunnel.packets_received,
+		distributed_kilobytes(tunnel.bytes_received - distributed_net_lines.tunnel.bytes_received),
+		tunnel.send_failures - distributed_net_lines.tunnel.send_failures,
+		tunnel.datagrams_delivered - distributed_net_lines.tunnel.datagrams_delivered,
+		tunnel.datagrams_lost - distributed_net_lines.tunnel.datagrams_lost, tunnel.streams,
+		open_sockets, highest_socket);
+	length = snprintf(line, sizeof(line), "net: netcode %.2f ms a tick (%ld ticks, the longest %.2f ms) | "
+		"corrections %ld | ",
+		ticks > 0 ? (double)distributed_net_lines.total / 1000.0 / (double)ticks : 0.0, ticks,
+		(double)distributed_net_lines.longest_tick / 1000.0,
+		distributed_statistics.corrections - distributed_net_lines.corrections);
+	if (length > 0 && length < (int)sizeof(line))
+	{
+		if (longest_round_trip == NONE)
+			snprintf(line + length, sizeof(line) - (size_t)length, "no round trip timed yet");
+		else if (connection == _game_connection_network_server)
+			snprintf(line + length, sizeof(line) - (size_t)length, "longest round trip %ld ms (m%ld)",
+				longest_round_trip, longest_machine);
+		else
+			snprintf(line + length, sizeof(line) - (size_t)length, "round trip %ld ms", longest_round_trip);
+	}
+	platform_log("%s", line);
+	/* (the host: each client machine's ticks without its input, on as many
+	lines as they take) */
+	if (connection == _game_connection_network_server)
+	{
+		length = snprintf(line, sizeof(line), "net: input gaps (ticks):");
+		for (machine_index = 0; machine_index < HALO_PORT_MAXIMUM_NETWORK_MACHINES; machine_index++)
+		{
+			if (!(machine_seen[machine_index / 8] & (1 << (machine_index % 8))) ||
+				distributed_machine_is_local(machine_index))
+			{
+				continue;
+			}
+			if (length > NET_LINE_BREAK)
+			{
+				platform_log("%s", line);
+				length = snprintf(line, sizeof(line), "net: input gaps (ticks), more:");
+			}
+			length += snprintf(line + length, sizeof(line) - (size_t)length, " m%ld %ld", machine_index,
+				machine_gaps[machine_index]);
+		}
+		platform_log("%s", line);
+	}
+	distributed_net_lines.time = now;
+	distributed_net_lines.tick = game_time_get();
+	distributed_net_lines.corrections = distributed_statistics.corrections;
+	distributed_net_lines.tunnel = tunnel;
+	distributed_net_lines.game = game;
+	distributed_net_lines.total = 0;
+	distributed_net_lines.longest_tick = 0;
+}
+
 void network_distributed_tick(
 	void)
 {
 	short connection = game_connection();
+	LONGLONG tick_start = distributed_net_lines.enabled > 0 ? distributed_microseconds() : 0;
 
 	if (game_time_get() == distributed_last_sent_time)
 		return;
@@ -3988,6 +4228,17 @@ void network_distributed_tick(
 	distributed_tick_sent_times[game_time_get() & (TICK_SENT_TIMES - 1)].time = game_time_get();
 	distributed_tick_sent_times[game_time_get() & (TICK_SENT_TIMES - 1)].milliseconds = system_milliseconds();
 	profile_scope(distributed_tick_batches_flush_section, distributed_batches_flush();)
+	/* (the net: lines: the tick's time, then once a second the lines, which
+	find the machines as this tick did) */
+	if (tick_start)
+	{
+		LONGLONG elapsed = distributed_microseconds() - tick_start;
+
+		distributed_net_lines.total += elapsed;
+		if (elapsed > distributed_net_lines.longest_tick)
+			distributed_net_lines.longest_tick = elapsed;
+	}
+	distributed_log_net_lines();
 	distributed_machines.in_tick = FALSE;
 	distributed_machines.valid = FALSE;
 }

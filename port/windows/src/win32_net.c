@@ -28,6 +28,8 @@ codes, so this passes nearly everything straight through.
 #endif
 
 static __thread int last_error;
+/* the sockets made or accepted and not closed (posix_socket_census) */
+static LONG open_sockets;
 
 static int fail(void)
 {
@@ -87,13 +89,25 @@ int posix_socket(int family, int type, int protocol)
 		WSAIoctl(result, SIO_UDP_CONNRESET, &report, sizeof(report), NULL, 0, &returned, NULL, NULL);
 		WSAIoctl(result, SIO_UDP_NETRESET, &report, sizeof(report), NULL, 0, &returned, NULL, NULL);
 	}
+	InterlockedIncrement(&open_sockets);
 	last_error = 0;
 	return from_socket(result);
 }
 
 int posix_socket_close(int socket)
 {
-	return succeed(closesocket((SOCKET)socket));
+	int result = succeed(closesocket((SOCKET)socket));
+
+	if (result == 0)
+		InterlockedDecrement(&open_sockets);
+	return result;
+}
+
+/* (the handles are no small numbers whose highest says anything) */
+int posix_socket_census(int *highest)
+{
+	*highest = -1;
+	return (int)open_sockets;
 }
 
 int posix_socket_bind(int socket, const void *address, int address_length)
@@ -117,6 +131,7 @@ int posix_socket_accept(int socket, void *address, int *address_length)
 
 	if (result == INVALID_SOCKET)
 		return fail();
+	InterlockedIncrement(&open_sockets);
 	last_error = 0;
 	return from_socket(result);
 }
