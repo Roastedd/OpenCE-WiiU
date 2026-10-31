@@ -3507,6 +3507,9 @@ static void gpu_test_run(void)
 	gx.test_log_used = 0;
 }
 
+/* (port/linux/game/graphics_quality.c's: whether the split screen's views hold the frames to 30 a second, for the overlay's 30HZ) */
+int graphics_quality_split_screen_capped(void);
+
 static void present(const struct dk_command_present *command)
 {
 	struct target *back = target_get(&command->back_buffer);
@@ -3601,7 +3604,9 @@ static void present(const struct dk_command_present *command)
 			gx.frame_buckets[frame_ms < 20.0f ? 0 : frame_ms < 36.7f ? 1 : frame_ms < 53.3f ? 2 : 3]++;
 			gx.overlay.render_width = (unsigned)((float)gx.render_height * 16.0f / 9.0f + 0.5f);
 			gx.overlay.render_height = gx.render_height;
-			gx.overlay.interpolation = config_boolean("display.interpolation");
+			/* (as the game draws: display.interpolation, unless the split screen's views hold the frames to 30 a second; asked here, on the GX2 thread,
+			without halo_interpolation_enabled's remembered reading, which is the game thread's) */
+			gx.overlay.interpolation = config_boolean("display.interpolation") && !graphics_quality_split_screen_capped();
 			overlay_push(&gx.overlay, (float)OSTicksToMicroseconds(end - gx.overlay_previous_end) / 1000.0f, (float)OSTicksToMicroseconds(cpu_ticks) / 1000.0f,
 				(float)OSTicksToMicroseconds(end - present_start) / 1000.0f, (float)OSTicksToMicroseconds(wait_ticks) / 1000.0f, gx.gpu_ms, (unsigned)draws,
 				(unsigned)(ring / 1024));

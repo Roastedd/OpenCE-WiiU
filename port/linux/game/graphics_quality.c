@@ -5,8 +5,8 @@ The detail a player can trade for frame rate, each setting on one of the engine'
 sets: hs_globals_external.c): display.grass (the detail objects: grass, pebbles and plants), display.decals (bullet
 holes, scorches and blood), display.particles (particles, particle systems and contrails), display.object_shadows (the
 shadows objects cast), display.lens_flares, display.specular (the level's specular lights, reflections and mirrors) and
-display.bump_mapping. They are set when config.toml's settings have changed, at the start of a frame
-(rasterizer_frame_begin), so a console command (init.txt) holds until a setting is changed.
+display.bump_mapping. They are set at the start of a frame (rasterizer_frame_begin) when config.toml's settings or the
+number of views drawn have changed, so a console command (init.txt) holds until one of them does.
 
 display.graphics_mode names a set of values for them and for display.render_lines (the Wii U's lines, from the next
 start) and display.interpolation: performance (the frame rate first: 60 frames a second where the game thread allows it,
@@ -14,6 +14,31 @@ with what costs it most of the detail left out), balanced (720 lines at 60, all 
 30 frames a second, all the Xbox drew) or custom (the settings as they are). The menus write a mode's values when it is
 chosen, and custom when a setting a mode sets is changed by hand (menu_functions.c), so the settings always hold what is
 drawn and the menus show it.
+
+Split screen (the Wii U's settings). The game draws each view in turn, the whole scene again for each (render.c's
+render_window), so three or four views cost the game thread nearly three or four times one view's drawing: each view
+after the first is estimated at about 13 ms of the game thread's time on the console (two views about 30 ms a frame,
+four about 56, 18 frames a second), and the game thread, not the GPU, is what limits it. With three or four views:
+- display.split_screen_detail "reduced" (the default) leaves out what each view draws again at a cost that grows with
+  what it sees, for what it shows: the objects' shadows (each object a view sees drawn a second time into its shadow,
+  and the level's surfaces under it found and drawn again: render_objects.c's render_object_shadows,
+  structure_render.c's structure_render_shadow), whose cost grows with the players each view sees; the lens flares (an
+  occlusion test each, each view), which the Wii U never draws anyway while its visibility tests are off, as they are by
+  default (wiiu_gx2.c); and the level's specular lights and reflections (its surfaces drawn again for each:
+  object_lights.c's lights_render_specular, structure_render.c's structure_render_reflections). They are what the
+  performance mode leaves out but the grass,
+  which the engine leaves out itself with more than one view (rasterizer_xbox_detail_objects.c), as it does the blur
+  screen effects (interface.c) and the mirrors (render.c). Particles stay: their switch takes the contrails too, which
+  are the assault rifle's tracers, the sniper rifle's trail, the plasma rifle's and the needler's shots and the
+  rocket's exhaust (Blood Gulch's contrail tags), where fire comes from, which a player in a quarter of the screen needs
+  more than a shadow. "same" draws what one view does.
+- display.split_screen_fps "auto" (the default) holds the frames to 30 a second, as display.interpolation off does,
+  each frame two of the TV's refreshes, without changing that setting (platform_wiiu.c's halo_interpolation_enabled
+  asks graphics_quality_split_screen_capped every frame): a frame that takes 40 ms shown at 60 Hz alternates between
+  two refreshes and three, an uneven step. Mario Kart 8 holds 60 for one or two players and 30 for three or four. Two
+  views keep display.interpolation's; "30" holds two or more, "60" none.
+The views are those the frame draws (main_get_window_count): one in a cinematic or the postgame's single screen, which
+then has the full detail and display.interpolation's frame rate.
 */
 
 #include "cseries.h"
@@ -37,6 +62,10 @@ unsigned long config_changes(void);
 /* render.c's and render_objects.c's, which their headers do not declare */
 extern boolean render_contrails_enabled;
 extern boolean render_shadows;
+
+/* main.c's: the views the frame draws; players.c's: the local players, 0 before its globals are made */
+short main_get_window_count(void);
+short players_port_local_player_count(void);
 
 /* the modes, in the order of each setting's values below */
 static char const *const graphics_modes[] = { "performance", "balanced", "quality" };
@@ -84,23 +113,70 @@ static int graphics_setting_is(char const *setting, char const *value)
 	return config_string(setting) && !strcmp(config_string(setting), value);
 }
 
+/* the views the frame draws: main_get_window_count's, asked only once a map has made a player (it reads the players'
+and the cinematics' globals; a frame drawn before them, as by the loop a fatal error leaves the game in, has one) */
+static short graphics_quality_views(void)
+{
+	return players_port_local_player_count() > 0 ? main_get_window_count() : 1;
+}
+
+#ifdef HALO_WIIU
+/* the views from which display.split_screen_detail and "auto" frame rate take effect */
+#define SPLIT_SCREEN_MANY_VIEWS 3
+
+/* whether the frames are held to 30 a second, as the views last drawn ask (graphics_quality_split_screen_capped) */
+static boolean graphics_quality_capped = FALSE;
+
+/* whether the views draw the reduced detail: three or four, unless display.split_screen_detail is "same" */
+static boolean graphics_quality_reduced(short views)
+{
+	return views >= SPLIT_SCREEN_MANY_VIEWS && strcmp(config_string("display.split_screen_detail"), "same") != 0;
+}
+
+/* whether the views are held to 30 frames a second: display.split_screen_fps "auto" with three or four, "30" with two or
+more, "60" never */
+static boolean graphics_quality_split_screen_cap(short views)
+{
+	char const *fps = config_string("display.split_screen_fps");
+
+	if (!strcmp(fps, "60"))
+		return FALSE;
+	if (!strcmp(fps, "30"))
+		return views >= 2;
+	return views >= SPLIT_SCREEN_MANY_VIEWS;
+}
+
+int graphics_quality_split_screen_capped(void)
+{
+	return graphics_quality_capped;
+}
+#endif
+
 void graphics_quality_apply(void)
 {
 	static unsigned long read_at = (unsigned long)-1;
-	boolean particles, specular;
+	static short views_at = NONE;
+	short views = graphics_quality_views();
+	boolean particles, specular, reduced = FALSE;
 
-	if (read_at == config_changes())
+	if (read_at == config_changes() && views_at == views)
 		return;
 	read_at = config_changes();
+	views_at = views;
+#ifdef HALO_WIIU
+	reduced = graphics_quality_reduced(views);
+	graphics_quality_capped = graphics_quality_split_screen_cap(views);
+#endif
 	rasterizer_debug_options.draw_detail_objects = config_boolean("display.grass") != 0;
 	decals_enabled = config_boolean("display.decals") != 0;
 	particles = config_boolean("display.particles") != 0;
 	render_particles_enabled = particles;
 	render_particle_systems_enabled = particles;
 	render_contrails_enabled = particles;
-	render_shadows = config_boolean("display.object_shadows") != 0;
-	rasterizer_debug_options.draw_lens_flares = config_boolean("display.lens_flares") != 0;
-	specular = config_boolean("display.specular") != 0;
+	/* (and the reduced split screen's: what each view draws again, at a cost that grows with what it sees) */
+	render_shadows = config_boolean("display.object_shadows") != 0 && !reduced;
+	rasterizer_debug_options.draw_lens_flares = config_boolean("display.lens_flares") != 0 && !reduced;
+	specular = config_boolean("display.specular") != 0 && !reduced;
 	rasterizer_debug_options.draw_environment_specular_lights = specular;
 	rasterizer_debug_options.draw_environment_reflections = specular;
 	rasterizer_debug_options.draw_environment_reflection_mirrors = specular;

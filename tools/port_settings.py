@@ -78,6 +78,13 @@ SCREENS = {
              "With V-Sync off, the most frames a second. Auto:\ntwice the display's refresh rate.", "desktop web"),
             ("SMOOTH MOTION:", "display.interpolation", ON_OFF,
              "Draw a frame for every display refresh, blending\nbetween the game's 30 ticks a second.", None),
+            # (the Wii U's split screen with three or four views: port/linux/game/graphics_quality.c)
+            ("SPLIT SCREEN DETAIL:", "display.split_screen_detail", [("REDUCED", "reduced"), ("SAME", "same")],
+             "Three or four players: Reduced leaves out shadows,\nflares and shine, which each view draws again.",
+             "wiiu"),
+            ("SPLIT SCREEN FPS:", "display.split_screen_fps", [("AUTO", "auto"), ("30", "30"), ("60", "60")],
+             "Auto: 30, evenly paced, for three or four players;\ntwo as Smooth Motion has them. 30: two or more.",
+             "wiiu"),
             ("INSTANT AIM:", "display.direct_camera", ON_OFF,
              "In first person, turn the view the moment the\nmouse moves, not up to two ticks later.", "desktop web"),
             ("HIGH-RES HUD:", "display.high_res_hud", ON_OFF,

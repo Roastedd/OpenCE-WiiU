@@ -152,6 +152,16 @@ static const struct config_setting config_settings[] =
 	{ "display.bump_mapping", _config_boolean, "true", "HALO_BUMP_MAPPING", _environment_value, _platform_all,
 		"Light the level's surfaces with their bump maps (the relief of rock and\n"
 		"metal); false lights them flat." },
+	{ "display.split_screen_detail", _config_string, "\"reduced\"", "HALO_SPLIT_SCREEN_DETAIL", _environment_value, _platform_wiiu,
+		"With three or four players in split screen (port/linux/game/graphics_quality.c):\n"
+		"\"reduced\" leaves out object shadows, lens flares and the level's specular\n"
+		"shine and reflections, which the game draws again for every view; \"same\"\n"
+		"draws what one view does. One view, or two, always draws what one does." },
+	{ "display.split_screen_fps", _config_string, "\"auto\"", "HALO_SPLIT_SCREEN_FPS", _environment_value, _platform_wiiu,
+		"The frame rate of split screen: \"auto\" holds three or four views to 30 frames\n"
+		"a second, evenly paced, and leaves two as display.interpolation has them;\n"
+		"\"30\" holds two or more to 30; \"60\" holds none (as display.interpolation).\n"
+		"display.interpolation itself is not changed." },
 	{ "display.direct_camera", _config_boolean, "true", "HALO_DIRECT_CAMERA", _environment_value, _platform_desktop,
 		"In first person, point the view where the player aims now instead of\n"
 		"where the last tick left it: the view turns the frame the mouse moves,\n"
