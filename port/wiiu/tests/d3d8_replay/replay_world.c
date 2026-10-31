@@ -332,7 +332,10 @@ char *_strdup(const char *text)
 /* ---------- the high-res HUD (hud_hires.h): one texture, standing for the replay's HUD placeholder and for the bitmap at replay_hud_override_address */
 
 static const unsigned int hud_png[4] = { 0x89504e47, 1, 2, 3 };
-const struct hud_hires_embedded hud_hires_embedded[1] = { { "replay\\hud", 0, 16, 16, 0, 0, 0, 0, 0, hud_png, sizeof(hud_png) } };
+const struct hud_hires_embedded hud_hires_embedded[1] =
+{
+	{ .tag = "replay\\hud", .bitmap = 0, .width = 16, .height = 16, .png = hud_png, .png_size = sizeof(hud_png) },
+};
 const unsigned int hud_hires_embedded_count = 1;
 
 unsigned long replay_hud_placeholder_data, replay_hud_override_address;

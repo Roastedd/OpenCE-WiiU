@@ -64,7 +64,7 @@ is for, in the menus' style: an SVG in `drawn/`, under the frame's path, which
 | `ce/shell/main_menu/settings_select/player_setup/player_profile_edit/profile_options__6.png` | 512x256 | Network Setup: a globe wrapped in a network of linked nodes |
 | `ce/shell/main_menu/settings_select/player_setup/player_profile_edit/profile_options__8.png` | 512x256 | About: a ring world in space, a planet and its sun beyond it |
 
-13 of 164 frames are drawn for this port; none is a placeholder.
+13 of 183 frames are drawn for this port; none is a placeholder.
 
 The PC version's `ui\gamespy` and `ui\ticker` fonts are drawn with `ui\small_ui`, which
 the Xbox's map has.

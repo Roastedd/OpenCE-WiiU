@@ -44,12 +44,27 @@ struct hud_hires_embedded
 	int point_threshold; /* red: exact discrete meter thresholds, zero elsewhere */
 	int title;
 	unsigned int sprites;
+	/* drawn for a Custom Edition map's stock bitmap of its name too, whose
+	layout is its own (port/assets/hud/custom_edition.json) */
+	int custom_edition;
+	int ce_only;
+	/* Stock CE first mip after hardware conversion; resource maps may be modified. */
+	unsigned int ce_width, ce_height, ce_size, ce_crc;
 	const unsigned int *png;
 	unsigned int png_size;
 };
 
 extern const struct hud_hires_embedded hud_hires_embedded[];
 extern const unsigned int hud_hires_embedded_count;
+
+struct hud_hires_ce_stock
+{
+	const char *tag;
+	int bitmap;
+	unsigned int width, height, size, crc;
+};
+extern const struct hud_hires_ce_stock hud_hires_ce_stock[];
+extern const unsigned int hud_hires_ce_stock_count;
 
 /* At the frame boundary, identify cached bitmaps affected by committed HUD
  * or title setting changes. Pixel/CRC validation still occurs on upload. */
@@ -74,6 +89,13 @@ unsigned int hud_hires_png_texture(const void *png, unsigned long size, unsigned
 /* the Wii U's texture cache makes its images itself: an 8-bit RGBA PNG's texels (red first, malloc'd), and its size; NULL if it could not be decoded */
 unsigned char *hud_hires_png_pixels(const void *png, unsigned long size, unsigned long *width, unsigned long *height);
 #endif
+/* the HUD's textures for a map's bitmaps (port/linux/game/hud_hires_tags.c),
+decoded from their PNGs as it loads, on a thread of their own, so that they
+are only uploaded when first drawn; and, as it is unloaded, that stopped and
+what was decoded and not drawn let go. The desktop builds' alone: Android,
+the web and the Wii U decode each when it is first drawn */
+void hud_hires_map_loaded(const long *assets, long count);
+void hud_hires_map_unloaded(void);
 /* whether its green is its coverage (d3d8_gl.c, nv2a_psh.c: coverage_alpha) */
 int hud_hires_override_coverage(long asset);
 /* the GL texture of the texture drawn for some of a bitmap's sprites whose

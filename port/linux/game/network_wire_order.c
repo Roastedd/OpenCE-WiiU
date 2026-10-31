@@ -140,6 +140,9 @@ static void wire_variant(
 	{
 	case game_engine_ctf:
 		wire_long(&variant->game_engine_variant.ctf.single_flag_time);
+		/* (Kills Score's: game_engine.h) */
+		wire_long(&variant->game_engine_variant.ctf.points_per_capture);
+		wire_long(&variant->game_engine_variant.ctf.kills_score);
 		break;
 	case game_engine_oddball:
 		wire_long(&variant->game_engine_variant.oddball.speed_with_ball);
@@ -153,7 +156,7 @@ static void wire_variant(
 		wire_long(&variant->game_engine_variant.race.team_scoring);
 		break;
 	default:
-		/* (slayer's and king's are booleans) */
+		/* (slayer's and king's are booleans and bytes) */
 		break;
 	}
 	wire_short(&variant->flags);

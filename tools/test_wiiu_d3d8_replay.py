@@ -32,8 +32,11 @@ GAME_FLAGS = ("-fms-extensions -fshort-wchar -fcommon -fno-pic -fno-strict-alias
 HOST_FLAGS = "-std=gnu11 -D_GNU_SOURCE -O2 -g -Wall -Werror -ffp-contract=off".split()
 
 FRAMES = 2470
-# what the GPU is given (every schedule's), and the Lock fields for the streams run as they are handed over and posted to the queue
-DIGEST = "2e63215d0e9d18a5"
+# what the GPU is given (every schedule's), and the Lock fields for the streams run as they are handed over and posted to the queue. (The
+# digest hashes the pixel shader key's struct as it is: upstream's merge added a field to it, ce_meter_channels, and with that the digest went
+# from 2e63215d0e9d18a5 to this, every draw's pixel key hash one to one with the old and nothing else of any draw changed. The shader pack's keys
+# are shader_key_wire.h's field order, which the field is not in.)
+DIGEST = "3599a1f106da2276"
 LOCKS = {"sync": "ec90e29cf5d40ffb", "async": "4f0177eef06689d2"}
 SCHEDULES = [("sync", "lag", 1), ("async", "lag", 1), ("async", "eager", 7), ("async", "eager", 99)]
 

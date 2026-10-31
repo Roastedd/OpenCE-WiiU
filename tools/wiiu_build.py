@@ -83,6 +83,8 @@ WIIU_EXCLUDE: Dict[str, str] = {
     "port/linux/src/touch_input.c": "touch controls on SDL 3",
     "port/linux/src/voice_audio.c": "voice chat on SDL 3 audio",
     "port/linux/src/xinput_sdl.c": "XInput on SDL 3 gamepads; VPAD/KPAD replace it",
+    "port/linux/src/controller_remap_input.c": "controller remapping, on SDL 3 gamepads and its clock: the Wii U's buttons are "
+                                               "xinput_wiiu.c's (platform_wiiu.c stands in)",
     "port/linux/src/updater.c": "the self-updater (SDL 3); the Wii U does not update itself",
     # system headers newlib does not have
     "port/linux/src/memory_watch.c": "execinfo.h; page protection the Wii U does not have (plan 6.2: a hash watch)",

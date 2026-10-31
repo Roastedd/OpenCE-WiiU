@@ -9,6 +9,9 @@ static unsigned long status[8],completed[8];
 #define mixer_lock 0
 #define pthread_mutex_lock(...) ((void)lock_depth++)
 #define pthread_mutex_unlock(...) ((void)lock_depth--)
+/* (dsound_sdl.c's mixer_lock_take, the game thread's take of the mixer's lock:
+on the Wii U it also has the mixer let go of it between voices) */
+#define mixer_lock_take() pthread_mutex_lock(&mixer_lock)
 #define channel_get(i) (&dsound_globals.channels[i])
 #define sound_cache_sound_hardware_unlock(...) ((void)unlocks++)
 #define interrupt_time_error(...) CHECK(FALSE,"invalid completion")
