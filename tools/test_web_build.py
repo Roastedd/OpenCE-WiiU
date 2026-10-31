@@ -126,7 +126,13 @@ def test_the_link_exports_what_the_page_calls():
 
 def test_the_memory_layout_agrees_with_the_sources():
     platform = (ROOT / "port/linux/src/platform.h").read_text()
-    base = int(re.search(r"#define PLATFORM_CONTIGUOUS_BASE (0x[0-9A-Fa-f]+)", platform).group(1), 16)
+    base = re.search(r"#define PLATFORM_CONTIGUOUS_BASE (\w+)", platform).group(1)
+    if base == "HALO_PORT_WINDOW_BASE":
+        # (the window's base by the build, halo_port_capacity.h's: the web build's is the last, the builds' but the
+        # Wii U's and a test's)
+        capacity = (ROOT / "port/linux/include/halo_port_capacity.h").read_text()
+        base = re.search(r"#else\n#define HALO_PORT_WINDOW_BASE (0x[0-9A-Fa-f]+)", capacity).group(1)
+    base = int(re.match(r"0x[0-9A-Fa-f]+", base).group(0), 16)
     sizes = re.search(r"#if defined\(HALO_ARM64_GUEST\) \|\| defined\(HALO_WEB\).*?#define PLATFORM_CONTIGUOUS_SIZE "
                       r"(0x[0-9A-Fa-f]+)", platform, re.S)
     assert sizes, "platform.h gives the web build the 128 MB window"
