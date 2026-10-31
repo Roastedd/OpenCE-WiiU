@@ -4165,14 +4165,32 @@ static short lobby_local_player_count(void)
 	return count;
 }
 
+/* whether one of this machine's players in the lobby (joined or to be) is on
+a controller other than the first: the second of two who stays when the first
+leaves. (In a game the players stay until it ends, and are counted.) */
+static boolean lobby_player_past_first_controller(void)
+{
+	short controller;
+
+	for (controller = 1; global_network_game_client_get() && controller < MAXIMUM_LOCAL_PLAYERS; controller++)
+	{
+		if (lobby_controller_playing(controller))
+			return TRUE;
+	}
+	return FALSE;
+}
+
 /* (xinput_sdl.c) whether this machine has, or is adding, a second player: co-op,
 or split screen in a network game (a player who quit keeps their part of the
-screen until the game ends). Then one gamepad is its own controller, not
-sharing player 1's with the keyboard */
+screen until the game ends), or has one in the lobby on a controller other than
+the first. Then one gamepad is its own controller, not sharing player 1's with
+the keyboard (and the Wii U's controllers their own, port/wiiu/src/xinput_wiiu.c's
+"auto"): a second player left alone in the lobby when the first leaves keeps it */
 unsigned char pc_menu_split_players(void)
 {
 	return player_spawn_count >= 2 || lobby_join.adding || lobby_join.controller != NONE ||
-		lobby_local_player_count() >= 2 || players_port_local_player_count() >= 2;
+		lobby_local_player_count() >= 2 || players_port_local_player_count() >= 2 ||
+		lobby_player_past_first_controller();
 }
 
 /* the lobby's widget that has the focus (the one a press goes to) */

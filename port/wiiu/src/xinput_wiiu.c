@@ -16,7 +16,8 @@ The layouts. "merged" (as before): the controller of KPAD channel n is port n, s
 "separate": the GamePad alone is port 0 and each controller has a port of its own. "auto" (the default) is merged for one person and separate once a
 second joins, as the desktop build does with a lone gamepad and the keyboard (xinput_sdl.c's port_gamepad): while this machine has one player every
 controller drives player 1 with the GamePad, and once the menus have two players, or are adding one (pc_menu_split_players: co-op chosen, ADD PLAYER, a
-controller choosing its profile, a split screen game), each controller drives its own port; when the machine is back to one player they share again. With
+controller choosing its profile, a split screen game), each controller drives its own port; when the machine is back to one player, on the GamePad's
+port, they share again (one left on another port, the second of two whose first left, keeps its controller: pc_menu_split_players says so). With
 one player the controllers have no port of their own, so a second person's START is player 1's: they choose ADD PLAYER in the lobby (the line under its
 players says so) or CO-OP CAMPAIGN, and the controllers take their own ports, whose LEDs then show their numbers. A controller moves only while every
 controller is at rest, so that a held button is not pressed again on its new port. The GamePad is player 1 in every layout.
@@ -337,7 +338,8 @@ static void layout_apply(void)
 }
 
 /* (port/linux/game/menu_functions.c: two or more players on this machine, or one being added: co-op's player 2, ADD PLAYER or a controller choosing its
-profile in the lobby, a split screen game. "auto" gives the controllers their own players then, as xinput_sdl.c gives a lone gamepad its own port) */
+profile in the lobby, a split screen game; or one in the lobby on a controller other than the first. "auto" gives the controllers their own players
+then, as xinput_sdl.c gives a lone gamepad its own port) */
 unsigned char pc_menu_split_players(void);
 
 /* The ports with a pad, once a frame (input_xbox.c asks at the start of each, before it reads them): the controllers polled and arranged first

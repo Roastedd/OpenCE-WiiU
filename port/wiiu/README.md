@@ -167,7 +167,9 @@ What three and four take, from the code:
   Game, LAN), the controller of port n being local player n. The campaign's co-op stays at two: its level select and its saved game take one or two
   players (`ui_widget_event_handler_functions.c`'s `solo_level_set_next_map_name`, `game_state.c`), as on the Xbox.
 - **Joining and controllers**: `input.wiiu_controller_layout` (Controls, above; `src/xinput_wiiu.c`'s comment). With `"auto"` and one player the
-  lobby's line under its players says "Another controller: ADD PLAYER.", since a second person's START would be player 1's.
+  lobby's line under its players says "Another controller: ADD PLAYER.", since a second person's START would be player 1's. The controllers stay
+  players of their own while a player of this machine in the lobby is on a controller other than the GamePad, so the second of two who stays when
+  the GamePad's player leaves keeps their controller (`menu_functions.c`'s `pc_menu_split_players`, which the desktop's lone gamepad follows too).
 - **Layout.** `compute_window_bounds` (`main.c`) splits the title-safe frame at the middle of the wide picture: two players top and bottom, three
   with player 1 across the top, four in a 2x2 grid, in the local players' port order. The dividers are drawn at the wide picture's middle
   (`interface.c`), the motion sensor keeps four players' blips apart (`motion_sensor.c`, fixed for three and four before), and the engine leaves
@@ -207,7 +209,8 @@ Controllers, on a small map (Chill Out) in a LAN game this console hosts:
 3. Reconnecting, in that four-player game: turn the PS4 pad off and on (or let it sleep): its window says the controller is unplugged, then its
    player plays on with it, with the same number in the log and on its lights. Take the Classic Controller out of the Wii Remote and put it back: the
    same. Turn two controllers off and on in the other order: each has its own player again, whatever channel the log gives it.
-4. Back to one player: every player leaves the lobby, to the main menu. Once no controller is held their lights show 1 again and all drive the menus,
+4. Back to one player: in a two-player lobby the GamePad's player leaves first (B): the Pro Controller's player stays in the lobby with their own
+   controller (its lights still 2). Then they leave too, to the main menu. Once no controller is held the lights show 1 again and all drive the menus,
    and no "controller unplugged" message comes up for the ports they leave (`input_abstraction.c` shows one for a port that still has a player).
 5. Co-op: CO-OP CAMPAIGN with the GamePad; the controllers' lights change to 2 to 4; player 2's profile chosen with the Pro Controller; the level plays
    with the GamePad as player 1 and the Pro Controller as player 2.
