@@ -3833,10 +3833,19 @@ void main_build_identity(
 #ifdef HALO_NATIVE_BUILD_INFO
 	main_native_build_label(version, version_size);
 #else
+	/* port: the Wii U (no __linux__, so no native label: its version line and
+	error screen stay the Xbox's) names itself to the hosts it joins; any other
+	build without the native label is the web build */
+	#ifdef HALO_WIIU
+	#define MAIN_BUILD_IDENTITY_PLATFORM "Wii U"
+	#else
+	#define MAIN_BUILD_IDENTITY_PLATFORM "Web"
+	#endif
 	if (HALO_BUILD_NUMBER > 0)
-		_snprintf(version, version_size - 1, "OpenCE Web | build %d (%s)", HALO_BUILD_NUMBER, HALO_BUILD_FLAVOR);
+		_snprintf(version, version_size - 1, "OpenCE " MAIN_BUILD_IDENTITY_PLATFORM " | build %d (%s)", HALO_BUILD_NUMBER, HALO_BUILD_FLAVOR);
 	else
-		_snprintf(version, version_size - 1, "OpenCE Web | local build (%s)", HALO_BUILD_FLAVOR);
+		_snprintf(version, version_size - 1, "OpenCE " MAIN_BUILD_IDENTITY_PLATFORM " | local build (%s)", HALO_BUILD_FLAVOR);
 	version[version_size - 1] = 0;
+	#undef MAIN_BUILD_IDENTITY_PLATFORM
 #endif
 }
