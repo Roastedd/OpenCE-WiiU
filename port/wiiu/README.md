@@ -566,6 +566,65 @@ With the owner at the console, in a test repository with a test key (never the r
    manifest could not be fetched; no panel.
 7. **End on the production build**: put the production build back by hand, delete `update/`, and leave the card on the safe settings.
 
+## Halo Custom Edition maps
+
+Players put Custom Edition maps on the card as they are (`data/custom_maps/`, with their own `bitmaps.map`, `sounds.map` and `loc.map`:
+[PLAYING.md](PLAYING.md)). A Custom Edition map is never converted ahead of time as the Xbox maps are: its hash is its network version and map
+sharing sends its bytes, so the file stays as Halo PC wrote it, little-endian, and the game turns it as it loads
+([docs/custom_edition_caches.md](../../docs/custom_edition_caches.md), "Big-endian builds"):
+
+- **The tag cache.** The maps' tag data is linked at `0x40440000`, 23 MiB, which is in the app's MEM2 heap 3.4 MiB below the Xbox window and free
+  at start-up: `src/wiiu_window.c` takes it right after the window, the same way, and logs `Custom Edition tag cache: 23 MiB at 40440000` (or
+  why not: then no Custom Edition map runs). `src/xbox_memory_wiiu.c` gives it to the game while `game.custom_edition` is on, and back to the
+  heap when it is off. With it, the map lists, loading and map sharing (which waited for it) run as on the desktop.
+- **The byte order.** The loader, the conversion and the group inference read the file's little-endian values as they always have; then
+  `port/linux/game/tag_swap.c` turns the tags to big-endian, by the same schemas and scalar layouts the Xbox maps were converted with
+  (`tools/wiiu/map_convert.py`, whose walk it is), and everything after reads them as the console's own: the sounds decoded, the validator, the
+  bitmaps, the scripts and the models (their model data turned as it is read). Each structure BSP is turned as it is read. Pixels and ADPCM
+  samples stay little-endian, as in the converted Xbox maps.
+- **Textures** whose channels Halo PC keeps elsewhere (model shaders' multipurpose maps, HUD meters) are sampled through their image's
+  component map (`src/xbox_textures_gx2.c`, `src/wiiu_gx2.c`), as the desktop's texture swizzle samples them. A meter drawn from a sheet in this
+  build's order, which the desktop's pixel shader reads in Halo PC's for that draw, is drawn as its texture is (the shader pack has no such key).
+- **Memory.** Besides the 23 MiB tag cache (in the heap, not the window), a Custom Edition map takes from the 128 MiB window what an Xbox map
+  does (the Xbox's 22 MB texture cache and 4 MB sound cache: Custom Edition maps can draw more texture than that, and the rest is drawn as the
+  default texture) plus its models' and BSP's compressed geometry, up to about 15 MB for the largest maps; geometry that does not fit is drawn
+  from the heap (slower, and logged). Ogg Vorbis sounds are decoded at load into a buffer of the heap.
+- **Shaders.** What a draw's shader key is not in `shaders.pack` draws is skipped (`halo/shaders_missing.txt`), so a map's new keys must be
+  captured on the console and the pack remade.
+
+Checked on the Mac (no Custom Edition map is on it, so the repository's test maps stood in: StageKit's, `tools/stagekit`, written little-endian
+as Custom Edition caches are, and the synthetic caches of `tools/test_cache_file_formats.py`): the C swap and `map_convert.py --custom-edition`
+make the same bytes of every map's tags, BSPs and model data, and the C swap and `map_convert.py` the same bytes of all 24 Xbox maps
+(`map_validate --swap`, `--swap-xbox`, under qemu-ppc and qemu-i386); `map_validate` needs no correction of the StageKit maps, big-endian or
+x86, and fuzzes them the same; the big-endian Linux build plays them tick for tick as the x86 build does. Not run on a console.
+
+### The Custom Edition test plan
+
+With the owner at the console and the card on the safe settings, one driver at a time; a Custom Edition map (stock `bloodgulch.map` first),
+`bitmaps.map`, `sounds.map` and `loc.map` in `data/custom_maps/`:
+
+1. **Start-up**: `log.txt` has `Memory window: 128 MiB at 41ea0000` and `Custom Edition tag cache: 23 MiB at 40440000` (the attempts before
+   it, if any, say how far the heap's start moved), and the black box's MEM2 heap line. With `game.custom_edition = false`: `given back to the
+   heap`, and the heap 23 MiB larger.
+2. **The map lists**: Create Game (LAN) → Map shows CUSTOM MULTIPLAYER with Bloodgulch (its picture if `bloodgulch.bmp` is there).
+3. **Bloodgulch, slayer**: it loads and plays. `data/debug.txt`: `custom edition: loading`, the tags' counts, `N tags turned to big-endian`,
+   `the map's tags needed 1 corrections` (loc.map's gamespy font, as on the desktop), the conversion's counts as the desktop records them
+   (79 BSP materials, 21 shaders renumbered, 10 chicago extended, 676 bitmaps, 32 HUD placements), the Ogg Vorbis sounds converted to ADPCM,
+   `model parts converted`, `the structure BSP ... has its vertices compressed`; no `cannot be turned` or `refused`. On screen: the level, its
+   models and its HUD drawn (the HUD meters' fill, the multipurpose maps' shine on the vehicles); sounds and the announcer play.
+4. **Shader keys**: `halo/shaders_missing.txt` after a few minutes of play (and of each later map): the keys go into the pack
+   (`tools/wiiu/shader_pack.sh`), and the next run's log shows no draw skipped for a missing key.
+5. **Times and memory**: from `loading` to the first frame, and the swap's share of it (the log's timestamps around `turned to
+   big-endian`); the MEM2 heap's free bytes in the game; `YOU GOT STABBED` (the texture cache full) or `SOUND CACHE BLOWN` in `debug.txt`;
+   `geometry drawn from outside contiguous memory` (the window full).
+6. **Larger maps**, one at a time, the same checks: a large multiplayer map (hugeass, bigass), a texture-heavy one (Elite_Alpha_Siege),
+   one with many Ogg Vorbis sounds, a campaign map (CMT's a30), a protected map.
+7. **Map transfer**: OpenCE on an x86 PC (Linux or Windows, the same network version) hosts a LAN game on a Custom Edition map the Wii U
+   lacks; the Wii U joins and downloads it (and any resource map it lacks) into `custom_maps`, then plays; the downloaded file's SHA-256 is the
+   host's. With `network.map_download = false` the Wii U shows the error and stays out. Then the Wii U hosts a map the PC lacks, and the PC
+   downloads it from the Wii U.
+8. **End**: delete the test maps (or leave them: they change nothing else), and leave the card on the safe settings.
+
 ## What is written and not run on a console
 
 Compiled, linked and tested on the build machine where it can be, not run on the Wii U: the high-res text (`text_hires.c`: the fonts in the maps' tags replaced by

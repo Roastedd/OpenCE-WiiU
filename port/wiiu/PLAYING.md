@@ -81,6 +81,27 @@ can look at their own screen; the menus are still shown whole. **TV** (the defau
 System Link in the Multiplayer menu finds and hosts games on your local network, with other Wii Us and with OpenCE on PC built from the same
 version.
 
+## Halo Custom Edition maps
+
+The game also plays maps made for Halo Custom Edition on PC (`.map` files of cache version 609), as OpenCE on PC does
+([docs/custom_edition_caches.md](../../docs/custom_edition_caches.md)). They have not been tried on a console yet.
+
+- Put the maps **as they are** in `wiiu/apps/halo/data/custom_maps/` on the SD card: do not convert them with `convert_maps.py`, which is for the Xbox
+  maps only (a Custom Edition map's file must stay as it is: network games tell its versions apart by its contents, and send it to players who lack
+  it). The game turns each one for the Wii U in memory as it loads.
+- Put your own copies of Halo Custom Edition's `bitmaps.map`, `sounds.map` and `loc.map` (from the `maps` folder of your Halo Custom Edition
+  install) in the same folder. Most maps need them; a map that needs one that is not there is refused, and `data/debug.txt` names it.
+- A map can have a picture and a description beside it: `<name>.bmp` (an uncompressed 24- or 32-bit bitmap) and `<name>.txt`.
+- The maps are listed under **CUSTOM MULTIPLAYER** and **CUSTOM SINGLEPLAYER** in the map lists, by their file's names.
+- Maps that need **OpenSauce** (their header asks for its memory upgrades, data files and the like) are refused; maps that only carry
+  OpenSauce's header play as stock Custom Edition plays them.
+- In a network game on a Custom Edition map you do not have, the map (and the resource maps you lack) is downloaded from the host into
+  `custom_maps` (`network.map_download` in `config.toml`; and `network.map_share` to send yours to others). A download of a map of which you
+  have another version is named `<name>_<8 hex digits>.map`.
+- `game.custom_edition` in `config.toml` (on by default) turns them off; the game then has 23 MB more memory for everything else.
+
+A new map can use graphics shaders that `shaders.pack` does not have yet: what they draw is left out until they are added to the pack.
+
 ## Voice chat
 
 In network games you can talk to the other players, into the GamePad's microphone or into a headset plugged into the GamePad's headphone jack.
@@ -121,6 +142,8 @@ again); a later one is. Without a network, the game starts as it always does.
 - To report a problem, include these files from `wiiu/apps/halo/` on the SD card: `log.txt`, `log-previous.txt`, `crash.txt`, `blackbox.txt`,
   `exit-trail.txt` and `data/debug.txt`. Take them after the game is closed.
 - A map missing from `data/maps/` stops the game at the end of the level before it. Make sure every converted map is there.
+- A Custom Edition map that does not load takes you back to the menus; `data/debug.txt` says why, in its lines that start with
+  `custom edition:`.
 
 ### If an update went wrong
 
