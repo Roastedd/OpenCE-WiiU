@@ -61,6 +61,7 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 #define ACQUIRE_LATE_PRIORITY 3000 /* (acquire callbacks run lowest first, the reverse of release's: libwhb's, at 100, makes its heap and buffers before this) */
 #define EXIT_PRIORITY 50
 #define EXIT_TRAIL_FILE WIIU_DATA_DIRECTORY "/exit-trail.txt"
+#define EXIT_TRAIL_PREVIOUS_FILE WIIU_DATA_DIRECTORY "/exit-trail-previous.txt"
 #define LOG_FILE WIIU_DATA_DIRECTORY "/log.txt"
 #define LOG_PREVIOUS_FILE WIIU_DATA_DIRECTORY "/log-previous.txt"
 #define BLACKBOX_FILE WIIU_DATA_DIRECTORY "/blackbox.txt"
@@ -388,6 +389,9 @@ void wiiu_untag_thread(void)
 
 int wiiu_gx2_release_drain(void);
 
+/* closes every socket the game opened and has not closed (wiiu_posix_net.c); returns how many */
+int wiiu_posix_net_close_all(void);
+
 /* whether the game thread is held at the foreground gate (for the other cores' release callbacks) */
 int wiiu_game_gate_is_held(void);
 
@@ -499,13 +503,10 @@ static void make_directories(void)
 }
 
 /* the last run's file out of the way, and its lines into this run's log */
+static void report_file(const char *previous, const char *what);
+
 static void report_previous(const char *path, const char *previous, const char *what)
 {
-	static char text[4096];
-	size_t size = 0;
-	int file;
-	char *line;
-
 	if (!strcmp(what, "black box"))
 	{
 		if (wiiu_shell_blackbox_take_previous(path, previous) == 0)
@@ -517,6 +518,17 @@ static void report_previous(const char *path, const char *previous, const char *
 		if (rename(path, previous) != 0)
 			return;
 	}
+	report_file(previous, what);
+}
+
+/* the lines of a file the last run left (an empty one says nothing) */
+static void report_file(const char *previous, const char *what)
+{
+	static char text[4096];
+	size_t size = 0;
+	int file;
+	char *line;
+
 	file = open(previous, O_RDONLY);
 	if (file < 0)
 		return;
@@ -530,6 +542,8 @@ static void report_previous(const char *path, const char *previous, const char *
 	}
 	close(file);
 	text[size] = 0;
+	if (!size)
+		return;
 	wiiu_log("The last run left a %s (%s), its lines follow:", what, previous);
 	for (line = strtok(text, "\n"); line; line = strtok(NULL, "\n"))
 		wiiu_log("  %.200s", line);
@@ -564,6 +578,10 @@ static void tell_new_fixups(uint32_t *told)
 	}
 }
 
+/* set as main returns: the app's own close is done, and the watchdog stands down (its _Exit is for a close that never gets there; one during the system's
+end of the process would be a second exit from another thread) */
+static volatile uint32_t main_returning;
+
 static void *watchdog_main(void *unused)
 {
 	uint32_t frames_before = 0;
@@ -579,6 +597,8 @@ static void *watchdog_main(void *unused)
 		wiiu_watch_result result;
 
 		sleep_ms(50);
+		if (main_returning)
+			return NULL;
 		now = shell_ms();
 		tell_new_fixups(&fixup_places_told);
 		result = wiiu_shell_watch_poll(&shell_watch, now, &stalled);
@@ -586,6 +606,7 @@ static void *watchdog_main(void *unused)
 		{
 			/* the log may be what is stuck, so the last words are given a moment and the process ends whether they got out */
 			wiiu_log("Closing took too long: ending the app");
+			exit_note("the close's deadline passed: the watchdog ends the app (_Exit)");
 			wiiu_shell_log_flush(&shell_log, 600);
 			_Exit(0);
 		}
@@ -788,7 +809,13 @@ int wiiu_shell_run(int (*game_main)(void))
 
 	base_ms = system_ms();
 	{
-		FILE *trail = fopen(EXIT_TRAIL_FILE, "w"); /* (this run's) */
+		/* (the last run's is kept, and its lines logged once the log is up: after a close that hung, the console is often started again before anyone
+		has read the file, as on 2026-10-30, when a HOME close stopped after "Closed" and the next start emptied its trail) */
+		FILE *trail;
+
+		unlink(EXIT_TRAIL_PREVIOUS_FILE);
+		rename(EXIT_TRAIL_FILE, EXIT_TRAIL_PREVIOUS_FILE);
+		trail = fopen(EXIT_TRAIL_FILE, "w"); /* (this run's) */
 
 		if (trail)
 			fclose(trail);
@@ -853,6 +880,7 @@ int wiiu_shell_run(int (*game_main)(void))
 	wiiu_log("OpenCE for the Wii U starting: main thread on core %u at priority %d", (unsigned)OSGetCoreId(), (int)main_priority);
 	if (memory_line(text, sizeof(text)))
 		wiiu_log("%s", text);
+	report_file(EXIT_TRAIL_PREVIOUS_FILE, "close trail");
 	report_previous(BLACKBOX_FILE, BLACKBOX_PREVIOUS_FILE, "black box");
 	report_previous(CRASH_FILE, CRASH_PREVIOUS_FILE, "crash note");
 	wiiu_crash_install(CRASH_FILE, &shell_watch.phase, last_beat);
@@ -944,7 +972,21 @@ int wiiu_shell_run(int (*game_main)(void))
 	if (error_log_started)
 		wiiu_shell_log_flush(&error_log, 500);
 	wiiu_shell_log_flush(&shell_log, 1500);
-	exit_note("the log is flushed; WHBProcShutdown next");
+	exit_note("the log is flushed");
+	/* Nothing of the app's is left writing to the card or holding a socket when main returns and wut takes the card away (__fini_wut_devoptab): the logs'
+	writers (and the shader capture's, the log's service) are ended, and the game's sockets closed, each step in the trail, so that a close that hangs
+	says where. (No GX2 call: one at exit froze the console, 2c6afc9.) */
+	if (error_log_started)
+		exit_note(wiiu_shell_log_stop(&error_log, 500) ? "debug.txt's writer ended" : "debug.txt's writer still running after 500 ms");
+	exit_note(wiiu_shell_log_stop(&shell_log, 500) ? "the log's writer ended" : "the log's writer still running after 500 ms");
+	{
+		char note[64];
+
+		snprintf(note, sizeof(note), "the game's sockets closed: %d", wiiu_posix_net_close_all());
+		exit_note(note);
+	}
+	main_returning = 1;
+	exit_note("the watchdog stood down; WHBProcShutdown next");
 	WHBProcShutdown();
 	exit_note("WHBProcShutdown returned; main returns");
 	return game_done ? game_result : 0;

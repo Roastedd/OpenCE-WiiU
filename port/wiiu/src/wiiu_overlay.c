@@ -207,7 +207,8 @@ void overlay_render(const struct overlay *overlay, uint8_t *pixels)
 	draw_text(pixels, 30, 1, 1, white, text);
 	snprintf(text, sizeof(text), "L%3d", low);
 	draw_text(pixels, 55, 1, 1, white, text);
-	/* Elapsed intervals as percentages of frame time, not hardware utilization. */
+	/* Percentages of the frame's time: C the CPU's side of a frame, an elapsed interval; G the GPU's own time for the frame's draws (its clock, wiiu_gx2.c
+	gpu_poll), at most what it took. */
 	draw_text(pixels, 74, 1, 1, grey, "BUD");
 	snprintf(text, sizeof(text), "C%3.0f%%", (double)short_percent(view->cpu_percent));
 	draw_text(pixels, 88, 1, 1, grey, text);

@@ -335,6 +335,50 @@ static void test_log_service_fairness(void)
 	CHECK(!pending && written == queued && written > 0);
 }
 
+/* the close's stop: the worker ends after its batch, and neither the lines queued after it nor its service reach the card */
+static int stop_service_calls;
+
+static int stop_service(void *context)
+{
+	(void)context;
+	__atomic_add_fetch(&stop_service_calls, 1, __ATOMIC_ACQ_REL);
+	return 0;
+}
+
+static void test_log_stop(void)
+{
+	static wiiu_shell_log stopping_log, never_started;
+	static char text[4096];
+	wiiu_shell_log_config config;
+	char path[300];
+	uint32_t pending, queued, written, dropped;
+	struct timespec pause = { 0, 3 * WIIU_LOG_PERIOD_MS * 1000000L };
+	int calls;
+
+	memset(&config, 0, sizeof(config));
+	path_in_folder(path, sizeof(path), "stop.txt");
+	unlink(path);
+	config.path = path;
+	config.now_ms = fake_now;
+	config.service = stop_service;
+	CHECK(wiiu_shell_log_start(&stopping_log, &config) == 0);
+	wiiu_shell_log_write(&stopping_log, "before the stop");
+	CHECK(wiiu_shell_log_flush(&stopping_log, 5000));
+	CHECK(wiiu_shell_log_stop(&stopping_log, 5000) == 1);
+	calls = __atomic_load_n(&stop_service_calls, __ATOMIC_ACQUIRE);
+	wiiu_shell_log_write(&stopping_log, "after the stop");
+	nanosleep(&pause, NULL);
+	wiiu_shell_log_counts(&stopping_log, &pending, &queued, &written, &dropped);
+	CHECK(pending == 1 && queued == 2 && written == 1 && dropped == 0);
+	CHECK(__atomic_load_n(&stop_service_calls, __ATOMIC_ACQUIRE) == calls);
+	read_file(path, text, sizeof(text));
+	CHECK(count_lines(text) == 1 && strstr(text, "before the stop") != NULL && strstr(text, "after the stop") == NULL);
+	/* a second stop, and the stop of a log that never started, answer at once */
+	CHECK(wiiu_shell_log_stop(&stopping_log, 0) == 1);
+	memset(&never_started, 0, sizeof(never_started));
+	CHECK(wiiu_shell_log_stop(&never_started, 0) == 1);
+}
+
 /* ---------- the black box */
 
 static size_t fake_where(void *thread, char *out, size_t capacity)
@@ -449,6 +493,7 @@ int main(void)
 	test_log();
 	test_log_card_trouble();
 	test_log_service_fairness();
+	test_log_stop();
 	test_blackbox();
 
 	if (failures)

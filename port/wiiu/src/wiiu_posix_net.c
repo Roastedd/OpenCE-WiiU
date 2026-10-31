@@ -177,6 +177,8 @@ logged. Refused at 512 too, it fails as Winsock's WSAEMSGSIZE (a datagram droppe
 static int datagram_receive_limit = DATAGRAM_RECEIVE_MOST;
 /* which sockets are datagram sockets (made by posix_socket) */
 static unsigned char datagram_sockets[LISTENERS];
+/* which sockets the game has open (made by posix_socket or posix_socket_accept, not yet closed): closed by the shell as the app ends */
+static unsigned char open_sockets[LISTENERS];
 
 static uint32_t clock_ms(void)
 {
@@ -206,7 +208,10 @@ int posix_socket(int family, int type, int protocol)
 
 		trace(type == SOCK_STREAM ? "socket (stream)" : "socket (datagram)", result, NULL, result);
 		if (result >= 0 && result < LISTENERS)
+		{
 			datagram_sockets[result] = type == SOCK_DGRAM;
+			open_sockets[result] = 1;
+		}
 		return succeed(result);
 	}
 }
@@ -218,8 +223,28 @@ int posix_socket_close(int socket)
 	{
 		memset(&listeners[socket], 0, sizeof(listeners[socket]));
 		datagram_sockets[socket] = 0;
+		open_sockets[socket] = 0;
 	}
 	return succeed(close(socket));
+}
+
+int wiiu_posix_net_close_all(void);
+
+int wiiu_posix_net_close_all(void)
+{
+	int socket, closed = 0;
+
+	for (socket = 0; socket < LISTENERS; socket++)
+	{
+		if (!open_sockets[socket])
+			continue;
+		open_sockets[socket] = 0;
+		datagram_sockets[socket] = 0;
+		memset(&listeners[socket], 0, sizeof(listeners[socket]));
+		close(socket);
+		closed++;
+	}
+	return closed;
 }
 
 int posix_socket_bind(int socket, const void *address, int address_length)
@@ -277,7 +302,10 @@ int posix_socket_accept(int socket, void *address, int *address_length)
 	if (address_length)
 		*address_length = (int)length;
 	if (result >= 0 && result < LISTENERS)
+	{
 		datagram_sockets[result] = 0;
+		open_sockets[result] = 1;
+	}
 	if (result >= 0 || errno != EBUSY)
 		trace("accept", socket, NULL, result);
 	if (socket >= 0 && socket < LISTENERS && listeners[socket].listening)

@@ -95,6 +95,9 @@ struct blit_vertex
 	float x, y, u, v, r, g, b, a;
 };
 
+/* frames whose GPU time is being measured at once (the samples of one are read a frame or two after it is handed over) */
+#define GPU_SAMPLE_SLOTS 4
+
 static struct
 {
 	int ready;
@@ -157,6 +160,7 @@ static struct
 	void *ring_dirty_from, *ring_dirty_to;
 	unsigned shaders_loaded, fetch_full;
 	unsigned draws_made, skipped_target, skipped_state, skipped_shader, skipped_ring, ring_overflows;
+	unsigned skipped_missing; /* of skipped_state, the draws whose shader (vertex or pixel) the pack has not: a key in the shader-misses files */
 	unsigned textures_made, textures_unsupported, texture_short, layouts_logged;
 	unsigned texture_log;
 	unsigned sampler_levels[4];
@@ -184,8 +188,14 @@ static struct
 	struct blit_vertex *overlay_quad;
 	OSTime overlay_previous_end, overlay_view_time;
 	unsigned long ring_total, draw_total, overlay_ring_previous, overlay_draw_previous;
-	OSTime gpu_stamp, gpu_submitted;
-	int gpu_pending;
+	/* the GPU's own time for a frame's draws (gpu_frame_begin, gpu_frame_end, gpu_poll): the slot of samples in use, each slot's state (0 free, 1 begun,
+	2 ended and not yet read) and when it ended; the frame now drawn is measured (1) or not (2: no free slot); the five seconds' sum and longest */
+	unsigned gpu_slot;
+	int gpu_frame_open;
+	uint8_t gpu_slot_state[GPU_SAMPLE_SLOTS];
+	OSTime gpu_slot_ended[GPU_SAMPLE_SLOTS];
+	OSTime gpu_window_ticks, gpu_window_longest;
+	unsigned gpu_window_frames;
 	float gpu_ms;
 	unsigned overlay_frame;
 	/* the GPU test (halo/gpu_test.txt: 1): a frame's streams kept (test_armed 2), run again at its present, timed */
@@ -202,7 +212,8 @@ static struct
 	double exit_after;
 	int hiz; /* halo/hiz.txt: 1, the big depth target has hierarchical Z */
 	unsigned fail_allocations; /* halo/mem1_fail.txt: that many allocations of targets made again after HOME fail (a test) */
-	int gpu_test_wanted; /* halo/gpu_test.txt 1, read at the start: the GPU test runs once the game draws 250 or more a frame */
+	int gpu_test_wanted; /* halo/gpu_test.txt "1 [DRAWS]", read at the start: the GPU test runs once the game draws DRAWS (250) or more a frame */
+	int gpu_test_draws;
 	volatile uint32_t mem1_restoring; /* a thread is making the targets again (the acquire callback, or the GX2 thread after 3 s): one at a time */
 	volatile int target_missing; /* target_get answered NULL for a target that has no memory (targets_bind then binds neither) */
 	int mem1; /* halo/mem1.txt: 1, the big render targets are made in the eDRAM (MEM1) instead of the DDR3 */
@@ -677,6 +688,7 @@ static void run_stream(const unsigned char *at, const unsigned char *end);
 static void gx_gate(void);
 static void gt_log(unsigned frames);
 static void gpu_poll(void);
+static void gpu_frame_begin(void);
 static int overlay_make(void);
 
 /* room in the ring, noted as written to (the caller writes it before it is flushed, which is at the end of the stream or the present) */
@@ -2084,6 +2096,8 @@ static void draw(const struct dk_command_draw *command)
 	if (!gx.vs_handle || !gx.ps_handle || !gx.format_set)
 	{
 		gx.skipped_state++;
+		if (gx.format_set)
+			gx.skipped_missing++;
 		return;
 	}
 	{
@@ -2250,6 +2264,8 @@ static void draw(const struct dk_command_draw *command)
 		gx.color->last_used = ++gx.use_serial;
 	gx.section_ticks[5] += OSGetSystemTime() - gx.section_now;
 	gx.section_now = OSGetSystemTime();
+	if (!gx.gpu_frame_open && !gx.replaying)
+		gpu_frame_begin();
 	if (indices)
 		GX2DrawIndexedEx(primitive_of(primitive), command->count, GX2_INDEX_TYPE_U16, indices, (uint32_t)vertex_offset, 1);
 	else
@@ -2413,8 +2429,13 @@ static int initialize(void)
 		{
 			int asked = 0;
 
-			gx.gpu_test_wanted = fscanf(file, "%d", &asked) == 1 && asked == 1;
+			gx.gpu_test_draws = 0;
+			gx.gpu_test_wanted = fscanf(file, "%d %d", &asked, &gx.gpu_test_draws) >= 1 && asked == 1;
+			if (gx.gpu_test_draws <= 0)
+				gx.gpu_test_draws = 250;
 			fclose(file);
+			if (gx.gpu_test_wanted)
+				wiiu_log("GX2: the GPU test runs at the first frame of %d draws or more after the 300th (gpu_test.txt)", gx.gpu_test_draws);
 		}
 	}
 	if (overlay_make())
@@ -2992,16 +3013,113 @@ static void blit_state(void)
 /* the game's configuration (platform code): a boolean setting by name */
 int config_boolean(const char *name);
 
-/* when the GPU has finished the work submitted for the last frame (its timestamp is retired): the time from the submit, which is the GPU's if it was idle until then, so it is
-only a little over what it took. Polled between draws and while waiting for the flip. */
+/* The GPU's time for a frame's draws, from the GPU's own clock: a bottom-of-pipe sample, which the GPU writes once everything handed to it before is done,
+before the frame's first draw (so: when the last frame's pictures and swap were done, or when the first draw reached an idle GPU) and after its last
+(before its pictures are copied to the screens and swapped, and so without the wait for the display). The difference is an upper bound of the GPU's
+work for the frame: it includes the moments the GPU waited for commands still being made. (It replaced a measure that was not the GPU's: from the
+frame's last flush to when the CPU next saw its submission counter retired, waits for the display and for the next poll included, 2026-10-30.) The
+sampler is gx2.rpl's (wut's import library has it; its headers do not declare it). Its clock runs at 27 MHz: on the console the samples, read as they are
+(big-endian), rose 26.8 MHz against the CPU's clock (2026-10-30), and the run logs its own measure of it once; gx2.rpl's GX2GPUTimeToCPUTime, as declared
+in an unmerged wut fork, returned nonsense there (21350398519233349 CPU ticks for 27000000), so the difference is converted here. */
+void GX2SampleBottomGPUCycle(uint64_t *timestamp);
+#define GPU_TIMER_HZ 27000000ull
+
+/* one sample to a cache line: the GPU writes it, and the CPU reads it only after dropping its own copy of the line */
+struct gpu_sample
+{
+	volatile uint64_t value;
+	uint8_t pad[56];
+};
+static struct gpu_sample gpu_samples[GPU_SAMPLE_SLOTS][2] __attribute__((aligned(64)));
+
+static void gpu_sample(struct gpu_sample *sample)
+{
+	sample->value = UINT64_MAX;
+	DCFlushRange(sample, sizeof(*sample));
+	GX2SampleBottomGPUCycle((uint64_t *)&sample->value);
+}
+
+/* at the frame's first draw */
+static void gpu_frame_begin(void)
+{
+	const unsigned slot = gx.gpu_slot;
+
+	if (gx.gpu_slot_state[slot] != 0)
+	{
+		gx.gpu_frame_open = 2;
+		return;
+	}
+	gpu_sample(&gpu_samples[slot][0]);
+	gx.gpu_slot_state[slot] = 1;
+	gx.gpu_frame_open = 1;
+}
+
+/* at the frame's present, before anything of it is drawn on the screens */
+static void gpu_frame_end(void)
+{
+	const unsigned slot = gx.gpu_slot;
+
+	if (gx.gpu_frame_open == 1)
+	{
+		gpu_sample(&gpu_samples[slot][1]);
+		gx.gpu_slot_state[slot] = 2;
+		gx.gpu_slot_ended[slot] = OSGetSystemTime();
+		gx.gpu_slot = (slot + 1) % GPU_SAMPLE_SLOTS;
+	}
+	gx.gpu_frame_open = 0;
+}
+
+/* the frames whose samples the GPU has written: polled between draws and while waiting for the flip */
 static void gpu_poll(void)
 {
-	if (!gx.gpu_pending)
-		return;
-	if (GX2GetRetiredTimeStamp() >= gx.gpu_stamp)
+	unsigned slot;
+
+	for (slot = 0; slot < GPU_SAMPLE_SLOTS; slot++)
 	{
-		gx.gpu_ms = (float)OSTicksToMicroseconds(OSGetSystemTime() - gx.gpu_submitted) / 1000.0f;
-		gx.gpu_pending = 0;
+		uint64_t begun, ended;
+
+		if (gx.gpu_slot_state[slot] != 2)
+			continue;
+		DCInvalidateRange(gpu_samples[slot], sizeof(gpu_samples[slot]));
+		begun = gpu_samples[slot][0].value;
+		ended = gpu_samples[slot][1].value;
+		if (begun != UINT64_MAX && ended != UINT64_MAX)
+		{
+			{
+				/* (the GPU's clock against the CPU's, once, over the first five seconds of samples) */
+				static uint64_t first_sample;
+				static OSTime first_seen;
+				static int told;
+
+				if (!first_seen)
+				{
+					first_sample = begun;
+					first_seen = OSGetSystemTime();
+				}
+				else if (!told && OSGetSystemTime() - first_seen >= OSSecondsToTicks(5) && begun > first_sample)
+				{
+					told = 1;
+					wiiu_log("GX2: the GPU's clock (its samples) runs at %.2f MHz by the CPU's (27 taken)",
+						(double)(begun - first_sample) / ((double)OSTicksToMicroseconds(OSGetSystemTime() - first_seen)));
+				}
+			}
+			if (ended >= begun && ended - begun < GPU_TIMER_HZ)
+			{
+				const OSTime ticks = (OSTime)((ended - begun) * (uint64_t)OSSecondsToTicks(1) / GPU_TIMER_HZ);
+
+				gx.gpu_ms = (float)OSTicksToMicroseconds(ticks) / 1000.0f;
+				gx.gpu_window_ticks += ticks;
+				if (ticks > gx.gpu_window_longest)
+					gx.gpu_window_longest = ticks;
+				gx.gpu_window_frames++;
+			}
+			gx.gpu_slot_state[slot] = 0;
+		}
+		else if (OSGetSystemTime() - gx.gpu_slot_ended[slot] > OSMillisecondsToTicks(1000))
+		{
+			/* (not written in a second: the slot is given up) */
+			gx.gpu_slot_state[slot] = 0;
+		}
 	}
 }
 
@@ -3335,7 +3453,7 @@ static void screenshot_take(struct target *source, uint32_t address)
 /* The GPU test. The commands of one frame, kept as they were handed over, are run again and again without the game (30 frames' worth, or what the ring has room for), then waited for:
 the time for each is the GPU's if it is more than the CPU's side of a frame (the commands need 2-4 ms of the GX2 thread), which is the question - could the GPU draw this frame in the time a 60 Hz display
 gives it, whatever is done to the CPU? Three runs: the frame as it is, with no pixels drawn (a scissor of one pixel: the cost of the draws without their fill), and with blending off. Asked for with a 1 in
-halo/gpu_test.txt (read at the start; run once). The picture of the frame is drawn 90 more times: no harm. */
+halo/gpu_test.txt (read at the start; run once), at the first frame of 250 draws or more after the 300th, or of the number after the 1 ("1 150"). The picture of the frame is drawn 90 more times: no harm. */
 static void gpu_test_run(void)
 {
 	static const struct { const char *name; int mode; } variants[3] = { { "the frame", 0 }, { "no pixels (scissor 1x1)", 4 }, { "no blending", 1 } };
@@ -3397,6 +3515,7 @@ static void present(const struct dk_command_present *command)
 	OSTime wait_ticks = 0;
 	const OSTime cpu_ticks = gx.overlay_previous_end ? present_start - gx.overlay_previous_end : 0;
 
+	gpu_frame_end();
 	gpu_poll();
 	if (gx.overlay_on)
 	{
@@ -3442,12 +3561,6 @@ static void present(const struct dk_command_present *command)
 	GX2CopyColorBufferToScanBuffer(WHBGfxGetDRCColourBuffer(), GX2_SCAN_TARGET_DRC);
 	/* (the frame's work is handed to the GPU before the swap, whose wait for the display is then not in the time the work is said to have taken) */
 	GX2Flush();
-	if (!gx.gpu_pending)
-	{
-		gx.gpu_stamp = GX2GetLastSubmittedTimeStamp();
-		gx.gpu_submitted = OSGetSystemTime();
-		gx.gpu_pending = 1;
-	}
 	GX2SwapScanBuffers();
 	GX2Flush();
 	if (!gx.screens_enabled)
@@ -3534,10 +3647,16 @@ static void present(const struct dk_command_present *command)
 		for (i = 1; i < 18; i++)
 			if (gx.counts[i])
 				wiiu_log("GX2:   command %u: %u", i, gx.counts[i]);
-		wiiu_log("GX2:   %u draws made; skipped: %u no target, %u no shader or format yet, %u shader not in the pack or not loaded, %u ring full; %u clears "
-			"made as rectangles; %u textures made (%u not 2D, %u short), ring overflows %u", gx.draws_made,
-			gx.skipped_target, gx.skipped_state, gx.skipped_shader, gx.skipped_ring, gx.rectangle_clears, gx.textures_made, gx.textures_unsupported,
-			gx.texture_short, gx.ring_overflows);
+		wiiu_log("GX2:   %u draws made; skipped: %u no target, %u no shader or format yet (%u of them a shader not in the pack), %u shader not loaded, %u ring "
+			"full; %u clears made as rectangles; %u textures made (%u not 2D, %u short), ring overflows %u", gx.draws_made,
+			gx.skipped_target, gx.skipped_state, gx.skipped_missing, gx.skipped_shader, gx.skipped_ring, gx.rectangle_clears, gx.textures_made,
+			gx.textures_unsupported, gx.texture_short, gx.ring_overflows);
+		if (gx.gpu_window_frames)
+			wiiu_log("GX2:   the GPU's own time for a frame's draws (bottom-of-pipe samples, at most what it took): %.2f ms on average over %u frames, %.2f the longest",
+				(double)OSTicksToMicroseconds(gx.gpu_window_ticks) / 1000.0 / (double)gx.gpu_window_frames, gx.gpu_window_frames,
+				(double)OSTicksToMicroseconds(gx.gpu_window_longest) / 1000.0);
+		gx.gpu_window_ticks = gx.gpu_window_longest = 0;
+		gx.gpu_window_frames = 0;
 		wiiu_log("GX2:   per frame over %u frames: %.1f ms in the stream (of which %.1f in draws, %.1f in textures), %.1f ms presenting", gx.window_frames,
 			(double)OSTicksToMicroseconds(gx.submit_ticks - gx.present_ticks) / 1000.0 / (double)gx.window_frames,
 			(double)OSTicksToMicroseconds(gx.draw_ticks) / 1000.0 / (double)gx.window_frames,
@@ -3594,7 +3713,7 @@ static void present(const struct dk_command_present *command)
 		if (query.begun)
 			wiiu_log("GX2:   visibility tests: %u begun, %u ended, %u read back", query.begun, query.ended, query.read_back);
 		memset(gx.counts, 0, sizeof(gx.counts));
-		gx.draws_made = gx.skipped_target = gx.skipped_state = gx.skipped_shader = gx.skipped_ring = 0;
+		gx.draws_made = gx.skipped_target = gx.skipped_state = gx.skipped_missing = gx.skipped_shader = gx.skipped_ring = 0;
 		gx.rectangle_clears = 0;
 		gx.textures_made = gx.textures_unsupported = 0;
 	}
@@ -3603,7 +3722,7 @@ static void present(const struct dk_command_present *command)
 	context_resume();
 	if (gx.test_armed == 3)
 		gx.test_armed = 4; /* (done: once a run) */
-	if (!gx.test_armed && gx.gpu_test_wanted && gx.frames > 300 && gx.last_frame_draws >= 250)
+	if (!gx.test_armed && gx.gpu_test_wanted && gx.frames > 300 && gx.last_frame_draws >= (unsigned)gx.gpu_test_draws)
 	{
 		{
 			if (!gx.test_log)
