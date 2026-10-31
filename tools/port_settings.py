@@ -287,8 +287,9 @@ SCREENS["gamepad_setup/wiiu"] = {
              "Tilting the top of the GamePad away looks up.", None),
             ("FACE BUTTONS:", "input.wiiu_face_buttons", [("AUTO", "auto"), ("BY PLACE", "position"), ("BY LETTER", "label")],
              "Auto: by letter in the menus, by place in the\ngame (B jumps). From the next start.", None),
-            ("CONTROLLERS:", "input.wiiu_controller_layout", [("MERGED", "merged"), ("SEPARATE", "separate")],
-             "Separate: a Pro Controller is player 2, for\nsplit screen. From the next start.", None),
+            ("CONTROLLERS:", "input.wiiu_controller_layout",
+             [("AUTO", "auto"), ("SEPARATE", "separate"), ("MERGED", "merged")],
+             "Auto: all play as player 1 until another joins\n(ADD PLAYER, co-op). Separate: each its own.\nMerged: the first is the GamePad's.", None),
     ],
 }
 

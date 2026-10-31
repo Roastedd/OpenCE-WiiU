@@ -121,6 +121,11 @@ short main_get_solo_level_from_name(char const *name);
 boolean player_name_clean(wchar_t *name, long count);
 short players_port_local_player_count(void);
 
+#ifdef HALO_WIIU
+/* port/wiiu/src/wiiu_input.c: how many controllers share player 1's that ADD PLAYER would make players of their own */
+int wiiu_input_controllers_merged(void);
+#endif
+
 boolean pc_menu_event_function_invoke(struct widget_instance *widget, struct event_record *event,
 	long function_index, boolean *widget_deleted);
 void pc_menu_game_data_function_invoke(struct widget_instance *widget, long function);
@@ -4301,6 +4306,12 @@ static void lobby_join_help(struct widget_instance *list)
 			if (input_has_gamepad(controller) && !lobby_controller_playing(controller))
 				text = L"Another controller: START joins.";
 		}
+#ifdef HALO_WIIU
+		/* (the Wii U's controllers share player 1's while it is the only one, as "auto" has them: another's START is player 1's,
+		and ADD PLAYER gives them players of their own, port/wiiu/src/xinput_wiiu.c) */
+		if (!text[0] && wiiu_input_controllers_merged())
+			text = L"Another controller: ADD PLAYER.";
+#endif
 	}
 	text_set(help, text);
 }

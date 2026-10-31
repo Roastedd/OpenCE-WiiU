@@ -283,11 +283,14 @@ static const struct config_setting config_settings[] =
 		"2 twice as far." },
 	{ "input.wiiu_gyro_invert_y", _config_boolean, "false", "HALO_WIIU_GYRO_INVERT_Y", _environment_value, _platform_wiiu,
 		"Tilting the top of the GamePad away looks up (as a flight stick), not down." },
-	{ "input.wiiu_controller_layout", _config_string, "\"merged\"", "HALO_WIIU_CONTROLLER_LAYOUT", _environment_value, _platform_wiiu,
-		"How the Pro and Classic Controllers take the players' places. \"merged\": the first\n"
-		"joins the GamePad as player 1 (so a Pro Controller can play alone). \"separate\": the\n"
-		"GamePad is player 1 alone and the controllers are players 2 to 4, in the order the\n"
-		"system numbered them: for split screen with the GamePad and a Pro Controller." },
+	{ "input.wiiu_controller_layout", _config_string, "\"auto\"", "HALO_WIIU_CONTROLLER_LAYOUT", _environment_value, _platform_wiiu,
+		"How the Pro and Classic Controllers take the players' places. \"auto\": while one\n"
+		"person plays, every controller plays as player 1 with the GamePad; once a second\n"
+		"joins (ADD PLAYER in the lobby, or co-op), each controller is a player of its own,\n"
+		"2 to 4 as its lights show. \"separate\": the GamePad is player 1 alone and each\n"
+		"controller a player of its own. A controller keeps its player while it goes and\n"
+		"comes back. \"merged\": the first controller joins the GamePad as player 1 and the\n"
+		"others are players 2 to 4 in the order the system numbered them." },
 	{ "input.wiiu_rumble", _config_boolean, "true", "HALO_WIIU_RUMBLE", _environment_value, _platform_wiiu,
 		"The GamePad and the Pro Controllers rumble as the game asks." },
 	{ "input.gamepad_vertical_look", _config_real, "1.0", "HALO_GAMEPAD_VERTICAL_LOOK", _environment_value, _platform_all,

@@ -116,8 +116,13 @@ The decisions and the files (the queue, the watch, the records) are plain C with
 
 ## Controls
 
-The GamePad is the first controller (a Pro or Classic Controller on channel 0 joins it); Pro and Classic Controllers on channels 1 to 3 are the other
-three (split screen). `src/wiiu_input.c` reads VPAD and KPAD; `src/xinput_wiiu.c` turns them into the Xbox pad the game reads.
+The GamePad is the first controller, player 1. The Pro and Classic Controllers take the players' places as `input.wiiu_controller_layout` says:
+`"auto"` (the default) has every controller play as player 1 with the GamePad while one person plays, and gives each its own player, 2 to 4, once a
+second joins (ADD PLAYER in the lobby, or CO-OP CAMPAIGN); `"separate"` gives each its own player always; `"merged"` is the layout before these, the
+controller of channel 0 joining the GamePad and those of channels 1 to 3 the other three. A controller keeps its player while it goes and comes back,
+known by its Bluetooth address on whatever channel the system gives it (`src/wiiu_pad_players.c`, tested on the desktop), and its lights show the number
+of the player it drives. `src/wiiu_input.c` reads VPAD and KPAD; `src/xinput_wiiu.c` turns them into the Xbox pad the game reads, and its comment says
+how the menus add players and why "auto" waits for a second one.
 
 | Game | Wii U | Menus |
 | --- | --- | --- |
