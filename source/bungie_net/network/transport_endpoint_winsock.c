@@ -300,6 +300,8 @@ enum
 	host's connection to its own client all it sends in one frame; a full
 	buffer blocks the host (network_connection_write) */
 	MINIMUM_ENDPOINT_SOCKET_BUFFER_SIZE = 1024 * 1024,
+	/* port: the most the Wii U's nsysnet takes for a stream's (create_socket) */
+	WIIU_STREAM_SOCKET_BUFFER_SIZE = 32 * 1024,
 };
 
 /* ---------- macros */
@@ -1740,6 +1742,17 @@ static SOCKET create_socket(
 	{
 		int option;
 		int option_length;
+		/* port: the size a socket's buffers are raised to */
+		int minimum_size = MINIMUM_ENDPOINT_SOCKET_BUFFER_SIZE;
+
+#ifdef HALO_WIIU
+		/* port: the Wii U's nsysnet does not grow a stream's buffers as Linux
+		does, and takes no more than 32 KB (64 KB is refused): a host's
+		connection to a machine joining a game in progress sends at most what
+		fits each frame, and a joiner's takes at most that between its reads */
+		if (socket_type == SOCK_STREAM)
+			minimum_size = WIIU_STREAM_SOCKET_BUFFER_SIZE;
+#endif
 
 		if (socket_type == SOCK_DGRAM)
 		{
@@ -1758,7 +1771,7 @@ static SOCKET create_socket(
 			winsock_error_to_string(WSAGetLastError());
 		}
 
-#ifndef HALO_WINDOWS
+#if !defined(HALO_WINDOWS) && !defined(HALO_WIIU)
 		/* Linux (and Android) grow a stream socket's buffers as far as the
 		connection needs, to several megabytes; setting a size would fix them,
 		at no more than the system's limit (about 416 KB by default) */
@@ -1769,9 +1782,9 @@ static SOCKET create_socket(
 		if (getsockopt(endpoint_socket, SOL_SOCKET, SO_SNDBUF,
 			(char *)&option, &option_length) == 0)
 		{
-			if (option < MINIMUM_ENDPOINT_SOCKET_BUFFER_SIZE)
+			if (option < minimum_size)
 			{
-				option = MINIMUM_ENDPOINT_SOCKET_BUFFER_SIZE;
+				option = minimum_size;
 				if (setsockopt(endpoint_socket, SOL_SOCKET, SO_SNDBUF,
 					(char const *)&option, sizeof(option)) != 0)
 				{
@@ -1788,9 +1801,9 @@ static SOCKET create_socket(
 		if (getsockopt(endpoint_socket, SOL_SOCKET, SO_RCVBUF,
 			(char *)&option, &option_length) == 0)
 		{
-			if (option < MINIMUM_ENDPOINT_SOCKET_BUFFER_SIZE)
+			if (option < minimum_size)
 			{
-				option = MINIMUM_ENDPOINT_SOCKET_BUFFER_SIZE;
+				option = minimum_size;
 				if (setsockopt(endpoint_socket, SOL_SOCKET, SO_RCVBUF,
 					(char const *)&option, sizeof(option)) != 0)
 				{
@@ -1802,7 +1815,7 @@ static SOCKET create_socket(
 		{
 			winsock_error_to_string(WSAGetLastError());
 		}
-#ifndef HALO_WINDOWS
+#if !defined(HALO_WINDOWS) && !defined(HALO_WIIU)
 		}
 #endif
 	}
