@@ -1,7 +1,9 @@
 /* Device identity and visual preferences. Neither changes input mappings. */
 #include "controller_buttons.h"
 #include "port_config.h"
+#ifndef HALO_WIIU
 #include <SDL3/SDL.h>
+#endif
 #include <stdio.h>
 #include <string.h>
 
@@ -19,6 +21,15 @@ void controller_device_get(short port, struct controller_device *device)
     if (port >= 0 && port < 4) *device = controller_devices[port];
 }
 
+#ifdef HALO_WIIU
+/* port: the Wii U has no SDL gamepads: its controllers (port/wiiu/src/xinput_wiiu.c) name no family, so every port's
+glyphs are display.hud_button_style's */
+void controller_device_read(void *handle, struct controller_device *device)
+{
+    (void)handle;
+    memset(device, 0, sizeof(*device));
+}
+#else
 static int controller_family_from_type(SDL_GamepadType type)
 {
     switch (type)
@@ -59,6 +70,7 @@ void controller_device_read(void *handle, struct controller_device *device)
         device->family == CONTROLLER_SWITCH ? "Switch controller" : "Unknown controller");
 #endif
 }
+#endif
 
 int controller_button_style_index(char const *name)
 {

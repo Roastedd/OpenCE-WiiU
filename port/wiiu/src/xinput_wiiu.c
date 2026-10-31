@@ -339,6 +339,23 @@ BOOL WINAPI XGetDeviceChanges(PXPP_DEVICE_TYPE device_type, PDWORD insertions, P
 	return *insertions || *removals;
 }
 
+/* how many controllers there are, as the game was last told (ADD PLAYER's screen asks: menu_functions.c), and that the last used was one
+(network_votekick.c's prompts: the Wii U has no keyboard) */
+int halo_gamepad_count(void)
+{
+	DWORD mask = reported_gamepads;
+	int count = 0;
+
+	for (; mask; mask &= mask - 1)
+		count++;
+	return count;
+}
+
+int halo_gamepad_last_used(void)
+{
+	return 1;
+}
+
 HANDLE WINAPI XInputOpen(PXPP_DEVICE_TYPE device_type, DWORD port, DWORD slot, PXINPUT_POLLING_PARAMETERS polling_parameters)
 {
 	(void)slot;

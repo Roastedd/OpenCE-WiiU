@@ -3,8 +3,10 @@ PLATFORM_WIIU.C
 
 The platform layer's calls that the Wii U does not need yet, or has no use for, answered as a build with nothing to answer them with would: the
 high-resolution HUD, text and menu art (OpenGL drawing in the Linux builds; the Wii U has none of them), the keyboard, mouse and touch aiming,
-the clipboard, the display settings, the voice chat, the network test's input hooks. Each is what the Linux code does when its feature is off.
-What the Wii U does need (input, audio, files, sockets) is in units of its own.
+the clipboard, the display settings, the voice chat, the network test's input hooks, the text chat's on-screen keyboard (it reads the Linux
+builds' gamepads: the Wii U shows the chat, and has no way to type it yet), controller remapping, questions in a message box, a browser, and the
+self-updater's HTTPS (the master servers' lists are not fetched: the server browser lists the brokers' games and the LAN's). Each is what the
+Linux code does when its feature is off. What the Wii U does need (input, audio, files, sockets) is in units of its own.
 */
 
 #include "platform.h"
@@ -15,6 +17,8 @@ What the Wii U does need (input, audio, files, sockets) is in units of its own.
 #include "menu_files.h"
 #include "voice_audio.h"
 #include "halo_menus.h"
+#include "controller_remap.h"
+#include "update.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -242,4 +246,150 @@ void voice_audio_mix(float *output, unsigned long frames)
 {
 	(void)output;
 	(void)frames;
+}
+
+/* ---------- questions, a browser (sdl_platform.c's) */
+
+/* (port_mods.c: mods that cannot be played together are played all, as when a desktop cannot ask) */
+int platform_ask(const char *title, const char *text, const char *const *labels, int count, int default_index)
+{
+	(void)labels;
+	(void)count;
+	(void)default_index;
+	platform_log("%s: %s (not asked: the Wii U has no message box)", title, text);
+	return -1;
+}
+
+/* (player_link.c: a master's page to link a Discord account, which Network Setup does not offer on the Wii U) */
+void platform_open_url(const char *url)
+{
+	platform_log("not opened (the Wii U has no browser to open): %s", url);
+}
+
+void platform_binding_capture_cancel(void)
+{
+}
+
+/* ---------- the self-updater's HTTPS (posix_update.c, in WIIU_EXCLUDE: no TLS sockets or certificate authorities here) */
+
+int update_https_request(const char *method, const char *url, const char *headers, const void *body,
+	unsigned long body_size, unsigned long maximum, struct update_response *response, char *error, int error_size)
+{
+	(void)method;
+	(void)url;
+	(void)headers;
+	(void)body;
+	(void)body_size;
+	(void)maximum;
+	memset(response, 0, sizeof(*response));
+	if (error && error_size > 0)
+		snprintf(error, (size_t)error_size, "the Wii U makes no HTTPS requests");
+	return 0;
+}
+
+/* ---------- the keyboard and the gamepads, as xinput_sdl.c has them: no keyboard, no on-screen keyboard's reading, no virtual
+gamepads, no debug camera's mouse */
+
+unsigned long halo_chat_pad_buttons(void)
+{
+	return 0;
+}
+
+unsigned long halo_chat_pad_buttons_for_port(short port)
+{
+	(void)port;
+	return 0;
+}
+
+int halo_chat_taps(float *x, float *y)
+{
+	(void)x;
+	(void)y;
+	return 0;
+}
+
+int halo_chat_wheel_steps(void)
+{
+	return 0;
+}
+
+int halo_chat_touch_layout(void)
+{
+	return 0;
+}
+
+void halo_input_shown_name(const char *binding, char *shown, size_t size)
+{
+	if (size)
+		snprintf(shown, size, "%s", binding ? binding : "");
+}
+
+unsigned char halo_keyboard_join_held(void)
+{
+	return 0;
+}
+
+void halo_keyboard_alone_set(unsigned char alone)
+{
+	(void)alone;
+}
+
+unsigned char halo_keyboard_shares_gamepad(void)
+{
+	return 0;
+}
+
+void halo_virtual_gamepads_start(void)
+{
+}
+
+int halo_linux_debug_camera_input(int *middle, int *up, int *down, float *wheel)
+{
+	*middle = 0;
+	*up = 0;
+	*down = 0;
+	*wheel = 0.0f;
+	return 0;
+}
+
+/* ---------- controller remapping (controller_remap_input.c, on SDL's gamepads): none; the Wii U's buttons are xinput_wiiu.c's, and
+Controller Setup has no BUTTON REMAPPING there */
+
+void controller_remap_input_reset(void)
+{
+}
+
+void controller_remap_capture_begin(short port)
+{
+	(void)port;
+}
+
+void controller_remap_capture_end(void)
+{
+}
+
+/* (3: the capture ended, as with no device to capture from) */
+int controller_remap_capture_poll(int *button)
+{
+	(void)button;
+	return 3;
+}
+
+int controller_remap_connected(short port)
+{
+	(void)port;
+	return 0;
+}
+
+unsigned int controller_remap_held(short port)
+{
+	(void)port;
+	return 0;
+}
+
+unsigned int controller_remap_pressed(short port, unsigned int mask)
+{
+	(void)port;
+	(void)mask;
+	return 0;
 }

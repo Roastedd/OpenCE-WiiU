@@ -1062,3 +1062,9 @@ void halo_custom_edition_texels_channels(const void *texels, unsigned char chann
 void halo_custom_edition_texels_forget(void)
 {
 }
+
+/* (hud_draw.c: a Custom Edition HUD sheet's meter drawn, which xbox_textures.c samples in its own channels) */
+void halo_custom_edition_hud_meter(int active)
+{
+	(void)active;
+}

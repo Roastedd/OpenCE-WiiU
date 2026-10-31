@@ -186,10 +186,28 @@ void halo_screen_ui_offset(unsigned char centered)
 	ui_offset = centered ? (halo_screen_width() - 640) / 2 : 0;
 }
 
-/* display.shadow_resolution, display.per_pixel_lighting and
-display.anti_aliasing are the OpenGL renderer's (d3d8_gl.c): here the shadow
-maps stay the Xbox's 128x128, every draw is lit as its vertex shader lights
-it, and the 3D view is drawn as it is */
+/* the same for a player's view of a split screen (its width): a half screen's 640 columns are centred as the screen's, a quarter's 320 in the
+quarter (render.c, as d3d8_gl.c does); and the shift in effect (ui_widget.c) */
+void halo_screen_ui_offset_view(long view_width)
+{
+	long width = halo_screen_width();
+
+	/* (a quarter's pause menu and dialogs are 320 wide: the Xbox's) */
+	ui_offset = view_width > 0 && view_width < width ? (view_width > 320 ? (view_width - 320) / 2 : 0) : (width - 640) / 2;
+}
+
+long halo_screen_ui_offset_current(void)
+{
+	return ui_offset;
+}
+
+/* display.shadow_resolution, display.per_pixel_lighting, display.anti_aliasing,
+display.model_detail, display.hdr and the overshield's rise are the OpenGL
+renderer's (d3d8_gl.c): here the shadow maps stay the Xbox's 128x128, every
+draw is lit as its vertex shader lights it, the 3D view is drawn as it is
+(no tone curve, no HDR calibration's patterns), models choose their detail as
+the Xbox's (stock), and a plasma shader's colors do not fade above a height
+(an overshield effect shows at once, whole) */
 long halo_shadow_map_scale(void)
 {
 	return 1;
@@ -203,6 +221,37 @@ void halo_vertex_shader_lighting(unsigned long handle)
 void halo_screen_anti_alias(short x0, short y0, short x1, short y1)
 {
 	(void)x0; (void)y0; (void)x1; (void)y1;
+}
+
+void halo_screen_tone_map(short x0, short y0, short x1, short y1)
+{
+	(void)x0; (void)y0; (void)x1; (void)y1;
+}
+
+int halo_hdr_calibration_available(void)
+{
+	return 0;
+}
+
+void halo_hdr_calibration_show(int pattern, int paper_white, int peak_brightness)
+{
+	(void)pattern; (void)paper_white; (void)peak_brightness;
+}
+
+int halo_model_detail_stock(void)
+{
+	return 1;
+}
+
+float halo_model_detail_scale(int level)
+{
+	(void)level;
+	return 1.0f;
+}
+
+void d3d8_gl_set_height_fade(float inverse_softness, float height, float offset, float scale)
+{
+	(void)inverse_softness; (void)height; (void)offset; (void)scale;
 }
 
 static void *stream_command(uint32_t type, unsigned long size);
