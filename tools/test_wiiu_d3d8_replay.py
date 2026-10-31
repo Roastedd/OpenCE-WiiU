@@ -2,8 +2,8 @@
 GX2 thread reads the command streams, digested; the digest is the one recorded here whatever the GX2 thread's schedule, and so is the digest of the
 resources' Lock fields for each way the streams run. A change to the layer that keeps the pictures keeps both.
 
-D3D8_REPLAY_TARGET='--target=powerpc-linux-gnu -fsigned-char -msvr4-struct-return' D3D8_REPLAY_RUNNER='qemu-ppc -cpu 750' (verify.sh step 7, in the
-opence-wiiu container); with no target the test is skipped (the layer has PowerPC assembly). D3D8_REPLAY_TRACES=folder keeps each run's trace there,
+D3D8_REPLAY_TARGET='--target=powerpc-linux-gnu -fsigned-char -msvr4-struct-return' D3D8_REPLAY_RUNNER='qemu-ppc -cpu 750', in the opence-wiiu
+container, as verify.sh runs the other big-endian tests; with no target the test is skipped (the layer has PowerPC assembly). D3D8_REPLAY_TRACES=folder keeps each run's trace there,
 to be compared line by line with another build's.
 """
 import os
