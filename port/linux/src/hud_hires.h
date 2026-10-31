@@ -82,6 +82,9 @@ placeholder's D3D texture has this Data, and the number of its mip levels;
 unsigned int hud_hires_placeholder_texture(unsigned long data, unsigned long *levels);
 /* the texture (its asset) drawn for the placeholder whose D3D texture has this Data, or -1 */
 long hud_hires_placeholder_asset(unsigned long data);
+/* changed by every registration (hud_hires_register_placeholder): what hud_hires_placeholder_asset answers holds while it is the same (the Wii U's
+texture cache remembers a draw's textures by it) */
+unsigned long hud_hires_placeholder_serial(void);
 /* whether its red holds exact segment thresholds, read unfiltered (d3d8_gl.c,
 nv2a_psh.c: point_threshold) */
 int hud_hires_override_point_threshold(long asset);
