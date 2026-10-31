@@ -1512,6 +1512,13 @@ void network_test_update(
 	/* (the main menu settling first) */
 	if (network_test.menu_seconds < 2.0f)
 		return;
+	/* (and the menus' saved game checks, which make the default game variants
+	from the main menu's string lists on a thread of their own: a game
+	started before they end loads its map and unloads those tags under them,
+	tag_get's assertion (a Wii U joining at once, 2026-10-31, whose card
+	takes seconds over them). The menus wait for them too, their input held.) */
+	if (filesystem_check_thread_is_active())
+		return;
 
 	switch (network_test.mode)
 	{
