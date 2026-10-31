@@ -2181,24 +2181,24 @@ static boolean collision_bsp_test_vector_recursive(
 				return FALSE;
 			}
 			data->last_plane_index = node->plane_designator;
-			if (collision_bsp_test_vector_recursive(
+			/* port: the recursive result is already TRUE or FALSE. Return
+			it directly so this last descent can reuse the current frame. */
+			return collision_bsp_test_vector_recursive(
 				data,
 				node->children[front],
 				t,
 				t1,
-				depth + 1))
-			{
-				return TRUE;
-			}
+				depth + 1);
 		}
-		else if (collision_bsp_test_vector_recursive(
-			data,
-			node->children[reaches_front],
-			t0,
-			t1,
-			depth + 1))
+		else
 		{
-			return TRUE;
+			/* port: as above, without changing plane arithmetic or order. */
+			return collision_bsp_test_vector_recursive(
+				data,
+				node->children[reaches_front],
+				t0,
+				t1,
+				depth + 1);
 		}
 	}
 	else

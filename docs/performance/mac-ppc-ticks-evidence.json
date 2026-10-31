@@ -1,0 +1,298 @@
+{
+  "base": "de64efdea42b1543bc695c67dbdcf8afbd639859",
+  "branch": "codex/b30-ticks-mac-20261031",
+  "source_sha256": "cc2bfbbb9d774f24accb8085c0b1c5b662afb86043c47f5d32624900528780a9",
+  "binary_identities": {
+    "baseline-ppc": {
+      "sha256": "1348b29371443fb9cc472348cab1e5da526c4542289ed7145be27a8f0248158c",
+      "bytes": 41912580
+    },
+    "baseline-x86": {
+      "sha256": "c6a56d247e0135e6763551838c746f8e0fee1209ccfffb7ec3e01c9d9dcc4675",
+      "bytes": 41245256
+    },
+    "candidate-ppc": {
+      "sha256": "da00e6ce27c680322c95cc06de5e95dff679b412c59d222b513939ad184ff225",
+      "bytes": 41912540
+    },
+    "candidate-x86": {
+      "sha256": "1d9e7ba099fa89b9e04519b020b46862aa0b9152698c7f9f1758202bd536d7e4",
+      "bytes": 41245348
+    },
+    "wiiu-candidate": {
+      "sha256": "e2b971255f150b05fc3daea6e6c6f97314585ea6d9a012abf7b2d4209fc73460",
+      "bytes": 55210828
+    },
+    "android-guest": {
+      "sha256": "b0302cb6d6214fddeb243f158be871e42971e3b6f4b8f3c530b8e3d8ecc12fc4",
+      "bytes": 24039128
+    }
+  },
+  "microbenchmarks": {
+    "host": [
+      {
+        "shape": "balanced",
+        "depth": 1,
+        "baseline_seconds": 0.000811,
+        "candidate_seconds": 0.000846,
+        "reduction_percent": -4.315659679408146
+      },
+      {
+        "shape": "balanced",
+        "depth": 3,
+        "baseline_seconds": 0.004801,
+        "candidate_seconds": 0.004437,
+        "reduction_percent": 7.581753801291391
+      },
+      {
+        "shape": "balanced",
+        "depth": 5,
+        "baseline_seconds": 0.021806,
+        "candidate_seconds": 0.020578,
+        "reduction_percent": 5.63147757497936
+      },
+      {
+        "shape": "balanced",
+        "depth": 7,
+        "baseline_seconds": 0.090987,
+        "candidate_seconds": 0.090865,
+        "reduction_percent": 0.13408508907866157
+      },
+      {
+        "shape": "bench",
+        "depth": 1,
+        "baseline_seconds": 0.001835,
+        "candidate_seconds": 0.001681,
+        "reduction_percent": 8.392370572207087
+      },
+      {
+        "shape": "bench",
+        "depth": 2,
+        "baseline_seconds": 0.003104,
+        "candidate_seconds": 0.002851,
+        "reduction_percent": 8.150773195876294
+      },
+      {
+        "shape": "bench",
+        "depth": 4,
+        "baseline_seconds": 0.006513,
+        "candidate_seconds": 0.005087,
+        "reduction_percent": 21.894672194073383
+      },
+      {
+        "shape": "bench",
+        "depth": 8,
+        "baseline_seconds": 0.015482,
+        "candidate_seconds": 0.01141,
+        "reduction_percent": 26.301511432631443
+      },
+      {
+        "shape": "bench",
+        "depth": 16,
+        "baseline_seconds": 0.034906,
+        "candidate_seconds": 0.030995,
+        "reduction_percent": 11.2043774709219
+      },
+      {
+        "shape": "bench",
+        "depth": 32,
+        "baseline_seconds": 0.09602,
+        "candidate_seconds": 0.083818,
+        "reduction_percent": 12.707769214746921
+      },
+      {
+        "shape": "bench",
+        "depth": 64,
+        "baseline_seconds": 0.183295,
+        "candidate_seconds": 0.112748,
+        "reduction_percent": 38.48822935704739
+      }
+    ],
+    "ppc": [
+      {
+        "shape": "balanced",
+        "depth": 1,
+        "baseline_seconds": 0.016838501,
+        "candidate_seconds": 0.015580161,
+        "reduction_percent": 7.472992993853778
+      },
+      {
+        "shape": "balanced",
+        "depth": 3,
+        "baseline_seconds": 0.111651474,
+        "candidate_seconds": 0.100670086,
+        "reduction_percent": 9.835416951145671
+      },
+      {
+        "shape": "balanced",
+        "depth": 5,
+        "baseline_seconds": 0.48286187,
+        "candidate_seconds": 0.4405227,
+        "reduction_percent": 8.768381317829055
+      },
+      {
+        "shape": "balanced",
+        "depth": 7,
+        "baseline_seconds": 1.969748664,
+        "candidate_seconds": 1.804281966,
+        "reduction_percent": 8.400396508658325
+      },
+      {
+        "shape": "bench",
+        "depth": 1,
+        "baseline_seconds": 0.04352926,
+        "candidate_seconds": 0.041328124,
+        "reduction_percent": 5.056681413835196
+      },
+      {
+        "shape": "bench",
+        "depth": 2,
+        "baseline_seconds": 0.081911994,
+        "candidate_seconds": 0.074796875,
+        "reduction_percent": 8.686296905432433
+      },
+      {
+        "shape": "bench",
+        "depth": 4,
+        "baseline_seconds": 0.146989154,
+        "candidate_seconds": 0.138203068,
+        "reduction_percent": 5.977370275904848
+      },
+      {
+        "shape": "bench",
+        "depth": 8,
+        "baseline_seconds": 0.283340878,
+        "candidate_seconds": 0.262174481,
+        "reduction_percent": 7.470294138073507
+      },
+      {
+        "shape": "bench",
+        "depth": 16,
+        "baseline_seconds": 0.555166741,
+        "candidate_seconds": 0.51625413,
+        "reduction_percent": 7.009175464997819
+      },
+      {
+        "shape": "bench",
+        "depth": 32,
+        "baseline_seconds": 1.100489135,
+        "candidate_seconds": 1.025908639,
+        "reduction_percent": 6.777031560606894
+      },
+      {
+        "shape": "bench",
+        "depth": 64,
+        "baseline_seconds": 2.201619422,
+        "candidate_seconds": 2.04884346,
+        "reduction_percent": 6.939253917973465
+      }
+    ]
+  },
+  "tick_comparisons": [
+    {
+      "a": "baseline-ppc-nointerp",
+      "b": "baseline-x86-nointerp",
+      "returncode": 0,
+      "result": "1304 player states at 1304 ticks in both runs (ticks 1 to 1304); 1304 the same, 0 different\nthe rest of the lines (items, score, hits; network counts left out): 0 ticks different\nplayer 0: 1237 and 2133 distinct states in turn; the first 1237 agree\n"
+    },
+    {
+      "a": "candidate-ppc-nointerp",
+      "b": "baseline-ppc-nointerp",
+      "returncode": 0,
+      "result": "1304 player states at 1304 ticks in both runs (ticks 1 to 1304); 1304 the same, 0 different\nthe rest of the lines (items, score, hits; network counts left out): 0 ticks different\nplayer 0: 1254 and 1237 distinct states in turn; the first 1237 agree\n"
+    },
+    {
+      "a": "candidate-ppc-nointerp",
+      "b": "baseline-x86-nointerp",
+      "returncode": 0,
+      "result": "1321 player states at 1321 ticks in both runs (ticks 1 to 1321); 1321 the same, 0 different\nthe rest of the lines (items, score, hits; network counts left out): 0 ticks different\nplayer 0: 1254 and 2133 distinct states in turn; the first 1254 agree\n"
+    },
+    {
+      "a": "candidate-ppc-nointerp",
+      "b": "candidate-x86-nointerp",
+      "returncode": 0,
+      "result": "1321 player states at 1321 ticks in both runs (ticks 1 to 1321); 1321 the same, 0 different\nthe rest of the lines (items, score, hits; network counts left out): 0 ticks different\nplayer 0: 1254 and 2158 distinct states in turn; the first 1254 agree\n"
+    },
+    {
+      "a": "candidate-x86-nointerp",
+      "b": "baseline-x86-nointerp",
+      "returncode": 1,
+      "result": "2396 player states at 2396 ticks in both runs (ticks 1 to 2396); 2396 the same, 0 different\nthe rest of the lines (items, score, hits; network counts left out): 153 ticks different\nplayer 0: 2158 and 2133 distinct states in turn; the first 2133 agree\ntick 1383:\n  /Users/edl/Documents/GitHub/HALOCE_WIIU/runs/host-mac-perf-20261031/ticks/candidate-x86-nointerp-runtime.txt: items 57 (+129 -0 !0 x0) | playing to 0 | sent _ received _ corrected 0 | hits 0 dealt 0 rejected 0 replayed 0 | local 0 camera (-60.3 37.6 1.8) respawn 0 | drift 0 0 0.000000 0.000000\n  /Users/edl/Documents/GitHub/HALOCE_WIIU/runs/host-mac-perf-20261031/ticks/baseline-x86-nointerp-runtime.txt: items 57 (+129 -0 !0 x0) | playing to 0 | sent _ received _ corrected 0 | hits 0 dealt 0 rejected 0 replayed 0 | local 0 camera (-60.3 37.7 1.8) respawn 0 | drift 0 0 0.000000 0.000000\ntick 1385:\n  /Users/edl/Documents/GitHub/HALOCE_WIIU/runs/host-mac-perf-20261031/ticks/candidate-x86-nointerp-runtime.txt: items 57 (+129 -0 !0 x0) | playing to 0 | sent _ received _ corrected 0 | hits 0 dealt 0 rejected 0 replayed 0 | local 0 camera (-60.2 37.7 1.8) respawn 0 | drift 0 0 0.000000 0.000000\n  /Users/edl/Documents/GitHub/HALOCE_WIIU/runs/host-mac-perf-20261031/ticks/baseline-x86-nointerp-runtime.txt: items 57 (+129 -0 !0 x0) | playing to 0 | sent _ received _ corrected 0 | hits 0 dealt 0 rejected 0 replayed 0 | local 0 camera (-60.2 37.8 1.8) respawn 0 | drift 0 0 0.000000 0.000000\ntick 1386:\n  /Users/edl/Documents/GitHub/HALOCE_WIIU/runs/host-mac-perf-20261031/ticks/candidate-x86-nointerp-runtime.txt: items 57 (+129 -0 !0 x0) | playing to 0 | sent _ received _ corrected 0 | hits 0 dealt 0 rejected 0 replayed 0 | local 0 camera (-60.2 37.7 1.8) respawn 0 | drift 0 0 0.000000 0.000000\n  /Users/edl/Documents/GitHub/HALOCE_WIIU/runs/host-mac-perf-20261031/ticks/baseline-x86-nointerp-runtime.txt: items 57 (+129 -0 !0 x0) | playing to 0 | sent _ received _ corrected 0 | hits 0 dealt 0 rejected 0 replayed 0 | local 0 camera (-60.2 37.8 1.8) respawn 0 | drift 0 0 0.000000 0.000000\n"
+    }
+  ],
+  "camera_control": [
+    {
+      "a": "candidate-x86",
+      "b": "baseline-x86",
+      "common_ticks": 3380,
+      "raw_rest_differences": 244,
+      "differences_after_classifying_camera_only": 0,
+      "first_raw_difference": 1380,
+      "note": "Diagnostic classification only; original compare tool results preserved and not relabeled as pass."
+    },
+    {
+      "a": "candidate-x86-nointerp",
+      "b": "baseline-x86-nointerp",
+      "common_ticks": 2396,
+      "raw_rest_differences": 153,
+      "differences_after_classifying_camera_only": 0,
+      "first_raw_difference": 1383,
+      "note": "Diagnostic classification only; original compare tool results preserved and not relabeled as pass."
+    },
+    {
+      "a": "baseline-x86-nointerp",
+      "b": "baseline-x86-nointerp-repeat",
+      "common_ticks": 2396,
+      "raw_rest_differences": 160,
+      "differences_after_classifying_camera_only": 0,
+      "first_raw_difference": 1380,
+      "note": "Diagnostic classification only; original compare tool results preserved and not relabeled as pass."
+    }
+  ],
+  "mac_target_sha256": "33c536018095e41f0998c94573227ff05aee04465449b84a24616d59a95001cb",
+  "mac_functions": [
+    {
+      "address": "0x00244800",
+      "identified_role": "BSP2D point traversal",
+      "bytes": 112,
+      "evidence": "20-byte node stride, signed terminal encoding, plane test and child loop; FMA present"
+    },
+    {
+      "address": "0x00244ff0",
+      "identified_role": "BSP vector traversal",
+      "bytes": 1732,
+      "recursive_call_sites": 2,
+      "evidence": "12-byte nodes/16-byte planes, split near/far recursion, leaf contents/flags, BSP2D call and result fields"
+    }
+  ],
+  "private_evidence": "/Users/edl/Documents/GitHub/HALOCE_WIIU/runs/host-mac-perf-20261031/ticks",
+  "console_contacted": false,
+  "limits": [
+    "Runtime microbenchmarks are host/QEMU results, not Wii U speedups.",
+    "Every-tick log comparison covers emitted fields, not a raw entire-game heap hash.",
+    "Longer independent x86 runs have baseline camera-only nondeterminism; their nonzero comparison result is retained.",
+    "Android guest ELF is qualified; full Android host/APK and web are not."
+  ],
+  "differential": {
+    "cases": 160532,
+    "hits": 2496,
+    "misses": 158036,
+    "guarded": 306,
+    "raw_return_and_result_bytes": true,
+    "ordered_events_with_float_bits": true,
+    "mutable_context_fields": true,
+    "fault_controls": [
+      "wrong-child",
+      "wrong-depth"
+    ],
+    "host_sanitizers": "ASAN/UBSAN passed",
+    "powerpc_pytest": "1 passed in 2.20s"
+  },
+  "source_and_test_hashes": {
+    "source/physics/collision_bsp.c": "cc2bfbbb9d774f24accb8085c0b1c5b662afb86043c47f5d32624900528780a9",
+    "tools/test_collision_tail.py": "6fd283b72fe9c83f7de5a1008c7e62f29ab49e9d65c8fffe59ba13f1ec497524",
+    "tools/harness/tests/collision_tail.c": "02350a36ff8da2e48087bbf17b87d1d8970ae30b5f054bd9db2f7cf6e9be6885",
+    "tools/harness/tests/collision_tail_reference.inc": "ee0e5c1b678370b287d3dddbf17a3c10eb518be9a72fa3b05991fe7fa6b34379",
+    "tools/harness/tests/test_collision_tail_contract.py": "f04096197e925349e416ad7d9bba772a079e2ee89ab1188bac087c369780523e"
+  }
+}
