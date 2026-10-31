@@ -25,8 +25,9 @@ name, the seed and the changed words (offset:value in the inflated file).
 A Halo Custom Edition map is checked as the game checks one
 (port/linux/game/custom_edition_cache.c): its loader reads it, with the
 resource maps beside it (or in --maps), into its own tag cache, its bytes
-are converted for this build, then the validator checks its tags and each
-of its structure bsps. Fuzzing changes words of its file, so that the
+are converted for this build (and, built big-endian, turned to big-endian as
+the game turns them: port/linux/game/tag_swap.c), then the validator checks
+its tags and each of its structure bsps. Fuzzing changes words of its file, so that the
 loader and the conversion are tried too. (The game also decodes its Ogg
 Vorbis sounds and converts its scripts and geometry, from tags the validator
 passed: not here.) Resource maps given as maps are passed over; OpenSauce
@@ -656,6 +657,32 @@ static void custom_edition_resources_close(struct custom_edition_resources *reso
 	}
 }
 
+/* a Custom Edition map's tags (bsp NULL) or a structure bsp loaded at bsp,
+size bytes, turned to a big-endian host's order (tag_swap.c), as the game
+turns them; nothing on a little-endian host. 0 if it is refused */
+static int custom_edition_swap(void *bytes, unsigned long size, char const *name, void *bsp)
+{
+#ifdef __BIG_ENDIAN__
+	struct tag_swap_report report;
+	void *scratch = malloc(tag_swap_scratch_bytes(size));
+	int swapped = scratch &&
+		(bsp ? tag_swap_custom_edition_structure_bsp(bytes, size, (unsigned long)bsp, scratch, &report) :
+			tag_swap_custom_edition_tags(bytes, size, scratch, &report));
+
+	free(scratch);
+	if (!swapped && !quiet)
+		printf("%s: its %s cannot be turned to big-endian: %s\n", name, bsp ? "structure bsp" : "tags",
+			scratch ? report.problem : "out of memory");
+	return swapped;
+#else
+	(void)bytes;
+	(void)size;
+	(void)name;
+	(void)bsp;
+	return 1;
+#endif
+}
+
 /* a Custom Edition map (map, with its resources) loaded, converted and
 checked where the game does it, then each of its structure bsps: 0 if it
 plays (its corrections counted), 1 if it is refused. *loaded_bytes is how
@@ -698,6 +725,12 @@ static int custom_edition_check(struct memory_file *map, struct custom_edition_r
 			printf("%s: its conversion refuses it: %s\n", name, cache_file_status_describe(status));
 		return 1;
 	}
+	/* (a big-endian host turns the tags to its order, then they are read as
+	its own: custom_edition_cache.c; the game decodes what sounds it can
+	before the rest are silenced) */
+	if (!custom_edition_swap(tag_cache, *loaded_bytes, name, NULL))
+		return 1;
+	custom_edition_cache_sounds_silence(tag_cache, *loaded_bytes);
 	ranges[range_count].offset = 0;
 	ranges[range_count++].size = report.identity.file_length;
 	if (resources->maps[_resource_map_bitmaps])
@@ -753,6 +786,11 @@ static int custom_edition_check(struct memory_file *map, struct custom_edition_r
 		}
 		memset(tag_cache + *loaded_bytes, 0xCD, report.tag_cache_bytes - *loaded_bytes);
 		memcpy(reference->base_address, map->bytes + reference->file_offset, reference->file_size);
+		if (!custom_edition_swap(reference->base_address, (unsigned long)reference->file_size, name, reference->base_address))
+		{
+			refused = 1;
+			break;
+		}
 		if (!tag_validate_structure_bsp(reference->tag_index, reference->base_address, reference->file_size))
 		{
 			refused = 1;

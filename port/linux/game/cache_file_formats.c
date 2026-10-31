@@ -491,6 +491,11 @@ struct load_state
 	uint32_t model_index_data_offset;
 	uint32_t model_data_size;
 	int32_t tag_index;
+	/* nonzero when the loaded tags' values are big-endian: a big-endian
+	host's, once port/linux/game/tag_swap.c has turned them (their tag
+	index's signature says which); the loader and the conversion leave them
+	little-endian */
+	int big_endian;
 };
 
 /* ---------- prototypes */
@@ -885,6 +890,71 @@ static float read_f32(
 	memcpy(&value, &bits, sizeof(value));
 
 	return value;
+}
+
+static uint32_t read_u32_big(
+	uint8_t const *bytes)
+{
+	return (uint32_t)bytes[3] |
+		((uint32_t)bytes[2] << 8) |
+		((uint32_t)bytes[1] << 16) |
+		((uint32_t)bytes[0] << 24);
+}
+
+static uint16_t read_u16_big(
+	uint8_t const *bytes)
+{
+	return (uint16_t)(bytes[1] | (bytes[0] << 8));
+}
+
+/* a loaded tag's values, in the order its tags are in (big_endian: struct
+load_state's) */
+static uint32_t ordered_u32(
+	int big_endian,
+	uint8_t const *bytes)
+{
+	return big_endian ? read_u32_big(bytes) : read_u32(bytes);
+}
+
+static int32_t ordered_s32(
+	int big_endian,
+	uint8_t const *bytes)
+{
+	uint32_t value = ordered_u32(big_endian, bytes);
+
+	return value <= INT32_MAX ? (int32_t)value : -(int32_t)(~value) - 1;
+}
+
+static int16_t ordered_s16(
+	int big_endian,
+	uint8_t const *bytes)
+{
+	uint16_t value = big_endian ? read_u16_big(bytes) : read_u16(bytes);
+
+	return value <= INT16_MAX ? (int16_t)value : (int16_t)(-(int32_t)(uint16_t)~value - 1);
+}
+
+static void ordered_write_u32(
+	int big_endian,
+	uint8_t *bytes,
+	uint32_t value)
+{
+	if (big_endian)
+	{
+		bytes[0] = (uint8_t)(value >> 24);
+		bytes[1] = (uint8_t)(value >> 16);
+		bytes[2] = (uint8_t)(value >> 8);
+		bytes[3] = (uint8_t)value;
+	}
+	else
+	{
+		bytes[0] = (uint8_t)value;
+		bytes[1] = (uint8_t)(value >> 8);
+		bytes[2] = (uint8_t)(value >> 16);
+		bytes[3] = (uint8_t)(value >> 24);
+	}
+
+	return;
 }
 
 static void write_u16(
@@ -1720,10 +1790,12 @@ static struct element_layout const *checked_group_layout(
 }
 
 /* The `count` elements of `element_bytes` a tag block points to, in memory
-of `size` bytes loaded at `address` (a structure BSP, or the tag cache):
-nonzero when they lie within it, aligned for the game to read as
-structures, with `*offset` their offset in it. */
-static int loaded_block_get(
+of `size` bytes loaded at `address` (a structure BSP, or the tag cache),
+its values big-endian when `big_endian` is nonzero: nonzero when they lie
+within it, aligned for the game to read as structures, with `*offset` their
+offset in it. */
+static int ordered_block_get(
+	int big_endian,
 	uint8_t const *block,
 	uint32_t address,
 	uint32_t size,
@@ -1731,9 +1803,9 @@ static int loaded_block_get(
 	int32_t *count,
 	uint32_t *offset)
 {
-	uint32_t block_address = read_u32(block + TAG_BLOCK_ADDRESS_OFFSET);
+	uint32_t block_address = ordered_u32(big_endian, block + TAG_BLOCK_ADDRESS_OFFSET);
 
-	*count = read_s32(block + TAG_BLOCK_COUNT_OFFSET);
+	*count = ordered_s32(big_endian, block + TAG_BLOCK_COUNT_OFFSET);
 	*offset = block_address - address;
 
 	return *count == 0 ||
@@ -1742,6 +1814,18 @@ static int loaded_block_get(
 		block_address >= address &&
 		range_fits(*offset, (uint32_t)*count * element_bytes, size) &&
 		!(*offset & 3));
+}
+
+/* ... of a block as the loader and the conversion have it, little-endian */
+static int loaded_block_get(
+	uint8_t const *block,
+	uint32_t address,
+	uint32_t size,
+	uint32_t element_bytes,
+	int32_t *count,
+	uint32_t *offset)
+{
+	return ordered_block_get(0, block, address, size, element_bytes, count, offset);
 }
 
 /* nonzero when the `vector_count` vectors at `vectors_offset` of each of
@@ -2570,12 +2654,12 @@ static uint8_t *loaded_tag_instances(
 	{
 		return NULL;
 	}
-	*tag_count = read_s32(state->tag_cache + TAG_INDEX_COUNT_OFFSET);
+	*tag_count = ordered_s32(state->big_endian, state->tag_cache + TAG_INDEX_COUNT_OFFSET);
 	if (*tag_count <= 0 ||
 		(uint32_t)*tag_count > ABSOLUTE_INDEX_MASK + 1 ||
 		!tag_cache_offset(
 			state,
-			read_u32(state->tag_cache + TAG_INDEX_INSTANCES_OFFSET),
+			ordered_u32(state->big_endian, state->tag_cache + TAG_INDEX_INSTANCES_OFFSET),
 			(uint32_t)*tag_count * TAG_INSTANCE_BYTES,
 			&instances_offset))
 	{
@@ -2594,6 +2678,9 @@ static void loaded_state_initialize(
 	state->tag_cache = tag_cache;
 	state->used_bytes = loaded_bytes;
 	state->tag_index = NO_TAG_INDEX;
+	/* (the tag index's signature, 'tags', reads so in one order only) */
+	state->big_endian = loaded_bytes >= TAG_INDEX_BYTES &&
+		read_u32_big(tag_cache + TAG_INDEX_SIGNATURE_OFFSET) == TAG_INDEX_SIGNATURE;
 
 	return;
 }
@@ -2621,8 +2708,8 @@ void *custom_edition_cache_tag_next(
 		uint8_t const *instance = instances + (uint32_t)index * TAG_INSTANCE_BYTES;
 		uint32_t offset;
 
-		if (read_u32(instance + TAG_INSTANCE_GROUP_OFFSET) == group_tag &&
-			tag_cache_offset(&state, read_u32(instance + TAG_INSTANCE_ADDRESS_OFFSET), definition_bytes, &offset))
+		if (ordered_u32(state.big_endian, instance + TAG_INSTANCE_GROUP_OFFSET) == group_tag &&
+			tag_cache_offset(&state, ordered_u32(state.big_endian, instance + TAG_INSTANCE_ADDRESS_OFFSET), definition_bytes, &offset))
 		{
 			*tag_index = index;
 			return tag_cache + offset;
@@ -2654,9 +2741,9 @@ void *custom_edition_cache_tag_get(
 	}
 	instance = instances + (handle & ABSOLUTE_INDEX_MASK) * TAG_INSTANCE_BYTES;
 
-	return read_u32(instance + TAG_INSTANCE_HANDLE_OFFSET) == handle &&
-		read_u32(instance + TAG_INSTANCE_GROUP_OFFSET) == group_tag &&
-		tag_cache_offset(&state, read_u32(instance + TAG_INSTANCE_ADDRESS_OFFSET), definition_bytes, &offset) ?
+	return ordered_u32(state.big_endian, instance + TAG_INSTANCE_HANDLE_OFFSET) == handle &&
+		ordered_u32(state.big_endian, instance + TAG_INSTANCE_GROUP_OFFSET) == group_tag &&
+		tag_cache_offset(&state, ordered_u32(state.big_endian, instance + TAG_INSTANCE_ADDRESS_OFFSET), definition_bytes, &offset) ?
 		tag_cache + offset :
 		NULL;
 }
@@ -2676,7 +2763,7 @@ void *custom_edition_cache_block_element(
 	if ((uint8_t const *)block < tag_cache ||
 		!range_fits((uint32_t)((uint8_t const *)block - tag_cache), TAG_BLOCK_BYTES, loaded_bytes) ||
 		element_bytes == 0 ||
-		!loaded_block_get(block, CUSTOM_EDITION_TAG_CACHE_ADDRESS, loaded_bytes, element_bytes, &element_count, &elements_offset) ||
+		!ordered_block_get(state.big_endian, block, CUSTOM_EDITION_TAG_CACHE_ADDRESS, loaded_bytes, element_bytes, &element_count, &elements_offset) ||
 		element_index < 0 ||
 		element_index >= element_count)
 	{
@@ -2703,9 +2790,9 @@ void *custom_edition_cache_data_get(
 	{
 		return NULL;
 	}
-	data_size = read_s32(field + TAG_DATA_SIZE_OFFSET);
+	data_size = ordered_s32(state.big_endian, field + TAG_DATA_SIZE_OFFSET);
 	if (data_size <= 0 ||
-		!tag_cache_offset(&state, read_u32(field + TAG_DATA_ADDRESS_OFFSET), (uint32_t)data_size, &data_offset))
+		!tag_cache_offset(&state, ordered_u32(state.big_endian, field + TAG_DATA_ADDRESS_OFFSET), (uint32_t)data_size, &data_offset))
 	{
 		return NULL;
 	}
@@ -2731,7 +2818,7 @@ char const *custom_edition_cache_tag_name(
 		tag_index >= tag_count ||
 		!tag_cache_offset(
 			&state,
-			read_u32(instances + (uint32_t)tag_index * TAG_INSTANCE_BYTES + TAG_INSTANCE_NAME_OFFSET),
+			ordered_u32(state.big_endian, instances + (uint32_t)tag_index * TAG_INSTANCE_BYTES + TAG_INSTANCE_NAME_OFFSET),
 			1,
 			&name_offset) ||
 		!memchr(tag_cache + name_offset, 0, loaded_bytes - name_offset))
@@ -2754,7 +2841,7 @@ int custom_edition_cache_tag_in_resource_map(
 	loaded_state_initialize(&state, tag_cache, loaded_bytes);
 	instances = loaded_tag_instances(&state, &tag_count);
 	return instances && tag_index >= 0 && tag_index < tag_count &&
-		read_u32(instances + (uint32_t)tag_index * TAG_INSTANCE_BYTES + TAG_INSTANCE_IN_RESOURCE_MAP_OFFSET) != 0;
+		ordered_u32(state.big_endian, instances + (uint32_t)tag_index * TAG_INSTANCE_BYTES + TAG_INSTANCE_IN_RESOURCE_MAP_OFFSET) != 0;
 }
 
 int32_t custom_edition_cache_tags_regroup(
@@ -2779,9 +2866,9 @@ int32_t custom_edition_cache_tags_regroup(
 	{
 		uint8_t *instance = instances + (uint32_t)tag_index * TAG_INSTANCE_BYTES;
 
-		if (read_u32(instance + TAG_INSTANCE_GROUP_OFFSET) == group_tag)
+		if (ordered_u32(state.big_endian, instance + TAG_INSTANCE_GROUP_OFFSET) == group_tag)
 		{
-			write_u32(instance + TAG_INSTANCE_GROUP_OFFSET, new_group_tag);
+			ordered_write_u32(state.big_endian, instance + TAG_INSTANCE_GROUP_OFFSET, new_group_tag);
 			regrouped_count++;
 		}
 	}
@@ -2906,20 +2993,15 @@ static void bitmaps_prepare(
 /* Gives every permutation of the sound at `sound_offset` (tag `handle`)
 the state the game expects of one it has not played: its tag is its own
 (sounds.map holds the handles of whatever map it was built with), with no
-cache block or samples. A sound whose compression this build cannot decode
-is made unplayable: this build plays Xbox ADPCM (and refuses uncompressed
-sounds), and Custom Edition also has Ogg Vorbis, which would be decoded as
-ADPCM noise. With no pitch ranges the game neither plays nor loads it
-(sound_manager.c, sound_definition_is_playable). */
+cache block or samples. (A sound this build cannot decode is made unplayable
+afterwards, by custom_edition_cache_sounds_silence: the game decodes Custom
+Edition's Ogg Vorbis between the two, custom_edition_sounds.c.) */
 static void sound_prepare(
 	struct load_state const *state,
 	uint32_t sound_offset,
-	uint32_t handle,
-	struct custom_edition_conversion_report *report)
+	uint32_t handle)
 {
 	uint8_t *sound = state->tag_cache + sound_offset;
-	int16_t compression = read_s16(sound + SOUND_COMPRESSION_OFFSET);
-	int decodable = compression == SOUND_COMPRESSION_NONE || compression == SOUND_COMPRESSION_XBOX_ADPCM;
 	int32_t pitch_range_count;
 	uint32_t pitch_ranges_offset;
 	int32_t pitch_range_index;
@@ -2954,22 +3036,12 @@ static void sound_prepare(
 		for (permutation_index = 0; permutation_index < permutation_count; permutation_index++)
 		{
 			uint8_t *permutation = state->tag_cache + permutations_offset + (uint32_t)permutation_index * SOUND_PERMUTATION_BYTES;
-			int16_t permutation_compression = read_s16(permutation + SOUND_PERMUTATION_COMPRESSION_OFFSET);
 
 			write_u32(permutation + SOUND_PERMUTATION_CACHE_BLOCK_INDEX_OFFSET, (uint32_t)NO_TAG_INDEX);
 			write_u32(permutation + SOUND_PERMUTATION_CACHE_BASE_ADDRESS_OFFSET, 0);
 			write_u32(permutation + SOUND_PERMUTATION_CACHE_TAG_INDEX_OFFSET, handle);
 			write_u32(permutation + SOUND_PERMUTATION_RUNTIME_TAG_INDEX_OFFSET, handle);
-			if (permutation_compression != SOUND_COMPRESSION_NONE && permutation_compression != SOUND_COMPRESSION_XBOX_ADPCM)
-			{
-				decodable = 0;
-			}
 		}
-	}
-	if (!decodable)
-	{
-		write_u32(sound + SOUND_PITCH_RANGES_OFFSET + TAG_BLOCK_COUNT_OFFSET, 0);
-		report->sounds_undecodable++;
 	}
 
 	return;
@@ -3777,7 +3849,9 @@ enum cache_file_status custom_edition_cache_convert(
 	memset(report, 0, sizeof(*report));
 	report->problem_tag_index = NO_TAG_INDEX;
 	loaded_state_initialize(&state, tag_cache, loaded_bytes);
-	instances = loaded_tag_instances(&state, &tag_count);
+	/* (the loader's tags, little-endian: before they are turned for a
+	big-endian host, tag_swap.c) */
+	instances = state.big_endian ? NULL : loaded_tag_instances(&state, &tag_count);
 	if (!instances)
 	{
 		return _cache_file_status_bad_tag_instances_range;
@@ -3831,7 +3905,7 @@ enum cache_file_status custom_edition_cache_convert(
 		if (group_tag == SOUND_GROUP_TAG &&
 			tag_cache_offset(&state, read_u32(instance + TAG_INSTANCE_ADDRESS_OFFSET), SOUND_DEFINITION_BYTES, &offset))
 		{
-			sound_prepare(&state, offset, read_u32(instance + TAG_INSTANCE_HANDLE_OFFSET), report);
+			sound_prepare(&state, offset, read_u32(instance + TAG_INSTANCE_HANDLE_OFFSET));
 		}
 		if (custom_edition_hud_definition_bytes(group_tag) &&
 			tag_cache_offset(&state, read_u32(instance + TAG_INSTANCE_ADDRESS_OFFSET),
@@ -3907,7 +3981,7 @@ void custom_edition_cache_combine_resource_offsets(
 	int32_t tag_index;
 
 	loaded_state_initialize(&state, tag_cache, loaded_bytes);
-	instances = loaded_tag_instances(&state, &tag_count);
+	instances = state.big_endian ? NULL : loaded_tag_instances(&state, &tag_count);
 	if (!instances)
 	{
 		return;
@@ -4004,4 +4078,90 @@ void custom_edition_cache_combine_resource_offsets(
 	}
 
 	return;
+}
+
+int32_t custom_edition_cache_sounds_silence(
+	uint8_t *tag_cache,
+	uint32_t loaded_bytes)
+{
+	struct load_state state;
+	uint8_t const *instances;
+	int32_t tag_count;
+	int32_t tag_index;
+	int32_t silenced_count = 0;
+
+	loaded_state_initialize(&state, tag_cache, loaded_bytes);
+	instances = loaded_tag_instances(&state, &tag_count);
+	if (!instances)
+	{
+		return 0;
+	}
+	for (tag_index = 0; tag_index < tag_count; tag_index++)
+	{
+		uint8_t const *instance = instances + (uint32_t)tag_index * TAG_INSTANCE_BYTES;
+		uint8_t *sound;
+		int16_t compression;
+		int decodable;
+		int32_t pitch_range_count;
+		uint32_t pitch_ranges_offset;
+		uint32_t offset;
+		int32_t pitch_range_index;
+
+		if (ordered_u32(state.big_endian, instance + TAG_INSTANCE_GROUP_OFFSET) != SOUND_GROUP_TAG ||
+			!tag_cache_offset(&state, ordered_u32(state.big_endian, instance + TAG_INSTANCE_ADDRESS_OFFSET),
+				SOUND_DEFINITION_BYTES, &offset))
+		{
+			continue;
+		}
+		sound = tag_cache + offset;
+		compression = ordered_s16(state.big_endian, sound + SOUND_COMPRESSION_OFFSET);
+		decodable = compression == SOUND_COMPRESSION_NONE || compression == SOUND_COMPRESSION_XBOX_ADPCM;
+		if (!ordered_block_get(
+			state.big_endian,
+			sound + SOUND_PITCH_RANGES_OFFSET,
+			CUSTOM_EDITION_TAG_CACHE_ADDRESS,
+			state.used_bytes,
+			SOUND_PITCH_RANGE_BYTES,
+			&pitch_range_count,
+			&pitch_ranges_offset))
+		{
+			continue;
+		}
+		for (pitch_range_index = 0; pitch_range_index < pitch_range_count; pitch_range_index++)
+		{
+			uint8_t const *pitch_range = tag_cache + pitch_ranges_offset + (uint32_t)pitch_range_index * SOUND_PITCH_RANGE_BYTES;
+			int32_t permutation_count;
+			uint32_t permutations_offset;
+			int32_t permutation_index;
+
+			if (!ordered_block_get(
+				state.big_endian,
+				pitch_range + SOUND_PITCH_RANGE_PERMUTATIONS_OFFSET,
+				CUSTOM_EDITION_TAG_CACHE_ADDRESS,
+				state.used_bytes,
+				SOUND_PERMUTATION_BYTES,
+				&permutation_count,
+				&permutations_offset))
+			{
+				continue;
+			}
+			for (permutation_index = 0; permutation_index < permutation_count; permutation_index++)
+			{
+				int16_t permutation_compression = ordered_s16(state.big_endian, tag_cache + permutations_offset +
+					(uint32_t)permutation_index * SOUND_PERMUTATION_BYTES + SOUND_PERMUTATION_COMPRESSION_OFFSET);
+
+				if (permutation_compression != SOUND_COMPRESSION_NONE && permutation_compression != SOUND_COMPRESSION_XBOX_ADPCM)
+				{
+					decodable = 0;
+				}
+			}
+		}
+		if (!decodable)
+		{
+			ordered_write_u32(state.big_endian, sound + SOUND_PITCH_RANGES_OFFSET + TAG_BLOCK_COUNT_OFFSET, 0);
+			silenced_count++;
+		}
+	}
+
+	return silenced_count;
 }

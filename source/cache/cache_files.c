@@ -1443,6 +1443,15 @@ boolean scenario_structure_bsp_load(
 			}
 		}
 
+		/* port: a Halo Custom Edition bsp is read as its file has it,
+		little-endian, and turned to a big-endian host's order before
+		anything reads it (port/linux/game/tag_swap.c) */
+		if (read_complete == TRUE && custom_edition_cache_tags_loaded() &&
+			!custom_edition_structure_bsp_swap(reference->base_address, reference->file_size))
+		{
+			return FALSE;
+		}
+
 		/* port: a bsp that did not all read, or whose header's pointers
 		leave what was read, is not loaded */
 		structure_bsp_header = reference->base_address;

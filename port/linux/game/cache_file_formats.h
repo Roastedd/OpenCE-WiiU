@@ -309,7 +309,8 @@ struct custom_edition_conversion_report
 	pointed past the nodes */
 	int32_t node_links_cut;
 	/* sounds in a compression this build cannot decode (Ogg Vorbis), made
-	unplayable */
+	unplayable: custom_edition_cache_sounds_silence's count, which the
+	conversion leaves 0 for its caller to fill */
 	int32_t sounds_undecodable;
 	/* HUD element placements with Halo PC's high resolution scale, whose
 	scale was halved */
@@ -394,16 +395,27 @@ enum cache_file_status custom_edition_cache_load(
 their bytes need to change: every shader's type as this build numbers them,
 transparent chicago extended shaders made transparent chicago shaders,
 bitmaps and sound permutations in the state of ones not yet drawn or played
-and naming their own tags, sounds this build cannot decode made unplayable,
-animation overlays naming animations that do not exist made to name none;
-and what this build can of the Halo PC behaviours the map named `map_name`
-relies on. Returns the first problem: tags already converted stay
-converted. */
+and naming their own tags, animation overlays naming animations that do not
+exist made to name none; and what this build can of the Halo PC behaviours
+the map named `map_name` relies on. Returns the first problem: tags already
+converted stay converted. The tags must be as the loader left them
+(little-endian): on a big-endian host, tag_swap.c turns them afterwards. */
 enum cache_file_status custom_edition_cache_convert(
 	uint8_t *tag_cache,
 	uint32_t loaded_bytes,
 	char const *map_name,
 	struct custom_edition_conversion_report *report);
+
+/* Makes every sound of a tag cache custom_edition_cache_load filled that
+this build cannot decode unplayable (its pitch ranges emptied: the game
+neither plays nor loads it, sound_manager.c's
+sound_definition_is_playable), returning how many there were: this build
+plays Xbox ADPCM, and Custom Edition also has Ogg Vorbis, which would be
+decoded as ADPCM noise. After the conversion and after the game has decoded
+what it can (custom_edition_sounds.c); in the tags' order, either. */
+int32_t custom_edition_cache_sounds_silence(
+	uint8_t *tag_cache,
+	uint32_t loaded_bytes);
 
 /* A walk of the placements of a HUD definition (custom_edition_hud_placements_walk):
 `block_elements` gives the first of the `element_bytes`-byte elements of the
@@ -436,7 +448,12 @@ void custom_edition_hud_placements_walk(
 char const *custom_edition_behaviour_name(
 	short behaviour);
 
-/* In a tag cache custom_edition_cache_load filled (`loaded_bytes` of it in
+/* The functions below read a loaded tag cache in the order its values are
+in: little-endian as the loader leaves them, or big-endian once tag_swap.c
+has turned them for a big-endian host (its tag index's signature says
+which).
+
+In a tag cache custom_edition_cache_load filled (`loaded_bytes` of it in
 use), the definition of the next tag of group `group_tag` after tag
 `*tag_index` (NONE, -1, to start from the first): `*tag_index` becomes its
 index, and NULL is returned when no tag after it has a definition of

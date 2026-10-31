@@ -190,6 +190,14 @@ logged when not. */
 struct scenario_structure_bsp_reference;
 boolean custom_edition_structure_bsp_reference_valid(
 	struct scenario_structure_bsp_reference const *reference);
+/* A structure bsp of the loaded map just read (`size` bytes at `bsp`, where
+it loads), turned to this host's byte order: the file's little-endian is a
+big-endian host's other order (tag_swap.c), which the map's tags were turned
+to as they loaded. Nothing on a little-endian host. FALSE after logging why
+when it cannot be: the bsp must not be used. */
+boolean custom_edition_structure_bsp_swap(
+	void *bsp,
+	long size);
 /* Whether the Custom Edition map loaded relies on a Halo PC behaviour (enum
 custom_edition_behaviour, cache_file_formats.h); FALSE when none is loaded. */
 boolean custom_edition_cache_relies_on(
@@ -243,7 +251,8 @@ hardware texture, sizes it can swizzle, and every pixel its levels need. */
 boolean custom_edition_bitmap_drawable(
 	struct bitmap_data *bitmap);
 /* Decodes every sound permutation of a tag cache custom_edition_cache_load
-filled (its resource offsets combined) that this build would not play: Ogg
+filled (its resource offsets combined, converted and in this host's byte
+order: after tag_swap.c on a big-endian one) that this build would not play: Ogg
 Vorbis, uncompressed, or mono at 44 kHz. Each is encoded again in memory as
 Xbox ADPCM in a format this build plays, its samples at decoded_offset and
 on in the combined offset space, where custom_edition_sounds_read serves

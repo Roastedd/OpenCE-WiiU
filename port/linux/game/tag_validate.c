@@ -1119,6 +1119,45 @@ struct inference_context
 
 static byte tag_validate_walked[UNSIGNED_SHORT_MAX + 1];
 
+/* Whether the tags (and bsps) being inferred from have their values in the
+other order than this host's: the inference runs on a Custom Edition map's
+tags as its loader leaves them, little-endian, which a big-endian host turns
+only afterwards (tag_swap.c). Their header's signature says which. */
+static boolean tag_validate_inference_swapped = FALSE;
+
+/* a value of the tags as this host reads it */
+static unsigned long inference_value(
+	unsigned long value)
+{
+	if (!tag_validate_inference_swapped)
+		return value;
+
+	return (value >> 24) | ((value >> 8) & 0xFF00UL) | ((value << 8) & 0xFF0000UL) | ((value << 24) & 0xFF000000UL);
+}
+
+/* ... a pointer's */
+static void *inference_pointer(
+	void const *value)
+{
+	return (void *)inference_value((unsigned long)value);
+}
+
+/* whether the tags' header's signature is 'tags' in this host's order or the
+other's, which the inference then reads them in */
+static boolean inference_order_set(
+	struct tag_validate_custom_edition_header const *header)
+{
+	tag_validate_inference_swapped = FALSE;
+	if (header->signature == TAG_HEADER_SIGNATURE)
+		return TRUE;
+	tag_validate_inference_swapped = TRUE;
+	if (inference_value(header->signature) == TAG_HEADER_SIGNATURE)
+		return TRUE;
+	tag_validate_inference_swapped = FALSE;
+
+	return FALSE;
+}
+
 /* the bytes at a runtime address, if size bytes of them lie in the context */
 static byte *inference_translate(
 	struct inference_context const *context,
@@ -1207,27 +1246,32 @@ static void infer_reference(
 	unsigned long const *groups)
 {
 	struct tag_validate_header *header = tag_validate_globals.header;
-	short absolute_index = (short)reference->index;
+	long tag_count = (long)inference_value((unsigned long)header->tag_count);
+	struct tag_validate_instance *instances = inference_pointer(header->instances);
+	long index = (long)inference_value((unsigned long)reference->index);
+	unsigned long group_tag = inference_value(reference->group_tag);
+	short absolute_index = (short)index;
 	struct tag_validate_instance *instance;
 	struct tag_schema_group const *group;
 
-	if (reference->index == NONE || absolute_index < 0 || absolute_index >= header->tag_count)
+	if (index == NONE || absolute_index < 0 || absolute_index >= tag_count)
 		return;
-	instance = &header->instances[absolute_index];
-	group = schema_group_get(reference->group_tag);
-	if (instance->tag_index != reference->index || schema_group_get(instance->group_tag) ||
-		!group || !group_accepted(reference->group_tag, groups))
+	instance = &instances[absolute_index];
+	group = schema_group_get(group_tag);
+	if ((long)inference_value((unsigned long)instance->tag_index) != index ||
+		schema_group_get(inference_value(instance->group_tag)) ||
+		!group || !group_accepted(group_tag, groups))
 	{
 		return;
 	}
 	if (tag_validate_inference_defer)
 	{
-		pending_group_add(reference->index, reference->group_tag);
+		pending_group_add(index, group_tag);
 		return;
 	}
-	instance->group_tag = reference->group_tag;
-	instance->parent_group_tags[0] = group->parent_group_tags[0];
-	instance->parent_group_tags[1] = group->parent_group_tags[1];
+	instance->group_tag = inference_value(group_tag);
+	instance->parent_group_tags[0] = inference_value(group->parent_group_tags[0]);
+	instance->parent_group_tags[1] = inference_value(group->parent_group_tags[1]);
 	tag_validate_inference.regrouped++;
 
 	return;
@@ -1263,17 +1307,18 @@ static void infer_walk(
 			{
 				struct tag_block const *block = (struct tag_block const *)address;
 				struct tag_schema_definition const *element_definition = field->definition;
+				long count = (long)inference_value((unsigned long)block->count);
 				byte *elements;
 				long element_index;
 
-				if (block->count <= 0 || element_definition->size <= 0 ||
-					(unsigned long)block->count > context->size / (unsigned long)element_definition->size)
+				if (count <= 0 || element_definition->size <= 0 ||
+					(unsigned long)count > context->size / (unsigned long)element_definition->size)
 				{
 					continue;
 				}
-				elements = inference_translate(context, block->address,
-					(unsigned long)block->count * element_definition->size);
-				for (element_index = 0; elements && element_index < block->count && tag_validate_inference.budget-- > 0;
+				elements = inference_translate(context, inference_pointer(block->address),
+					(unsigned long)count * element_definition->size);
+				for (element_index = 0; elements && element_index < count && tag_validate_inference.budget-- > 0;
 					element_index++)
 				{
 					infer_walk(context, elements + element_index * element_definition->size,
@@ -1302,19 +1347,29 @@ long tag_validate_custom_edition_infer_groups(
 	struct tag_validate_custom_edition_header *header = tag_header;
 	struct tag_validation validation;
 	struct inference_context context;
+	struct tag_validate_instance *instances;
+	long tag_count;
 	long absolute_index;
+	long pending_index;
+	long pending_applied = 0;
 	boolean walked_any;
 	char message[MAXIMUM_MESSAGE_LENGTH];
 	char reference_text[5];
 	char instance_text[5];
 
 	validation_begin(&validation, tag_header, loaded_size, tag_cache_size, TRUE, map_name);
-	tag_validate_report(message);
 	if (!schemas_fit() || tag_cache_size > TAG_VALIDATE_MAXIMUM_TAG_CACHE_SIZE ||
 		loaded_size < (long)sizeof(*header) || (unsigned long)loaded_size > tag_cache_size ||
-		header->signature != TAG_HEADER_SIGNATURE ||
-		header->tag_count <= 0 || header->tag_count > UNSIGNED_SHORT_MAX ||
-		!region_contains(&validation, header->instances, header->tag_count * sizeof(struct tag_validate_instance)))
+		!inference_order_set(header))
+	{
+		return 0;
+	}
+	/* (the header's values in the tags' order, which may be the other one:
+	inference_order_set) */
+	tag_count = (long)inference_value((unsigned long)header->tag_count);
+	instances = inference_pointer(header->instances);
+	if (tag_count <= 0 || tag_count > UNSIGNED_SHORT_MAX ||
+		!region_contains(&validation, instances, tag_count * sizeof(struct tag_validate_instance)))
 	{
 		return 0;
 	}
@@ -1323,8 +1378,6 @@ long tag_validate_custom_edition_infer_groups(
 	context.size = (unsigned long)loaded_size;
 	memset(tag_validate_walked, 0, sizeof(tag_validate_walked));
 	tag_validate_inference.budget = MAXIMUM_INFERENCE_ELEMENTS;
-	long pending_index;
-	long pending_applied = 0;
 
 	for (pending_index = 0; pending_index < tag_validate_pending_groups.count; pending_index++)
 	{
@@ -1334,37 +1387,41 @@ long tag_validate_custom_edition_infer_groups(
 			schema_group_get(tag_validate_pending_groups.group_tag[pending_index]);
 		struct tag_validate_instance *pending_instance;
 
-		if (absolute < 0 || absolute >= header->tag_count || !pending_group)
+		if (absolute < 0 || absolute >= tag_count || !pending_group)
 			continue;
-		pending_instance = &header->instances[absolute];
-		if (pending_instance->tag_index != handle || schema_group_get(pending_instance->group_tag))
+		pending_instance = &instances[absolute];
+		if ((long)inference_value((unsigned long)pending_instance->tag_index) != handle ||
+			schema_group_get(inference_value(pending_instance->group_tag)))
+		{
 			continue;
-		pending_instance->group_tag = tag_validate_pending_groups.group_tag[pending_index];
-		pending_instance->parent_group_tags[0] = pending_group->parent_group_tags[0];
-		pending_instance->parent_group_tags[1] = pending_group->parent_group_tags[1];
+		}
+		pending_instance->group_tag = inference_value(tag_validate_pending_groups.group_tag[pending_index]);
+		pending_instance->parent_group_tags[0] = inference_value(pending_group->parent_group_tags[0]);
+		pending_instance->parent_group_tags[1] = inference_value(pending_group->parent_group_tags[1]);
 		pending_applied++;
 	}
 	tag_validate_pending_groups.count = 0;
 	tag_validate_inference.regrouped += pending_applied;
-	tag_validate_report(message);
 	tag_validate_inference.regrouped = 0;
 	do
 	{
 		walked_any = FALSE;
-		for (absolute_index = 0; absolute_index < header->tag_count; absolute_index++)
+		for (absolute_index = 0; absolute_index < tag_count; absolute_index++)
 		{
-			struct tag_validate_instance *instance = &header->instances[absolute_index];
-			struct tag_schema_group const *group = schema_group_get(instance->group_tag);
+			struct tag_validate_instance *instance = &instances[absolute_index];
+			unsigned long group_tag = inference_value(instance->group_tag);
+			void *base_address = inference_pointer(instance->base_address);
+			struct tag_schema_group const *group = schema_group_get(group_tag);
 
-			if (tag_validate_walked[absolute_index] || !group || !group->definition || !instance->base_address ||
-				instance->group_tag == STRUCTURE_BSP_GROUP_TAG ||
-				!inference_translate(&context, instance->base_address, group->definition->size))
+			if (tag_validate_walked[absolute_index] || !group || !group->definition || !base_address ||
+				group_tag == STRUCTURE_BSP_GROUP_TAG ||
+				!inference_translate(&context, base_address, group->definition->size))
 			{
 				continue;
 			}
 			tag_validate_walked[absolute_index] = TRUE;
 			walked_any = TRUE;
-			infer_walk(&context, instance->base_address, group->definition, 0);
+			infer_walk(&context, base_address, group->definition, 0);
 		}
 	}
 	while (walked_any && tag_validate_inference.budget > 0);
@@ -1377,14 +1434,15 @@ long tag_validate_custom_edition_infer_groups(
 	tag_to_text(tag_validate_inference.example_instance_group, instance_text),
 	tag_validate_inference.mismatched);
 	tag_validate_report(message);
+	tag_validate_inference_swapped = FALSE;
 	return tag_validate_inference.regrouped;
 }
 
 /* A structure bsp's references, as tag_validate_custom_edition_infer_groups
 reads the tags': `bsp` is a copy of the bsp's bytes that loads at
 bsp_address, in a map whose tag table is at tag_header (tag_data_bytes of
-it). The groups they name are noted, and given to the tags when the tags'
-own are (the bsp is not in memory yet). */
+it), its values in the tags' order. The groups they name are noted, and given
+to the tags when the tags' own are (the bsp is not in memory yet). */
 void tag_validate_custom_edition_note_structure_bsp(
 	void *tag_header,
 	unsigned long tag_data_bytes,
@@ -1398,9 +1456,9 @@ void tag_validate_custom_edition_note_structure_bsp(
 	struct tag_validation validation;
 	struct inference_context context;
 	struct tag_schema_group const *group;
+	long tag_count;
 	unsigned long root_address;
 	byte *root;
-	char message[MAXIMUM_MESSAGE_LENGTH];
 
 	if (bsp_index == 0)
 		tag_validate_pending_groups.count = 0;
@@ -1413,26 +1471,34 @@ void tag_validate_custom_edition_note_structure_bsp(
 	validation_new(&validation, tag_header, tag_data_bytes);
 	group = schema_group_get(STRUCTURE_BSP_GROUP_TAG);
 	if (!schemas_fit() || !group || !group->definition ||
-		tag_data_bytes < sizeof(*header) || header->signature != TAG_HEADER_SIGNATURE ||
-		header->tag_count <= 0 || header->tag_count > UNSIGNED_SHORT_MAX ||
-		!region_contains(&validation, header->instances, header->tag_count * sizeof(struct tag_validate_instance)) ||
+		tag_data_bytes < sizeof(*header) || !inference_order_set(header) ||
 		bsp_bytes < sizeof(unsigned long))
 	{
+		tag_validate_inference_swapped = FALSE;
+		return;
+	}
+	tag_count = (long)inference_value((unsigned long)header->tag_count);
+	if (tag_count <= 0 || tag_count > UNSIGNED_SHORT_MAX ||
+		!region_contains(&validation, inference_pointer(header->instances),
+			tag_count * sizeof(struct tag_validate_instance)))
+	{
+		tag_validate_inference_swapped = FALSE;
 		return;
 	}
 	context.buffer = bsp;
 	context.address = bsp_address;
 	context.size = bsp_bytes;
-	root_address = *(unsigned long const *)bsp;
+	root_address = inference_value(*(unsigned long const *)bsp);
 	root = inference_translate(&context, (void const *)root_address, group->definition->size);
-	if (!root)
-		return;
-	memset(&tag_validate_inference, 0, sizeof(tag_validate_inference));
-	tag_validate_inference.budget = MAXIMUM_INFERENCE_ELEMENTS;
-	tag_validate_inference_defer = TRUE;
-	infer_walk(&context, root, group->definition, 0);
-	tag_validate_inference_defer = FALSE;
-	tag_validate_report(message);
+	if (root)
+	{
+		memset(&tag_validate_inference, 0, sizeof(tag_validate_inference));
+		tag_validate_inference.budget = MAXIMUM_INFERENCE_ELEMENTS;
+		tag_validate_inference_defer = TRUE;
+		infer_walk(&context, root, group->definition, 0);
+		tag_validate_inference_defer = FALSE;
+	}
+	tag_validate_inference_swapped = FALSE;
 
 	return;
 }

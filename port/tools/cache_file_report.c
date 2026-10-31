@@ -268,6 +268,11 @@ static int report_custom_edition_cache(
 			enum cache_file_status conversion_status = custom_edition_cache_convert(tag_cache, loaded_bytes, report.identity.name, &conversion);
 			int behaviour;
 
+			/* (the sounds this build cannot decode, which the game decodes
+			first where it can: Ogg Vorbis, custom_edition_sounds.c) */
+			if (conversion_status == _cache_file_status_ok)
+				conversion.sounds_undecodable = custom_edition_cache_sounds_silence(tag_cache, loaded_bytes);
+
 			printf("convert: %s\n", cache_file_status_describe(conversion_status));
 			if (conversion_status != _cache_file_status_ok)
 			{

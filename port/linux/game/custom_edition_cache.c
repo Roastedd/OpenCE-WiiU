@@ -17,6 +17,12 @@ functions.
 Every read the game makes of the map (structure BSPs, bitmap pixels, sound
 samples) is served from the map, bitmaps.map or sounds.map according to
 where its offset falls in their combined offset space.
+
+A big-endian host (the Wii U) plays the map's file as it is, little-endian:
+its tags are turned to the host's order once they are converted, before
+anything else reads them, its model data as the models are made, and each
+structure BSP as it is read (tag_swap.c). Pixels and samples stay as the
+file has them, as the converted Xbox maps' do.
 */
 
 /* ---------- headers */
@@ -30,6 +36,7 @@ where its offset falls in their combined offset space.
 #include "cache_file_formats.h"
 #include "custom_edition_cache.h"
 #include "tag_schema.h"
+#include "tag_swap.h"
 #include "map_share.h"
 
 #include <stdlib.h>
@@ -555,6 +562,80 @@ static void custom_edition_cache_files_close(
 	return;
 }
 
+/* port: a swap's scratch memory (tag_swap.h), for `bytes` bytes, or NULL
+after logging that there is none */
+static void *custom_edition_swap_scratch(
+	unsigned long bytes)
+{
+	void *scratch = malloc(tag_swap_scratch_bytes(bytes));
+
+	if (!scratch)
+		error(_error_silent, "custom edition: out of memory for 0x%lX bytes of byte order scratch", tag_swap_scratch_bytes(bytes));
+	return scratch;
+}
+
+/* port: the map's tags, as its loader and conversion leave them
+(little-endian), turned to a big-endian host's order; nothing on a
+little-endian host */
+static boolean custom_edition_cache_tags_swap(
+	uint8_t *tag_cache,
+	uint32_t loaded_bytes)
+{
+#ifdef __BIG_ENDIAN__
+	struct tag_swap_report report;
+	void *scratch = custom_edition_swap_scratch(loaded_bytes);
+	boolean swapped;
+
+	if (!scratch)
+		return FALSE;
+	swapped = tag_swap_custom_edition_tags(tag_cache, loaded_bytes, scratch, &report);
+	free(scratch);
+	if (!swapped)
+	{
+		error(_error_silent, "custom edition: the map's tags cannot be turned to this machine's byte order: %s", report.problem);
+		return FALSE;
+	}
+	error(_error_silent, "custom edition: %ld tags turned to big-endian (%lu shorts, %lu words, %lu doubles; %ld tags of groups no schema has, %lu bytes of data no handler knows, left as they are)",
+		report.tags, report.shorts, report.words, report.doubles, report.groups_left, report.data_bytes_left);
+#else
+	(void)tag_cache;
+	(void)loaded_bytes;
+#endif
+
+	return TRUE;
+}
+
+/* port: the model data (read from the map) turned to a big-endian host's
+order by the converted models' parts; nothing on a little-endian host */
+static boolean custom_edition_cache_model_data_swap(
+	uint8_t const *tag_cache,
+	struct custom_edition_load_report const *report,
+	byte *model_data)
+{
+#ifdef __BIG_ENDIAN__
+	struct tag_swap_report swap;
+	void *scratch = custom_edition_swap_scratch(report->model_data_bytes);
+	boolean swapped;
+
+	if (!scratch)
+		return FALSE;
+	swapped = tag_swap_custom_edition_model_data(tag_cache, report->tag_data_bytes + report->resource_tag_bytes,
+		model_data, report->model_data_bytes, report->model_index_data_offset, scratch, &swap);
+	free(scratch);
+	if (!swapped)
+	{
+		error(_error_silent, "custom edition: the model data cannot be turned to this machine's byte order: %s", swap.problem);
+		return FALSE;
+	}
+#else
+	(void)tag_cache;
+	(void)report;
+	(void)model_data;
+#endif
+
+	return TRUE;
+}
+
 /* Converts the loaded map's models for this build from its model data,
 which is read for the purpose and let go. */
 static boolean custom_edition_cache_models_convert(
@@ -573,7 +654,7 @@ static boolean custom_edition_cache_models_convert(
 	{
 		error(_error_silent, "custom edition: cannot read the model data");
 	}
-	else
+	else if (custom_edition_cache_model_data_swap(tag_cache, report, model_data))
 	{
 		success = custom_edition_models_convert(
 			tag_cache,
@@ -706,9 +787,6 @@ static boolean custom_edition_cache_tags_convert(
 		loaded_bytes,
 		COMBINED_BITMAPS_OFFSET,
 		COMBINED_SOUNDS_OFFSET);
-	/* (before the conversion, which silences sounds this build cannot play) */
-	custom_edition_sounds_decode(tag_cache, loaded_bytes, (long)COMBINED_DECODED_OFFSET,
-		COMBINED_BITMAPS_OFFSET - COMBINED_DECODED_OFFSET);
 	status = custom_edition_cache_convert(tag_cache, loaded_bytes, report->identity.name, &conversion);
 	if (status != _cache_file_status_ok)
 	{
@@ -749,13 +827,6 @@ static boolean custom_edition_cache_tags_convert(
 			"custom edition: %ld animation overlays named animations their graphs do not have and were disabled",
 			(long)conversion.animation_overlays_disabled);
 	}
-	if (conversion.sounds_undecodable)
-	{
-		error(
-			_error_silent,
-			"custom edition: %ld sounds use a compression this build cannot decode (Custom Edition's Ogg Vorbis) and will not play",
-			(long)conversion.sounds_undecodable);
-	}
 	if (conversion.hud_placements_rescaled)
 	{
 		error(
@@ -774,6 +845,24 @@ static boolean custom_edition_cache_tags_convert(
 			"custom edition: %ld menu event handlers of Halo PC's own functions run none%s",
 			(long)conversion.widget_functions_cleared,
 			conversion.pause_menu_trimmed ? "; the multiplayer pause menu is the Xbox's resume and quit" : "");
+	}
+
+	/* port: the tags in this host's order from here on (tag_swap.c); then
+	the sounds this build would not play decoded, and those it cannot
+	silenced */
+	if (!custom_edition_cache_tags_swap(tag_cache, loaded_bytes))
+	{
+		return FALSE;
+	}
+	custom_edition_sounds_decode(tag_cache, loaded_bytes, (long)COMBINED_DECODED_OFFSET,
+		COMBINED_BITMAPS_OFFSET - COMBINED_DECODED_OFFSET);
+	conversion.sounds_undecodable = custom_edition_cache_sounds_silence(tag_cache, loaded_bytes);
+	if (conversion.sounds_undecodable)
+	{
+		error(
+			_error_silent,
+			"custom edition: %ld sounds use a compression this build cannot decode and will not play",
+			(long)conversion.sounds_undecodable);
 	}
 
 	return custom_edition_cache_tags_validate(tag_cache, report) &&
@@ -1273,6 +1362,32 @@ boolean custom_edition_structure_bsp_reference_valid(
 			(unsigned long)reference->file_size, (unsigned long)reference->file_offset, address);
 		return FALSE;
 	}
+
+	return TRUE;
+}
+
+boolean custom_edition_structure_bsp_swap(
+	void *bsp,
+	long size)
+{
+#ifdef __BIG_ENDIAN__
+	struct tag_swap_report report;
+	void *scratch;
+	boolean swapped;
+
+	if (size <= 0 || !(scratch = custom_edition_swap_scratch((unsigned long)size)))
+		return FALSE;
+	swapped = tag_swap_custom_edition_structure_bsp(bsp, (unsigned long)size, (unsigned long)bsp, scratch, &report);
+	free(scratch);
+	if (!swapped)
+	{
+		error(_error_silent, "custom edition: a structure bsp cannot be turned to this machine's byte order: %s", report.problem);
+		return FALSE;
+	}
+#else
+	(void)bsp;
+	(void)size;
+#endif
 
 	return TRUE;
 }
