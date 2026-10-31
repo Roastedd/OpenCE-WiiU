@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="256" viewBox="0 0 512 256">
+  <title>Vehicle Options: an off-road buggy, its roll cage open, on the pad it spawns on</title>
+  <!-- The gametype editor's picture of Vehicle Options (gametype_options frame 4), drawn for this
+       port in place of the PC version's: its widget shows the top left 284x208 of the frame,
+       beside the list. tools/render_menu_art.py draws it at twice this size. -->
+  <defs>
+    <!-- the glow: the drawing's silhouette blurred in the menus' blue, and
+         its lines' own bloom, under it -->
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="512" height="256" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="4.5" result="wide"/>
+      <feFlood flood-color="#2895FF" flood-opacity="0.7"/>
+      <feComposite in2="wide" operator="in" result="halo"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="1.4" result="bloom"/>
+      <feMerge>
+        <feMergeNode in="halo"/>
+        <feMergeNode in="bloom"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- a softer glow for the lines alone -->
+    <filter id="soft" filterUnits="userSpaceOnUse" x="0" y="0" width="512" height="256" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2.2" result="bloom"/>
+      <feMerge>
+        <feMergeNode in="bloom"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- the projection's light, and its grid, fading out from the middle -->
+    <radialGradient id="pool" gradientUnits="userSpaceOnUse" cx="145" cy="96" r="132" gradientTransform="translate(145 96) scale(1 0.73) translate(-145 -96)">
+      <stop offset="0" stop-color="#1667C8" stop-opacity="0.42"/>
+      <stop offset="0.55" stop-color="#0E4FA6" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#0A3C86" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="fade" gradientUnits="userSpaceOnUse" cx="145" cy="96" r="132" gradientTransform="translate(145 96) scale(1 0.73) translate(-145 -96)">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="1"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <mask id="fading" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="256">
+      <rect width="512" height="256" fill="url(#fade)"/>
+    </mask>
+    <pattern id="grid" patternUnits="userSpaceOnUse" x="5" y="12" width="14" height="14">
+      <path d="M14 0H0V14" fill="none" stroke="#2F8EF0" stroke-width="0.6"/>
+    </pattern>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0D3B78"/>
+      <stop offset="1" stop-color="#04173A"/>
+    </linearGradient>
+    <radialGradient id="pad" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#2B86E0" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#0B3C80" stop-opacity="0.15"/>
+    </radialGradient>
+  </defs>
+  <!-- the projection: a pool of light and a faint grid -->
+  <ellipse cx="145" cy="96" rx="132" ry="96" fill="url(#pool)"/>
+  <rect x="13" y="0" width="264" height="192" fill="url(#grid)" opacity="0.22" mask="url(#fading)"/>
+  <g transform="translate(0 -10)">
+  <!-- the pad it spawns on -->
+  <g filter="url(#soft)">
+    <ellipse cx="145" cy="164" rx="118" ry="21" fill="url(#pad)" stroke="#55BEFF" stroke-width="2"/>
+    <ellipse cx="145" cy="164" rx="92" ry="15" fill="none" stroke="#2A7FD4" stroke-width="1.4" stroke-dasharray="6 4"/>
+    <path d="M257,164 L269,164 M241.99,174 L252.39,175 M201,181.32 L207,183.05 M145,184 L145,186 M89,181.32 L83,183.05 M48.01,174 L37.61,175 M33,164 L21,164 M48.01,154 L37.61,153 M89,146.68 L83,144.95 M145,144 L145,142 M201,146.68 L207,144.95 M241.99,154 L252.39,153" stroke="#55BEFF" stroke-width="1.6"/>
+  </g>
+  <!-- the buggy: its seat and wheel, roll cage, tub, suspension and wheels -->
+  <g filter="url(#glow)">
+    <path d="M112,100 L108,76 Q107,68 114,68 L118,68 Q123,68 124,74 L127,92 L146,92 Q151,92 151,97 L151,100 Z" fill="url(#body)" stroke="#A8E6FF" stroke-width="1.8" stroke-linejoin="round"/>
+    <path d="M170,100 L164,80" stroke="#55BEFF" stroke-width="2.2"/>
+    <ellipse cx="163" cy="78" rx="3" ry="8" transform="rotate(-24 163 78)" fill="none" stroke="#A8E6FF" stroke-width="2"/>
+    <path d="M92,100 L100,58 L152,54 L188,100 M100,58 L66,100 M100,72 L150,72 M152,54 L156,48 M100,58 L96,52" fill="none" stroke="#55BEFF" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="128" y="48" width="22" height="6" rx="2" transform="rotate(-4 139 51)" fill="#E6F9FF"/>
+    <polyline points="73,100 83,104 73,108 83,112 73,116 83,120 73,124" fill="none" stroke="#A8E6FF" stroke-width="1.6"/>
+    <polyline points="207,100 217,104 207,108 217,112 207,116 217,120 207,124" fill="none" stroke="#A8E6FF" stroke-width="1.6"/>
+    <path d="M50,104 L64,100 L196,100 L236,106 L248,116 L246,124 L245,124 A33,33 0 0 0 179,124 L111,124 A33,33 0 0 0 45,124 L48,124 Q42,124 42,118 L42,110 Q42,104 50,104 Z" fill="url(#body)" stroke="#55BEFF" stroke-width="2.4" stroke-linejoin="round"/>
+    <path d="M60,110 H107 M119,110 H171" stroke="#2A7FD4" stroke-width="1.4"/>
+    <path d="M248,112 L258,110 L260,126 L250,128" fill="none" stroke="#55BEFF" stroke-width="2.6" stroke-linejoin="round"/>
+    <rect x="236" y="108" width="9" height="6" rx="1.5" fill="#E6F9FF"/>
+    <path d="M44,100 V94 H58 V100" fill="url(#body)" stroke="#55BEFF" stroke-width="1.8"/>
+    <path d="M78,134 L104,112 M78,134 L58,112 M212,134 L186,112 M212,134 L234,114" stroke="#55BEFF" stroke-width="2.2" stroke-linecap="round"/>
+    <circle cx="78" cy="134" r="27" fill="#041634" stroke="#55BEFF" stroke-width="2.4"/>
+    <path d="M100.68,134 L105,134 M99.31,141.76 L103.37,143.23 M95.37,148.58 L98.68,151.36 M89.34,153.64 L91.5,157.38 M81.94,156.34 L82.69,160.59 M74.06,156.34 L73.31,160.59 M66.66,153.64 L64.5,157.38 M60.63,148.58 L57.32,151.36 M56.69,141.76 L52.63,143.23 M55.32,134 L51,134 M56.69,126.24 L52.63,124.77 M60.63,119.42 L57.32,116.64 M66.66,114.36 L64.5,110.62 M74.06,111.66 L73.31,107.41 M81.94,111.66 L82.69,107.41 M89.34,114.36 L91.5,110.62 M95.37,119.42 L98.68,116.64 M99.31,126.24 L103.37,124.77" stroke="#2A7FD4" stroke-width="1.6"/>
+    <circle cx="78" cy="134" r="17.82" fill="url(#body)" stroke="#A8E6FF" stroke-width="1.8"/>
+    <path d="M86.64,134 L94.2,134 M82.32,141.48 L86.1,148.03 M73.68,141.48 L69.9,148.03 M69.36,134 L61.8,134 M73.68,126.52 L69.9,119.97 M82.32,126.52 L86.1,119.97" stroke="#55BEFF" stroke-width="2"/>
+    <circle cx="78" cy="134" r="6.48" fill="#A8E6FF"/>
+    <circle cx="212" cy="134" r="27" fill="#041634" stroke="#55BEFF" stroke-width="2.4"/>
+    <path d="M234.68,134 L239,134 M233.31,141.76 L237.37,143.23 M229.37,148.58 L232.68,151.36 M223.34,153.64 L225.5,157.38 M215.94,156.34 L216.69,160.59 M208.06,156.34 L207.31,160.59 M200.66,153.64 L198.5,157.38 M194.63,148.58 L191.32,151.36 M190.69,141.76 L186.63,143.23 M189.32,134 L185,134 M190.69,126.24 L186.63,124.77 M194.63,119.42 L191.32,116.64 M200.66,114.36 L198.5,110.62 M208.06,111.66 L207.31,107.41 M215.94,111.66 L216.69,107.41 M223.34,114.36 L225.5,110.62 M229.37,119.42 L232.68,116.64 M233.31,126.24 L237.37,124.77" stroke="#2A7FD4" stroke-width="1.6"/>
+    <circle cx="212" cy="134" r="17.82" fill="url(#body)" stroke="#A8E6FF" stroke-width="1.8"/>
+    <path d="M220.64,134 L228.2,134 M216.32,141.48 L220.1,148.03 M207.68,141.48 L203.9,148.03 M203.36,134 L195.8,134 M207.68,126.52 L203.9,119.97 M216.32,126.52 L220.1,119.97" stroke="#55BEFF" stroke-width="2"/>
+    <circle cx="212" cy="134" r="6.48" fill="#A8E6FF"/>
+  </g>
+  </g>
+</svg>

@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="256" viewBox="0 0 512 256">
+  <title>Teamplay Options: two teams of three facing each other, the blue and the red, each under its emblem</title>
+  <!-- The gametype editor's picture of Teamplay Options (gametype_options frame 6), drawn for this
+       port in place of the PC version's: its widget shows the top left 284x208 of the frame,
+       beside the list. tools/render_menu_art.py draws it at twice this size. -->
+  <defs>
+    <!-- the glow: the drawing's silhouette blurred in the menus' blue, and
+         its lines' own bloom, under it -->
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="512" height="256" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="4.5" result="wide"/>
+      <feFlood flood-color="#2895FF" flood-opacity="0.7"/>
+      <feComposite in2="wide" operator="in" result="halo"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="1.4" result="bloom"/>
+      <feMerge>
+        <feMergeNode in="halo"/>
+        <feMergeNode in="bloom"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- a softer glow for the lines alone -->
+    <filter id="soft" filterUnits="userSpaceOnUse" x="0" y="0" width="512" height="256" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2.2" result="bloom"/>
+      <feMerge>
+        <feMergeNode in="bloom"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- the projection's light, and its grid, fading out from the middle -->
+    <radialGradient id="pool" gradientUnits="userSpaceOnUse" cx="145" cy="96" r="132" gradientTransform="translate(145 96) scale(1 0.73) translate(-145 -96)">
+      <stop offset="0" stop-color="#1667C8" stop-opacity="0.42"/>
+      <stop offset="0.55" stop-color="#0E4FA6" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#0A3C86" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="fade" gradientUnits="userSpaceOnUse" cx="145" cy="96" r="132" gradientTransform="translate(145 96) scale(1 0.73) translate(-145 -96)">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="1"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <mask id="fading" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="256">
+      <rect width="512" height="256" fill="url(#fade)"/>
+    </mask>
+    <pattern id="grid" patternUnits="userSpaceOnUse" x="5" y="12" width="14" height="14">
+      <path d="M14 0H0V14" fill="none" stroke="#2F8EF0" stroke-width="0.6"/>
+    </pattern>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0D3B78"/>
+      <stop offset="1" stop-color="#04173A"/>
+    </linearGradient>
+    <filter id="redglow" filterUnits="userSpaceOnUse" x="0" y="0" width="512" height="256" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="4.5" result="wide"/>
+      <feFlood flood-color="#FF3B2B" flood-opacity="0.6"/>
+      <feComposite in2="wide" operator="in" result="halo"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="1.4" result="bloom"/>
+      <feMerge>
+        <feMergeNode in="halo"/>
+        <feMergeNode in="bloom"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <linearGradient id="blue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4AAEFF"/>
+      <stop offset="1" stop-color="#0D3F86"/>
+    </linearGradient>
+    <linearGradient id="red" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FF8C76"/>
+      <stop offset="1" stop-color="#7A1C14"/>
+    </linearGradient>
+  </defs>
+  <!-- the projection: a pool of light and a faint grid -->
+  <ellipse cx="145" cy="96" rx="132" ry="96" fill="url(#pool)"/>
+  <rect x="13" y="0" width="264" height="192" fill="url(#grid)" opacity="0.22" mask="url(#fading)"/>
+  <!-- the blue team, under its emblem -->
+  <g filter="url(#glow)">
+    <path d="M48,22 Q74,16 100,22 V52 Q100,72 74,84 Q48,72 48,52 Z" fill="url(#blue)" stroke="#55BEFF" stroke-width="2.2" stroke-linejoin="round"/>
+    <path d="M61,38 L74,48 L87,38 M61,52 L74,62 L87,52" fill="none" stroke="#E6F9FF" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M30.4,158 V143.6 Q30.4,129.2 43.2,129.2 H52.8 Q65.6,129.2 65.6,143.6 V158 Z" fill="#0A3470" stroke="#55BEFF" stroke-width="1.6" stroke-linejoin="round"/>
+    <circle cx="48" cy="118" r="8.8" fill="#0A3470" stroke="#55BEFF" stroke-width="1.6"/>
+    <path d="M82.4,158 V143.6 Q82.4,129.2 95.2,129.2 H104.8 Q117.6,129.2 117.6,143.6 V158 Z" fill="#0A3470" stroke="#55BEFF" stroke-width="1.6" stroke-linejoin="round"/>
+    <circle cx="100" cy="118" r="8.8" fill="#0A3470" stroke="#55BEFF" stroke-width="1.6"/>
+    <path d="M52,168 V150 Q52,132 68,132 H80 Q96,132 96,150 V168 Z" fill="url(#blue)" stroke="#E6F9FF" stroke-width="2.2" stroke-linejoin="round"/>
+    <circle cx="74" cy="118" r="11" fill="url(#blue)" stroke="#E6F9FF" stroke-width="2.2"/>
+  </g>
+  <!-- the red team, under its emblem -->
+  <g filter="url(#redglow)">
+    <path d="M190,22 Q216,16 242,22 V52 Q242,72 216,84 Q190,72 190,52 Z" fill="url(#red)" stroke="#FF6A55" stroke-width="2.2" stroke-linejoin="round"/>
+    <path d="M203,38 L216,48 L229,38 M203,52 L216,62 L229,52" fill="none" stroke="#FFE4DD" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M172.4,158 V143.6 Q172.4,129.2 185.2,129.2 H194.8 Q207.6,129.2 207.6,143.6 V158 Z" fill="#4A120E" stroke="#FF6A55" stroke-width="1.6" stroke-linejoin="round"/>
+    <circle cx="190" cy="118" r="8.8" fill="#4A120E" stroke="#FF6A55" stroke-width="1.6"/>
+    <path d="M224.4,158 V143.6 Q224.4,129.2 237.2,129.2 H246.8 Q259.6,129.2 259.6,143.6 V158 Z" fill="#4A120E" stroke="#FF6A55" stroke-width="1.6" stroke-linejoin="round"/>
+    <circle cx="242" cy="118" r="8.8" fill="#4A120E" stroke="#FF6A55" stroke-width="1.6"/>
+    <path d="M194,168 V150 Q194,132 210,132 H222 Q238,132 238,150 V168 Z" fill="url(#red)" stroke="#FFE4DD" stroke-width="2.2" stroke-linejoin="round"/>
+    <circle cx="216" cy="118" r="11" fill="url(#red)" stroke="#FFE4DD" stroke-width="2.2"/>
+  </g>
+  <!-- between them -->
+  <g filter="url(#soft)">
+    <path d="M145,14 V174" stroke="#A8E6FF" stroke-width="1.6" stroke-dasharray="2 5" stroke-linecap="round"/>
+    <path d="M127,118 l9,9 l-9,9 M163,118 l-9,9 l9,9" fill="none" stroke="#E6F9FF" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M22,171 H133" stroke="#55BEFF" stroke-width="1.6"/>
+    <path d="M157,171 H268" stroke="#FF6A55" stroke-width="1.6"/>
+  </g>
+</svg>

@@ -246,9 +246,9 @@ every screen it leads to (campaign, profiles, multiplayer with its server
 browser, direct IP and server setup, the gametype editor, and the profile's
 settings: controls, gamepads, mouse, audio, video, network and colour),
 laid out as it has them. Their pictures are the high-res redraws; the few
-that are not yet (3D renders, screenshots) are drawn from the Xbox's own
-menus where it has the same, else a placeholder, listed in
-`port/assets/menus/NON_HANDDRAWN.md`.
+that are not (3D renders, screenshots) are drawn from the Xbox's own menus
+where it has the same, else are original drawings made for this port
+(`port/assets/menus/drawn`), listed in `port/assets/menus/NON_HANDDRAWN.md`.
 
 The campaign is wired: Campaign, on player 1's profile (the one last used),
 continues its saved game, starts a level it has reached at a difficulty (New

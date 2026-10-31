@@ -19,11 +19,13 @@ in the PC bitmaps' layout), copied to port/assets/menus/svg, at up to 4
 times their size. The pictures with no redraw (renders, screenshots, logos)
 are the Xbox map's bitmap of the same name, where it has the same pictures
 in the same order (XBOX_BITMAPS: the player's own ui.map draws them, and
-nothing is shipped), else the --placeholder image, fitted to each frame
-where the PC version's picture is (--pictures: only their bounds are read),
-else to the part of it the widgets show;
-port/assets/menus/NON_HANDDRAWN.md lists both, the placeholders as ones to
-be redrawn.
+nothing is shipped), else this port's own drawing of the frame
+(port/assets/menus/drawn, drawn at twice its size as
+tools/render_menu_art.py draws it), else the --placeholder image, fitted to
+each frame where the PC version's picture is (--pictures: only their bounds
+are read), else to the part of it the widgets show;
+port/assets/menus/NON_HANDDRAWN.md lists them all, the placeholders as ones
+to be redrawn.
 
 What this engine (the Xbox's) has no use for is written but never runs: the
 PC version's mouse events (the port's own mouse support clicks with A), and
@@ -50,6 +52,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hud_assets import bleed, render_svg  # noqa: E402
 import port_settings  # noqa: E402
+import render_menu_art  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 MENUS = ROOT / "port/assets/menus"
@@ -290,6 +293,7 @@ class Art:
         self.tags, self.redraws, self.shown, self.pictures_folder = tags, redraws, shown, pictures
         self.placeholder = Image.open(placeholder).convert("RGBA")
         self.pictures = []  # (frame, size, PC picture) of the frames drawn as the placeholder
+        self.drawings = []  # (frame, width, height, what it shows) of the frames drawn from drawn/
         self.xbox_frames = []  # (PC frame, Xbox bitmap, its frame) drawn from the Xbox map
         self.added_frames = []  # (our bitmap, Xbox bitmap, its frame): port_settings.BITMAP_FRAMES
         self.svgs = []
@@ -389,11 +393,21 @@ class Art:
                     sys.exit(f"{svg}: {image.shape[1]}x{image.shape[0]}, not {scale}x {width}x{height}")
                 Image.fromarray(bleed(image), "RGBA").save(output, optimize=True)
                 return
-        # (no redraw: the placeholder, as large as fits, in the middle of where
-        # the PC version's picture is (only its bounds are read), else of the
-        # part the widgets show: a widget draws its bitmap from the top left,
-        # cut to its size)
+        # (no redraw: this port's own drawing of the frame, drawn/, which
+        # tools/render_menu_art.py draws at twice its size)
         name = self.frame_sources(relative, index, count)[-1]
+        drawing = render_menu_art.DRAWN / f"{name}.svg"
+        if drawing.is_file():
+            if render_menu_art.frame_size(drawing) != (width, height):
+                sys.exit(f"{drawing}: not {width}x{height}, the frame's size")
+            render_menu_art.render(drawing, output)
+            self.drawings.append((output.relative_to(MENUS).as_posix(), width, height,
+                                  render_menu_art.title(drawing)))
+            return
+        # (no drawing either: the placeholder, as large as fits, in the middle
+        # of where the PC version's picture is (only its bounds are read), else
+        # of the part the widgets show: a widget draws its bitmap from the top
+        # left, cut to its size)
         image = Image.new("RGBA", (width * PLACEHOLDER_SCALE, height * PLACEHOLDER_SCALE), (0, 0, 0, 0))
         area = (0, 0, min([width] + [w for w, _ in shown]), min([height] + [h for _, h in shown]))
         original = self.pictures_folder / f"{name}.png" if self.pictures_folder else None
@@ -556,6 +570,76 @@ def pause_art(art):
     return lines
 
 
+def non_handdrawn(art: Art) -> str:
+    """NON_HANDDRAWN.md: the pictures that are not redraws, and where each
+    is drawn from"""
+    report = [
+        "# Menu pictures that are not redraws",
+        "",
+        "The menus' bitmaps are drawn from the high-res redraws (`svg/`, from ui-svg-handmade) where there is",
+        "one. The PC version's pictures that have none (3D renders, screenshots and logos) are not in this",
+        "repository.",
+        "",
+        "## From the Xbox's map",
+        "",
+        "These have the same pictures, in the same order, in the Xbox's `ui.map`, which the menus draw them",
+        "from (the player's own; nothing is shipped). `mp_map_grafix`: the Xbox's has the 13 Xbox maps' pictures",
+        "(the PC version's first 13) and its \"?\"; the PC version's other 8 are its own maps'.",
+        "",
+    ]
+    report += [f"- `{tag}`" for tag in sorted(XBOX_BITMAPS)]
+    report += [
+        "",
+        "These frames are drawn from a frame of the Xbox map's bitmap of the same name, whose other frames differ:",
+        "the same picture, or for the profile settings the Xbox's picture for the same thing.",
+        "",
+        "| The PC version's frame | The Xbox's frame |",
+        "| --- | --- |",
+    ]
+    report += [f"| `{name}.png` | `{tag}` frame {index} |" for name, tag, index in sorted(art.xbox_frames)]
+    report += [
+        "",
+        "These frames are added after a bitmap's, drawn scaled from the Xbox map's (the profile settings'",
+        "picture of Gamepad Setup: the Xbox's Controller Setup's pictures of the button settings).",
+        "",
+        "| Our bitmap | The Xbox's frame |",
+        "| --- | --- |",
+    ]
+    report += [f"| `{name}` | `{tag}` frame {index} |" for name, tag, index in art.added_frames]
+    if art.drawings:
+        report += [
+            "",
+            "## Drawn for this port",
+            "",
+            "The Xbox's map has none of these (or other pictures under the name), and the PC version's are 3D",
+            "renders and screenshots, which are not shipped. Each frame is an original drawing of what its item",
+            "is for, in the menus' style: an SVG in `drawn/`, under the frame's path, which",
+            "`tools/render_menu_art.py` draws at twice the frame's size.",
+            "",
+            "| File | Size | What it shows |",
+            "| --- | --- | --- |",
+        ]
+        report += [f"| `{png}` | {w}x{h} | {shows} |" for png, w, h, shows in sorted(art.drawings)]
+    if art.pictures:
+        report += [
+            "",
+            "## Placeholders, to be redrawn",
+            "",
+            "The Xbox's map has none of these (or other pictures under the name), so each frame is a placeholder",
+            "until it is redrawn.",
+            "",
+            "| File | Size | The PC version's picture |",
+            "| --- | --- | --- |",
+        ]
+        report += [f"| `{png}` | {w}x{h} | `{source}` |" for png, w, h, source in sorted(art.pictures)]
+    placeholders = (f"{len(art.pictures)} {'is a placeholder' if len(art.pictures) == 1 else 'are placeholders'}"
+                    if art.pictures else "none is a placeholder")
+    report += ["", f"{len(art.drawings)} of {len(art.pngs)} frames are drawn for this port; {placeholders}.",
+               "", "The PC version's `ui\\gamespy` and `ui\\ticker` fonts are drawn with `ui\\small_ui`, which",
+               "the Xbox's map has.", ""]
+    return "\n".join(report)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--tags", type=Path, required=True)
@@ -649,54 +733,7 @@ def main() -> None:
     lines.append("</menus>")
     (CE / "bitmaps.xml").write_text("\n".join(lines) + "\n")
     # what is not hand-drawn
-    report = [
-        "# Menu pictures that are not redraws",
-        "",
-        "The menus' bitmaps are drawn from the high-res redraws (`svg/`, from ui-svg-handmade) where there is",
-        "one. The PC version's pictures that have none (3D renders, screenshots and logos) are not in this",
-        "repository.",
-        "",
-        "## From the Xbox's map",
-        "",
-        "These have the same pictures, in the same order, in the Xbox's `ui.map`, which the menus draw them",
-        "from (the player's own; nothing is shipped). `mp_map_grafix`: the Xbox's has the 13 Xbox maps' pictures",
-        "(the PC version's first 13) and its \"?\"; the PC version's other 8 are its own maps'.",
-        "",
-    ]
-    report += [f"- `{tag}`" for tag in sorted(XBOX_BITMAPS)]
-    report += [
-        "",
-        "These frames are drawn from a frame of the Xbox map's bitmap of the same name, whose other frames differ:",
-        "the same picture, or for the profile settings the Xbox's picture for the same thing.",
-        "",
-        "| The PC version's frame | The Xbox's frame |",
-        "| --- | --- |",
-    ]
-    report += [f"| `{name}.png` | `{tag}` frame {index} |" for name, tag, index in sorted(art.xbox_frames)]
-    report += [
-        "",
-        "These frames are added after a bitmap's, drawn scaled from the Xbox map's (the profile settings'",
-        "picture of Gamepad Setup: the Xbox's Controller Setup's pictures of the button settings).",
-        "",
-        "| Our bitmap | The Xbox's frame |",
-        "| --- | --- |",
-    ]
-    report += [f"| `{name}` | `{tag}` frame {index} |" for name, tag, index in art.added_frames]
-    report += [
-        "",
-        "## Placeholders, to be redrawn",
-        "",
-        "The Xbox's map has none of these (or other pictures under the name), so each frame is a placeholder",
-        "until it is redrawn.",
-        "",
-        "| File | Size | The PC version's picture |",
-        "| --- | --- | --- |",
-    ]
-    report += [f"| `{png}` | {w}x{h} | `{source}` |" for png, w, h, source in sorted(art.pictures)]
-    report += ["", f"{len(art.pictures)} of {len(art.pngs)} frames are placeholders.",
-               "", "The PC version's `ui\\gamespy` and `ui\\ticker` fonts are drawn with `ui\\small_ui`, which",
-               "the Xbox's map has.", ""]
-    (MENUS / "NON_HANDDRAWN.md").write_text("\n".join(report))
+    (MENUS / "NON_HANDDRAWN.md").write_text(non_handdrawn(art))
     # what is not wired
     used = Counter()
     for path in CE.glob("*.xml"):
@@ -732,7 +769,8 @@ def main() -> None:
     }, indent=1) + "\n")
     size = sum((MENUS / name).stat().st_size for name in files)
     print(f"{len(widgets)} widgets in {len(folders)} files, {len(string_lists)} string lists, {len(bitmaps)} bitmaps "
-          f"({len(art.pngs)} frames, {len(art.pictures)} not redrawn); {size // 1024} KB; fonts {dict(fonts)}")
+          f"({len(art.pngs)} frames, {len(art.drawings)} drawn for this port, {len(art.pictures)} placeholders); "
+          f"{size // 1024} KB; fonts {dict(fonts)}")
 
 
 if __name__ == "__main__":

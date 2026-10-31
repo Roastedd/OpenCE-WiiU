@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="256" viewBox="0 0 512 256">
+  <title>Join or create a game on the LAN: three screens linked by cables to one switch</title>
+  <!-- Multiplayer's picture of Join's and Create's LAN (mp_options frame 1), drawn for this port
+       in place of the PC version's: its widget shows the top left 307x244 of the frame, beside the
+       list. tools/render_menu_art.py draws it at twice this size. -->
+  <defs>
+    <!-- the glow: the drawing's silhouette blurred in the menus' blue, and
+         its lines' own bloom, under it -->
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="512" height="256" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="4.5" result="wide"/>
+      <feFlood flood-color="#2895FF" flood-opacity="0.7"/>
+      <feComposite in2="wide" operator="in" result="halo"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="1.4" result="bloom"/>
+      <feMerge>
+        <feMergeNode in="halo"/>
+        <feMergeNode in="bloom"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- a softer glow for the lines alone -->
+    <filter id="soft" filterUnits="userSpaceOnUse" x="0" y="0" width="512" height="256" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2.2" result="bloom"/>
+      <feMerge>
+        <feMergeNode in="bloom"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- the projection's light, and its grid, fading out from the middle -->
+    <radialGradient id="pool" gradientUnits="userSpaceOnUse" cx="147" cy="114" r="150" gradientTransform="translate(147 114) scale(1 0.73) translate(-147 -114)">
+      <stop offset="0" stop-color="#1667C8" stop-opacity="0.42"/>
+      <stop offset="0.55" stop-color="#0E4FA6" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#0A3C86" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="fade" gradientUnits="userSpaceOnUse" cx="147" cy="114" r="150" gradientTransform="translate(147 114) scale(1 0.73) translate(-147 -114)">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="1"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <mask id="fading" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="256">
+      <rect width="512" height="256" fill="url(#fade)"/>
+    </mask>
+    <pattern id="grid" patternUnits="userSpaceOnUse" x="7" y="2" width="14" height="14">
+      <path d="M14 0H0V14" fill="none" stroke="#2F8EF0" stroke-width="0.6"/>
+    </pattern>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0D3B78"/>
+      <stop offset="1" stop-color="#04173A"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0D3F80"/>
+      <stop offset="1" stop-color="#1F6FC4"/>
+    </linearGradient>
+  </defs>
+  <!-- the projection: a pool of light and a faint grid -->
+  <ellipse cx="147" cy="114" rx="150" ry="110" fill="url(#pool)"/>
+  <rect x="-3" y="4" width="300" height="220" fill="url(#grid)" opacity="0.22" mask="url(#fading)"/>
+  <!-- the cables -->
+  <g filter="url(#soft)">
+    <path d="M49,97 V118.5 q0,8 8,8 H102 q8,0 8,8 V156 M147,85 V156 M245,97 V118.5 q0,8 -8,8 H192 q-8,0 -8,8 V156" fill="none" stroke="#55BEFF" stroke-width="2.6" stroke-linejoin="round"/>
+    <circle cx="79.5" cy="126.5" r="2.8" fill="#E6F9FF"/>
+    <circle cx="147" cy="120.5" r="2.8" fill="#E6F9FF"/>
+    <circle cx="214.5" cy="126.5" r="2.8" fill="#E6F9FF"/>
+  </g>
+  <!-- the screens -->
+  <g filter="url(#glow)">
+    <rect x="45" y="86" width="8" height="7" fill="#06204A" stroke="#55BEFF" stroke-width="1.4"/>
+    <rect x="34" y="92" width="30" height="5" rx="2.5" fill="#06204A" stroke="#55BEFF" stroke-width="1.4"/>
+    <rect x="12" y="34" width="74" height="52" rx="4" fill="#041634" stroke="#55BEFF" stroke-width="2.2"/>
+    <rect x="16" y="38" width="66" height="44" rx="1.5" fill="url(#screen)"/>
+    <circle cx="49" cy="60" r="12.32" fill="none" stroke="#E6F9FF" stroke-width="1.6"/>
+    <path d="M29.2,60 h13.2 M55.6,60 h13.2 M49,40.2 v13.2 M49,66.6 v13.2" stroke="#E6F9FF" stroke-width="1.6"/>
+    <rect x="143" y="74" width="8" height="7" fill="#06204A" stroke="#55BEFF" stroke-width="1.4"/>
+    <rect x="132" y="80" width="30" height="5" rx="2.5" fill="#06204A" stroke="#55BEFF" stroke-width="1.4"/>
+    <rect x="110" y="22" width="74" height="52" rx="4" fill="#041634" stroke="#55BEFF" stroke-width="2.2"/>
+    <rect x="114" y="26" width="66" height="44" rx="1.5" fill="url(#screen)"/>
+    <circle cx="147" cy="41.84" r="7.48" fill="#A8E6FF"/>
+    <path d="M131.16,67 q0,-15.84 15.84,-15.84 q15.84,0 15.84,15.84 z" fill="#A8E6FF"/>
+    <rect x="241" y="86" width="8" height="7" fill="#06204A" stroke="#55BEFF" stroke-width="1.4"/>
+    <rect x="230" y="92" width="30" height="5" rx="2.5" fill="#06204A" stroke="#55BEFF" stroke-width="1.4"/>
+    <rect x="208" y="34" width="74" height="52" rx="4" fill="#041634" stroke="#55BEFF" stroke-width="2.2"/>
+    <rect x="212" y="38" width="66" height="44" rx="1.5" fill="url(#screen)"/>
+    <path d="M238,78 V43" stroke="#E6F9FF" stroke-width="1.8" stroke-linecap="round"/>
+    <path d="M239,43.5 q6,-3 11,1 t10,0 v11 q-5,-3 -10,0 t-11,-1 z" fill="#A8E6FF"/>
+  </g>
+  <!-- the switch -->
+  <g filter="url(#glow)">
+    <rect x="88" y="156" width="118" height="32" rx="5" fill="url(#body)" stroke="#55BEFF" stroke-width="2.4"/>
+    <rect x="102" y="164" width="16" height="9" rx="1.5" fill="#020C20" stroke="#55BEFF" stroke-width="1.1"/>
+    <circle cx="110" cy="179" r="2" fill="#E6F9FF"/>
+    <rect x="139" y="164" width="16" height="9" rx="1.5" fill="#020C20" stroke="#55BEFF" stroke-width="1.1"/>
+    <circle cx="147" cy="179" r="2" fill="#E6F9FF"/>
+    <rect x="176" y="164" width="16" height="9" rx="1.5" fill="#020C20" stroke="#55BEFF" stroke-width="1.1"/>
+    <circle cx="184" cy="179" r="2" fill="#E6F9FF"/>
+    <circle cx="100" cy="172" r="2.4" fill="#A8E6FF"/>
+    <circle cx="194" cy="172" r="2.4" fill="#2A7FD4"/>
+  </g>
+</svg>

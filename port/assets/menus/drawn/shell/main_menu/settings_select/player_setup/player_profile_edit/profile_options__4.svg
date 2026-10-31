@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="256" viewBox="0 0 512 256">
+  <title>Audio Setup: a speaker, its sound, and faders for the music and everything else</title>
+  <!-- The profile settings' picture of Audio Setup (profile_options frame 4), drawn for this port
+       in place of the PC version's: its widget shows the top left 279x202 of the frame, beside the
+       list. tools/render_menu_art.py draws it at twice this size. -->
+  <defs>
+    <!-- the glow: the drawing's silhouette blurred in the menus' blue, and
+         its lines' own bloom, under it -->
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="512" height="256" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="4.5" result="wide"/>
+      <feFlood flood-color="#2895FF" flood-opacity="0.7"/>
+      <feComposite in2="wide" operator="in" result="halo"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="1.4" result="bloom"/>
+      <feMerge>
+        <feMergeNode in="halo"/>
+        <feMergeNode in="bloom"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- a softer glow for the lines alone -->
+    <filter id="soft" filterUnits="userSpaceOnUse" x="0" y="0" width="512" height="256" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2.2" result="bloom"/>
+      <feMerge>
+        <feMergeNode in="bloom"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- the projection's light, and its grid, fading out from the middle -->
+    <radialGradient id="pool" gradientUnits="userSpaceOnUse" cx="143" cy="100" r="132" gradientTransform="translate(143 100) scale(1 0.73) translate(-143 -100)">
+      <stop offset="0" stop-color="#1667C8" stop-opacity="0.42"/>
+      <stop offset="0.55" stop-color="#0E4FA6" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#0A3C86" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="fade" gradientUnits="userSpaceOnUse" cx="143" cy="100" r="132" gradientTransform="translate(143 100) scale(1 0.73) translate(-143 -100)">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="1"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <mask id="fading" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="256">
+      <rect width="512" height="256" fill="url(#fade)"/>
+    </mask>
+    <pattern id="grid" patternUnits="userSpaceOnUse" x="3" y="2" width="14" height="14">
+      <path d="M14 0H0V14" fill="none" stroke="#2F8EF0" stroke-width="0.6"/>
+    </pattern>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0D3B78"/>
+      <stop offset="1" stop-color="#04173A"/>
+    </linearGradient>
+    <radialGradient id="cone" cx="0.38" cy="0.35" r="0.75">
+      <stop offset="0" stop-color="#2B7BD6"/>
+      <stop offset="0.7" stop-color="#0C3B7A"/>
+      <stop offset="1" stop-color="#06204A"/>
+    </radialGradient>
+    <radialGradient id="dome" cx="0.35" cy="0.32" r="0.8">
+      <stop offset="0" stop-color="#E6F9FF"/>
+      <stop offset="0.45" stop-color="#55BEFF"/>
+      <stop offset="1" stop-color="#0D4A92"/>
+    </radialGradient>
+    <linearGradient id="knob" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7FD3FF"/>
+      <stop offset="1" stop-color="#1B6FC8"/>
+    </linearGradient>
+  </defs>
+  <!-- the projection: a pool of light and a faint grid -->
+  <ellipse cx="143" cy="100" rx="132" ry="96" fill="url(#pool)"/>
+  <rect x="11" y="4" width="264" height="192" fill="url(#grid)" opacity="0.22" mask="url(#fading)"/>
+  <!-- the speaker -->
+  <g filter="url(#glow)">
+    <rect x="34" y="24" width="80" height="154" rx="9" fill="url(#body)" stroke="#55BEFF" stroke-width="2.4"/>
+    <rect x="40" y="30" width="68" height="142" rx="5" fill="none" stroke="#2A7FD4" stroke-width="1"/>
+    <circle cx="74" cy="56" r="14" fill="#06204A" stroke="#55BEFF" stroke-width="2"/>
+    <circle cx="74" cy="56" r="6.5" fill="url(#dome)"/>
+    <circle cx="74" cy="122" r="33" fill="#05183A" stroke="#55BEFF" stroke-width="2.4"/>
+    <circle cx="74" cy="122" r="26" fill="url(#cone)" stroke="#A8E6FF" stroke-width="1.2"/>
+    <circle cx="74" cy="122" r="19" fill="none" stroke="#55BEFF" stroke-width="0.9" opacity="0.8"/>
+    <circle cx="74" cy="122" r="12" fill="none" stroke="#55BEFF" stroke-width="0.9" opacity="0.8"/>
+    <circle cx="74" cy="122" r="8" fill="url(#dome)"/>
+    <rect x="60" y="160" width="28" height="6" rx="3" fill="#020C20" stroke="#2A7FD4" stroke-width="1.2"/>
+  </g>
+  <!-- its sound -->
+  <g filter="url(#soft)">
+    <path d="M122.86,90.62 A20,20 0 0 1 122.86,117.38" fill="none" stroke="#A8E6FF" stroke-width="3.2" stroke-linecap="round" opacity="1"/>
+    <path d="M133.27,81.25 A34,34 0 0 1 133.27,126.75" fill="none" stroke="#55BEFF" stroke-width="2.7" stroke-linecap="round" opacity="0.78"/>
+    <path d="M143.67,71.88 A48,48 0 0 1 143.67,136.12" fill="none" stroke="#55BEFF" stroke-width="2.2" stroke-linecap="round" opacity="0.56"/>
+  </g>
+  <!-- the faders: the music, and everything else -->
+  <g filter="url(#glow)">
+    <path d="M181,58 h7 M181,71.5 h7 M181,85 h7 M181,98.5 h7 M181,112 h7 M181,125.5 h7 M181,139 h7 M181,152.5 h7 M181,166 h7" stroke="#2A7FD4" stroke-width="1.2"/>
+    <rect x="192.5" y="52" width="7" height="120" rx="3.5" fill="#03132E" stroke="#55BEFF" stroke-width="1.6"/>
+    <rect x="194" y="74" width="4" height="96" rx="2" fill="#55BEFF" opacity="0.9"/>
+    <rect x="184" y="68" width="24" height="12" rx="3" fill="url(#knob)" stroke="#E6F9FF" stroke-width="1.4"/>
+    <path d="M189,74 h14" stroke="#E6F9FF" stroke-width="1.2"/>
+    <path d="M225,58 h7 M225,71.5 h7 M225,85 h7 M225,98.5 h7 M225,112 h7 M225,125.5 h7 M225,139 h7 M225,152.5 h7 M225,166 h7" stroke="#2A7FD4" stroke-width="1.2"/>
+    <rect x="236.5" y="52" width="7" height="120" rx="3.5" fill="#03132E" stroke="#55BEFF" stroke-width="1.6"/>
+    <rect x="238" y="112" width="4" height="58" rx="2" fill="#55BEFF" opacity="0.9"/>
+    <rect x="228" y="106" width="24" height="12" rx="3" fill="url(#knob)" stroke="#E6F9FF" stroke-width="1.4"/>
+    <path d="M233,112 h14" stroke="#E6F9FF" stroke-width="1.2"/>
+  </g>
+  <g filter="url(#soft)">
+    <path d="M190,38 v-20 l14,-4 v18" fill="none" stroke="#A8E6FF" stroke-width="2.4" stroke-linejoin="round"/>
+    <ellipse cx="186.5" cy="38.5" rx="4.6" ry="3.6" transform="rotate(-20 186.5 38.5)" fill="#A8E6FF"/>
+    <ellipse cx="200.5" cy="32.5" rx="4.6" ry="3.6" transform="rotate(-20 200.5 32.5)" fill="#A8E6FF"/>
+    <polyline points="226,28 229,28 232,20 235,37 238,13 241,42 244,18 247,34 250,24 253,28 256,28" fill="none" stroke="#A8E6FF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
