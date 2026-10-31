@@ -190,4 +190,7 @@ def test_the_menus_name_known_platforms_and_match_their_generator():
                "network_setup.xml").read_text()
     for row in ("op_allow_upnp", "op_join_from_clipboard", "op_auto"):
         assert re.search(rf'<child widget="[^"]*/{row}"[^>]*platform="desktop android"', network), row
+        assert not re.search(rf'<child widget="[^"]*/{row}"[^>]*platform="[^"]*web', network), row
+    # (the Wii U updates itself too: port/wiiu/src/wiiu_update.c)
+    assert re.search(r'<child widget="[^"]*/op_auto"[^>]*platform="wiiu"', network)
     assert re.search(r'<child widget="[^"]*/op_online"[^>]*platform="desktop android web"', network)

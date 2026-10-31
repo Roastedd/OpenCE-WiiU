@@ -88,9 +88,44 @@ version.
   it catches up. The **Quality** graphics mode turns it on. Off by default.
 - Every setting is also in `config.toml`, each with a comment saying what it does.
 
+## Updates
+
+Release builds look for a new version each time the game starts, if the console is online (Settings → your profile → Network Setup →
+**Check for updates**, on by default). When there is one, a panel at the main menu says so:
+
+- **A**: update now. The new files (about 18 MB) are downloaded, checked, and put in place, and the game starts the new version by
+  itself. While the panel says the files are being put in place, the HOME button is off for a moment: don't turn the console off.
+- **B**: not now. The game asks again the next time it starts.
+- **X twice**: never ask again (this turns Check for updates off).
+
+A download stopped with B, with HOME or by closing the game goes on from where it stopped the next time you choose to update. The update
+needs the download's size and 32 MB more free on the SD card, and says so if they are not there. It changes only the release's own files
+(`halo.wuhb`, `shaders.pack`, `brokers.txt`): never your maps, saves, settings (`config.toml`) or anything in `data/`. A new version whose
+maps would have to be converted again is not offered.
+
+If the new version does not reach its main menu (it crashes before it gets there, or does not get there twice in a row), the game puts the
+version you had back by itself and tells you at the main menu. That version is not offered again (press Y there if you want it offered
+again); a later one is. Without a network, the game starts as it always does.
+
 ## If something goes wrong
 
 - If the game stops responding, press **HOME** and choose **Close Software**. If HOME does nothing, hold the console's power button.
 - To report a problem, include these files from `wiiu/apps/halo/` on the SD card: `log.txt`, `log-previous.txt`, `crash.txt`, `blackbox.txt`,
   `exit-trail.txt` and `data/debug.txt`. Take them after the game is closed.
 - A map missing from `data/maps/` stops the game at the end of the level before it. Make sure every converted map is there.
+
+### If an update went wrong
+
+The updater keeps its files in `wiiu/apps/halo/update/` on the SD card: `<name>.part` (a download not finished), `<name>.new` (downloaded
+and checked, not yet in place), `<name>.old` (the version you had, kept until the new one has reached its main menu), `<name>.bad` (a
+version set aside, deleted at the next start), and its journal, `state.txt` and `state2.txt`. Whatever stops the console during an update,
+the next start finishes the update or undoes it. It cannot when Halo has gone from the Wii U Menu (the power was cut at the one moment
+`halo.wuhb` itself was being swapped), or when the new version crashes before it shows anything. Then, on a computer:
+
+1. In `wiiu/apps/halo/update/`, for each file ending in `.old` (`halo.wuhb.old`, `shaders.pack.old`, ...): delete the file of the same
+   name in `wiiu/apps/halo/`, if there is one, and move the `.old` file there without its `.old` (`update/halo.wuhb.old` becomes
+   `halo.wuhb`).
+2. Delete `update/state.txt` and `update/state2.txt`.
+
+That is the version you had, as it was. If there are no `.old` files, install a release by hand as in "Installing" and delete the
+`update` folder.

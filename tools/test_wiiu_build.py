@@ -198,6 +198,34 @@ def test_the_games_main_is_the_shells_to_run(monkeypatch):
     assert is_compiled(text, "port/linux/src/xbox_kernel.c")
 
 
+def test_the_updaters_units_have_their_libraries_and_defines(monkeypatch):
+    """port/wiiu/src/wiiu_update*.c: Mbed TLS's and Monocypher's headers, the build number, and the releases' repository and key only
+    when configure.py's environment gives them (the updater is off without them); a repository or key of another form stops it"""
+    for name in ("HALO_BUILD_NUMBER", "HALO_UPDATE_REPOSITORY", "HALO_UPDATE_PUBLIC_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    text = graph(monkeypatch)
+    for name in wiiu_build.WIIU_UPDATE_UNITS:
+        flags = compile_flags(text, f"port/wiiu/src/{name}").split()
+        assert "-Iport/third_party/mbedtls/include" in flags and "-Iport/third_party/monocypher" in flags, name
+        assert "-DHALO_BUILD_NUMBER=0" in flags and "-fshort-wchar" not in flags, name
+        assert not [flag for flag in flags if flag.startswith(("-DHALO_UPDATE_REPOSITORY", "-DHALO_UPDATE_PUBLIC_KEY"))], name
+    assert "HALO_BUILD_NUMBER" not in compile_flags(text, "port/wiiu/src/wiiu_shell.c")
+    monkeypatch.setenv("HALO_BUILD_NUMBER", "12")
+    monkeypatch.setenv("HALO_UPDATE_REPOSITORY", "owner/halo-wiiu.releases")
+    monkeypatch.setenv("HALO_UPDATE_PUBLIC_KEY", "ab" * 32)
+    flags = compile_flags(graph(monkeypatch), "port/wiiu/src/wiiu_update.c").split()
+    assert "-DHALO_BUILD_NUMBER=12" in flags
+    assert '-DHALO_UPDATE_REPOSITORY=\\"owner/halo-wiiu.releases\\"' in flags
+    assert '-DHALO_UPDATE_PUBLIC_KEY=\\"' + "ab" * 32 + '\\"' in flags
+    for name, value in (("HALO_UPDATE_PUBLIC_KEY", "AB" * 32), ("HALO_UPDATE_PUBLIC_KEY", "ab" * 31), ("HALO_UPDATE_REPOSITORY", "no-slash"),
+                        ("HALO_UPDATE_REPOSITORY", "owner/repo; rm -rf /")):
+        monkeypatch.setenv(name, value)
+        with pytest.raises(ValueError):
+            graph(monkeypatch)
+        monkeypatch.setenv("HALO_UPDATE_PUBLIC_KEY", "ab" * 32)
+        monkeypatch.setenv("HALO_UPDATE_REPOSITORY", "owner/halo-wiiu.releases")
+
+
 def test_the_wii_us_own_units_are_built_as_the_platform_layer_is(monkeypatch, tmp_path):
     """port/wiiu/src/wiiu_*.c have the native ABI; others the platform layer's"""
     unit = ROOT / "port/wiiu/src" / "zz_test_unit.c"

@@ -16,4 +16,6 @@ Internet play (`port/linux/src/p2p_crypto.c`) uses its Ed25519 (with
 SHA-512) and its conversion of Ed25519 public keys to X25519: a run's key
 signs the listing of a public game in the server browser
 (`port/linux/src/p2p_lobby.c`). It builds into the Linux, Windows and
-Android platform layers.
+Android platform layers. The Wii U's updater
+(`port/wiiu/src/wiiu_update_core.c`) checks its releases' manifests with its
+`crypto_ed25519_check`.

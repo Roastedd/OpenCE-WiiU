@@ -466,6 +466,9 @@ let the game write to it.
 Builds that you make yourself have no build number. They do not look for
 updates.
 
+The Wii U build updates itself from releases of its own, signed with a key
+of their own: refer to "Updates" in [the Wii U README](../wiiu/README.md).
+
 ## Frame rate
 
 The game calculates its world at 30 Hz, as on the Xbox. On the Xbox, the

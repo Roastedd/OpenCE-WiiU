@@ -33,6 +33,7 @@ profile). Without it, each file is optimised alone. No profile is used either wa
 """
 
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -103,11 +104,35 @@ WIIU_EXCLUDE: Dict[str, str] = {
 # 16-bit wchar_t, no XDK headers: wut's and newlib's structures have their real layout)
 WIIU_NATIVE_PREFIX = "wiiu_"
 
+# The self-updater's units (port/wiiu/src/wiiu_update*.c): Mbed TLS's headers for the downloads, Monocypher's for the manifest's
+# signature, and the build's update defines (update_defines).
+WIIU_UPDATE_UNITS = ("wiiu_update.c", "wiiu_update_core.c", "wiiu_update_http.c")
+
 # what the link needs and the compile does not say: wut's specs and libraries (the environment has WUT_ROOT, as
 # the opence-wiiu container does)
 # (--wrap: the game thread's waits for locks are timed while the profiler runs, port/wiiu/src/wiiu_lockprof.c)
 WIIU_LINK_FLAGS = ["-g", "-specs=$$WUT_ROOT/share/wut.specs", WIIU_MARCH, "-meabi", "-mhard-float", "-Wl,--wrap=pthread_mutex_lock"]
 WIIU_LIBS = ["-L$$WUT_ROOT/lib", "-lwut", "-lm"]
+
+
+def update_defines(release: bool) -> str:
+    """The Wii U updater's configuration (port/wiiu/src/wiiu_update.c), from configure.py's environment: the build number
+    (HALO_BUILD_NUMBER, as the desktop updater's: updater_defines), the repository its releases are published in
+    (HALO_UPDATE_REPOSITORY, "owner/repo") and the Ed25519 public key their manifests are signed with (HALO_UPDATE_PUBLIC_KEY, 64
+    hexadecimal digits). Without the last two the updater is off. A value of another form stops configure.py: a build that
+    looks in the wrong place, or trusts a key it was not meant to, is worse than one without an updater."""
+    defines = [updater_defines(release)]
+    repository = os.environ.get("HALO_UPDATE_REPOSITORY", "")
+    key = os.environ.get("HALO_UPDATE_PUBLIC_KEY", "")
+    if repository:
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+            raise ValueError(f"HALO_UPDATE_REPOSITORY is not owner/repo: {repository!r}")
+        defines.append(f'-DHALO_UPDATE_REPOSITORY=\\"{repository}\\"')
+    if key:
+        if not re.fullmatch(r"[0-9a-f]{64}", key):
+            raise ValueError("HALO_UPDATE_PUBLIC_KEY is not 64 lowercase hexadecimal digits (the raw Ed25519 public key)")
+        defines.append(f'-DHALO_UPDATE_PUBLIC_KEY=\\"{key}\\"')
+    return " ".join(defines)
 
 
 def wiiu_flags(flags: Sequence[str]) -> List[str]:
@@ -343,7 +368,8 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
     for source in sorted(wiiu_src.glob("*.c")):
         if source.name.startswith(WIIU_NATIVE_PREFIX):
             # (-ffp-contract=off: the objects are checked for fused multiply-adds whether or not they touch the simulation)
-            add_object(source, f"{posix_cflags} -ffp-contract=off -I{wiiu_src} -I{platform_dir}")
+            extra = f" {mbedtls_include} -I{MONOCYPHER_DIR} {update_defines(release)}" if source.name in WIIU_UPDATE_UNITS else ""
+            add_object(source, f"{posix_cflags} -ffp-contract=off -I{wiiu_src} -I{platform_dir}{extra}")
         else:
             # (the platform layer's flags; the Xbox-facing units that include xgpu.h get a stand-in for SDL's OpenGL header)
             add_object(source, f"{platform_cflags} -I{wiiu_src} -I{WIIU_DIR / 'include'}")

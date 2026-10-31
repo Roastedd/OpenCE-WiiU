@@ -23,8 +23,10 @@ Not run on a console.
 #include "port_config.h"
 #include "wiiu_indices.h"
 #include "wiiu_mip.h"
+#include "wiiu_font.h"
 #include "wiiu_overlay.h"
 #include "wiiu_stream_queue.h"
+#include "wiiu_update.h"
 
 /* d3d8_gx2.c: the queue of streams and its buffers (halo/gx2_thread.txt 7) */
 extern struct stream_queue dk_stream_queue;
@@ -194,6 +196,12 @@ static struct
 	struct blit_vertex *overlay_quad;
 	OSTime overlay_previous_end, overlay_view_time;
 	unsigned long ring_total, draw_total, overlay_ring_previous, overlay_draw_previous;
+	/* the updater's panel (wiiu_update.c): its text drawn into a texture when it changes, over the middle of both screens while the main menu
+	has it */
+	GX2Texture panel_texture;
+	GX2Sampler panel_sampler;
+	unsigned panel_generation;
+	int panel_made, panel_shown;
 	/* the GPU's own time for a frame's draws (gpu_frame_begin, gpu_frame_end, gpu_poll): the slot of samples in use, each slot's state (0 free, 1 begun,
 	2 ended and not yet read) and when it ended; the frame now drawn is measured (1) or not (2: no free slot); the five seconds' sum and longest */
 	unsigned gpu_slot;
@@ -711,6 +719,7 @@ static void gt_log(unsigned frames);
 static void gpu_poll(void);
 static void gpu_frame_begin(void);
 static int overlay_make(void);
+static int panel_make(void);
 
 /* room in the ring, noted as written to (the caller writes it before it is flushed, which is at the end of the stream or the present) */
 static void *ring_reserve(uint32_t size)
@@ -2492,6 +2501,9 @@ static int initialize(void)
 		gx.overlay_shown = on != 0;
 		wiiu_log("GX2: the performance overlay is %s (halo/overlay.txt 1 shows it from the start; L + R + - on the GamePad shows or hides it)", gx.overlay_shown ? "shown" : "hidden");
 	}
+	gx.panel_made = panel_make();
+	if (!gx.panel_made)
+		wiiu_log("GX2: no memory for the updater's panel: it is not drawn");
 	{
 		/* how fast the index range runs on this machine: over a buffer made as the game's index buffers are (calloc), written, then read at once, then again, then with a 1 MB sweep between
 		(the L1 holds 32 KB; the L2 the core has 0.5 to 2 MB) */
@@ -3286,6 +3298,143 @@ static void overlay_draw(GX2ColorBuffer *screen, GX2ContextState *context, unsig
 	GX2DrawEx(GX2_PRIMITIVE_MODE_TRIANGLES, 6, 0, 1);
 }
 
+/* ---------- the updater's panel (wiiu_update.c): its lines in the 3x5 font on a dark box, over the middle of each screen while the main menu has it */
+
+#define PANEL_WIDTH 256u
+#define PANEL_HEIGHT 64u
+
+static int panel_make(void)
+{
+	GX2Surface *surface = &gx.panel_texture.surface;
+
+	surface->dim = GX2_SURFACE_DIM_TEXTURE_2D;
+	surface->width = PANEL_WIDTH;
+	surface->height = PANEL_HEIGHT;
+	surface->depth = 1;
+	surface->mipLevels = 1;
+	surface->format = GX2_SURFACE_FORMAT_UNORM_R8_G8_B8_A8;
+	surface->aa = GX2_AA_MODE1X;
+	surface->use = GX2_SURFACE_USE_TEXTURE;
+	surface->tileMode = GX2_TILE_MODE_LINEAR_ALIGNED;
+	GX2CalcSurfaceSizeAndAlignment(surface);
+	surface->image = gx_alloc_raw(surface->imageSize, surface->alignment ? surface->alignment : 256);
+	if (!surface->image)
+		return 0;
+	memset(surface->image, 0, surface->imageSize);
+	gx.panel_texture.viewNumMips = 1;
+	gx.panel_texture.viewNumSlices = 1;
+	gx.panel_texture.compMap = GX2_COMP_MAP(GX2_SQ_SEL_R, GX2_SQ_SEL_G, GX2_SQ_SEL_B, GX2_SQ_SEL_A);
+	GX2InitTextureRegs(&gx.panel_texture);
+	GX2InitSampler(&gx.panel_sampler, GX2_TEX_CLAMP_MODE_CLAMP, GX2_TEX_XY_FILTER_MODE_POINT);
+	return 1;
+}
+
+/* the panel's lines drawn into its texture: a dark box with a green edge, its first line (the title) green, the others white */
+static void panel_refresh(const char *text)
+{
+	static uint8_t pixels[PANEL_WIDTH * PANEL_HEIGHT * 4];
+	GX2Surface *surface = &gx.panel_texture.surface;
+	text_layer layer;
+	const char *line = text;
+	unsigned x, y, row = 0;
+
+	for (y = 0; y < PANEL_HEIGHT; y++)
+		for (x = 0; x < PANEL_WIDTH; x++)
+		{
+			uint8_t *pixel = pixels + ((size_t)y * PANEL_WIDTH + x) * 4;
+			const int edge = x == 0 || y == 0 || x == PANEL_WIDTH - 1 || y == PANEL_HEIGHT - 1;
+
+			pixel[0] = edge ? 0x70 : 0x0c;
+			pixel[1] = edge ? 0xb0 : 0x10;
+			pixel[2] = edge ? 0x70 : 0x14;
+			pixel[3] = edge ? 0xff : 0xe6;
+		}
+	/* (two rows of pixels in from the edge: ten rows of 6-pixel cells fit under it) */
+	text_layer_init(&layer, pixels + 2 * PANEL_WIDTH * 4, PANEL_WIDTH, PANEL_HEIGHT - 4, 1);
+	while (*line && row < layer.rows)
+	{
+		char part[80];
+		const size_t length = strcspn(line, "\n");
+
+		snprintf(part, sizeof(part), "%.*s", (int)(length < sizeof(part) - 1 ? length : sizeof(part) - 1), line);
+		layer.color[0] = row ? 0xff : 0x90;
+		layer.color[1] = row ? 0xff : 0xe0;
+		layer.color[2] = row ? 0xff : 0x90;
+		layer.color[3] = 0xff;
+		text_layer_puts(&layer, 1, row, part);
+		row++;
+		line += length;
+		if (*line == '\n')
+			line++;
+	}
+	for (y = 0; y < PANEL_HEIGHT; y++)
+		memcpy((uint8_t *)surface->image + (size_t)y * surface->pitch * 4, pixels + (size_t)y * PANEL_WIDTH * 4, PANEL_WIDTH * 4);
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, surface->image, surface->imageSize);
+}
+
+/* each present: whether there is a panel to draw, its texture drawn again when its text has changed */
+static void panel_update(void)
+{
+	static char text[704];
+	unsigned generation = gx.panel_generation;
+
+	gx.panel_shown = gx.panel_made && wiiu_update_panel(text, sizeof(text), &generation);
+	if (gx.panel_shown && generation != gx.panel_generation)
+	{
+		gx.panel_generation = generation;
+		panel_refresh(text);
+	}
+}
+
+/* the panel over the middle of a screen, below the main menu's title, in whole pixels per texel (its vertices are the ring's: each screen's draw its own) */
+static void panel_draw(GX2ColorBuffer *screen, GX2ContextState *context)
+{
+	static const unsigned corner_x[6] = { 0, 1, 0, 1, 1, 0 };
+	static const unsigned corner_y[6] = { 0, 0, 1, 0, 1, 1 };
+	const float screen_width = (float)screen->surface.width, screen_height = (float)screen->surface.height;
+	struct blit_vertex *vertices = ring_reserve(6 * sizeof(struct blit_vertex));
+	unsigned scale = (unsigned)(screen_width * 0.9f) / PANEL_WIDTH, i;
+	float x0, x1, y0, y1;
+
+	if (!vertices)
+		return;
+	if (scale > 4)
+		scale = 4;
+	if (!scale)
+		scale = 1;
+	x1 = (float)(PANEL_WIDTH * scale) / screen_width;
+	x0 = -x1;
+	y1 = 1.0f - 2.0f * (0.62f * screen_height - 0.5f * (float)(PANEL_HEIGHT * scale)) / screen_height;
+	y0 = y1 - 2.0f * (float)(PANEL_HEIGHT * scale) / screen_height;
+	for (i = 0; i < 6; i++)
+	{
+		struct blit_vertex *v = &vertices[i];
+
+		v->x = corner_x[i] ? x1 : x0;
+		v->y = corner_y[i] ? y0 : y1;
+		v->u = (float)corner_x[i];
+		v->v = (float)corner_y[i];
+		v->r = v->g = v->b = v->a = 1.0f;
+	}
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER, vertices, 6 * sizeof(struct blit_vertex));
+	GX2SetContextState(context);
+	GX2SetColorBuffer(screen, GX2_RENDER_TARGET_0);
+	GX2SetViewport(0.0f, 0.0f, screen_width, screen_height, 0.0f, 1.0f);
+	GX2SetScissor(0, 0, (uint32_t)screen_width, (uint32_t)screen_height);
+	blit_state();
+	GX2SetColorControl(GX2_LOGIC_OP_COPY, 1, FALSE, TRUE);
+	GX2SetBlendControl(GX2_RENDER_TARGET_0, GX2_BLEND_MODE_SRC_ALPHA, GX2_BLEND_MODE_INV_SRC_ALPHA, GX2_BLEND_COMBINE_MODE_ADD, TRUE, GX2_BLEND_MODE_ONE,
+		GX2_BLEND_MODE_INV_SRC_ALPHA, GX2_BLEND_COMBINE_MODE_ADD);
+	GX2SetFetchShader(&gx.blit.fetchShader);
+	GX2SetVertexShader(gx.blit.vertexShader);
+	GX2SetPixelShader(gx.blit.pixelShader);
+	GX2SetShaderMode(GX2_SHADER_MODE_UNIFORM_REGISTER);
+	GX2SetAttribBuffer(0, 6 * sizeof(struct blit_vertex), sizeof(struct blit_vertex), vertices);
+	GX2SetPixelTexture(&gx.panel_texture, gx.sampler_location);
+	GX2SetPixelSampler(&gx.panel_sampler, gx.sampler_location);
+	GX2DrawEx(GX2_PRIMITIVE_MODE_TRIANGLES, 6, 0, 1);
+}
+
 /* the hold-to-skip bar (xinput_wiiu.c says how far the hold is, 0 to 1): a grey frame and a white fill growing from the left, at the bottom middle of each screen, as games
 show a held skip. Its vertices are the ring's (each screen's draw its own: the GPU reads them after this returns). */
 static volatile float skip_progress;
@@ -3697,6 +3846,7 @@ static void present(const struct dk_command_present *command)
 		if (gx.overlay_shown && !(gx.overlay_frame++ & 1))
 			overlay_refresh();
 	}
+	panel_update();
 	if (gx.test_armed == 2)
 	{
 		gx.test_armed = 3;
@@ -3717,6 +3867,8 @@ static void present(const struct dk_command_present *command)
 			overlay_draw(WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState(), 3); /* (768 pixels of the TV's 1920) */
 		if (skip_progress > 0.0f)
 			skip_bar_draw(WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState(), skip_progress);
+		if (gx.panel_shown)
+			panel_draw(WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState());
 	}
 	GX2CopyColorBufferToScanBuffer(WHBGfxGetTVColourBuffer(), GX2_SCAN_TARGET_TV);
 	if (back)
@@ -3726,6 +3878,8 @@ static void present(const struct dk_command_present *command)
 			overlay_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState(), 2); /* (512 of the GamePad's 854) */
 		if (skip_progress > 0.0f)
 			skip_bar_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState(), skip_progress);
+		if (gx.panel_shown)
+			panel_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState());
 	}
 	GX2CopyColorBufferToScanBuffer(WHBGfxGetDRCColourBuffer(), GX2_SCAN_TARGET_DRC);
 	/* (the frame's work is handed to the GPU before the swap, whose wait for the display is then not in the time the work is said to have taken) */

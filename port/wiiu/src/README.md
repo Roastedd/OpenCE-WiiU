@@ -24,5 +24,9 @@ what newlib and wut lack, and, as they are written, stand-ins for the platform l
 | `wiiu_tls.c` | Thread-local storage: the four `__syscall_tls_*` newlib's pthread keys need and wut lacks, for libgcc's emulated TLS. |
 | `wiiu_input.[ch]` | The GamePad (VPAD) and the Pro and Classic Controllers (KPAD): their reads, their connections (`KPADSetConnectCallback`), their lights and motors. |
 | `wiiu_pad_players.[ch]` | Which player each controller is: the map that keeps a controller's player while it goes and comes back, the layouts (`input.wiiu_controller_layout`, "auto" among them) and the number its lights show. No system call. Tested on the desktop (`tools/harness/tests/test_wiiu_pad_players.py`). |
+| `wiiu_update.[ch]` | The self-updater's Cafe OS half: its worker thread, the panel at the main menu and its buttons, the card, RPXLoadingModule's unmount and launch (through `OSDynLoad`). Off unless the build is given a number, a repository and a key (`../README.md`, "Updates"). |
+| `wiiu_update_core.[ch]` | The updater's decisions: the manifest, its Ed25519 signature, the journal, the swap, the trial and the rollback. Tested on the desktop, with the power cut at every step (`tools/test_wiiu_update.py`). |
+| `wiiu_update_http.[ch]` | The updater's HTTPS: Mbed TLS over the BSD sockets (nsysnet's here), redirects, ranges, downloads that go on after HOME. Tested on the desktop against local TLS servers. |
+| `wiiu_update_roots.h` | The certificate authorities the updater trusts, written by `tools/wiiu/update_roots.py`. |
 
 None of this has run on a console.
