@@ -3602,20 +3602,20 @@ controller starts again at the most lines when either has changed */
 static void drs_settings(void)
 {
 	const unsigned long changes = config_changes();
-	long floor;
+	long fewest;
 	int on;
 
 	if (gx.drs_read && gx.drs_read_at == changes)
 		return;
 	gx.drs_read_at = changes;
 	on = config_boolean("display.dynamic_resolution") != 0;
-	floor = config_integer("display.dynamic_resolution_floor");
-	floor = floor < 540 ? 540 : floor > 810 ? 810 : floor;
-	if (gx.drs_read && on == gx.drs_on && (unsigned)floor == gx.drs_floor)
+	fewest = config_integer("display.dynamic_resolution_floor");
+	fewest = fewest < 540 ? 540 : fewest > 810 ? 810 : fewest;
+	if (gx.drs_read && on == gx.drs_on && (unsigned)fewest == gx.drs_floor)
 		return;
 	gx.drs_read = 1;
 	gx.drs_on = on;
-	gx.drs_floor = (unsigned)floor;
+	gx.drs_floor = (unsigned)fewest;
 	wiiu_drs_reset(&gx.drs, gx.render_height, gx.drs_floor);
 	wiiu_log("GX2: dynamic resolution is %s (display.dynamic_resolution): %u lines, down to %u (display.dynamic_resolution_floor %u)", on ? "on" : "off",
 		gx.render_height, wiiu_drs_lines(&gx.drs, gx.drs.lowest), gx.drs_floor);

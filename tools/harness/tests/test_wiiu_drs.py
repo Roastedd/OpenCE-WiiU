@@ -30,7 +30,7 @@ FAULTS = {
     # (no rise for a GPU that keeps up but whose time reads high)
     "no_calm_rise": (" || drs->calm >= CALM_FRAMES)", ")"),
     # (every step allowed whatever the floor)
-    "no_floor": ("if (wiiu_drs_lines(drs, step) >= floor)", "if (wiiu_drs_lines(drs, step) >= floor || 1)"),
+    "no_floor": ("if (wiiu_drs_lines(drs, step) >= fewest)", "if (wiiu_drs_lines(drs, step) >= fewest || 1)"),
 }
 
 FIXTURE = r'''

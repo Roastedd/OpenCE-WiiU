@@ -45,8 +45,8 @@ struct wiiu_drs
 	unsigned drops, rises; /* the changes made */
 };
 
-/* the controller for the ceiling's lines and the fewest lines allowed: at step 0, held for its first frames */
-void wiiu_drs_reset(struct wiiu_drs *drs, unsigned ceiling, unsigned floor);
+/* the controller for the ceiling's lines and the fewest lines allowed (a step of fewer is never used): at step 0, held for its first frames */
+void wiiu_drs_reset(struct wiiu_drs *drs, unsigned ceiling, unsigned fewest);
 /* the lines a step draws */
 unsigned wiiu_drs_lines(const struct wiiu_drs *drs, unsigned step);
 /* a frame's measures: the step the next frames are to be drawn at (0 while a menu has the screen) */
