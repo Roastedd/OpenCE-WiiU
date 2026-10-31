@@ -180,6 +180,9 @@ static struct
 	unsigned shaders_loaded, fetch_full;
 	unsigned draws_made, skipped_target, skipped_state, skipped_shader, skipped_ring, ring_overflows;
 	unsigned skipped_missing; /* of skipped_state, the draws whose shader (vertex or pixel) the pack has not: a key in the shader-misses files */
+	unsigned skipped_left_out; /* of those, the draws whose key was left out of the pack on purpose (tools/wiiu/shader_exclude.txt) */
+	unsigned drawn_fallback; /* of draws_made, those whose pixel key the pack lacks, drawn with its stand-in */
+	uint32_t vs_found, ps_found; /* how the pack answered the keys of vs_handle and ps_handle (DK_SHADER_FOUND_*) */
 	unsigned textures_made, textures_unsupported, texture_short, layouts_logged;
 	int mip_gpu_enabled;
 	unsigned mip_gpu_calls, mip_cpu_calls, mip_gpu_fallbacks, mip_reuses, mip_failed;
@@ -2105,7 +2108,8 @@ static void draw_trace(const struct dk_command_draw *command, const struct shade
 		}
 		slot++;
 	}
-	wiiu_log("GX2 draw %u: vs %u ps %u prim %u count %u idx %s off %d streams %u (%08x, %u bytes, stride %u); attrs%s; v0 %g %g %g bytes %s", gx.traced, (unsigned)gx.vs_handle, (unsigned)gx.ps_handle,
+	wiiu_log("GX2 draw %u: vs %u ps %u%s prim %u count %u idx %s off %d streams %u (%08x, %u bytes, stride %u); attrs%s; v0 %g %g %g bytes %s", gx.traced, (unsigned)gx.vs_handle,
+		(unsigned)gx.ps_handle, gx.ps_found == DK_SHADER_FOUND_FALLBACK ? " (stand-in)" : "",
 		(unsigned)command->primitive, (unsigned)command->count, command->index_address ? "yes" : "no", (int)command->vertex_offset,
 		(unsigned)command->stream_count, command->stream_count ? (unsigned)command->streams[0][0] : 0, command->stream_count ? (unsigned)command->streams[0][1] : 0,
 		(unsigned)f->strides[0], text, first[0], first[1], first[2], bytes);
@@ -2300,7 +2304,11 @@ static void draw(const struct dk_command_draw *command)
 	{
 		gx.skipped_state++;
 		if (gx.format_set)
+		{
 			gx.skipped_missing++;
+			if ((!gx.vs_handle && gx.vs_found == DK_SHADER_FOUND_LEFT_OUT) || (!gx.ps_handle && gx.ps_found == DK_SHADER_FOUND_LEFT_OUT))
+				gx.skipped_left_out++;
+		}
 		return;
 	}
 	{
@@ -2478,6 +2486,8 @@ static void draw(const struct dk_command_draw *command)
 	gx.section_ticks[6] += OSGetSystemTime() - gx.section_now;
 	gx.draws_made++;
 	gx.draw_total++;
+	if (gx.ps_found == DK_SHADER_FOUND_FALLBACK)
+		gx.drawn_fallback++;
 	if (!(gx.draw_total & 31))
 		gpu_poll();
 }
@@ -4168,10 +4178,11 @@ static void present(const struct dk_command_present *command)
 		for (i = 1; i < 18; i++)
 			if (gx.counts[i])
 				wiiu_log("GX2:   command %u: %u", i, gx.counts[i]);
-		wiiu_log("GX2:   %u draws made; skipped: %u no target, %u no shader or format yet (%u of them a shader not in the pack), %u shader not loaded, %u ring "
-			"full; %u clears made as rectangles; %u textures made (%u not 2D, %u short), ring overflows %u", gx.draws_made,
-			gx.skipped_target, gx.skipped_state, gx.skipped_missing, gx.skipped_shader, gx.skipped_ring, gx.rectangle_clears, gx.textures_made,
-			gx.textures_unsupported, gx.texture_short, gx.ring_overflows);
+		wiiu_log("GX2:   %u draws made (%u with a stand-in, for a pixel key not in the pack); skipped: %u no target, %u no shader or format yet (%u of "
+			"them a shader not in the pack, %u a key left out of it), %u shader not loaded, %u ring full; %u clears made as rectangles; %u textures "
+			"made (%u not 2D, %u short), ring overflows %u", gx.draws_made, gx.drawn_fallback, gx.skipped_target, gx.skipped_state, gx.skipped_missing,
+			gx.skipped_left_out, gx.skipped_shader, gx.skipped_ring, gx.rectangle_clears, gx.textures_made, gx.textures_unsupported, gx.texture_short,
+			gx.ring_overflows);
 		if (gx.gpu_window_frames)
 			wiiu_log("GX2:   the GPU's own time for a frame's draws (bottom-of-pipe samples, at most what it took): %.2f ms on average over %u frames, %.2f the longest",
 				(double)OSTicksToMicroseconds(gx.gpu_window_ticks) / 1000.0 / (double)gx.gpu_window_frames, gx.gpu_window_frames,
@@ -4254,6 +4265,7 @@ static void present(const struct dk_command_present *command)
 			wiiu_log("GX2:   visibility tests: %u begun, %u ended, %u read back", query.begun, query.ended, query.read_back);
 		memset(gx.counts, 0, sizeof(gx.counts));
 		gx.draws_made = gx.skipped_target = gx.skipped_state = gx.skipped_missing = gx.skipped_shader = gx.skipped_ring = 0;
+		gx.skipped_left_out = gx.drawn_fallback = 0;
 		gx.rectangle_clears = 0;
 		gx.textures_made = gx.textures_unsupported = 0;
 	}
@@ -4382,11 +4394,14 @@ static void derive_apply(void)
 	if (changed & DK_DERIVED_KEYS)
 	{
 		uint32_t dk_shader_for_draw(uint32_t stage, const void *key_data);
+		uint32_t dk_shader_found(uint32_t stage);
 
 		const OSTime keys_start = gx.census ? OSGetSystemTime() : 0;
 
-		gx.vs_handle = dk_shader_for_draw(0 /* DK_SHADER_STAGE_VERTEX */, dk_derive_vertex_key(derive));
-		gx.ps_handle = dk_shader_for_draw(1 /* DK_SHADER_STAGE_PIXEL */, dk_derive_pixel_key(derive));
+		gx.vs_handle = dk_shader_for_draw(DK_SHADER_STAGE_VERTEX, dk_derive_vertex_key(derive));
+		gx.vs_found = dk_shader_found(DK_SHADER_STAGE_VERTEX);
+		gx.ps_handle = dk_shader_for_draw(DK_SHADER_STAGE_PIXEL, dk_derive_pixel_key(derive));
+		gx.ps_found = dk_shader_found(DK_SHADER_STAGE_PIXEL);
 		if (!gx.vs_handle || !gx.ps_handle)
 			gx.shader_key_misses++;
 		if (gx.census)
@@ -4446,16 +4461,20 @@ static void run_stream(const unsigned char *at, const unsigned char *end)
 		case DK_COMMAND_SHADERS:
 			gx.vs_handle = ((const struct dk_command_shaders *)header)->vertex;
 			gx.ps_handle = ((const struct dk_command_shaders *)header)->pixel;
+			gx.vs_found = gx.ps_found = DK_SHADER_FOUND_EXACT;
 			break;
 		case DK_COMMAND_SHADER_KEYS:
 		{
 			/* (gx2_shaders.c's, which the game thread called for each draw before: here, on this thread, once per change of the keys) */
 			uint32_t dk_shader_for_draw(uint32_t stage, const void *key_data);
+			uint32_t dk_shader_found(uint32_t stage);
 			const struct dk_command_shader_keys *keys = (const struct dk_command_shader_keys *)header;
 			const unsigned char *data = (const unsigned char *)(keys + 1);
 
-			gx.vs_handle = dk_shader_for_draw(0 /* DK_SHADER_STAGE_VERTEX */, data);
-			gx.ps_handle = dk_shader_for_draw(1 /* DK_SHADER_STAGE_PIXEL */, data + keys->vertex_size);
+			gx.vs_handle = dk_shader_for_draw(DK_SHADER_STAGE_VERTEX, data);
+			gx.vs_found = dk_shader_found(DK_SHADER_STAGE_VERTEX);
+			gx.ps_handle = dk_shader_for_draw(DK_SHADER_STAGE_PIXEL, data + keys->vertex_size);
+			gx.ps_found = dk_shader_found(DK_SHADER_STAGE_PIXEL);
 			if (!gx.vs_handle || !gx.ps_handle)
 				gx.shader_key_misses++;
 			break;

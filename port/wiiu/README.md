@@ -747,6 +747,19 @@ A unit that replaces an excluded source goes in `src/` (its README says how), an
 
 The files (`posix_files.c`'s `UTIME_OMIT`, `pread` and `pwrite`), the null renderer, and the Wii U's input; each replaces stubs.
 
+## Shaders the pack lacks
+
+The shaders are compiled ahead of time into `halo/shaders.pack` (`gx2_shaders.c`, `tools/wiiu/shader_pack.sh`), so a key nobody
+met before has none, and its draws were skipped: models, the first-person weapon, the sky and the HUD vanished on Blood Gulch
+(2026-10-30) until their keys were in the pack. A pixel key the pack lacks is now drawn with a stand-in (`shader_key_fallback`,
+`shader_key_wire.h`): what the key's final color and alpha depend on is followed through its combiner program, and the stand-in
+keeps what it can of that: stage 0's texture (2D, 3D or cube, as the key samples it) times the diffuse color, each where the color
+or the alpha depends on them (untextured, the diffuse color, else C0, else nothing), with the key's alpha test and alpha kill. It
+is itself a key, generated like every other (`pack_gen.c`), so it meets every vertex shader; the pack has all 114 of them. Such
+draws are rough, not missing. A key in `tools/wiiu/shader_exclude.txt` is marked in the pack (stage 2 or 3, no shader) and still
+skipped, and a vertex key the pack lacks still skips the draw. The 5-second log counts the draws made with a stand-in, and the
+first 40 such keys are logged by name; each key is written down for the next pack as before.
+
 ## Owned missing-shader capture
 
 `gx2_shaders.c` queues one attempt per `(stage, lookup hash)` from its single
