@@ -242,7 +242,8 @@ them. Each run: read `log.txt` afterwards.
    HOME, wait 10 s, back. The picture comes back as it was, the log says `GX2: back: N render targets are in the eDRAM again, 0 have no
    memory`, no new target line follows, and the 5 s line still says 576 (or the controller's step).
 5. **The GamePad's view.** Wii U GamePad Setup, GAMEPAD SHOWS: PLAYER 1. Two players in Blood Gulch: the GamePad shows player 1's half,
-   letterboxed, with nothing of player 2's at its bottom edge; with four players (if controllers allow) player 1's quarter fills it.
+   letterboxed, with nothing of player 2's at its bottom edge (with three players too: player 1 has the top half); with four players (if
+   controllers allow) player 1's quarter fills it.
    Pause (a menu): the GamePad shows the whole picture and taps work. One player, or a cinematic: the whole picture. Once with `576` in
    `halo/drs_lines.txt`: the same, at that step.
 
