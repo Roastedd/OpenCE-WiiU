@@ -1276,6 +1276,8 @@ struct image
 	uint8_t *base;
 	/* where each level is, as the surface says (its first slice), the pitch of its rows (blocks, for the compressed formats) and the size of a slice of it */
 	uint32_t level_offset[MIP_LIMIT], level_pitch[MIP_LIMIT], level_slice_bytes[MIP_LIMIT];
+	/* the texels' channel each channel is sampled from (dk_command_texture's channels) */
+	uint32_t channels;
 	GX2Texture texture;
 };
 
@@ -1360,9 +1362,26 @@ static uint8_t *image_level(const struct image *image, unsigned level, unsigned 
 	return image->base + image->level_offset[level] + (size_t)slice * image->level_slice_bytes[level];
 }
 
+/* the component map that samples each of red, green, blue and alpha from the texels' channel channels names for it (a byte each, red's lowest:
+dk_command_texture). The texels are the DDS file's bytes, whose components are red to alpha, or a Direct3D color's bytes, blue first, which the map puts right:
+a Halo Custom Edition texture that keeps its channels elsewhere (a multipurpose map, a HUD meter) is sampled in the order the game reads them, as xbox_textures.c's
+texture swizzle samples it, the texels left as they are */
+static uint32_t image_component_map(int compressed, uint32_t channels)
+{
+	static const GX2_SQ_SEL stored[2][4] =
+	{
+		{ GX2_SQ_SEL_B, GX2_SQ_SEL_G, GX2_SQ_SEL_R, GX2_SQ_SEL_A },
+		{ GX2_SQ_SEL_R, GX2_SQ_SEL_G, GX2_SQ_SEL_B, GX2_SQ_SEL_A },
+	};
+	const GX2_SQ_SEL *select = stored[compressed ? 1 : 0];
+
+	return GX2_COMP_MAP(select[channels & 3], select[(channels >> 8) & 3], select[(channels >> 16) & 3], select[(channels >> 24) & 3]);
+}
+
 /* makes the texture's surface with all its levels. The compressed formats are in the 1D tiled layout (wiiu_tile.c), BGRA linear; the texels are the DDS file's bytes / a
 Direct3D color's bytes (blue first), which the component map puts right */
-static int image_surface(struct image *image, uint32_t kind, uint32_t format, uint32_t width, uint32_t height, uint32_t depth, uint32_t levels)
+static int image_surface(struct image *image, uint32_t kind, uint32_t format, uint32_t width, uint32_t height, uint32_t depth, uint32_t levels,
+	uint32_t channels)
 {
 	GX2Surface *surface = &image->texture.surface;
 	GX2SurfaceFormat gx_format;
@@ -1461,8 +1480,8 @@ static int image_surface(struct image *image, uint32_t kind, uint32_t format, ui
 	image->texture.viewNumMips = levels;
 	image->texture.viewFirstSlice = 0;
 	image->texture.viewNumSlices = kind == DK_TEXTURE_CUBE ? 6 : kind == DK_TEXTURE_3D ? image->depth : 1;
-	image->texture.compMap = image->compressed ? GX2_COMP_MAP(GX2_SQ_SEL_R, GX2_SQ_SEL_G, GX2_SQ_SEL_B, GX2_SQ_SEL_A) :
-		GX2_COMP_MAP(GX2_SQ_SEL_B, GX2_SQ_SEL_G, GX2_SQ_SEL_R, GX2_SQ_SEL_A);
+	image->channels = channels;
+	image->texture.compMap = image_component_map(image->compressed, channels);
 	GX2InitTextureRegs(&image->texture);
 	image->supported = 1;
 	return 1;
@@ -1533,8 +1552,16 @@ static void texture_make(const struct dk_command_texture *command)
 		image->height == command->height && image->depth == (command->depth ? command->depth : 1) && image->requested_levels == command->levels))
 	{
 		image_release(image);
-		image_surface(image, command->kind, command->format, command->width, command->height, command->depth, command->levels);
+		image_surface(image, command->kind, command->format, command->width, command->height, command->depth, command->levels, command->channels);
 		gx.textures_made++;
+	}
+	/* (the same image's texels in another channel order: a Custom Edition map's texture given its own, or given back the stored one; the draws already
+	made took the old registers with them) */
+	else if (image->channels != command->channels)
+	{
+		image->channels = command->channels;
+		image->texture.compMap = image_component_map(image->compressed, command->channels);
+		GX2InitTextureRegs(&image->texture);
 	}
 	if (gx.texture_log < 80 && command->format == DK_TEXTURE_BGRA && command->kind == DK_TEXTURE_2D && command->source_bytes)
 	{

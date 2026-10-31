@@ -312,7 +312,11 @@ level of a compressed format is its 4x4 blocks, of BGRA its texels, depth
 slices after one another - the next face face_bytes on from the last. The
 host reads source_bytes from source when it runs the command. With
 source_bytes 0 the image is only made (its texels undefined), for
-DK_COMMAND_TEXTURE_ROWS to fill. */
+DK_COMMAND_TEXTURE_ROWS to fill. channels says which of the texels' red,
+green, blue and alpha (0 to 3) each of red, green, blue and alpha is sampled
+from, a byte each, red's lowest: DK_TEXTURE_CHANNELS_AS_STORED for all but a
+Halo Custom Edition map's textures that keep their channels elsewhere
+(xbox_textures_gx2.c). */
 struct dk_command_texture
 {
 	struct dk_command_header header;
@@ -326,7 +330,10 @@ struct dk_command_texture
 	uint32_t source;
 	uint32_t face_bytes;
 	uint32_t source_bytes;
+	uint32_t channels;
 };
+
+#define DK_TEXTURE_CHANNELS_AS_STORED 0x03020100u
 
 /* writes rows [top, top + rows) of one level of 2D BGRA image id (made by
 DK_COMMAND_TEXTURE), from the level's whole rows one after another at a

@@ -6,10 +6,12 @@ of the app's heap, reserved by wiiu_window.c, and always readable and writable: 
 protects (the tag cache once loaded, the textures the renderer watches) is only remembered, as in the web build, and the renderer finds a rewritten
 texture by hashing its pages (web_memory_watch.c). A block is cleared when it is given out, as fresh pages would be.
 
-Halo Custom Edition's window at 0x40440000 is not made: those maps do not run on the Wii U (halo_custom_edition_tag_cache is NULL).
+Halo Custom Edition's tag cache at 0x40440000 (23 MiB) is a block of the same heap, taken with the window by wiiu_window.c; the game has it when the
+game.custom_edition setting is on (as xbox_memory.c reserves it), and the heap has it back when the setting is off.
 */
 
 #include "platform.h"
+#include "port_config.h"
 
 #include <string.h>
 
@@ -18,15 +20,36 @@ Halo Custom Edition's window at 0x40440000 is not made: those maps do not run on
 
 /* wiiu_window.c's (the console's ABI) */
 void *wiiu_window_memory(void);
+void *wiiu_custom_edition_tag_cache_memory(void);
+void wiiu_custom_edition_tag_cache_release(void);
 
 /* per page: 0 free, otherwise the protection of the block (PAGE_*); the first page of a block also records the block length */
 static DWORD page_protection[CONTIGUOUS_PAGE_COUNT];
 static unsigned long block_page_count[CONTIGUOUS_PAGE_COUNT];
 static pthread_mutex_t arena_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* The Custom Edition tag cache, when Custom Edition maps may run; asked for often (each draw's indices, d3d8_gx2.c), so decided once, the first
+time, when the settings are read */
 void *halo_custom_edition_tag_cache(void)
 {
-	return NULL;
+	static int decided;
+	static void *tag_cache;
+
+	if (!decided)
+	{
+		decided = 1;
+		if (config_boolean("game.custom_edition"))
+		{
+			tag_cache = wiiu_custom_edition_tag_cache_memory();
+			if (!tag_cache)
+				platform_log("cannot reserve the Custom Edition tag cache at 0x40440000 (the log's first lines say why): Custom Edition maps cannot run");
+		}
+		else
+		{
+			wiiu_custom_edition_tag_cache_release();
+		}
+	}
+	return tag_cache;
 }
 
 BOOL platform_is_contiguous(const void *address)

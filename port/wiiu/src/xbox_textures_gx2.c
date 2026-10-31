@@ -32,6 +32,7 @@ a time, and only the atlas's rows that changed are sent again.
 #include "hud_hires.h"
 #include "menu_files.h"
 #include "text_hires.h"
+#include "../../linux/game/cache_file_formats.h"
 
 /* (the high-res HUD's and the menus' PNGs come from hud_hires.c and menu_files.c, built without OpenGL here: hud_hires_png_pixels, menu_art_name, menu_art_png,
 menu_art_serial; the text's atlas from text_hires.c, text_hires_atlas_rows) */
@@ -437,6 +438,8 @@ static uint32_t compressed_format(unsigned char kind)
 read where the game keeps it; any other is decoded (all its faces and levels,
 each level after the last, with no padding) into a buffer the host reads when
 it runs the command, which the stream frees once it has been handed over. */
+static uint32_t custom_edition_texels_command_channels(unsigned long address);
+
 static void upload(uint32_t id, uint32_t kind, const struct xgpu_texture_description *description,
 	const unsigned char *base, const D3DCOLOR *palette)
 {
@@ -488,6 +491,7 @@ static void upload(uint32_t id, uint32_t kind, const struct xgpu_texture_descrip
 	command->height = (uint32_t)description->height;
 	command->depth = (uint32_t)description->depth;
 	command->levels = (uint32_t)description->levels;
+	command->channels = custom_edition_texels_command_channels((unsigned long)base);
 	/* (last: it may hand the stream over, which the command is in) */
 	if (decoded)
 		dk_stream_free_after_handover(decoded, total);
@@ -636,6 +640,7 @@ static void image_make(uint32_t id, unsigned long width, unsigned long height, u
 	command->source = 0;
 	command->face_bytes = 0;
 	command->source_bytes = 0;
+	command->channels = DK_TEXTURE_CHANNELS_AS_STORED;
 }
 
 /* sends a whole level of BGRA texels, a piece at a time */
@@ -1063,24 +1068,116 @@ void xgpu_texture_cache_begin_frame(void)
 
 /* ---------- Custom Edition channel orders (platform.h)
 
-xbox_textures.c samples the textures of a Halo Custom Edition map whose
-channels Halo PC keeps elsewhere with each channel taken from where it is.
-This cache does not: a Custom Edition map's tag data is linked at 0x40440000,
-where this build's game image is (port/android/include/halo_android_abi.h),
-so its tag cache is never reserved (xbox_memory.c) and no Custom Edition map
-loads here. Every texture is sampled in the Xbox's order. */
+Halo PC keeps what some textures hold in other channels than the game reads
+it from (enum custom_edition_channel_order): a model shader's multipurpose
+masks, and a HUD meter's shape and fill order. The Custom Edition map's
+loading says which texels hold which order as they arrive
+(port/linux/game/custom_edition_bitmaps.c), and a texture made of them is
+sampled with each channel taken from where Halo PC keeps it, by its image's
+component map (wiiu_gx2.c), as xbox_textures.c's texture swizzle samples it:
+the texels stay as compressed as they were. Addresses stay listed until other
+texels arrive there, which the loading also says, or the map goes; the game
+and this cache share a thread.
+
+A meter drawn from a texture whose texels are in this build's order is
+sampled as one by xbox_textures.c's pixel shaders on a Custom Edition map's
+HUD (its meter channels key); this renderer's shaders are the shader pack's,
+which has no such key yet, so here such a meter is drawn as its texture is. */
+
+/* for each order, the channel (red, green, blue, alpha) of the texels each
+channel is sampled from (xbox_textures.c's) */
+static const unsigned char custom_edition_channel_sources[NUMBER_OF_CUSTOM_EDITION_CHANNEL_ORDERS][4] =
+{
+	{ 0, 1, 2, 3 },
+	/* specular, self-illumination, color change and the auxiliary mask */
+	{ 2, 1, 3, 0 },
+	/* the fill order in color, the shape in alpha */
+	{ 3, 3, 3, 0 },
+	/* Explicit Xbox-order HUD artwork must not be converted per draw. */
+	{ 0, 1, 2, 3 },
+};
+
+struct custom_edition_texels
+{
+	unsigned long address;
+	unsigned char channel_order;
+};
+
+static struct custom_edition_texels *custom_edition_texels;
+static unsigned long custom_edition_texel_count;
+static unsigned long custom_edition_texel_capacity;
+
+/* the order of the texels at address */
+static unsigned char custom_edition_texels_order(unsigned long address)
+{
+	unsigned long index;
+
+	for (index = 0; index < custom_edition_texel_count; index++)
+	{
+		if (custom_edition_texels[index].address == address)
+			return custom_edition_texels[index].channel_order;
+	}
+	return _custom_edition_channels_xbox;
+}
+
+/* the texture command's channels for the texels at address
+(dk_command_texture) */
+static uint32_t custom_edition_texels_command_channels(unsigned long address)
+{
+	const unsigned char *sources = custom_edition_channel_sources[custom_edition_texels_order(address)];
+
+	return (uint32_t)sources[0] | (uint32_t)sources[1] << 8 | (uint32_t)sources[2] << 16 | (uint32_t)sources[3] << 24;
+}
 
 void halo_custom_edition_texels_channels(const void *texels, unsigned char channel_order)
 {
-	(void)texels;
-	(void)channel_order;
+	unsigned long address = (unsigned long)texels;
+	unsigned long index;
+
+	if (channel_order >= NUMBER_OF_CUSTOM_EDITION_CHANNEL_ORDERS)
+		channel_order = _custom_edition_channels_xbox;
+	for (index = 0; index < custom_edition_texel_count && custom_edition_texels[index].address != address; index++)
+	{
+	}
+	if (index < custom_edition_texel_count)
+	{
+		if (channel_order == _custom_edition_channels_xbox)
+			custom_edition_texels[index] = custom_edition_texels[--custom_edition_texel_count];
+		else
+			custom_edition_texels[index].channel_order = channel_order;
+	}
+	else if (channel_order != _custom_edition_channels_xbox)
+	{
+		if (custom_edition_texel_count == custom_edition_texel_capacity)
+		{
+			unsigned long capacity = custom_edition_texel_capacity ? custom_edition_texel_capacity * 2 : 64;
+			struct custom_edition_texels *grown = realloc(custom_edition_texels, capacity * sizeof(*grown));
+
+			if (!grown)
+			{
+				platform_log("no memory to list the texels at %08lx: they are sampled in Halo PC's channel order",
+					address);
+				return;
+			}
+			custom_edition_texels = grown;
+			custom_edition_texel_capacity = capacity;
+		}
+		custom_edition_texels[custom_edition_texel_count].address = address;
+		custom_edition_texels[custom_edition_texel_count].channel_order = channel_order;
+		custom_edition_texel_count++;
+	}
 }
 
 void halo_custom_edition_texels_forget(void)
 {
+	free(custom_edition_texels);
+	custom_edition_texels = NULL;
+	custom_edition_texel_count = 0;
+	custom_edition_texel_capacity = 0;
 }
 
-/* (hud_draw.c: a Custom Edition HUD sheet's meter drawn, which xbox_textures.c samples in its own channels) */
+/* (hud_draw.c: a Custom Edition HUD sheet's meter drawn, which xbox_textures.c samples in its own channels: not here,
+above) */
 void halo_custom_edition_hud_meter(int active)
 {
 	(void)active;
