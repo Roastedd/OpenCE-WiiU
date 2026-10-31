@@ -21,5 +21,7 @@ what newlib and wut lack, and, as they are written, stand-ins for the platform l
 | `wiiu_atomic.[ch]` | 64-bit atomics (libatomic's names), for a core that has none. Tested on the desktop. |
 | `wiiu_libc.c` | `pause` and `sysconf`, which `xbox_kernel.c` calls and newlib lacks. |
 | `wiiu_tls.c` | Thread-local storage: the four `__syscall_tls_*` newlib's pthread keys need and wut lacks, for libgcc's emulated TLS. |
+| `wiiu_voice_audio.c` | Voice chat's sound (`voice_audio.h`): the GamePad's microphone (mic.rpl), Opus on a voice thread of its own, the voices for the mixer, HOME and the close, the microphone probe. Cafe OS half. |
+| `wiiu_voice_core.[ch]` | Voice chat's queues and rings between its threads, the 32 to 48 kHz resampler, the two readings of the microphone's ring. Tested on the desktop (`tools/harness/tests/test_wiiu_voice.py`). |
 
 None of this has run on a console.

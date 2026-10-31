@@ -13,6 +13,7 @@ without a Nunchuk) are not read.
 #include <padscore/kpad.h>
 #include <padscore/wpad.h>
 #include <vpad/input.h>
+#include <vpadbase/base.h>
 
 #include <coreinit/time.h>
 
@@ -42,7 +43,7 @@ static unsigned int from_vpad(uint32_t hold)
 		{ VPAD_BUTTON_L, WIIU_PAD_L }, { VPAD_BUTTON_R, WIIU_PAD_R }, { VPAD_BUTTON_ZL, WIIU_PAD_ZL }, { VPAD_BUTTON_ZR, WIIU_PAD_ZR },
 		{ VPAD_BUTTON_PLUS, WIIU_PAD_PLUS }, { VPAD_BUTTON_MINUS, WIIU_PAD_MINUS }, { VPAD_BUTTON_UP, WIIU_PAD_UP },
 		{ VPAD_BUTTON_DOWN, WIIU_PAD_DOWN }, { VPAD_BUTTON_LEFT, WIIU_PAD_LEFT }, { VPAD_BUTTON_RIGHT, WIIU_PAD_RIGHT },
-		{ VPAD_BUTTON_STICK_L, WIIU_PAD_STICK_L }, { VPAD_BUTTON_STICK_R, WIIU_PAD_STICK_R },
+		{ VPAD_BUTTON_STICK_L, WIIU_PAD_STICK_L }, { VPAD_BUTTON_STICK_R, WIIU_PAD_STICK_R }, { VPAD_BUTTON_TV, WIIU_PAD_TV },
 	};
 	unsigned int result = 0;
 	unsigned int i;
@@ -390,6 +391,80 @@ static void read_touch(const VPADStatus *status)
 	}
 }
 
+/* ---------- the TV button (push to talk) and the GamePad's jack */
+
+static int tv_taken;
+static int tv_asked;
+static uint32_t tv_asked_ms;
+static int tv_probe;
+static int tv_held;
+static int headset = -1;
+static unsigned int mic_status;
+static unsigned int mic_status_told;
+
+static uint32_t input_ms(void)
+{
+	return (uint32_t)OSTicksToMilliseconds(OSGetSystemTime());
+}
+
+/* (from the game thread, which reads the GamePad: the TV menu taken while voice chat or the probe asks for the button, given back a second
+after the last asking, and never in the background, where the GamePad is the system's) */
+static void tv_update(void)
+{
+	const int probe = __atomic_load_n(&tv_probe, __ATOMIC_ACQUIRE);
+	const int want = (tv_asked && input_ms() - tv_asked_ms < 1000u) || probe;
+
+	if (want == tv_taken || !wiiu_in_foreground())
+		return;
+	VPADSetTVMenuInvalid(VPAD_CHAN_0, want ? TRUE : FALSE);
+	tv_taken = want;
+	if (!want)
+		tv_asked = 0;
+	wiiu_log(want ? "Input: the GamePad's TV button is push to talk (the system's TV menu is off)" :
+		"Input: the GamePad's TV button opens the system's TV menu again");
+}
+
+int wiiu_input_push_to_talk(void)
+{
+	start();
+	tv_asked = 1;
+	tv_asked_ms = input_ms();
+	tv_update();
+	return tv_taken && tv_held;
+}
+
+void wiiu_input_take_tv_button(int take)
+{
+	__atomic_store_n(&tv_probe, take ? 1 : 0, __ATOMIC_RELEASE);
+}
+
+int wiiu_input_headset(void)
+{
+	return __atomic_load_n(&headset, __ATOMIC_ACQUIRE);
+}
+
+unsigned int wiiu_input_mic_status(void)
+{
+	return __atomic_load_n(&mic_status, __ATOMIC_ACQUIRE);
+}
+
+/* the jack and the microphone's status byte, in the log as they change (the status byte at most 16 times: what its bits mean is unknown,
+0x08 has been read as the headset's microphone being the one used) */
+static void jack_note(const VPADStatus *status)
+{
+	const int now_headset = status->usingHeadphones ? 1 : 0;
+
+	if (now_headset != headset || (status->micStatus != mic_status && mic_status_told < 16u))
+	{
+		if (now_headset == headset)
+			mic_status_told++;
+		wiiu_log("Input: the GamePad's jack: %s (VPADBASEGetHeadphoneStatus %d), its microphone status 0x%02x", now_headset ? "a headset" : "empty",
+			(int)VPADBASEGetHeadphoneStatus(VPAD_CHAN_0), (unsigned)status->micStatus);
+	}
+	__atomic_store_n(&mic_status, (unsigned int)status->micStatus, __ATOMIC_RELEASE);
+	__atomic_store_n(&headset, now_headset, __ATOMIC_RELEASE);
+}
+
 int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 {
 	int present = 0;
@@ -420,6 +495,7 @@ int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 			ranges_note(&status);
 			fresh = 1;
 			read_touch(&status);
+			jack_note(&status);
 		}
 		else if (error != VPAD_READ_NO_SAMPLES && error != VPAD_READ_BUSY)
 		{
@@ -427,6 +503,15 @@ int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 		}
 		*pad = last_vpad;
 		wiiu_debug_input(pad);
+		/* (the TV button as the game sees it: the debug server's held one too) */
+		{
+			const int held = (pad->buttons & WIIU_PAD_TV) != 0;
+
+			if (held != tv_held && __atomic_load_n(&tv_probe, __ATOMIC_ACQUIRE))
+				wiiu_log("mic probe: the TV button is %s", held ? "down" : "up");
+			tv_held = held;
+		}
+		tv_update();
 		/* (after the debug server's held rates, which stand for the gyro's) */
 		if (fresh)
 			gyro_mouse_note(&status, pad->gyro_pitch, pad->gyro_yaw, status.gyro.z);

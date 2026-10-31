@@ -234,6 +234,12 @@ static const struct config_setting config_settings[] =
 		"voices play whatever this is (audio.voice_volume 0 silences them)." },
 	{ "audio.voice_volume", _config_real, "1.0", "HALO_VOICE_VOLUME", _environment_value, _platform_all,
 		"The volume of the other players' voices (0 to 2)." },
+	{ "audio.wiiu_microphone_read", _config_string, "\"auto\"", "HALO_WIIU_MICROPHONE_READ", _environment_value, _platform_wiiu,
+		"How voice chat reads the GamePad microphone's ring, whose status the published sources read two\n"
+		"ways: \"consume\" (a read index and a count, the system told what was read), \"position\" (a\n"
+		"write position in bytes, followed), or either with a unit (\"consume bytes\", \"position\n"
+		"samples\"). \"auto\": what the microphone probe found (mic_probe_result.txt, written when\n"
+		"mic_probe.txt says 1), else \"consume\"." },
 	{ "audio.output_device", _config_string, "\"default\"", "HALO_AUDIO_OUTPUT_DEVICE", _environment_value,
 		_platform_desktop,
 		"Where the game's sound and the voices play: a device's name as Settings >\n"
