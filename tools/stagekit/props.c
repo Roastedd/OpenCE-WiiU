@@ -18,6 +18,10 @@ enum
 	platform, 2, which cycles by itself; any other has no behaviour of its own
 	and moves only where it is set) */
 	MACHINE_TYPE_SET = 1,
+	/* (a gbxmodel part's kinds of strip and vertices, as Custom Edition
+	writes them: cache_file_formats.c's gbxmodel_part_check) */
+	GBXMODEL_STRIP_PRECOMPILED = 1,
+	GBXMODEL_VERTICES_UNCOMPRESSED = 4,
 };
 
 /* ---------- structures */
@@ -72,7 +76,48 @@ struct machine_placement
 	struct scenario_machine_datum machine;
 	unsigned char unused[0x40 - sizeof(struct scenario_machine_datum)];
 };
+/* a model part as Custom Edition caches hold it (tag_schema_models.c's
+gbxmodel_geometry_part): this build's part, then where its strip and
+vertices are in the map's model data, then its local nodes */
+struct gbxmodel_part
+{
+	unsigned long flags;
+	short shader_index;
+	char previous_part_index;
+	char next_part_index;
+	short centroid_primary_node_index;
+	short centroid_secondary_node_index;
+	real centroid_primary_node_weight;
+	real centroid_secondary_node_weight;
+	real_point3d centroid;
+	struct tag_block uncompressed_vertices;
+	struct tag_block compressed_vertices;
+	struct tag_block triangles;
+	short strip_type;
+	unsigned short pad1;
+	long strip_triangle_count;
+	unsigned long strip_offset;
+	unsigned long unused1;
+	short vertex_type;
+	unsigned short pad2;
+	long vertex_count;
+	unsigned long unused2[2];
+	unsigned long vertex_offset;
+	unsigned char pad3[3];
+	unsigned char local_node_count;
+	unsigned char local_node_indices[22];
+	unsigned short pad4;
+};
+struct model_shader_reference
+{
+	struct tag_reference shader;
+	short permutation_index;
+	unsigned short pad;
+	long unused[3];
+};
 typedef char model_geometry_size_check[sizeof(struct model_geometry) == 0x30 ? 1 : -1];
+typedef char gbxmodel_part_size_check[sizeof(struct gbxmodel_part) == 0x84 ? 1 : -1];
+typedef char model_shader_reference_size_check[sizeof(struct model_shader_reference) == 0x20 ? 1 : -1];
 typedef char animation_node_size_check[sizeof(struct animation_node) == 0x40 ? 1 : -1];
 typedef char device_animations_size_check[sizeof(struct device_animations) == 0x60 ? 1 : -1];
 typedef char scenery_placement_size_check[sizeof(struct scenery_placement) == 0x48 ? 1 : -1];
@@ -126,6 +171,84 @@ long prop_empty_model(
 	return handle;
 }
 
+/* A box drawn (bounds in its object's space): a gbxmodel of one node, region,
+permutation and geometry, whose one part is the box's eight corners and a
+strip of its twelve triangles in the map's model data, as Custom Edition keeps
+a model's geometry (custom_edition_geometry.c makes this build's of it as the
+map loads). Its shader is none. */
+long prop_box_model(
+	char const *name,
+	real_rectangle3d const *bounds)
+{
+	/* (a strip over a cube's corners, numbered x first, then y, then z: its
+	twelve triangles) */
+	static unsigned short const strip[14] = { 3, 2, 6, 7, 4, 2, 0, 3, 1, 6, 5, 4, 1, 0 };
+	struct model_vertex_uncompressed corners[8];
+	struct model *render;
+	struct model_node *root;
+	struct model_region *region;
+	struct model_region_permutation *permutation;
+	struct model_geometry *geometry;
+	struct gbxmodel_part *part;
+	long handle;
+	void *data;
+	long corner;
+
+	memset(corners, 0, sizeof(corners));
+	for (corner = 0; corner < 8; corner++)
+	{
+		struct model_vertex_uncompressed *vertex = &corners[corner];
+		/* (its normal along the corner's diagonal: the components of a unit
+		vector, a third of the square root of three each, StageKit's own) */
+		real diagonal = square_root(1.f / 3.f);
+
+		vertex->position.x = corner & 1 ? bounds->x1 : bounds->x0;
+		vertex->position.y = corner & 2 ? bounds->y1 : bounds->y0;
+		vertex->position.z = corner & 4 ? bounds->z1 : bounds->z0;
+		vertex->normal.i = corner & 1 ? diagonal : -diagonal;
+		vertex->normal.j = corner & 2 ? diagonal : -diagonal;
+		vertex->normal.k = corner & 4 ? diagonal : -diagonal;
+		vertex->binormal.k = 1.f;
+		vertex->tangent.i = 1.f;
+		vertex->texcoord.x = corner & 1 ? 1.f : 0.f;
+		vertex->texcoord.y = corner & 2 ? 1.f : 0.f;
+		vertex->nodes[0] = vertex->nodes[1] = 0;
+		vertex->node_weights[0] = 1.f;
+	}
+
+	handle = cache_tag_new(FOURCC('m', 'o', 'd', '2'), NONE, NONE, name, sizeof(struct model), &data);
+	render = data;
+	root = cache_block(&render->nodes, 1, sizeof(*root));
+	strcpy(root->name, "root");
+	root->next_sibling_node_index = root->first_child_node_index = root->parent_node_index = NONE;
+	root->default_rotation.w = 1.f;
+	root->runtime_default_inverse_matrix.scale = 1.f;
+	root->runtime_default_inverse_matrix.forward.i = 1.f;
+	root->runtime_default_inverse_matrix.left.j = 1.f;
+	root->runtime_default_inverse_matrix.up.k = 1.f;
+	region = cache_block(&render->regions, 1, sizeof(*region));
+	strcpy(region->name, "box");
+	permutation = cache_block(&region->permutations, 1, sizeof(*permutation));
+	strcpy(permutation->name, "default");
+	cache_block(&render->shaders, 1, sizeof(struct model_shader_reference));
+	geometry = cache_block(&render->geometries, 1, sizeof(*geometry));
+	part = cache_block(&geometry->parts, 1, sizeof(*part));
+	part->shader_index = 0;
+	part->previous_part_index = part->next_part_index = NONE;
+	part->centroid_primary_node_index = part->centroid_secondary_node_index = 0;
+	part->centroid_primary_node_weight = 1.f;
+	part->centroid.x = (bounds->x0 + bounds->x1) / 2.f;
+	part->centroid.y = (bounds->y0 + bounds->y1) / 2.f;
+	part->centroid.z = (bounds->z0 + bounds->z1) / 2.f;
+	part->strip_type = GBXMODEL_STRIP_PRECOMPILED;
+	part->strip_triangle_count = NUMBEROF(strip) - 2;
+	part->strip_offset = cache_model_strip(strip, NUMBEROF(strip));
+	part->vertex_type = GBXMODEL_VERTICES_UNCOMPRESSED;
+	part->vertex_count = NUMBEROF(corners);
+	part->vertex_offset = cache_model_vertices(corners, NUMBEROF(corners));
+	return handle;
+}
+
 /* how far a box's farthest corner is from its object's origin */
 static real box_reach(
 	real_rectangle3d const *bounds)
@@ -165,11 +288,13 @@ static long box_collision_model(
 	return handle;
 }
 
-void prop_obstacle(
+/* a scenery box drawn with the model render_handle */
+static void obstacle_place(
 	struct stage *stage,
 	char const *name,
 	real_rectangle3d const *bounds,
-	real_point3d const *position)
+	real_point3d const *position,
+	long render_handle)
 {
 	struct object_definition *scenery;
 	struct scenario_object_palette_entry *palette;
@@ -183,7 +308,7 @@ void prop_obstacle(
 		sizeof(struct object_definition), &data);
 	scenery = data;
 	scenery->object.type = _object_type_scenery;
-	cache_reference(&scenery->object.model, prop_empty_model());
+	cache_reference(&scenery->object.model, render_handle);
 	cache_reference(&scenery->object.collision_model, model_handle);
 	/* (round the box, a little past its farthest corner) */
 	scenery->object.bounding_radius = box_reach(bounds) + 0.1f;
@@ -194,6 +319,24 @@ void prop_obstacle(
 	placement->object.palette_entry_index = (short)(stage->scenario->scenery_palette.count - 1);
 	placement->object.name_index = NONE;
 	placement->object.position = *position;
+}
+
+void prop_obstacle(
+	struct stage *stage,
+	char const *name,
+	real_rectangle3d const *bounds,
+	real_point3d const *position)
+{
+	obstacle_place(stage, name, bounds, position, prop_empty_model());
+}
+
+void prop_drawn_obstacle(
+	struct stage *stage,
+	char const *name,
+	real_rectangle3d const *bounds,
+	real_point3d const *position)
+{
+	obstacle_place(stage, name, bounds, position, prop_box_model(name, bounds));
 }
 
 /* the name a scenario's console lines call an object it places by */

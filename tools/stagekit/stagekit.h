@@ -24,6 +24,7 @@ scenarios place (props.c), and a scenario itself (scenarios/).
 #include "models/model_definitions.h"
 #include "physics/collision_bsp_definitions.h"
 #include "physics/collision_model_definitions.h"
+#include "rasterizer/rasterizer_model_types.h"
 #include "sound/sound_definitions.h"
 #include "structures/structure_bsp_definitions.h"
 #include "text/font_group.h"
@@ -82,6 +83,11 @@ void *cache_bsp_block(struct tag_block *block, long count, unsigned long element
 long cache_tag_new(unsigned long group, unsigned long parent, unsigned long grandparent, char const *name,
 	unsigned long size, void **data);
 void cache_tag_no_data(long handle);
+/* the map's model data, which a model's parts name their geometry in: count
+vertices added, their offset in it; count strip indices added, their offset
+from the strips' start */
+unsigned long cache_model_vertices(struct model_vertex_uncompressed const *vertices, long count);
+unsigned long cache_model_strip(unsigned short const *indices, long count);
 void cache_reference(struct tag_reference *reference, long handle);
 /* a reference to no tag, of the group it names */
 void cache_no_reference(struct tag_reference *reference, unsigned long group);
@@ -112,8 +118,17 @@ void player_start(struct stage *stage, real_point3d const *position);
 /* a model that draws nothing (one node, region and permutation), made once */
 long prop_empty_model(void);
 
+/* a box drawn (bounds in its object's space): a gbxmodel of one part, the
+box's eight corners and its strip in the map's model data */
+long prop_box_model(char const *name, real_rectangle3d const *bounds);
+
 /* a scenery box standing at position (bounds in its own space), solid to anything */
 void prop_obstacle(struct stage *stage, char const *name, real_rectangle3d const *bounds,
+	real_point3d const *position);
+
+/* ... drawn: its model a box (bounds) of one part, whose eight corners and
+strip are in the map's model data, as Custom Edition keeps a gbxmodel's */
+void prop_drawn_obstacle(struct stage *stage, char const *name, real_rectangle3d const *bounds,
 	real_point3d const *position);
 
 /* a platform (bounds in its own space) at position that rises rise in seconds

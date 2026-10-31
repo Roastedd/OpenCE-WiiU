@@ -5,7 +5,9 @@ The map file StageKit writes: a Halo Custom Edition cache (version 609, which
 the port converts itself: port/linux/game/cache_file_formats.c names each
 offset used here). Its tags are built where the game reads a Custom Edition
 map's tags, so the game's structures' pointers are written as they are; the
-structure BSP goes at the top of that room, as every map puts it.
+structure BSP goes at the top of that room, as every map puts it. A model's
+parts keep their vertices and strips in the map's model data, which no tag
+holds: after the structure BSP in the file, the vertices, then the strips.
 */
 
 /* ---------- headers */
@@ -34,6 +36,10 @@ enum
 	HANDLE_SALT = 0x0E00,
 	/* the room kept at the top of the tag cache for the structure BSP */
 	BSP_BYTES = 0x10000,
+	/* the room for the model data: its vertices (68 bytes each), and its
+	strips (16-bit indices) */
+	MODEL_VERTEX_BYTES = 0x10000,
+	MODEL_STRIP_BYTES = 0x4000,
 };
 
 /* ---------- structures */
@@ -88,6 +94,10 @@ struct tag_instance
 static unsigned char *tag_cache;
 static unsigned long tags_used;
 static unsigned long bsp_used;
+static unsigned char model_vertices[MODEL_VERTEX_BYTES];
+static unsigned long model_vertices_used;
+static unsigned char model_strips[MODEL_STRIP_BYTES];
+static unsigned long model_strips_used;
 static struct tag_index *tag_index;
 static struct tag_instance *instances;
 
@@ -147,7 +157,9 @@ static void unset_references_to_none(
 }
 
 /* each tag's references made none, where the schemas describe its group (the
-structure BSP, written apart, is left as the generator made it) */
+structure BSP, written apart, is left as the generator made it): this
+build's groups', and Custom Edition's own (a gbxmodel's, as the validator
+takes it: tag_schema_custom_edition_groups) */
 static void tags_finish(
 	void)
 {
@@ -158,11 +170,15 @@ static void tags_finish(
 	{
 		struct tag_instance const *instance = &instances[index];
 		struct tag_schema_group const *const *list;
+		struct tag_schema_group const *group;
 
+		for (group = tag_schema_custom_edition_groups; group->group_tag; group++)
+		{
+			if (group->group_tag == instance->group && instance->address)
+				unset_references_to_none(group->definition, instance->address, empty_name);
+		}
 		for (list = tag_schema_group_lists; *list; list++)
 		{
-			struct tag_schema_group const *group;
-
 			for (group = *list; group->group_tag; group++)
 			{
 				if (group->group_tag == instance->group && instance->address)
@@ -279,6 +295,38 @@ long cache_tag_new(
 	return instance->handle;
 }
 
+unsigned long cache_model_vertices(
+	struct model_vertex_uncompressed const *vertices,
+	long count)
+{
+	unsigned long offset = model_vertices_used;
+
+	if (count * sizeof(*vertices) > MODEL_VERTEX_BYTES - model_vertices_used)
+	{
+		fprintf(stderr, "stagekit: the model vertices do not fit\n");
+		exit(1);
+	}
+	memcpy(model_vertices + offset, vertices, count * sizeof(*vertices));
+	model_vertices_used += count * sizeof(*vertices);
+	return offset;
+}
+
+unsigned long cache_model_strip(
+	unsigned short const *indices,
+	long count)
+{
+	unsigned long offset = model_strips_used;
+
+	if (count * sizeof(*indices) > MODEL_STRIP_BYTES - model_strips_used)
+	{
+		fprintf(stderr, "stagekit: the model strips do not fit\n");
+		exit(1);
+	}
+	memcpy(model_strips + offset, indices, count * sizeof(*indices));
+	model_strips_used += count * sizeof(*indices);
+	return offset;
+}
+
 /* (a structure BSP's instance has no data of its own: the scenario's
 reference places it) */
 void cache_tag_no_data(
@@ -320,14 +368,19 @@ void cache_write(
 	long *tag_count)
 {
 	struct cache_header header = { 0 };
-	unsigned long tag_data_offset = HEADER_BYTES + BSP_BYTES;
+	/* (the model data, its vertices then its strips, a multiple of 4 bytes
+	long, between the structure BSP and the tags) */
+	unsigned long model_data_bytes = (model_vertices_used + model_strips_used + 3) & ~3UL;
+	unsigned long model_data_offset = HEADER_BYTES + BSP_BYTES;
+	unsigned long tag_data_offset = model_data_offset + model_data_bytes;
+	static unsigned char const padding[4];
 	FILE *file;
 
 	tags_finish();
-	/* no models' vertices or indices: none, before the tags */
-	tag_index->vertex_data_offset = tag_data_offset;
-	tag_index->index_data_offset = 0;
-	tag_index->model_data_size = 0;
+	/* (where the strips start counts from the model data's start) */
+	tag_index->vertex_data_offset = model_data_offset;
+	tag_index->index_data_offset = model_vertices_used;
+	tag_index->model_data_size = model_data_bytes;
 	header.signature = FOURCC('h', 'e', 'a', 'd');
 	header.version = 609;
 	header.file_length = tag_data_offset + tags_used;
@@ -341,6 +394,10 @@ void cache_write(
 	file = fopen(path, "wb");
 	if (!file || fwrite(&header, sizeof(header), 1, file) != 1 ||
 		fwrite(tag_cache + CUSTOM_EDITION_TAG_CACHE_BYTES - BSP_BYTES, BSP_BYTES, 1, file) != 1 ||
+		fwrite(model_vertices, 1, model_vertices_used, file) != model_vertices_used ||
+		fwrite(model_strips, 1, model_strips_used, file) != model_strips_used ||
+		fwrite(padding, 1, model_data_bytes - model_vertices_used - model_strips_used, file) !=
+			model_data_bytes - model_vertices_used - model_strips_used ||
 		fwrite(tag_cache, tags_used, 1, file) != 1 ||
 		fclose(file))
 	{

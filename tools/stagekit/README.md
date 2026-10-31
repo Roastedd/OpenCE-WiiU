@@ -13,12 +13,14 @@ executable `HALO_GAME` names).
 ## The stage
 
 - `cache.c`: the cache it writes, its tags laid out where the game reads them, so their pointers are written as
-  they are: a Custom Edition cache (the format the port converts itself). Every reference left unset is made none by the groups' own schemas (`port/linux/game/tag_schema_*.c`): a
-  map needs no correction.
+  they are: a Custom Edition cache (the format the port converts itself). Every reference left unset is made none by the groups' own schemas (`port/linux/game/tag_schema_*.c`, and
+  Custom Edition's gbxmodels' own): a map needs no correction. A model's parts keep their vertices and strips in the
+  map's model data, after the structure BSP in the file, as Custom Edition keeps a gbxmodel's.
 - `stage.c`: what every map has: the chamber (a floor in a box 1000 by 1000 by 100), the globals and interface, the
   players' biped, no scripts, a player start unless the scenario places its own.
-- `props.c`: what scenarios place (an obstacle, an elevator, the players' starts), each a function, any number of
-  each.
+- `props.c`: what scenarios place (an obstacle, drawn or not, an elevator, the players' starts), each a function, any
+  number of each. A drawn obstacle's model is a box of one part, eight corners and a strip, which the game compresses
+  into buffers as the map loads (`port/linux/game/custom_edition_geometry.c`).
 - `collision.c`: a box's collision, hollow (the chamber) or solid (a prop).
 
 ## A scenario
