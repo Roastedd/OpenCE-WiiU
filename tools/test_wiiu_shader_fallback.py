@@ -1,13 +1,13 @@
 """The Wii U's shaders for keys the pack lacks (gx2_shaders.c, shader_key_wire.h, pack_gen.c).
 
 The lookup, compiled from gx2_shaders.c itself with the rest of the game stood in for (port/wiiu/tests/test_shader_fallback.c): a pixel key the pack
-lacks is drawn with its stand-in; a key left out of the pack is skipped; each key the pack lacks is written down.
+lacks is drawn with its canonical key's shader, else with its stand-in; a key left out of the pack is skipped; each key the pack lacks is written down.
 SHADER_FALLBACK_TARGET='--target=powerpc-linux-gnu -fuse-ld=lld -no-pie' SHADER_FALLBACK_RUNNER='qemu-ppc -L /usr/powerpc-linux-gnu' runs it
 big-endian, as the console: its hashes must be those the pack builder made on a little-endian computer.
 
-And the pack builder's check (pack_gen.c --check, built as tools/wiiu/shader_pack.sh builds it): on random keys, the stand-in of each is one of those
-the pack has; with two broken stand-ins it must report, as controls. That needs clang-i686 and qemu-i386 (the opence-wiiu container) and is skipped
-elsewhere.
+And the pack builder's check (pack_gen.c --check, built as tools/wiiu/shader_pack.sh builds it): on random keys, a key and its canonical key have the
+same GLSL, word for word, and the stand-in of each is one of those the pack has; with two broken canonical keys and two broken stand-ins it must
+report, as controls. That needs clang-i686 and qemu-i386 (the opence-wiiu container) and is skipped elsewhere.
 """
 import os
 from pathlib import Path
@@ -83,13 +83,13 @@ class LookupTests(unittest.TestCase):
         self.assertEqual(backend.count('gx.vs_found = dk_shader_found(DK_SHADER_STAGE_VERTEX);'), 2)
         draw = backend[backend.index('static void draw(const struct dk_command_draw *command)'):backend.index('int wiiu_memcpy_selftest(void);')]
         self.assertLess(draw.index('gx.draws_made++;'), draw.index('gx.drawn_fallback++;'))
-        self.assertIn('if (gx.ps_found == DK_SHADER_FOUND_FALLBACK)\n\t\tgx.drawn_fallback++;', draw)
+        self.assertIn('if (gx.ps_found == DK_SHADER_FOUND_EQUIVALENT)\n\t\tgx.drawn_equivalent++;', draw)
         self.assertIn('gx.skipped_left_out++;', draw)
         log = backend[backend.index('wiiu_log("GX2:   %u draws made'):]
         log = log[:log.index(';\n') + 1]
-        for counter in ['gx.drawn_fallback', 'gx.skipped_missing', 'gx.skipped_left_out']:
+        for counter in ['gx.drawn_equivalent', 'gx.drawn_fallback', 'gx.skipped_missing', 'gx.skipped_left_out']:
             self.assertIn(counter, log)
-        self.assertIn('gx.skipped_left_out = gx.drawn_fallback = 0;', backend)
+        self.assertIn('gx.skipped_left_out = gx.drawn_equivalent = gx.drawn_fallback = 0;', backend)
 
 
 @unittest.skipUnless(shutil.which('clang-i686') and shutil.which('qemu-i386'), 'the pack builder is built in the opence-wiiu container')
@@ -124,10 +124,10 @@ class GeneratorCheckTests(unittest.TestCase):
             return subprocess.run(['qemu-i386', '-L', '/usr/i686-linux-gnu', str(directory / 'pack_gen'), *arguments],
                                   capture_output=True, text=True, timeout=1200)
 
-    def test_every_key_has_a_stand_in_the_pack_has(self):
+    def test_canonical_keys_have_the_same_glsl(self):
         result = self.pack_gen(['--check', '200000', '20261030'])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr[-3000:])
-        self.assertIn('200000 random pixel keys', result.stdout)
+        self.assertIn('200000 random pixel keys have the GLSL of their canonical keys', result.stdout)
 
     def test_the_check_finds_a_stand_in_the_pack_has_not(self):
         # the numbered stand-ins without the alpha kill; a stand-in for NEVER
@@ -137,6 +137,13 @@ class GeneratorCheckTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, change)
             self.assertIn(said, result.stderr, change)
 
+    def test_the_check_finds_a_canonical_key_that_clears_too_much(self):
+        # a clip plane's compare mode cleared, and the last combiner stage the count runs
+        for change in [('out->combiner_state[D3DRS_PSCOMPAREMODE] = compare;', 'out->combiner_state[D3DRS_PSCOMPAREMODE] = 0;'),
+                       ('for (stage = count; stage < 8; stage++)', 'for (stage = count ? count - 1 : 0; stage < 8; stage++)')]:
+            result = self.pack_gen(['--check', '20000', '1'], change)
+            self.assertNotEqual(result.returncode, 0, change)
+            self.assertIn('have different GLSL', result.stderr, change)
 
 
 if __name__ == '__main__':

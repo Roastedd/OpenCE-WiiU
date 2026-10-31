@@ -10,10 +10,10 @@ read (WIIU_PORT_PLAN.md, the GX2 probe). The pack is sd:/wiiu/apps/halo/shaders.
 	3 mark a vertex and a pixel key left out of the pack on purpose (tools/wiiu/shader_exclude.txt: their shaders draw wrongly), with no shader (size 0).
 
 A vertex shader is asked for by its program's hash and the mask of its packed attributes, a pixel shader by its key's bytes (shader_key_wire.h), the same on
-the console and on the computer. A pixel key the pack lacks is asked for again as its stand-in, stage 0's texture times its color with its alpha test
-(shader_key_fallback), which the pack has whatever the keys (port/wiiu/tools/shader_pack/pack_gen.c); the 5-second log counts the draws made so
-(wiiu_gx2.c). A draw whose shader is not found so is skipped: its vertex shader is not in the pack, its key was left out, or the pack is older than the
-stand-ins.
+the console and on the computer. A pixel key the pack lacks is asked for again as its canonical key, which has the same shader (the generator does not read
+what makes them differ), and then as its stand-in, stage 0's texture times its color with its alpha test (shader_key_fallback): the pack has both for every
+key it was built from, and the stand-ins whatever the keys (port/wiiu/tools/shader_pack/pack_gen.c). The 5-second log counts the draws made each way
+(wiiu_gx2.c). A draw whose shader is not found so is skipped: its vertex shader is not in the pack, its key was left out, or the pack is older than these.
 
 Every key the pack lacks as it is, but those left out, is queued once for the main log worker, which writes complete shader-misses-*.txt batches for
 shader_pack.py; .part files are incomplete and must not be harvested.
@@ -306,7 +306,8 @@ static unsigned found_told;
 
 #define FOUND_TOLD_LIMIT 40
 
-/* a pixel key's shader: its own, else its stand-in's; none for a key left out of the pack. *shader_hash is the hash of the key whose shader it is */
+/* a pixel key's shader: its own, else its canonical key's (the same shader), else its stand-in's; none for a key left out of the pack. *shader_hash
+is the hash of the key whose shader it is */
 static uint32_t pixel_find(const struct nv2a_pixel_shader_key *key, uint64_t hash, uint32_t *how, uint64_t *shader_hash)
 {
 	struct nv2a_pixel_shader_key other;
@@ -320,6 +321,12 @@ static uint32_t pixel_find(const struct nv2a_pixel_shader_key *key, uint64_t has
 	*how = DK_SHADER_FOUND_LEFT_OUT;
 	if (find(DK_SHADER_STAGE_PIXEL + 2, hash))
 		return 0;
+	shader_key_canonical(key, &other);
+	shader_key_write(&other, wire);
+	*shader_hash = shader_key_hash(SHADER_KEY_HASH_INIT, wire, sizeof(wire));
+	*how = DK_SHADER_FOUND_EQUIVALENT;
+	if (*shader_hash != hash && (handle = find(DK_SHADER_STAGE_PIXEL, *shader_hash)) != 0)
+		return handle;
 	*how = DK_SHADER_FOUND_FALLBACK;
 	if (shader_key_fallback(key, &other))
 	{
@@ -391,11 +398,12 @@ uint32_t dk_shader_for_draw(uint32_t stage, const void *key_data)
 		found[1] = how;
 		if (how != DK_SHADER_FOUND_EXACT && how != DK_SHADER_FOUND_LEFT_OUT)
 			noted = missing_note(stage, hash, key_data);
-		if (how == DK_SHADER_FOUND_FALLBACK && found_told < FOUND_TOLD_LIMIT)
+		if ((how == DK_SHADER_FOUND_EQUIVALENT || how == DK_SHADER_FOUND_FALLBACK) && found_told < FOUND_TOLD_LIMIT)
 		{
 			found_told++;
-			platform_log("shaders: pixel key %08x%08x is not in the pack: drawn with its stand-in, %08x%08x%s", (unsigned)(hash >> 32), (unsigned)hash,
-				(unsigned)(shader_hash >> 32), (unsigned)shader_hash, found_told == FOUND_TOLD_LIMIT ? " (no more of these lines)" : "");
+			platform_log("shaders: pixel key %08x%08x is not in the pack: drawn with %s, %08x%08x%s", (unsigned)(hash >> 32), (unsigned)hash,
+				how == DK_SHADER_FOUND_EQUIVALENT ? "the shader of its canonical key" : "its stand-in", (unsigned)(shader_hash >> 32), (unsigned)shader_hash,
+				found_told == FOUND_TOLD_LIMIT ? " (no more of these lines)" : "");
 		}
 		if (how != DK_SHADER_FOUND_NONE)
 		{

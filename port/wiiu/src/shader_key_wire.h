@@ -131,7 +131,11 @@ static inline uint64_t shader_vertex_key(uint64_t program_hash, uint32_t packed_
 	return shader_key_hash(SHADER_KEY_HASH_INIT, bytes, 12);
 }
 
-/* ---------- pixel keys the pack has no shader for (gx2_shaders.c dk_shader_for_draw; pack_gen.c writes the shaders these name) */
+/* ---------- pixel keys the pack has no shader for (gx2_shaders.c dk_shader_for_draw; pack_gen.c writes the shaders these name)
+
+A key holds what the render states held when the draw was made, and some of that its shader never reads: the general combiner stages past the count
+keep the values of the last draw that used them, for one. Keys that differ only there have the same shader. The 2200 pixel keys met by 2026-10-30
+have 186 shaders between them, and 94 of the 95 keys Blood Gulch missed that day had their shader in the pack already, under another key. */
 
 /* the texture stage modes (D3DRS_PSTEXTUREMODES, five bits a stage) that matter here, as nv2a_psh.c numbers them */
 #define SHADER_KEY_MODE_NONE 0x00
@@ -154,7 +158,93 @@ static inline unsigned shader_key_stage_mode(const struct nv2a_pixel_shader_key 
 	return mode;
 }
 
-/* The stand-in for a pixel key the pack has no shader for (the fallback). What the key's final color and alpha depend on is followed
+/* The key with all that port/linux/src/nv2a_psh.c (the generator of the pack's GLSL) does not read set to 0, and each flag it only tests set to 1:
+the general combiner stages past the count, the constants (uniforms), compare modes of stages that are not clip planes, the alpha kill, signs and 2D
+sampler of a stage that samples nothing, the mode bits above the four stages' (the Switch renderer's: NV2A_PIXEL_KEY_CLIP, NV2A_PIXEL_KEY_WARP_BLEND),
+an alpha test that writes no test, and so on. Two keys with the same canonical key have the same GLSL, word for word: pack_gen.c writes each key's
+shader under its canonical key's hash as well, after checking that the two texts are the same, so that a key the pack lacks finds the shader of
+another. */
+static inline void shader_key_canonical(const struct nv2a_pixel_shader_key *key, struct nv2a_pixel_shader_key *out)
+{
+	const uint32_t count_word = key->combiner_state[D3DRS_PSCOMBINERCOUNT];
+	unsigned count = count_word & 0xff, stage, mode;
+	uint32_t compare = 0;
+
+	*out = *key;
+	if (count > 8)
+		count = 8;
+	/* (the count's flags, unique C0 and C1 and the mux's bit, are read by the stages it runs) */
+	out->combiner_state[D3DRS_PSCOMBINERCOUNT] = count ? (count_word & 0x11100u) | count : 0;
+	for (stage = count; stage < 8; stage++)
+	{
+		out->combiner_state[D3DRS_PSALPHAINPUTS0 + stage] = 0;
+		out->combiner_state[D3DRS_PSALPHAOUTPUTS0 + stage] = 0;
+		out->combiner_state[D3DRS_PSRGBINPUTS0 + stage] = 0;
+		out->combiner_state[D3DRS_PSRGBOUTPUTS0 + stage] = 0;
+	}
+	for (stage = 0; stage < 8; stage++)
+	{
+		out->combiner_state[D3DRS_PSCONSTANT0_0 + stage] = 0;
+		out->combiner_state[D3DRS_PSCONSTANT1_0 + stage] = 0;
+	}
+	out->combiner_state[D3DRS_PSFINALCOMBINERCONSTANT0] = 0;
+	out->combiner_state[D3DRS_PSFINALCOMBINERCONSTANT1] = 0;
+	/* (no render state is numbered between the count and the dot mapping) */
+	out->combiner_state[D3DRS_PSCOMBINERCOUNT + 1] = 0;
+	out->texture_modes &= 0xfffffu;
+	for (stage = 0; stage < 4; stage++)
+	{
+		mode = shader_key_stage_mode(key, stage);
+		if (mode == SHADER_KEY_MODE_CLIPPLANE)
+			compare |= key->combiner_state[D3DRS_PSCOMPAREMODE] & (0xfu << (4 * stage));
+		if (mode == SHADER_KEY_MODE_NONE)
+		{
+			out->alpha_kill[stage] = 0;
+			out->color_sign[stage] = 0;
+			/* (declared and never sampled: anything but a 3D or cube sampler is declared a sampler2D) */
+			if (key->sampler_type[stage] != _xgpu_sampler_3d && key->sampler_type[stage] != _xgpu_sampler_cube)
+				out->sampler_type[stage] = _xgpu_sampler_none;
+		}
+		else
+		{
+			out->alpha_kill[stage] = key->alpha_kill[stage] != 0;
+			out->color_sign[stage] = key->color_sign[stage] & 0xf;
+		}
+	}
+	out->combiner_state[D3DRS_PSCOMPAREMODE] = compare;
+	/* the alpha test: ALWAYS, and any value that is not a comparison, writes none; the samples' coverage goes with an ordering only */
+	switch (key->alpha_test_function)
+	{
+	case D3DCMP_LESS:
+	case D3DCMP_LESSEQUAL:
+	case D3DCMP_GREATER:
+	case D3DCMP_GREATEREQUAL:
+		break;
+	case D3DCMP_NEVER:
+	case D3DCMP_EQUAL:
+	case D3DCMP_NOTEQUAL:
+		out->alpha_test_samples = 0;
+		break;
+	default:
+		out->alpha_test_function = 0;
+		out->alpha_test_samples = 0;
+		break;
+	}
+	out->fog_enable = key->fog_enable != 0;
+	if (!key->fog_enable || (key->fog_table_mode != D3DFOG_EXP && key->fog_table_mode != D3DFOG_EXP2 && key->fog_table_mode != D3DFOG_LINEAR))
+		out->fog_table_mode = 0;
+	out->count_samples = key->count_samples != 0;
+	out->coverage_alpha = key->coverage_alpha != 0;
+	mode = shader_key_stage_mode(key, 0);
+	out->point_threshold = key->point_threshold && (mode == SHADER_KEY_MODE_PROJECT2D || mode == SHADER_KEY_MODE_PROJECT3D) &&
+		key->sampler_type[0] == _xgpu_sampler_2d;
+	if (key->per_pixel_lighting && key->per_pixel_lighting != 2)
+		out->per_pixel_lighting = 1;
+	if (key->source_blend)
+		out->source_blend = (unsigned char)(((key->source_blend - 1) & 3) + 1);
+}
+
+/* The stand-in for a pixel key the pack has no shader for under any key (the fallback). What the key's final color and alpha depend on is followed
 through its combiner program (shader_key_sources), and the stand-in keeps the part of that it can: stage 0's texture times the diffuse color, each
 where the key's color or alpha depends on them; with no texture, the diffuse color, else C0, else nothing (a fade or a flash the stand-in cannot
 follow is better transparent than a black or white screen); with the key's alpha test and stage 0's alpha kill, and nothing more (no other stage, no

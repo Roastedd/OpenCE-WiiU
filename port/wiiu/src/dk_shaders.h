@@ -43,9 +43,11 @@ change to what it writes, so the other shaders keep their names) */
 #define DK_SHADER_STAGE_VERTEX 0
 #define DK_SHADER_STAGE_PIXEL 1
 
-/* how the Wii U's shader pack answered a key (gx2_shaders.c dk_shader_found): with the key's own shader; with its stand-in (a pixel key the pack
-lacks); not at all, the key left out of the pack on purpose; not at all */
+/* how the Wii U's shader pack answered a key (gx2_shaders.c dk_shader_found): with the key's own shader; with the shader of its canonical key, which is
+the same (a pixel key the pack lacks); with its stand-in (a pixel key whose shader the pack has under no key); not at all, the key left out of the
+pack on purpose; not at all */
 #define DK_SHADER_FOUND_EXACT 0
+#define DK_SHADER_FOUND_EQUIVALENT 1
 #define DK_SHADER_FOUND_FALLBACK 2
 #define DK_SHADER_FOUND_LEFT_OUT 3
 #define DK_SHADER_FOUND_NONE 4
