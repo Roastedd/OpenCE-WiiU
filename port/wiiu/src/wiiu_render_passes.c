@@ -5,7 +5,8 @@ The game thread's time in each part of a window's rendering (source/render/rende
 log every five seconds as the milliseconds each part takes a window. The frame parts line (d3d8_gx2.c) says how long the
 rendering takes as a whole (13 to 14 ms a frame on a30, 2026-10-30); this says where those milliseconds go, so that what
 is moved off the game thread or made cheaper is chosen by measurement. A part's time includes the Direct3D layer's work
-for its draws. A mark costs a read of the time base.
+for its draws; "begin" (rasterizer_window_begin) includes the wait for room in the GX2 thread's queue, which at the main menu
+is most of a frame (15.6 ms a window at 60 frames a second, 2026-10-31). A mark costs a read of the time base.
 */
 
 #include <coreinit/time.h>
@@ -19,7 +20,7 @@ void wiiu_render_pass(int pass);
 /* the parts, in the order render_window does them; the mark numbered PASS_COUNT ends the window */
 static const char *const pass_names[] =
 {
-	"visibility", "sky", "objects", "lightmaps", "shadows", "decals",
+	"visibility", "begin", "sky", "objects", "lightmaps", "shadows", "decals",
 	"specular", "transparent", "effects", "detail", "hud", "end",
 };
 #define PASS_COUNT ((int)(sizeof(pass_names) / sizeof(pass_names[0])))
