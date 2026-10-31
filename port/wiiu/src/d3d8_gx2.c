@@ -382,13 +382,38 @@ struct dk_device
 
 static struct dk_device device;
 
-/* whether a render state, or a stage's texture states, may have been written since the draw that last told the GX2 thread (state_writes_send): every
-function that writes D3D__RenderState or D3D__TextureState sets them (the XDK's inline SetRenderState calls one of them for every state) */
-static BOOL render_states_touched = TRUE;
+/* the render states, and each stage's texture states, written since the draw that last told the GX2 thread (state_writes_send), a bit each: every
+function that writes D3D__RenderState or D3D__TextureState marks the words it writes (the XDK's inline SetRenderState calls one of them for every
+state), so a draw compares those words with the GX2 thread's copy, not the whole of both tables (the two tables' compares, nearly every draw since
+nearly every draw follows a state's change, were each draw's longest loop). render_states_all: every render state is compared, the device being new
+or SetRenderState_Simple having been given a method that is no simple state's */
+#define RENDER_STATE_WORDS ((D3DRS_MAX + 31) / 32)
+static uint32_t render_states_dirty[RENDER_STATE_WORDS];
+static BOOL render_states_all = TRUE;
+static uint32_t texture_states_dirty[D3DTSS_MAXSTAGES] = { ~0u, ~0u, ~0u, ~0u };
+
+static inline void render_state_mark(unsigned long state)
+{
+	if (state < D3DRS_MAX)
+		render_states_dirty[state / 32] |= 1u << (state % 32);
+}
+
+/* (first to last, inclusive) */
+static void render_states_mark(unsigned long first, unsigned long last)
+{
+	for (; first <= last; first++)
+		render_state_mark(first);
+}
+
+static inline void texture_state_mark(DWORD stage, unsigned long type)
+{
+	if (stage < D3DTSS_MAXSTAGES && type < D3DTSS_MAX)
+		texture_states_dirty[stage] |= 1u << type;
+}
+
 /* changed when a register's current value (SetVertexData) or the byte order the streams were found in (halo_stream_endian_forget) may have: a
 draw's vertex format depends on them (format_for_draw) */
 static unsigned long attributes_serial = 1, endian_serial = 1;
-static unsigned texture_states_touched = 0xf;
 
 static D3DDevice *device_pointer(void)
 {
@@ -1186,8 +1211,8 @@ HRESULT WINAPI Direct3D_CreateDevice(UINT adapter, D3DDEVTYPE device_type, void 
 		device.viewport.Height = height;
 		device.viewport.MaxZ = 1.0f;
 		device.next_vertex_shader_id = 1;
-		render_states_touched = TRUE;
-		texture_states_touched = 0xf;
+		render_states_all = TRUE;
+		memset(texture_states_dirty, 0xff, sizeof(texture_states_dirty));
 		D3D__RenderState[D3DRS_ZENABLE] = TRUE;
 		D3D__RenderState[D3DRS_ZWRITEENABLE] = TRUE;
 		D3D__RenderState[D3DRS_ZFUNC] = D3DCMP_LESSEQUAL;
@@ -1639,17 +1664,47 @@ HRESULT WINAPI D3DDevice_GetVisibilityTestResult(DWORD index, UINT *result, ULON
 
 /* ---------- render and texture stage state */
 
+/* the simple render states by their push buffer method (D3DSIMPLERENDERSTATEENCODE): the state + 1 at (method - 0x40000) / 4, 0 for none. The 82
+methods are 0x40260 to 0x41e78, each a state's own */
+#define SIMPLE_METHOD_BASE 0x40000UL
+#define SIMPLE_METHOD_SLOTS 2048
+static unsigned char simple_states[SIMPLE_METHOD_SLOTS];
+static BOOL simple_states_made;
+
+static void simple_states_make(void)
+{
+	unsigned long state;
+
+	for (state = 0; state < D3DRS_SIMPLE_MAX; state++)
+	{
+		const unsigned long slot = (D3DSIMPLERENDERSTATEENCODE[state] - SIMPLE_METHOD_BASE) / 4;
+
+		/* (a method two states shared would be known by neither: every state compared) */
+		if (slot < SIMPLE_METHOD_SLOTS)
+			simple_states[slot] = simple_states[slot] ? 0xff : (unsigned char)(state + 1);
+	}
+	simple_states_made = TRUE;
+}
+
 void D3DFASTCALL D3DDevice_SetRenderState_Simple(DWORD method, DWORD value)
 {
-	/* callers also store the value in D3D__RenderState themselves */
-	(void)method;
+	/* callers also store the value in D3D__RenderState themselves: the state is marked by its method, which names it */
+	const unsigned long slot = (method - SIMPLE_METHOD_BASE) / 4;
+	unsigned long state;
+
 	(void)value;
-	render_states_touched = TRUE;
+	if (!simple_states_made)
+		simple_states_make();
+	state = slot < SIMPLE_METHOD_SLOTS ? simple_states[slot] : 0;
+	if (state && state <= D3DRS_SIMPLE_MAX && D3DSIMPLERENDERSTATEENCODE[state - 1] == method)
+		render_state_mark(state - 1);
+	else
+		render_states_all = TRUE;
 }
 
 void D3DFASTCALL D3DDevice_SetRenderState_Deferred(D3DRENDERSTATETYPE state, DWORD value)
 {
-	render_states_touched = TRUE;
+	render_state_mark((unsigned long)state);
 	if ((unsigned long)state < D3DRS_MAX)
 		D3D__RenderState[state] = value;
 }
@@ -1658,7 +1713,7 @@ void WINAPI D3DDevice_SetRenderState_ZBias(DWORD value);
 
 void WINAPI D3DDevice_SetRenderStateNotInline(D3DRENDERSTATETYPE state, DWORD value)
 {
-	render_states_touched = TRUE;
+	render_state_mark((unsigned long)state);
 	if (state == D3DRS_ZBIAS)
 		D3DDevice_SetRenderState_ZBias(value);
 	else if ((unsigned long)state < D3DRS_MAX)
@@ -1675,7 +1730,8 @@ void WINAPI D3DDevice_SetRenderState_ZBias(DWORD value)
 	float slope = offset * 0.25f;
 	DWORD enable = value != 0;
 
-	render_states_touched = TRUE;
+	render_states_mark(D3DRS_POLYGONOFFSETZSLOPESCALE, D3DRS_SOLIDOFFSETENABLE);
+	render_state_mark(D3DRS_ZBIAS);
 	memcpy(&D3D__RenderState[D3DRS_POLYGONOFFSETZSLOPESCALE], &slope, sizeof(slope));
 	memcpy(&D3D__RenderState[D3DRS_POLYGONOFFSETZOFFSET], &offset, sizeof(offset));
 	D3D__RenderState[D3DRS_POINTOFFSETENABLE] = enable;
@@ -1685,7 +1741,7 @@ void WINAPI D3DDevice_SetRenderState_ZBias(DWORD value)
 }
 
 #define COMPLEX_RENDER_STATE(name, state) \
-	void WINAPI D3DDevice_SetRenderState_##name(DWORD value) { render_states_touched = TRUE; D3D__RenderState[state] = value; }
+	void WINAPI D3DDevice_SetRenderState_##name(DWORD value) { render_state_mark(state); D3D__RenderState[state] = value; }
 
 COMPLEX_RENDER_STATE(PSTextureModes, D3DRS_PSTEXTUREMODES)
 COMPLEX_RENDER_STATE(VertexBlend, D3DRS_VERTEXBLEND)
@@ -1717,40 +1773,35 @@ COMPLEX_RENDER_STATE(DoNotCullUncompressed, D3DRS_DONOTCULLUNCOMPRESSED)
 
 void D3DFASTCALL D3DDevice_SetTextureState_Deferred(DWORD stage, D3DTEXTURESTAGESTATETYPE type, DWORD value)
 {
-	if (stage < D3DTSS_MAXSTAGES)
-		texture_states_touched |= 1u << stage;
+	texture_state_mark(stage, (unsigned long)type);
 	if (stage < D3DTSS_MAXSTAGES && (unsigned long)type < D3DTSS_MAX)
 		D3D__TextureState[stage][type] = value;
 }
 
 void WINAPI D3DDevice_SetTextureState_TexCoordIndex(DWORD stage, DWORD value)
 {
-	if (stage < D3DTSS_MAXSTAGES)
-		texture_states_touched |= 1u << stage;
+	texture_state_mark(stage, D3DTSS_TEXCOORDINDEX);
 	if (stage < D3DTSS_MAXSTAGES)
 		D3D__TextureState[stage][D3DTSS_TEXCOORDINDEX] = value;
 }
 
 void WINAPI D3DDevice_SetTextureState_BorderColor(DWORD stage, DWORD value)
 {
-	if (stage < D3DTSS_MAXSTAGES)
-		texture_states_touched |= 1u << stage;
+	texture_state_mark(stage, D3DTSS_BORDERCOLOR);
 	if (stage < D3DTSS_MAXSTAGES)
 		D3D__TextureState[stage][D3DTSS_BORDERCOLOR] = value;
 }
 
 void WINAPI D3DDevice_SetTextureState_ColorKeyColor(DWORD stage, DWORD value)
 {
-	if (stage < D3DTSS_MAXSTAGES)
-		texture_states_touched |= 1u << stage;
+	texture_state_mark(stage, D3DTSS_COLORKEYCOLOR);
 	if (stage < D3DTSS_MAXSTAGES)
 		D3D__TextureState[stage][D3DTSS_COLORKEYCOLOR] = value;
 }
 
 void WINAPI D3DDevice_SetTextureState_BumpEnv(DWORD stage, D3DTEXTURESTAGESTATETYPE type, DWORD value)
 {
-	if (stage < D3DTSS_MAXSTAGES)
-		texture_states_touched |= 1u << stage;
+	texture_state_mark(stage, (unsigned long)type);
 	if (stage < D3DTSS_MAXSTAGES && (unsigned long)type < D3DTSS_MAX)
 		D3D__TextureState[stage][type] = value;
 }
@@ -1772,7 +1823,9 @@ void WINAPI D3DDevice_SetPixelShaderProgram(D3DPIXELSHADERDEF *definition)
 	/* the definition's members are the pixel shader render states */
 	if (!definition)
 		return;
-	render_states_touched = TRUE;
+	/* (every pixel shader state below D3DRS_PS_MAX, and the texture modes) */
+	render_states_mark(D3DRS_PS_MIN, D3DRS_PS_MAX - 1);
+	render_state_mark(D3DRS_PSTEXTUREMODES);
 	memcpy(&D3D__RenderState[D3DRS_PSALPHAINPUTS0], definition->PSAlphaInputs, sizeof(definition->PSAlphaInputs));
 	D3D__RenderState[D3DRS_PSFINALCOMBINERINPUTSABCD] = definition->PSFinalCombinerInputsABCD;
 	D3D__RenderState[D3DRS_PSFINALCOMBINERINPUTSEFG] = definition->PSFinalCombinerInputsEFG;
@@ -2301,7 +2354,7 @@ static unsigned long long constants_told;
 
 /* what the GX2 thread holds a copy of (dk_derive.h): the render and texture stage states it was last told, and the draw's facts. It derives the draw's
 state, shader keys, samplers and uniforms from them; on this thread a draw only finds its textures and tells what changed. The copy is sent whole again
-after each present (states_resync), which also finds a state written by a way that did not set render_states_touched or texture_states_touched. */
+after each present (states_resync), which also finds a state written by a way that did not mark it (render_states_dirty, texture_states_dirty). */
 static DWORD render_states_told[D3DRS_MAX];
 static DWORD texture_states_told[D3DTSS_MAXSTAGES][D3DTSS_MAX];
 static BOOL states_told_valid;
@@ -2321,20 +2374,21 @@ static int target_pixel(float coordinate, int axis)
 	return (int)floorf(coordinate * target_scale[axis] + 0.5f);
 }
 
-/* the state words that differ from the GX2 thread's copy, written as one command (a stage's or the render states' only if a setter touched them) */
+/* the state words that differ from the GX2 thread's copy, written as one command, in order: of the render states, every one (render_states_all) or the
+ones marked, and of each stage's texture states the ones marked; everything when the copy is to be sent whole */
 static void state_writes_send(void)
 {
 	uint32_t writes[2 * (D3DRS_MAX + D3DTSS_MAXSTAGES * D3DTSS_MAX)];
 	unsigned long count = 0, index;
-	unsigned stage;
+	unsigned stage, word;
 	struct dk_command_state_writes *command;
 
 	if (!states_told_valid)
 	{
-		render_states_touched = TRUE;
-		texture_states_touched = (1u << D3DTSS_MAXSTAGES) - 1;
+		render_states_all = TRUE;
+		memset(texture_states_dirty, 0xff, sizeof(texture_states_dirty));
 	}
-	if (render_states_touched)
+	if (render_states_all)
 	{
 		for (index = 0; index < D3DRS_MAX; index++)
 		{
@@ -2346,12 +2400,31 @@ static void state_writes_send(void)
 			count++;
 		}
 	}
+	else
+	{
+		for (word = 0; word < RENDER_STATE_WORDS; word++)
+		{
+			uint32_t marked = render_states_dirty[word];
+
+			for (; marked; marked &= marked - 1)
+			{
+				index = word * 32 + (unsigned long)__builtin_ctz(marked);
+				if (D3D__RenderState[index] == render_states_told[index])
+					continue;
+				render_states_told[index] = D3D__RenderState[index];
+				writes[count * 2] = (uint32_t)index;
+				writes[count * 2 + 1] = D3D__RenderState[index];
+				count++;
+			}
+		}
+	}
 	for (stage = 0; stage < D3DTSS_MAXSTAGES; stage++)
 	{
-		if (!(texture_states_touched & (1u << stage)))
-			continue;
-		for (index = 0; index < D3DTSS_MAX; index++)
+		uint32_t marked = texture_states_dirty[stage];
+
+		for (; marked; marked &= marked - 1)
 		{
+			index = (unsigned long)__builtin_ctz(marked);
 			if (states_told_valid && D3D__TextureState[stage][index] == texture_states_told[stage][index])
 				continue;
 			texture_states_told[stage][index] = D3D__TextureState[stage][index];
@@ -2360,8 +2433,9 @@ static void state_writes_send(void)
 			count++;
 		}
 	}
-	render_states_touched = FALSE;
-	texture_states_touched = 0;
+	render_states_all = FALSE;
+	memset(render_states_dirty, 0, sizeof(render_states_dirty));
+	memset(texture_states_dirty, 0, sizeof(texture_states_dirty));
 	states_told_valid = TRUE;
 	if (!count)
 		return;
@@ -2371,7 +2445,8 @@ static void state_writes_send(void)
 }
 
 /* after a present: the GX2 thread's copy is sent whole with the next draw (what a stream it never ran - none is dropped - or a setter that did not say so
-could have left wrong is right again a frame later), and a state found changed that no setter flagged is logged */
+could have left wrong is right again a frame later), and a state found changed that no setter marked is logged: a word that differs from the copy
+and is not marked */
 static void states_resync(void)
 {
 	if (states_told_valid)
@@ -2379,13 +2454,12 @@ static void states_resync(void)
 		unsigned long index;
 		unsigned stage;
 
-		if (!render_states_touched)
+		if (!render_states_all)
 			for (index = 0; index < D3DRS_MAX; index++)
-				states_missed += D3D__RenderState[index] != render_states_told[index];
+				states_missed += D3D__RenderState[index] != render_states_told[index] && !((render_states_dirty[index / 32] >> (index % 32)) & 1);
 		for (stage = 0; stage < D3DTSS_MAXSTAGES; stage++)
-			if (!(texture_states_touched & (1u << stage)))
-				for (index = 0; index < D3DTSS_MAX; index++)
-					states_missed += D3D__TextureState[stage][index] != texture_states_told[stage][index];
+			for (index = 0; index < D3DTSS_MAX; index++)
+				states_missed += D3D__TextureState[stage][index] != texture_states_told[stage][index] && !((texture_states_dirty[stage] >> index) & 1);
 	}
 	if (states_missed)
 	{

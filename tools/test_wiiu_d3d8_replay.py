@@ -138,10 +138,18 @@ class D3D8ReplayTest(unittest.TestCase):
         self.assertNotEqual(sync, late)
 
     def test_a_texture_stage_state_not_sent_changes_the_pictures(self):
-        mutation = ("port/wiiu/src/d3d8_gx2.c", "\t\tif (!(texture_states_touched & (1u << stage)))\n\t\t\tcontinue;",
-                    "\t\tif (!(texture_states_touched & (1u << stage)) || stage == 3)\n\t\t\tcontinue;")
+        mutation = ("port/wiiu/src/d3d8_gx2.c", "\t\tuint32_t marked = texture_states_dirty[stage];",
+                    "\t\tuint32_t marked = stage == 3 ? 0 : texture_states_dirty[stage];")
         reference, mutated = self.mutated_digests([], [("sync", "lag", 1)]) + self.mutated_digests([mutation], [("sync", "lag", 1)])
         self.assertNotEqual(reference, mutated)
+
+    def test_a_setter_that_does_not_mark_its_state_is_found_at_the_frame_end(self):
+        # (the frame's end compares the words no setter marked with the GX2 thread's copy, and logs any that differ)
+        mutation = ("port/wiiu/src/d3d8_gx2.c", "{ render_state_mark(state); D3D__RenderState[state] = value; }", "{ D3D__RenderState[state] = value; }")
+        with tempfile.TemporaryDirectory(prefix="opence-d3d8-replay-") as folder:
+            values = replay(self.build_in(folder, [mutation]), "sync", "lag", 1, frames=60)
+        self.assertNotEqual(values["digest"], DIGEST)
+        self.assertNotEqual(values["states-missed"], "0")
 
     def test_facts_not_sent_when_they_change_change_the_pictures(self):
         mutation = ("port/wiiu/src/d3d8_gx2.c", "if (!facts_known || !words_equal(&facts, &facts_told, sizeof(facts)))", "if (!facts_known)")
