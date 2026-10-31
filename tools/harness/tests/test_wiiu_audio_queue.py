@@ -23,6 +23,8 @@ class WiiUAudioQueueTest(unittest.TestCase):
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#define packet_allocate malloc
+#define packet_deallocate free
 #define DSOUND_MIXER_YIELDS
 #define STDMETHODCALLTYPE
 #define MAXIMUM_STREAM_PACKETS 64

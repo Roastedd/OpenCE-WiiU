@@ -75,6 +75,12 @@ skips opening a device; audio.channels chooses stereo or 5.1
 #include "../../wiiu/src/wiiu_decoder_profile.h"
 #include "../../wiiu/src/wiiu_mixer_profile.h"
 #include "wiiu_resampler_ps.h"
+#include "../../wiiu/src/wiiu_packet_pool.h"
+#define packet_allocate wiiu_packet_pool_allocate
+#define packet_deallocate wiiu_packet_pool_release
+#else
+#define packet_allocate malloc
+#define packet_deallocate free
 #endif
 
 #define OUTPUT_RATE 48000
@@ -478,7 +484,7 @@ static short *decode_adpcm(const unsigned char *source, unsigned long size, unsi
 {
 	unsigned long block_bytes = XBOX_ADPCM_BLOCK_BYTES * channels;
 	unsigned long blocks = size / block_bytes;
-	short *samples = malloc((blocks ? blocks : 1) * XBOX_ADPCM_BLOCK_SAMPLES * channels * sizeof(short));
+	short *samples = packet_allocate((blocks ? blocks : 1) * XBOX_ADPCM_BLOCK_SAMPLES * channels * sizeof(short));
 	unsigned long block, channel;
 
 	if (!samples)
@@ -523,7 +529,7 @@ static short *decode_pcm(const unsigned char *source, unsigned long size, unsign
 	unsigned long *frame_count)
 {
 	unsigned long frames = size / (2 * channels);
-	short *samples = malloc((frames ? frames : 1) * channels * sizeof(short));
+	short *samples = packet_allocate((frames ? frames : 1) * channels * sizeof(short));
 
 	if (samples)
 		memcpy(samples, source, frames * channels * sizeof(short));
@@ -2395,7 +2401,7 @@ void dsound_sdl_output_device_check(void)
 
 static void packet_release(struct voice_packet *entry)
 {
-	free(entry->samples);
+	packet_deallocate(entry->samples);
 	entry->samples = NULL;
 }
 
@@ -2547,7 +2553,7 @@ static void packet_samples_give(struct sdl_stream *stream, unsigned long serial,
 		}
 	}
 	pthread_mutex_unlock(&mixer_lock);
-	free(samples);
+	packet_deallocate(samples);
 }
 
 /* ---------- the decoder (the Wii U: beside the GX2 thread, wiiu_shell.c) */
@@ -2615,7 +2621,7 @@ static void *decoder_thread(void *parameter)
 		samples = packet_decode(job.adpcm, job.source, job.size, job.channels, &frames);
 		if (decoder.profile_enabled)
 			decoded_ticks = OSGetSystemTime();
-		free(job.source);
+		packet_deallocate(job.source);
 		packet_samples_give(job.stream, job.serial, samples, frames);
 		if (decoder.profile_enabled)
 		{
@@ -2652,6 +2658,18 @@ static void *decoder_thread(void *parameter)
 					platform_log("audio profile: queue >=2/10/16 ms %u/%u/%u, caller fallbacks %lu",
 						(unsigned)profile.queue_at_least[0], (unsigned)profile.queue_at_least[1],
 						(unsigned)profile.queue_at_least[2], fallbacks);
+					{
+						struct wiiu_packet_pool_stats memory;
+
+						wiiu_packet_pool_stats(&memory, 1);
+						platform_log("audio memory: %u requests, %u pool hits, %u heap allocations (%u failed), %u heap frees, cached %u buffers / %u bytes",
+							(unsigned)memory.requests, (unsigned)memory.hits, (unsigned)memory.heap_allocations,
+							(unsigned)memory.heap_failures, (unsigned)memory.heap_frees,
+							(unsigned)memory.cached_blocks, (unsigned)memory.cached_bytes);
+						if (memory.retries || memory.size_rejections)
+							platform_log("audio memory: %u allocation retries after reclaiming %u idle buffers; %u overflow rejections (no heap request)",
+								(unsigned)memory.retries, (unsigned)memory.reclaimed_blocks, (unsigned)memory.size_rejections);
+					}
 					memset(&profile, 0, sizeof(profile));
 				}
 			}
@@ -2692,7 +2710,7 @@ static BOOL decoder_post(struct sdl_stream *stream, unsigned long serial, const 
 {
 	BOOL posted = FALSE;
 	/* (the data copied now: the job owns what it reads; a quarter of the decoded size for ADPCM) */
-	unsigned char *copy = malloc(input->dwMaxSize ? input->dwMaxSize : 1);
+	unsigned char *copy = packet_allocate(input->dwMaxSize ? input->dwMaxSize : 1);
 
 	if (!copy)
 	{
@@ -2726,7 +2744,7 @@ static BOOL decoder_post(struct sdl_stream *stream, unsigned long serial, const 
 		pthread_cond_signal(&decoder.posted);
 	}
 	pthread_mutex_unlock(&decoder.lock);
-	free(copy);
+	packet_deallocate(copy);
 #ifdef HALO_WIIU
 	if (!posted && decoder.profile_enabled)
 		__atomic_add_fetch(&decoder_profile_fallbacks, 1, __ATOMIC_RELAXED);
@@ -2758,7 +2776,7 @@ static HRESULT STDMETHODCALLTYPE stream_process(IDirectSoundStream *object, LPCX
 	if (stream->packet_count == MAXIMUM_STREAM_PACKETS)
 	{
 		pthread_mutex_unlock(&mixer_lock);
-		free(samples);
+		packet_deallocate(samples);
 		return E_OUTOFMEMORY;
 	}
 	entry = &stream->packets[(stream->packet_head + stream->packet_count) % MAXIMUM_STREAM_PACKETS];
