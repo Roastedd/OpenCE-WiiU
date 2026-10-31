@@ -33,6 +33,13 @@ passed: not here.) Resource maps given as maps are passed over; OpenSauce
 maps are refused, as the game refuses them.
 
 usage: map_validate [--strict] [--quiet] [--maps folder] [--fuzz iterations [--seed n] [--log file]] map.map...
+
+The byte swap the big-endian builds turn a Custom Edition map with
+(port/linux/game/tag_swap.c) is checked against tools/wiiu/map_convert.py's,
+on any host:
+
+usage: map_validate --swap tags.dump output [map.map]
+       map_validate --swap-xbox map.map output
 */
 
 #include <stdarg.h>
@@ -45,6 +52,10 @@ usage: map_validate [--strict] [--quiet] [--maps folder] [--fuzz iterations [--s
 
 #include "zlib_prefixed.h"
 #include "../port/linux/game/cache_file_formats.h"
+
+/* (the game's boolean, for tag_swap.h) */
+typedef unsigned char boolean;
+#include "../port/linux/game/tag_swap.h"
 
 /* ---------- constants */
 
@@ -921,6 +932,257 @@ static int custom_edition_validate(char const *path, unsigned char *tag_cache, l
 	return failed;
 }
 
+/* ---------- the byte swap (port/linux/game/tag_swap.c), as map_convert.py's
+
+The swap turns little-endian into big-endian on any host, so these write
+what it makes of a map for tools/wiiu/map_convert.py's to be compared with
+(--custom-edition for a Custom Edition map's tags, its structure bsps and
+model data; an Xbox map converted without --rebase). */
+
+static unsigned long little_long(unsigned char const *bytes)
+{
+	return bytes[0] | bytes[1] << 8 | (unsigned long)bytes[2] << 16 | (unsigned long)bytes[3] << 24;
+}
+
+static unsigned long big_long(unsigned char const *bytes)
+{
+	return bytes[3] | bytes[2] << 8 | (unsigned long)bytes[1] << 16 | (unsigned long)bytes[0] << 24;
+}
+
+static int file_write(char const *path, void const *bytes, unsigned long size)
+{
+	FILE *file = fopen(path, "wb");
+	int written = file && fwrite(bytes, 1, size, file) == size;
+
+	if (file && fclose(file))
+		written = 0;
+	if (!written)
+		printf("%s: cannot be written\n", path);
+	return written;
+}
+
+static void swap_report_print(char const *name, struct tag_swap_report const *report)
+{
+	printf("%s: %ld tags, %ld bsps, %ld model parts; swapped %lu shorts, %lu words, %lu doubles; %lu bytes visited; "
+		"%ld tags of groups left, %lu data bytes left\n", name, report->tags, report->structure_bsps, report->model_parts,
+		report->shorts, report->words, report->doubles, report->bytes_visited, report->groups_left,
+		report->data_bytes_left);
+}
+
+/* a swap of size bytes at bytes (swap_proc), with its own scratch */
+static int swap_with_scratch(char const *name, struct tag_swap_report *report, unsigned long size,
+	boolean (*swap)(void *context, void *scratch, struct tag_swap_report *report), void *context)
+{
+	void *scratch = malloc(tag_swap_scratch_bytes(size));
+	int swapped = scratch && swap(context, scratch, report);
+
+	free(scratch);
+	if (!swapped)
+		printf("%s: refused: %s\n", name, scratch ? report->problem : "out of memory");
+	else
+		swap_report_print(name, report);
+	return swapped;
+}
+
+struct swap_buffer
+{
+	unsigned char *bytes;
+	unsigned long size;
+	unsigned long address;
+	/* (the model data's: the tags, turned, and where its strips start) */
+	unsigned char const *tags;
+	unsigned long tags_size;
+	unsigned long index_data_offset;
+};
+
+static boolean swap_tags(void *context, void *scratch, struct tag_swap_report *report)
+{
+	struct swap_buffer *buffer = context;
+
+	return tag_swap_custom_edition_tags(buffer->bytes, buffer->size, scratch, report);
+}
+
+static boolean swap_structure_bsp(void *context, void *scratch, struct tag_swap_report *report)
+{
+	struct swap_buffer *buffer = context;
+
+	return tag_swap_custom_edition_structure_bsp(buffer->bytes, buffer->size, buffer->address, scratch, report);
+}
+
+static boolean swap_model_data(void *context, void *scratch, struct tag_swap_report *report)
+{
+	struct swap_buffer *buffer = context;
+
+	return tag_swap_custom_edition_model_data(buffer->tags, buffer->tags_size, buffer->bytes, buffer->size,
+		buffer->index_data_offset, scratch, report);
+}
+
+static boolean swap_xbox_map(void *context, void *scratch, struct tag_swap_report *report)
+{
+	struct swap_buffer *buffer = context;
+
+	return tag_swap_xbox_map(buffer->bytes, buffer->size, scratch, report);
+}
+
+/* --swap TAGS OUTPUT [MAP]: a Custom Edition map's tags as its loader leaves
+them (cache_file_report --dump-tags) turned into OUTPUT; with MAP, its
+structure bsps into OUTPUT.bsp<N> and its model data into OUTPUT.model */
+static int swap_custom_edition(char const *tags_path, char const *output, char const *map_path)
+{
+	struct memory_file tags;
+	struct memory_file map;
+	struct swap_buffer buffer;
+	struct tag_swap_report report;
+	char path[1024];
+	unsigned long base = CUSTOM_EDITION_TAG_CACHE_ADDRESS;
+	unsigned long table, scenario, references, count, index;
+	int failed = 0;
+
+	if (!memory_file_open(&tags, tags_path))
+	{
+		printf("%s: cannot be read\n", tags_path);
+		return 1;
+	}
+	memset(&buffer, 0, sizeof(buffer));
+	buffer.bytes = tags.bytes;
+	buffer.size = tags.size;
+	if (!swap_with_scratch(tags_path, &report, tags.size, swap_tags, &buffer) ||
+		!file_write(output, tags.bytes, tags.size))
+	{
+		memory_file_close(&tags);
+		return 1;
+	}
+	if (!map_path)
+	{
+		memory_file_close(&tags);
+		return 0;
+	}
+	if (!memory_file_open(&map, map_path))
+	{
+		printf("%s: cannot be read\n", map_path);
+		memory_file_close(&tags);
+		return 1;
+	}
+	/* (the scenario's structure bsps, from the tags as turned) */
+	table = big_long(tags.bytes) - base;
+	scenario = (big_long(tags.bytes + 4) & 0xFFFF) * 0x20;
+	references = 0;
+	count = 0;
+	if (table < tags.size && scenario + 0x20 <= tags.size - table)
+	{
+		unsigned long root = big_long(tags.bytes + table + scenario + 0x14) - base;
+
+		if (root < tags.size && SCENARIO_STRUCTURE_BSPS_OFFSET + 12 <= tags.size - root)
+		{
+			count = big_long(tags.bytes + root + SCENARIO_STRUCTURE_BSPS_OFFSET);
+			references = big_long(tags.bytes + root + SCENARIO_STRUCTURE_BSPS_OFFSET + 4) - base;
+		}
+	}
+	if (count > MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO || references > tags.size || count * 0x20 > tags.size - references)
+		count = 0;
+	for (index = 0; index < count && !failed; index++)
+	{
+		unsigned char const *reference = tags.bytes + references + index * 0x20;
+		unsigned long file_offset = big_long(reference);
+		unsigned long size = big_long(reference + 4);
+
+		snprintf(path, sizeof(path), "%s.bsp%lu", output, index);
+		if (file_offset > map.size || size > map.size - file_offset)
+		{
+			printf("%s: structure bsp %lu is outside it\n", map_path, index);
+			failed = 1;
+			break;
+		}
+		buffer.bytes = malloc(size + 1);
+		buffer.size = size;
+		buffer.address = big_long(reference + 8);
+		memcpy(buffer.bytes, map.bytes + file_offset, size);
+		failed = !swap_with_scratch(path, &report, size, swap_structure_bsp, &buffer) ||
+			!file_write(path, buffer.bytes, size);
+		free(buffer.bytes);
+	}
+	if (!failed)
+	{
+		unsigned long model_offset = big_long(tags.bytes + 0x14);
+		unsigned long model_size = big_long(tags.bytes + 0x20);
+
+		snprintf(path, sizeof(path), "%s.model", output);
+		if (model_offset > map.size || model_size > map.size - model_offset)
+		{
+			printf("%s: its model data is outside it\n", map_path);
+			failed = 1;
+		}
+		else
+		{
+			buffer.bytes = malloc(model_size + 1);
+			buffer.size = model_size;
+			buffer.tags = tags.bytes;
+			buffer.tags_size = tags.size;
+			buffer.index_data_offset = big_long(tags.bytes + 0x1C);
+			memcpy(buffer.bytes, map.bytes + model_offset, model_size);
+			failed = !swap_with_scratch(path, &report, model_size, swap_model_data, &buffer) ||
+				!file_write(path, buffer.bytes, model_size);
+			free(buffer.bytes);
+		}
+	}
+	memory_file_close(&map);
+	memory_file_close(&tags);
+
+	return failed;
+}
+
+/* --swap-xbox MAP OUTPUT: an Xbox map inflated and turned as map_convert.py
+turns it (without --rebase), written inflated */
+static int swap_xbox(char const *map_path, char const *output)
+{
+	struct memory_file file;
+	struct swap_buffer buffer;
+	struct tag_swap_report report;
+	unsigned long file_length;
+	int failed;
+
+	if (!memory_file_open(&file, map_path) || file.size < CACHE_FILE_HEADER_SIZE)
+	{
+		printf("%s: cannot be read\n", map_path);
+		return 1;
+	}
+	memset(&buffer, 0, sizeof(buffer));
+	file_length = little_long(file.bytes + 8);
+	buffer.bytes = malloc(file_length + 1);
+	buffer.size = file_length;
+	if (!buffer.bytes || file_length < CACHE_FILE_HEADER_SIZE)
+	{
+		printf("%s: not a map\n", map_path);
+		memory_file_close(&file);
+		free(buffer.bytes);
+		return 1;
+	}
+	memcpy(buffer.bytes, file.bytes, CACHE_FILE_HEADER_SIZE);
+	if (file.size == file_length)
+	{
+		memcpy(buffer.bytes, file.bytes, file_length);
+	}
+	else
+	{
+		uLongf inflated = file_length - CACHE_FILE_HEADER_SIZE;
+
+		if (uncompress(buffer.bytes + CACHE_FILE_HEADER_SIZE, &inflated, file.bytes + CACHE_FILE_HEADER_SIZE,
+			file.size - CACHE_FILE_HEADER_SIZE) != Z_OK || inflated != file_length - CACHE_FILE_HEADER_SIZE)
+		{
+			printf("%s: cannot be inflated\n", map_path);
+			memory_file_close(&file);
+			free(buffer.bytes);
+			return 1;
+		}
+	}
+	memory_file_close(&file);
+	failed = !swap_with_scratch(map_path, &report, file_length, swap_xbox_map, &buffer) ||
+		!file_write(output, buffer.bytes, file_length);
+	free(buffer.bytes);
+
+	return failed;
+}
+
 /* the format of the file at path, from its first bytes */
 static enum cache_file_format file_format(char const *path)
 {
@@ -953,6 +1215,12 @@ int main(int argc, char **argv)
 	long fuzz_iterations = 0;
 	unsigned long seed = 1;
 	int argument;
+
+	/* (the byte swap's checks, which need no tag cache) */
+	if (argc >= 4 && argc <= 5 && !strcmp(argv[1], "--swap"))
+		return swap_custom_edition(argv[2], argv[3], argc == 5 ? argv[4] : NULL);
+	if (argc == 4 && !strcmp(argv[1], "--swap-xbox"))
+		return swap_xbox(argv[2], argv[3]);
 
 	tag_cache = mmap((void *)TAG_CACHE_BASE_ADDRESS, TAG_CACHE_SIZE, PROT_READ | PROT_WRITE,
 		MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
