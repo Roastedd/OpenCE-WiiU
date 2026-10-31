@@ -446,6 +446,26 @@ int posix_socket(int family, int type, int protocol)
 	return index < 0 ? fail(WSAEMFILE) : succeed(SOCKET_BASE + index);
 }
 
+/* (a connection waiting to be accepted is one too) */
+int posix_socket_census(int *highest)
+{
+	int count = 0;
+	int index;
+
+	*highest = -1;
+	pthread_mutex_lock(&net_lock);
+	for (index = 0; index < MAXIMUM_SOCKETS; index++)
+	{
+		if (sockets[index].state != _socket_free)
+		{
+			count++;
+			*highest = SOCKET_BASE + index;
+		}
+	}
+	pthread_mutex_unlock(&net_lock);
+	return count;
+}
+
 int posix_socket_close(int descriptor)
 {
 	struct web_socket *socket;

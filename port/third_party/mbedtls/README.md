@@ -21,3 +21,5 @@ its own WebRTC).
 The Linux build's self-updater (`port/linux/src/posix_update.c`) uses it to
 download new builds over HTTPS, with the system's certificate authorities.
 The Windows build uses WinHTTP instead, and the Android app Java's HTTPS.
+The Wii U's updater (`port/wiiu/src/wiiu_update_http.c`) uses it over the
+console's sockets, with the roots of `port/wiiu/src/wiiu_update_roots.h`.

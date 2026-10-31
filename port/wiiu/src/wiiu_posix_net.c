@@ -199,10 +199,88 @@ int posix_socket_last_error(void)
 	return last_error;
 }
 
+/* halo/socket_probe.txt "1" (the FTP helper cannot delete a file, so "0" or an empty file is none), at the first socket the game makes: how many sockets nsysnet gives the app, the numbers it gives them and
+what poll does with them, said in the log; then the probe's sockets are closed. wut's poll is nsysnet's select underneath, whose sets hold the sockets numbered
+0 to 31 (NSYSNET_FD_SETSIZE): a socket numbered 32 or more would fail every poll it is in with EINVAL. A host's sockets grow with its machines (internet play's
+tunnel holds four or five for each peer), so this measures how many machines a Wii U can host. */
+#define SOCKET_PROBE_MOST 96
+int __wut_get_nsysnet_fd(int fd);
+
+static void socket_probe_poll(const char *what, const int *sockets, int count)
+{
+	struct pollfd descriptors[SOCKET_PROBE_MOST];
+	int index, result;
+
+	for (index = 0; index < count; index++)
+	{
+		descriptors[index].fd = sockets[index];
+		descriptors[index].events = POLLIN;
+		descriptors[index].revents = 0;
+	}
+	errno = 0;
+	result = poll(descriptors, (nfds_t)count, 0);
+	wiiu_log("Socket probe: a poll of %s (%d sockets): %d, errno %d", what, count, result, result < 0 ? errno : 0);
+}
+
+static void socket_probe(void)
+{
+	int sockets[SOCKET_PROBE_MOST];
+	int count = 0, refused = 0, lowest = -1, highest = -1, lowest_index = 0, highest_index = 0, index;
+	FILE *file = fopen(WIIU_DATA_DIRECTORY "/socket_probe.txt", "r");
+	int wanted;
+
+	if (!file)
+		return;
+	wanted = fgetc(file) == '1';
+	fclose(file);
+	if (!wanted)
+		return;
+	while (count < SOCKET_PROBE_MOST)
+	{
+		const int made = socket(AF_INET, count % 2 ? SOCK_STREAM : SOCK_DGRAM, 0);
+		int number;
+
+		if (made < 0)
+		{
+			refused = errno;
+			break;
+		}
+		number = __wut_get_nsysnet_fd(made);
+		if (lowest < 0 || number < lowest)
+		{
+			lowest = number;
+			lowest_index = count;
+		}
+		if (number > highest)
+		{
+			highest = number;
+			highest_index = count;
+		}
+		sockets[count++] = made;
+	}
+	wiiu_log("Socket probe: %d sockets made, datagram and stream in turn, nsysnet's numbers %d to %d; %s %d", count, lowest, highest,
+		count < SOCKET_PROBE_MOST ? "the next was refused, errno" : "the probe stopped at its most,", count < SOCKET_PROBE_MOST ? refused : count);
+	if (count)
+	{
+		socket_probe_poll("the lowest numbered", &sockets[lowest_index], 1);
+		socket_probe_poll("the highest numbered", &sockets[highest_index], 1);
+		socket_probe_poll("all of them", sockets, count);
+	}
+	for (index = 0; index < count; index++)
+		close(sockets[index]);
+}
+
 int posix_socket(int family, int type, int protocol)
 {
+	static int probed;
+
 	if (unusable())
 		return -1;
+	if (!probed)
+	{
+		probed = 1;
+		socket_probe();
+	}
 	{
 		int result = socket(family, type, protocol);
 
@@ -226,6 +304,27 @@ int posix_socket_close(int socket)
 		open_sockets[socket] = 0;
 	}
 	return succeed(close(socket));
+}
+
+/* the sockets open, and the highest of nsysnet's numbers among them (wut's descriptors are newlib's, which files share; the limit is
+nsysnet's: 27 sockets, numbered 3 to 31, measured 2026-10-31) */
+int posix_socket_census(int *highest)
+{
+	int socket, count = 0;
+
+	*highest = -1;
+	for (socket = 0; socket < LISTENERS; socket++)
+	{
+		if (open_sockets[socket])
+		{
+			const int number = __wut_get_nsysnet_fd(socket);
+
+			count++;
+			if (number > *highest)
+				*highest = number;
+		}
+	}
+	return count;
 }
 
 int wiiu_posix_net_close_all(void);
@@ -562,10 +661,29 @@ int posix_socket_setsockopt(int socket, int level, int name, const void *value, 
 	}
 	if (host_level == SOL_SOCKET && (host_name == SO_SNDBUF || host_name == SO_RCVBUF) && value && length == (int)sizeof(int))
 	{
-		int asked;
+		/* (the first few streams' sizes, before and after: the game raises a stream's to 32 KB, transport_endpoint_winsock.c, from what
+		nsysnet gives it, which no console has said yet) */
+		static unsigned int told_streams;
+		const int stream = socket >= 0 && socket < LISTENERS && !datagram_sockets[socket];
+		int asked, before = -1, after = -1, result, error;
+		socklen_t size_length = sizeof(before);
 
 		memcpy(&asked, value, sizeof(asked));
-		return succeed(set_buffer_size(socket, host_name, asked));
+		if (stream && told_streams < 4u && getsockopt(socket, SOL_SOCKET, host_name, &before, &size_length) != 0)
+			before = -1;
+		result = set_buffer_size(socket, host_name, asked);
+		error = errno;
+		if (stream && told_streams < 4u)
+		{
+			told_streams++;
+			size_length = sizeof(after);
+			if (getsockopt(socket, SOL_SOCKET, host_name, &after, &size_length) != 0)
+				after = -1;
+			wiiu_log("Net: stream socket %d: %s was %d, %d asked, now %d", socket, host_name == SO_SNDBUF ? "SO_SNDBUF" : "SO_RCVBUF", before, asked,
+				after);
+		}
+		errno = error;
+		return succeed(result);
 	}
 	return succeed(setsockopt(socket, host_level, host_name, value, (socklen_t)length));
 }

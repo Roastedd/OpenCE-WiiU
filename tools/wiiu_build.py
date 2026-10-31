@@ -24,10 +24,16 @@ and links build/linux-wiiu/halo.elf and halo.rpx, with a report of the sizes aga
 multiply-adds: tools/wiiu_check_objects.py), and the link for weak references nothing defines and for newlib's
 wide-character functions, which assume a 32-bit wchar_t (tools/wiiu_link_check.py).
 
-Not optimised together at the link (no -flto, no profile): devkitPPC's linker does not read LLVM bitcode.
+devkitPPC's linker does not read LLVM bitcode, so the link cannot optimise the game as one module the way the Linux
+builds' does (configure.py --lto). With configure.py --wiiu-lto the game's sources (those the Linux builds optimise
+together) are compiled to LLVM IR instead, linked into one module by llvm-link, and that module is compiled to one
+object, which is checked and linked like any other: calls between the game's files can then be inlined (the accessors
+datum_get, tag_block_get_element and cache_get_tag_instance were 6% of the game thread's time in the 2026-10-29
+profile). Without it, each file is optimised alone. No profile is used either way.
 """
 
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -77,6 +83,8 @@ WIIU_EXCLUDE: Dict[str, str] = {
     "port/linux/src/touch_input.c": "touch controls on SDL 3",
     "port/linux/src/voice_audio.c": "voice chat on SDL 3 audio",
     "port/linux/src/xinput_sdl.c": "XInput on SDL 3 gamepads; VPAD/KPAD replace it",
+    "port/linux/src/controller_remap_input.c": "controller remapping, on SDL 3 gamepads and its clock: the Wii U's buttons are "
+                                               "xinput_wiiu.c's (platform_wiiu.c stands in)",
     "port/linux/src/updater.c": "the self-updater (SDL 3); the Wii U does not update itself",
     # system headers newlib does not have
     "port/linux/src/memory_watch.c": "execinfo.h; page protection the Wii U does not have (plan 6.2: a hash watch)",
@@ -98,11 +106,35 @@ WIIU_EXCLUDE: Dict[str, str] = {
 # 16-bit wchar_t, no XDK headers: wut's and newlib's structures have their real layout)
 WIIU_NATIVE_PREFIX = "wiiu_"
 
+# The self-updater's units (port/wiiu/src/wiiu_update*.c): Mbed TLS's headers for the downloads, Monocypher's for the manifest's
+# signature, and the build's update defines (update_defines).
+WIIU_UPDATE_UNITS = ("wiiu_update.c", "wiiu_update_core.c", "wiiu_update_http.c")
+
 # what the link needs and the compile does not say: wut's specs and libraries (the environment has WUT_ROOT, as
 # the opence-wiiu container does)
 # (--wrap: the game thread's waits for locks are timed while the profiler runs, port/wiiu/src/wiiu_lockprof.c)
 WIIU_LINK_FLAGS = ["-g", "-specs=$$WUT_ROOT/share/wut.specs", WIIU_MARCH, "-meabi", "-mhard-float", "-Wl,--wrap=pthread_mutex_lock"]
 WIIU_LIBS = ["-L$$WUT_ROOT/lib", "-lwut", "-lm"]
+
+
+def update_defines(release: bool) -> str:
+    """The Wii U updater's configuration (port/wiiu/src/wiiu_update.c), from configure.py's environment: the build number
+    (HALO_BUILD_NUMBER, as the desktop updater's: updater_defines), the repository its releases are published in
+    (HALO_UPDATE_REPOSITORY, "owner/repo") and the Ed25519 public key their manifests are signed with (HALO_UPDATE_PUBLIC_KEY, 64
+    hexadecimal digits). Without the last two the updater is off. A value of another form stops configure.py: a build that
+    looks in the wrong place, or trusts a key it was not meant to, is worse than one without an updater."""
+    defines = [updater_defines(release)]
+    repository = os.environ.get("HALO_UPDATE_REPOSITORY", "")
+    key = os.environ.get("HALO_UPDATE_PUBLIC_KEY", "")
+    if repository:
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+            raise ValueError(f"HALO_UPDATE_REPOSITORY is not owner/repo: {repository!r}")
+        defines.append(f'-DHALO_UPDATE_REPOSITORY=\\"{repository}\\"')
+    if key:
+        if not re.fullmatch(r"[0-9a-f]{64}", key):
+            raise ValueError("HALO_UPDATE_PUBLIC_KEY is not 64 lowercase hexadecimal digits (the raw Ed25519 public key)")
+        defines.append(f'-DHALO_UPDATE_PUBLIC_KEY=\\"{key}\\"')
+    return " ".join(defines)
 
 
 def wiiu_flags(flags: Sequence[str]) -> List[str]:
@@ -190,6 +222,23 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
         depfile="$out.d",
         deps="gcc",
     )
+    # (configure.py --wiiu-lto: the game's sources as LLVM IR, linked into one module and compiled to one object, which
+    # is checked as every object is; -S, because wiiu-clang strips a section from what -c makes, which IR does not have)
+    n.rule(
+        name="wiiu_cc_ir",
+        command=f"{compile_launcher(sln)}$wiiu_cc -MMD -MF $out.d $cflags -flto -S $in -o $out",
+        description="WIIU CC IR $out",
+        depfile="$out.d",
+        deps="gcc",
+    )
+    n.rule(
+        name="wiiu_lto",
+        command="llvm-link -o $out.bc @$out.rsp && $wiiu_cc $cflags -c $out.bc -o $out"
+                " && $python tools/wiiu_check_objects.py --quiet $out",
+        description="WIIU LTO $out",
+        rspfile="$out.rsp",
+        rspfile_content="$in_newline",
+    )
     n.rule(
         name="wiiu_stubs",
         command='$python tools/wiiu_stubs.py --link "$wiiu_ld $ldflags" --libs "$libs" --objects $out.rsp'
@@ -238,12 +287,16 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
     sdk_flags = f"-idirafter {XDK_INCLUDE}"
     objects: List[Path] = []
 
-    def add_object(source: Path, cflags: str) -> Path:
-        obj = obj_dir / source.with_suffix(".o")
-        objects.append(obj)
+    lto = getattr(sln, "wiiu_lto", False)
+    ir_modules: List[Path] = []
+
+    def add_object(source: Path, cflags: str, ir: bool = False) -> Path:
+        """the source's object, or with ir (the game's sources under --wiiu-lto) its LLVM IR for the one module"""
+        obj = obj_dir / source.with_suffix(".ll" if ir else ".o")
+        (ir_modules if ir else objects).append(obj)
         n.build(
             outputs=obj,
-            rule="wiiu_cc",
+            rule="wiiu_cc_ir" if ir else "wiiu_cc",
             inputs=source,
             # (the SDK declarations are system headers, which the depfile leaves out)
             implicit=[*xdk_headers(), prefix_header, semantics_header, platform_semantics_header],
@@ -268,10 +321,16 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
         if source.as_posix() == "source/shell/shell_xbox.c":
             # (the Wii U's own main, port/wiiu/src/wiiu_main.c, runs the game's on a thread of its own, as the web build's does)
             flags += " -Dmain=halo_game_main"
-        add_object(source, flags)
+        add_object(source, flags, ir=lto)
     for source in sorted(Path(config["game_sources"]).glob("*.c")):
-        add_object(source, game_cflags)
-    add_object(STB_VORBIS_SOURCE, game_cflags)
+        add_object(source, game_cflags, ir=lto)
+    add_object(STB_VORBIS_SOURCE, game_cflags, ir=lto)
+    if lto:
+        # (the game as one module: its code generation flags are the game's, which the IR's functions also carry)
+        game_object = obj_dir / "game_lto.o"
+        objects.append(game_object)
+        n.build(outputs=game_object, rule="wiiu_lto", inputs=ir_modules, implicit=[Path("tools/wiiu_check_objects.py")],
+                variables={"cflags": f"{abi} -w"})
 
     platform_dir = Path(config["platform_sources"])
     platform_cflags = " ".join([
@@ -311,7 +370,8 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
     for source in sorted(wiiu_src.glob("*.c")):
         if source.name.startswith(WIIU_NATIVE_PREFIX):
             # (-ffp-contract=off: the objects are checked for fused multiply-adds whether or not they touch the simulation)
-            add_object(source, f"{posix_cflags} -ffp-contract=off -I{wiiu_src} -I{platform_dir}")
+            extra = f" {mbedtls_include} -I{MONOCYPHER_DIR} {update_defines(release)}" if source.name in WIIU_UPDATE_UNITS else ""
+            add_object(source, f"{posix_cflags} -ffp-contract=off -I{wiiu_src} -I{platform_dir}{extra}")
         else:
             # (the platform layer's flags; the Xbox-facing units that include xgpu.h get a stand-in for SDL's OpenGL header)
             add_object(source, f"{platform_cflags} -I{wiiu_src} -I{WIIU_DIR / 'include'}")

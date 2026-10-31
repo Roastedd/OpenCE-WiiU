@@ -86,6 +86,13 @@ struct player_action const *update_server_update_actions(
 /* each player's latest input forgotten, for a new game */
 void update_queues_distributed_reset(
 	void);
+/* (the host) for each player of count, by absolute index: the ticks since
+the last call that ran a client machine's player with the input the tick
+before ran it with, none newer having come (the netcode's net: lines);
+they count from 0 again */
+void update_server_distributed_input_gaps(
+	long *gaps,
+	long count);
 /* (a client) the host's action for the player at that absolute index, of
 the host's update */
 void update_client_handle_relayed_action(

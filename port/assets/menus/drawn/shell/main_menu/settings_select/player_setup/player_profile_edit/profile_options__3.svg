@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="256" viewBox="0 0 512 256">
+  <title>Mouse Setup: a mouse, the aim it moves, and a sensitivity slider</title>
+  <!-- The profile settings' picture of Mouse Setup (profile_options frame 3), drawn for this port
+       in place of the PC version's: its widget shows the top left 279x202 of the frame, beside the
+       list. tools/render_menu_art.py draws it at twice this size. -->
+  <defs>
+    <!-- the glow: the drawing's silhouette blurred in the menus' blue, and
+         its lines' own bloom, under it -->
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="512" height="256" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="4.5" result="wide"/>
+      <feFlood flood-color="#2895FF" flood-opacity="0.7"/>
+      <feComposite in2="wide" operator="in" result="halo"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="1.4" result="bloom"/>
+      <feMerge>
+        <feMergeNode in="halo"/>
+        <feMergeNode in="bloom"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- a softer glow for the lines alone -->
+    <filter id="soft" filterUnits="userSpaceOnUse" x="0" y="0" width="512" height="256" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2.2" result="bloom"/>
+      <feMerge>
+        <feMergeNode in="bloom"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- the projection's light, and its grid, fading out from the middle -->
+    <radialGradient id="pool" gradientUnits="userSpaceOnUse" cx="143" cy="100" r="132" gradientTransform="translate(143 100) scale(1 0.73) translate(-143 -100)">
+      <stop offset="0" stop-color="#1667C8" stop-opacity="0.42"/>
+      <stop offset="0.55" stop-color="#0E4FA6" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#0A3C86" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="fade" gradientUnits="userSpaceOnUse" cx="143" cy="100" r="132" gradientTransform="translate(143 100) scale(1 0.73) translate(-143 -100)">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="1"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <mask id="fading" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="256">
+      <rect width="512" height="256" fill="url(#fade)"/>
+    </mask>
+    <pattern id="grid" patternUnits="userSpaceOnUse" x="3" y="2" width="14" height="14">
+      <path d="M14 0H0V14" fill="none" stroke="#2F8EF0" stroke-width="0.6"/>
+    </pattern>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0D3B78"/>
+      <stop offset="1" stop-color="#04173A"/>
+    </linearGradient>
+    <linearGradient id="pressed" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8FDAFF"/>
+      <stop offset="1" stop-color="#1F74CF"/>
+    </linearGradient>
+  </defs>
+  <!-- the projection: a pool of light and a faint grid -->
+  <ellipse cx="143" cy="100" rx="132" ry="96" fill="url(#pool)"/>
+  <rect x="11" y="4" width="264" height="192" fill="url(#grid)" opacity="0.22" mask="url(#fading)"/>
+  <!-- the mouse, and the ways it moves -->
+  <g filter="url(#soft)">
+    <path d="M-5,-7 L3,0 L-5,7" transform="translate(40 104) rotate(180)" fill="none" stroke="#55BEFF" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M-5,-7 L3,0 L-5,7" transform="translate(92 32) rotate(-90)" fill="none" stroke="#55BEFF" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M-5,-7 L3,0 L-5,7" transform="translate(92 176) rotate(90)" fill="none" stroke="#55BEFF" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M-5,-7 L3,0 L-5,7" transform="translate(144 104) rotate(0)" fill="none" stroke="#55BEFF" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <g filter="url(#glow)">
+    <path d="M92,46 C113,46 126,57 128,76 C131,96 132,122 127,140 C122,156 109,162 92,162 C75,162 62,156 57,140 C52,122 53,96 56,76 C58,57 71,46 92,46 Z" fill="url(#body)" stroke="#55BEFF" stroke-width="2.4"/>
+    <path d="M92,46 C71,46 58,57 56,76 C55,82 54.5,89 54.4,91 Q74,98 92,99 Z" fill="url(#pressed)"/>
+    <path d="M54.4,91 Q92,106 129.6,91" fill="none" stroke="#55BEFF" stroke-width="1.6"/>
+    <path d="M92,46 V99" stroke="#55BEFF" stroke-width="1.6"/>
+    <rect x="87" y="56" width="10" height="24" rx="5" fill="#020C20" stroke="#E6F9FF" stroke-width="1.6"/>
+    <path d="M89,60 h6 M89,64 h6 M89,68 h6 M89,72 h6 M89,76 h6" stroke="#55BEFF" stroke-width="1"/>
+    <path d="M70,142 Q92,152 114,142" fill="none" stroke="#2A7FD4" stroke-width="1.2"/>
+  </g>
+  <!-- the aim it moves -->
+  <g filter="url(#glow)">
+    <circle cx="210" cy="72" r="30" fill="#041634" fill-opacity="0.7" stroke="#55BEFF" stroke-width="2.4"/>
+    <circle cx="210" cy="72" r="19" fill="none" stroke="#2A7FD4" stroke-width="1.2" stroke-dasharray="4 4"/>
+    <path d="M173,72 h16 M231,72 h16 M210,35 v16 M210,93 v16" stroke="#A8E6FF" stroke-width="2.4" stroke-linecap="round"/>
+    <circle cx="210" cy="72" r="3" fill="#E6F9FF"/>
+  </g>
+  <!-- the sensitivity -->
+  <g filter="url(#glow)">
+    <path d="M170,153 v7 M180,153 v4 M190,153 v7 M200,153 v4 M210,153 v7 M220,153 v4 M230,153 v7 M240,153 v4 M250,153 v7" stroke="#2A7FD4" stroke-width="1.2"/>
+    <polygon points="170,174 250,174 250,164" fill="#55BEFF" opacity="0.55"/>
+    <rect x="170" y="141" width="80" height="6" rx="3" fill="#03132E" stroke="#55BEFF" stroke-width="1.6"/>
+    <rect x="171.5" y="142.5" width="54.5" height="3" rx="1.5" fill="#55BEFF"/>
+    <rect x="220" y="133" width="12" height="22" rx="3" fill="url(#pressed)" stroke="#E6F9FF" stroke-width="1.4"/>
+  </g>
+</svg>

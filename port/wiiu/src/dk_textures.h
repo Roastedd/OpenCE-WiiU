@@ -15,9 +15,18 @@ port/linux/src/xbox_textures.c) and what it needs of the device
 palette its stages' palettized textures use), sending its texels to the host
 if it is new or has been written since; 0 if there is none to draw. *kind
 receives DK_TEXTURE_2D, _3D or _CUBE, and description what xbox_textures
-knows of it. */
+knows of it. *lasting (if not NULL) says whether the same header words would
+get the same answer, and nothing would be sent, while the memory watch's
+serial, dk_texture_serial, the menus' art serial (menu_art_serial), the HUD
+placeholders' serial (hud_hires_placeholder_serial) and the frame stay the
+same: not for a palettized texture (its palette's contents are hashed at
+each lookup), the text's atlas (its rows drawn since are sent at each) or
+with debug.texture_no_cache. */
 uint32_t dk_texture_get(const DWORD *resource, const D3DCOLOR *palette, int *kind,
-	struct xgpu_texture_description *description);
+	struct xgpu_texture_description *description, int *lasting);
+/* changed whenever the cache drops a texture (its number may be given to
+another) */
+unsigned long dk_texture_serial(void);
 
 /* d3d8_dk.c: room for a command in the stream (dk_commands.h), its header
 filled in */

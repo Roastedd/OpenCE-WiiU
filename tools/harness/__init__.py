@@ -90,7 +90,10 @@ def build(test, generated):
     # (HALO_HARNESS_TARGET replaces -m32: "--target=powerpc-linux-gnu -fsigned-char -fuse-ld=lld -no-pie" builds
     # the tests big-endian, run by HALO_HARNESS_RUNNER, qemu-ppc)
     target = os.environ.get("HALO_HARNESS_TARGET", "-m32").split()
-    command = [os.environ.get("CC", "clang"), *target, "-std=gnu99", "-O2", "-Wall", "-Werror", "-Wno-unused-function",
+    # (-ffp-contract=off: no fused multiply-adds, as the game is built (linux_build.py's LINUX_ABI_FLAGS): a target that has
+    # them, PowerPC's or ARM64's, would otherwise round some cases' arithmetic differently from the game)
+    command = [os.environ.get("CC", "clang"), *target, "-std=gnu99", "-O2", "-ffp-contract=off", "-Wall", "-Werror",
+               "-Wno-unused-function",
                "-Wno-unused-variable", "-I", str(HARNESS / "include"), "-I", str(work),
                str(HARNESS / "tests" / f"{test}.c"), "-o", str(executable), "-lm"]
     result = subprocess.run(command, capture_output=True, text=True)
@@ -117,6 +120,6 @@ def timeout_scale():
 
 def run(executable, case):
     """Run one case: (exit status, output)."""
-    result = subprocess.run([*runner(), str(executable), case], capture_output=True, text=True,
+    result = subprocess.run([*runner(), str(executable), case], capture_output=True, text=True, errors="replace",
                             timeout=60 * timeout_scale())
     return result.returncode, (result.stdout + result.stderr).strip()

@@ -14,11 +14,11 @@ Sources for the layouts, cited per structure below:
 - BlamLib, in the same archive: the font and unicode string list layouts.
 - Reclaimer (GPL-3.0, Gravemind2401; the Reclaimer-master archive): how
   bitmap tags and pixel data are found in bitmaps.map.
-No code from either project is used: they are documentation here, and this
-repository is CC0. Facts that neither source states were established by
-reading the sample Custom Edition maps; the comments below say so where they
-are used ("observed", "every map examined"), and
-docs/custom_edition_caches.md lists each with its evidence.
+No code from either project is used: they are documentation here. Facts
+that neither source states were established by reading the sample Custom
+Edition maps; the comments below say so where they are used ("observed",
+"every map examined"), and docs/custom_edition_caches.md lists each with its
+evidence.
 */
 
 /* ---------- headers */
@@ -89,6 +89,9 @@ cache_files_structures.hpp, s_cache_tag_header and s_cache_tag_instance) */
 #define TAG_INSTANCE_NAME_OFFSET 0x10
 #define TAG_INSTANCE_ADDRESS_OFFSET 0x14
 #define TAG_INSTANCE_IN_RESOURCE_MAP_OFFSET 0x18
+/* the second of the instance's unused words, left zero: its first byte is
+an empty name for tags whose own is unusable */
+#define TAG_INSTANCE_EMPTY_NAME_OFFSET 0x1C
 /* the longest tag path a name may hold, terminator excluded */
 #define TAG_NAME_MAXIMUM_LENGTH 255
 
@@ -488,6 +491,11 @@ struct load_state
 	uint32_t model_index_data_offset;
 	uint32_t model_data_size;
 	int32_t tag_index;
+	/* nonzero when the loaded tags' values are big-endian: a big-endian
+	host's, once port/linux/game/tag_swap.c has turned them (their tag
+	index's signature says which); the loader and the conversion leave them
+	little-endian */
+	int big_endian;
 };
 
 /* ---------- prototypes */
@@ -752,7 +760,15 @@ static struct element_layout const transparent_chicago_extended_layout =
 {
 	TRANSPARENT_CHICAGO_EXTENDED_BYTES, transparent_chicago_extended_blocks, 3, NULL, 0, NULL
 };
+static custom_edition_structure_bsp_proc structure_bsp_proc = NULL;
 
+void custom_edition_structure_bsp_proc_set(
+	custom_edition_structure_bsp_proc proc)
+{
+	structure_bsp_proc = proc;
+
+	return;
+}
 /* The value of the type field each shader group has in Custom Edition, which
 inserted transparent chicago extended at 7 (OpenSauce
 shader_definitions.hpp, e_shader_type), and in this build (shaders.c); a
@@ -874,6 +890,71 @@ static float read_f32(
 	memcpy(&value, &bits, sizeof(value));
 
 	return value;
+}
+
+static uint32_t read_u32_big(
+	uint8_t const *bytes)
+{
+	return (uint32_t)bytes[3] |
+		((uint32_t)bytes[2] << 8) |
+		((uint32_t)bytes[1] << 16) |
+		((uint32_t)bytes[0] << 24);
+}
+
+static uint16_t read_u16_big(
+	uint8_t const *bytes)
+{
+	return (uint16_t)(bytes[1] | (bytes[0] << 8));
+}
+
+/* a loaded tag's values, in the order its tags are in (big_endian: struct
+load_state's) */
+static uint32_t ordered_u32(
+	int big_endian,
+	uint8_t const *bytes)
+{
+	return big_endian ? read_u32_big(bytes) : read_u32(bytes);
+}
+
+static int32_t ordered_s32(
+	int big_endian,
+	uint8_t const *bytes)
+{
+	uint32_t value = ordered_u32(big_endian, bytes);
+
+	return value <= INT32_MAX ? (int32_t)value : -(int32_t)(~value) - 1;
+}
+
+static int16_t ordered_s16(
+	int big_endian,
+	uint8_t const *bytes)
+{
+	uint16_t value = big_endian ? read_u16_big(bytes) : read_u16(bytes);
+
+	return value <= INT16_MAX ? (int16_t)value : (int16_t)(-(int32_t)(uint16_t)~value - 1);
+}
+
+static void ordered_write_u32(
+	int big_endian,
+	uint8_t *bytes,
+	uint32_t value)
+{
+	if (big_endian)
+	{
+		bytes[0] = (uint8_t)(value >> 24);
+		bytes[1] = (uint8_t)(value >> 16);
+		bytes[2] = (uint8_t)(value >> 8);
+		bytes[3] = (uint8_t)value;
+	}
+	else
+	{
+		bytes[0] = (uint8_t)value;
+		bytes[1] = (uint8_t)(value >> 8);
+		bytes[2] = (uint8_t)(value >> 16);
+		bytes[3] = (uint8_t)(value >> 24);
+	}
+
+	return;
 }
 
 static void write_u16(
@@ -1709,10 +1790,12 @@ static struct element_layout const *checked_group_layout(
 }
 
 /* The `count` elements of `element_bytes` a tag block points to, in memory
-of `size` bytes loaded at `address` (a structure BSP, or the tag cache):
-nonzero when they lie within it, aligned for the game to read as
-structures, with `*offset` their offset in it. */
-static int loaded_block_get(
+of `size` bytes loaded at `address` (a structure BSP, or the tag cache),
+its values big-endian when `big_endian` is nonzero: nonzero when they lie
+within it, aligned for the game to read as structures, with `*offset` their
+offset in it. */
+static int ordered_block_get(
+	int big_endian,
 	uint8_t const *block,
 	uint32_t address,
 	uint32_t size,
@@ -1720,9 +1803,9 @@ static int loaded_block_get(
 	int32_t *count,
 	uint32_t *offset)
 {
-	uint32_t block_address = read_u32(block + TAG_BLOCK_ADDRESS_OFFSET);
+	uint32_t block_address = ordered_u32(big_endian, block + TAG_BLOCK_ADDRESS_OFFSET);
 
-	*count = read_s32(block + TAG_BLOCK_COUNT_OFFSET);
+	*count = ordered_s32(big_endian, block + TAG_BLOCK_COUNT_OFFSET);
 	*offset = block_address - address;
 
 	return *count == 0 ||
@@ -1731,6 +1814,18 @@ static int loaded_block_get(
 		block_address >= address &&
 		range_fits(*offset, (uint32_t)*count * element_bytes, size) &&
 		!(*offset & 3));
+}
+
+/* ... of a block as the loader and the conversion have it, little-endian */
+static int loaded_block_get(
+	uint8_t const *block,
+	uint32_t address,
+	uint32_t size,
+	uint32_t element_bytes,
+	int32_t *count,
+	uint32_t *offset)
+{
+	return ordered_block_get(0, block, address, size, element_bytes, count, offset);
 }
 
 /* nonzero when the `vector_count` vectors at `vectors_offset` of each of
@@ -1858,7 +1953,7 @@ static enum cache_file_status structure_bsp_geometry_verify(
 
 static enum cache_file_status structure_bsps_verify(
 	struct load_state *state,
-	uint8_t const *tag_instances,
+	uint8_t *tag_instances,
 	int32_t tag_count,
 	uint32_t scenario_offset,
 	uint32_t *checksum)
@@ -1891,6 +1986,23 @@ static enum cache_file_status structure_bsps_verify(
 		uint32_t bsp_pointer;
 		enum cache_file_status status;
 
+		/* port: map protection can rename a structure BSP's group, as it does the
+		scenario's; a tag the scenario names as one, with no address yet (a BSP has
+		none until it loads) and not held by a resource map, is one */
+		if (tag_index < (uint32_t)tag_count)
+		{
+			uint8_t *bsp_instance = tag_instances + tag_index * TAG_INSTANCE_BYTES;
+
+			if (read_u32(bsp_instance + TAG_INSTANCE_HANDLE_OFFSET) == tag_handle &&
+				read_u32(bsp_instance + TAG_INSTANCE_GROUP_OFFSET) != STRUCTURE_BSP_GROUP_TAG &&
+				!read_u32(bsp_instance + TAG_INSTANCE_ADDRESS_OFFSET) &&
+				!read_u32(bsp_instance + TAG_INSTANCE_IN_RESOURCE_MAP_OFFSET))
+			{
+				write_u32(bsp_instance + TAG_INSTANCE_GROUP_OFFSET, STRUCTURE_BSP_GROUP_TAG);
+				write_u32(bsp_instance + TAG_INSTANCE_PARENT_GROUP_OFFSET, NO_GROUP_TAG);
+				write_u32(bsp_instance + TAG_INSTANCE_PARENT_GROUP_OFFSET + 4, NO_GROUP_TAG);
+			}
+		}
 		/* the tag the reference names: a structure BSP, not yet loaded */
 		if (tag_index >= (uint32_t)tag_count ||
 			read_u32(tag_instances + tag_index * TAG_INSTANCE_BYTES + TAG_INSTANCE_HANDLE_OFFSET) != tag_handle ||
@@ -1929,6 +2041,19 @@ static enum cache_file_status structure_bsps_verify(
 		{
 			free(bsp);
 			return load_fail(state, _cache_file_status_bad_structure_bsp_header, (uint32_t)file_offset);
+		}
+		/* port: the references a protected map's bsp holds name the groups of
+		tags whose own are scrambled (tag_validate.c) */
+		if (structure_bsp_proc)
+		{
+			structure_bsp_proc(
+				state->tag_cache,
+				state->used_bytes,
+				bsp_index,
+				bsp,
+				(uint32_t)size,
+				bsp_address,
+				state->report->identity.name);
 		}
 		status = structure_bsp_geometry_verify(state, bsp, (uint32_t)size, bsp_address);
 		free(bsp);
@@ -2324,7 +2449,11 @@ enum cache_file_status custom_edition_cache_load(
 		{
 			return load_fail(&state, _cache_file_status_bad_tag_handle, handle);
 		}
-		if (!tag_name_get(&state, instance))
+		/* port: a protected map's tag names may lie anywhere; only a tag held by a
+		resource map needs its name (to find its entry), and is checked again
+		below. The others are given an empty name after the checksum. */
+		if (read_u32(instance + TAG_INSTANCE_IN_RESOURCE_MAP_OFFSET) &&
+			!tag_name_get(&state, instance))
 		{
 			return load_fail(&state, _cache_file_status_bad_tag_name, read_u32(instance + TAG_INSTANCE_NAME_OFFSET));
 		}
@@ -2347,7 +2476,10 @@ enum cache_file_status custom_edition_cache_load(
 			is past the tags */
 			write_u32(instance + TAG_INSTANCE_ADDRESS_OFFSET, 0);
 		}
-		else if (!address || !tag_cache_offset(&state, address, 1, &offset))
+		/* port: a protected map may leave a tag without data (address 0), which
+		Halo PC tolerates while nothing reads it; the validator refuses any
+		reference to such a tag (tag_validate.c) */
+		else if (address && !tag_cache_offset(&state, address, 1, &offset))
 		{
 			return load_fail(&state, _cache_file_status_bad_tag_address, address);
 		}
@@ -2403,6 +2535,26 @@ enum cache_file_status custom_edition_cache_load(
 	{
 		report->warnings |= 1UL << _custom_edition_warning_checksum_mismatch_bit;
 	}
+
+	/* port: a name that lies outside the tag data or is not terminated (map
+	protection scrambles them; Halo PC never needed them) becomes an empty
+	one: a zero byte in the tag's own instance. tag_validate.c then makes
+	it its own empty name. */
+	for (tag_index_value = 0; tag_index_value < tag_count; tag_index_value++)
+	{
+		uint8_t *instance = tag_instances + (uint32_t)tag_index_value * TAG_INSTANCE_BYTES;
+
+		state.tag_index = tag_index_value;
+		if (!read_u32(instance + TAG_INSTANCE_IN_RESOURCE_MAP_OFFSET) && !tag_name_get(&state, instance))
+		{
+			write_u32(instance + TAG_INSTANCE_EMPTY_NAME_OFFSET, 0);
+			write_u32(
+				instance + TAG_INSTANCE_NAME_OFFSET,
+				CUSTOM_EDITION_TAG_CACHE_ADDRESS + instances_offset +
+					(uint32_t)tag_index_value * TAG_INSTANCE_BYTES + TAG_INSTANCE_EMPTY_NAME_OFFSET);
+		}
+	}
+	state.tag_index = NO_TAG_INDEX;
 
 	/* the tags held by resource maps, placed after the tag data */
 	for (tag_index_value = 0; tag_index_value < tag_count; tag_index_value++)
@@ -2460,6 +2612,10 @@ enum cache_file_status custom_edition_cache_load(
 			continue;
 		}
 		state.tag_index = tag_index_value;
+		if (!read_u32(instance + TAG_INSTANCE_ADDRESS_OFFSET))
+		{
+			continue;
+		}
 		if (!tag_cache_offset(&state, read_u32(instance + TAG_INSTANCE_ADDRESS_OFFSET), layout->bytes, &offset))
 		{
 			return load_fail(&state, _cache_file_status_bad_tag_address, read_u32(instance + TAG_INSTANCE_ADDRESS_OFFSET));
@@ -2498,12 +2654,12 @@ static uint8_t *loaded_tag_instances(
 	{
 		return NULL;
 	}
-	*tag_count = read_s32(state->tag_cache + TAG_INDEX_COUNT_OFFSET);
+	*tag_count = ordered_s32(state->big_endian, state->tag_cache + TAG_INDEX_COUNT_OFFSET);
 	if (*tag_count <= 0 ||
 		(uint32_t)*tag_count > ABSOLUTE_INDEX_MASK + 1 ||
 		!tag_cache_offset(
 			state,
-			read_u32(state->tag_cache + TAG_INDEX_INSTANCES_OFFSET),
+			ordered_u32(state->big_endian, state->tag_cache + TAG_INDEX_INSTANCES_OFFSET),
 			(uint32_t)*tag_count * TAG_INSTANCE_BYTES,
 			&instances_offset))
 	{
@@ -2522,6 +2678,9 @@ static void loaded_state_initialize(
 	state->tag_cache = tag_cache;
 	state->used_bytes = loaded_bytes;
 	state->tag_index = NO_TAG_INDEX;
+	/* (the tag index's signature, 'tags', reads so in one order only) */
+	state->big_endian = loaded_bytes >= TAG_INDEX_BYTES &&
+		read_u32_big(tag_cache + TAG_INDEX_SIGNATURE_OFFSET) == TAG_INDEX_SIGNATURE;
 
 	return;
 }
@@ -2549,8 +2708,8 @@ void *custom_edition_cache_tag_next(
 		uint8_t const *instance = instances + (uint32_t)index * TAG_INSTANCE_BYTES;
 		uint32_t offset;
 
-		if (read_u32(instance + TAG_INSTANCE_GROUP_OFFSET) == group_tag &&
-			tag_cache_offset(&state, read_u32(instance + TAG_INSTANCE_ADDRESS_OFFSET), definition_bytes, &offset))
+		if (ordered_u32(state.big_endian, instance + TAG_INSTANCE_GROUP_OFFSET) == group_tag &&
+			tag_cache_offset(&state, ordered_u32(state.big_endian, instance + TAG_INSTANCE_ADDRESS_OFFSET), definition_bytes, &offset))
 		{
 			*tag_index = index;
 			return tag_cache + offset;
@@ -2582,9 +2741,9 @@ void *custom_edition_cache_tag_get(
 	}
 	instance = instances + (handle & ABSOLUTE_INDEX_MASK) * TAG_INSTANCE_BYTES;
 
-	return read_u32(instance + TAG_INSTANCE_HANDLE_OFFSET) == handle &&
-		read_u32(instance + TAG_INSTANCE_GROUP_OFFSET) == group_tag &&
-		tag_cache_offset(&state, read_u32(instance + TAG_INSTANCE_ADDRESS_OFFSET), definition_bytes, &offset) ?
+	return ordered_u32(state.big_endian, instance + TAG_INSTANCE_HANDLE_OFFSET) == handle &&
+		ordered_u32(state.big_endian, instance + TAG_INSTANCE_GROUP_OFFSET) == group_tag &&
+		tag_cache_offset(&state, ordered_u32(state.big_endian, instance + TAG_INSTANCE_ADDRESS_OFFSET), definition_bytes, &offset) ?
 		tag_cache + offset :
 		NULL;
 }
@@ -2604,7 +2763,7 @@ void *custom_edition_cache_block_element(
 	if ((uint8_t const *)block < tag_cache ||
 		!range_fits((uint32_t)((uint8_t const *)block - tag_cache), TAG_BLOCK_BYTES, loaded_bytes) ||
 		element_bytes == 0 ||
-		!loaded_block_get(block, CUSTOM_EDITION_TAG_CACHE_ADDRESS, loaded_bytes, element_bytes, &element_count, &elements_offset) ||
+		!ordered_block_get(state.big_endian, block, CUSTOM_EDITION_TAG_CACHE_ADDRESS, loaded_bytes, element_bytes, &element_count, &elements_offset) ||
 		element_index < 0 ||
 		element_index >= element_count)
 	{
@@ -2631,9 +2790,9 @@ void *custom_edition_cache_data_get(
 	{
 		return NULL;
 	}
-	data_size = read_s32(field + TAG_DATA_SIZE_OFFSET);
+	data_size = ordered_s32(state.big_endian, field + TAG_DATA_SIZE_OFFSET);
 	if (data_size <= 0 ||
-		!tag_cache_offset(&state, read_u32(field + TAG_DATA_ADDRESS_OFFSET), (uint32_t)data_size, &data_offset))
+		!tag_cache_offset(&state, ordered_u32(state.big_endian, field + TAG_DATA_ADDRESS_OFFSET), (uint32_t)data_size, &data_offset))
 	{
 		return NULL;
 	}
@@ -2659,7 +2818,7 @@ char const *custom_edition_cache_tag_name(
 		tag_index >= tag_count ||
 		!tag_cache_offset(
 			&state,
-			read_u32(instances + (uint32_t)tag_index * TAG_INSTANCE_BYTES + TAG_INSTANCE_NAME_OFFSET),
+			ordered_u32(state.big_endian, instances + (uint32_t)tag_index * TAG_INSTANCE_BYTES + TAG_INSTANCE_NAME_OFFSET),
 			1,
 			&name_offset) ||
 		!memchr(tag_cache + name_offset, 0, loaded_bytes - name_offset))
@@ -2682,7 +2841,7 @@ int custom_edition_cache_tag_in_resource_map(
 	loaded_state_initialize(&state, tag_cache, loaded_bytes);
 	instances = loaded_tag_instances(&state, &tag_count);
 	return instances && tag_index >= 0 && tag_index < tag_count &&
-		read_u32(instances + (uint32_t)tag_index * TAG_INSTANCE_BYTES + TAG_INSTANCE_IN_RESOURCE_MAP_OFFSET) != 0;
+		ordered_u32(state.big_endian, instances + (uint32_t)tag_index * TAG_INSTANCE_BYTES + TAG_INSTANCE_IN_RESOURCE_MAP_OFFSET) != 0;
 }
 
 int32_t custom_edition_cache_tags_regroup(
@@ -2707,9 +2866,9 @@ int32_t custom_edition_cache_tags_regroup(
 	{
 		uint8_t *instance = instances + (uint32_t)tag_index * TAG_INSTANCE_BYTES;
 
-		if (read_u32(instance + TAG_INSTANCE_GROUP_OFFSET) == group_tag)
+		if (ordered_u32(state.big_endian, instance + TAG_INSTANCE_GROUP_OFFSET) == group_tag)
 		{
-			write_u32(instance + TAG_INSTANCE_GROUP_OFFSET, new_group_tag);
+			ordered_write_u32(state.big_endian, instance + TAG_INSTANCE_GROUP_OFFSET, new_group_tag);
 			regrouped_count++;
 		}
 	}
@@ -2834,20 +2993,15 @@ static void bitmaps_prepare(
 /* Gives every permutation of the sound at `sound_offset` (tag `handle`)
 the state the game expects of one it has not played: its tag is its own
 (sounds.map holds the handles of whatever map it was built with), with no
-cache block or samples. A sound whose compression this build cannot decode
-is made unplayable: this build plays Xbox ADPCM (and refuses uncompressed
-sounds), and Custom Edition also has Ogg Vorbis, which would be decoded as
-ADPCM noise. With no pitch ranges the game neither plays nor loads it
-(sound_manager.c, sound_definition_is_playable). */
+cache block or samples. (A sound this build cannot decode is made unplayable
+afterwards, by custom_edition_cache_sounds_silence: the game decodes Custom
+Edition's Ogg Vorbis between the two, custom_edition_sounds.c.) */
 static void sound_prepare(
 	struct load_state const *state,
 	uint32_t sound_offset,
-	uint32_t handle,
-	struct custom_edition_conversion_report *report)
+	uint32_t handle)
 {
 	uint8_t *sound = state->tag_cache + sound_offset;
-	int16_t compression = read_s16(sound + SOUND_COMPRESSION_OFFSET);
-	int decodable = compression == SOUND_COMPRESSION_NONE || compression == SOUND_COMPRESSION_XBOX_ADPCM;
 	int32_t pitch_range_count;
 	uint32_t pitch_ranges_offset;
 	int32_t pitch_range_index;
@@ -2882,22 +3036,12 @@ static void sound_prepare(
 		for (permutation_index = 0; permutation_index < permutation_count; permutation_index++)
 		{
 			uint8_t *permutation = state->tag_cache + permutations_offset + (uint32_t)permutation_index * SOUND_PERMUTATION_BYTES;
-			int16_t permutation_compression = read_s16(permutation + SOUND_PERMUTATION_COMPRESSION_OFFSET);
 
 			write_u32(permutation + SOUND_PERMUTATION_CACHE_BLOCK_INDEX_OFFSET, (uint32_t)NO_TAG_INDEX);
 			write_u32(permutation + SOUND_PERMUTATION_CACHE_BASE_ADDRESS_OFFSET, 0);
 			write_u32(permutation + SOUND_PERMUTATION_CACHE_TAG_INDEX_OFFSET, handle);
 			write_u32(permutation + SOUND_PERMUTATION_RUNTIME_TAG_INDEX_OFFSET, handle);
-			if (permutation_compression != SOUND_COMPRESSION_NONE && permutation_compression != SOUND_COMPRESSION_XBOX_ADPCM)
-			{
-				decodable = 0;
-			}
 		}
-	}
-	if (!decodable)
-	{
-		write_u32(sound + SOUND_PITCH_RANGES_OFFSET + TAG_BLOCK_COUNT_OFFSET, 0);
-		report->sounds_undecodable++;
 	}
 
 	return;
@@ -3183,93 +3327,73 @@ static int hud_bitmap_halves_scale(
 	return flag_is_set(flags, BITMAP_HALF_HUD_SCALE_BIT) || flag_is_set(flags, BITMAP_FORCE_HUD_HIGH_RESOLUTION_SCALE_BIT);
 }
 
-/* the element at `element`, whose bitmap is `bitmap_offset` bytes on
-(NO_HUD_BITMAP: none) */
-static void hud_element_convert(
-	struct load_state const *state,
-	uint8_t *element,
-	int32_t bitmap_offset,
-	struct custom_edition_conversion_report *report)
-{
-	hud_placement_convert(
-		element,
-		bitmap_offset != NO_HUD_BITMAP && hud_bitmap_halves_scale(state, element + bitmap_offset),
-		report);
-
-	return;
-}
-
 /* the placement at `placement_offset` in each element of the block at
-`block`, when the block lies within the tag cache: each drawing the bitmap
-`bitmap_offset` bytes after its placement (NO_HUD_BITMAP: none of its own),
-or the items of a bitmap that halves their scale */
-static void hud_placement_block_convert(
-	struct load_state const *state,
+`block`: each drawing the bitmap `bitmap_offset` bytes after its placement
+(NO_HUD_BITMAP: none of its own) */
+static void hud_walk_block(
+	struct custom_edition_hud_walk const *walk,
 	uint8_t const *block,
 	uint32_t element_bytes,
 	uint32_t placement_offset,
-	int32_t bitmap_offset,
-	int items_of_halving_bitmap,
-	struct custom_edition_conversion_report *report)
+	int32_t bitmap_offset)
 {
 	int32_t element_count;
-	uint32_t elements_offset;
+	uint8_t *elements = walk->block_elements(walk->context, block, element_bytes, &element_count);
 	int32_t element_index;
 
-	if (!loaded_block_get(block, CUSTOM_EDITION_TAG_CACHE_ADDRESS, state->used_bytes, element_bytes, &element_count, &elements_offset))
+	for (element_index = 0; elements && element_index < element_count; element_index++)
 	{
-		return;
-	}
-	for (element_index = 0; element_index < element_count; element_index++)
-	{
-		uint8_t *placement = state->tag_cache + elements_offset + (uint32_t)element_index * element_bytes + placement_offset;
+		uint8_t *placement = elements + (uint32_t)element_index * element_bytes + placement_offset;
 
-		if (items_of_halving_bitmap)
-			hud_placement_convert(placement, 1, report);
-		else
-			hud_element_convert(state, placement, bitmap_offset, report);
+		walk->placement(walk->context, placement, bitmap_offset != NO_HUD_BITMAP ? placement + bitmap_offset : NULL, 0);
 	}
 
 	return;
 }
 
-/* the placements of the items of each weapon HUD crosshair or overlay in
-the block at `block` whose bitmap halves their scale */
-static void weapon_hud_items_convert(
-	struct load_state const *state,
+/* the items of the block at `block`, of `item_bytes` each starting with its
+placement, all drawing the bitmap `bitmap` names */
+static void hud_walk_items(
+	struct custom_edition_hud_walk const *walk,
 	uint8_t const *block,
 	uint32_t item_bytes,
-	struct custom_edition_conversion_report *report)
+	uint8_t const *bitmap)
 {
-	int32_t element_count;
-	uint32_t elements_offset;
-	int32_t element_index;
+	int32_t item_count;
+	uint8_t *items = walk->block_elements(walk->context, block, item_bytes, &item_count);
+	int32_t item_index;
 
-	if (!loaded_block_get(
-		block,
-		CUSTOM_EDITION_TAG_CACHE_ADDRESS,
-		state->used_bytes,
-		WEAPON_HUD_CROSSHAIRS_OR_OVERLAYS_BYTES,
-		&element_count,
-		&elements_offset))
+	for (item_index = 0; items && item_index < item_count; item_index++)
 	{
-		return;
-	}
-	for (element_index = 0; element_index < element_count; element_index++)
-	{
-		uint8_t const *element = state->tag_cache + elements_offset +
-			(uint32_t)element_index * WEAPON_HUD_CROSSHAIRS_OR_OVERLAYS_BYTES;
-
-		if (hud_bitmap_halves_scale(state, element + WEAPON_HUD_CROSSHAIRS_OR_OVERLAYS_BITMAP_OFFSET))
-			hud_placement_block_convert(state, element + WEAPON_HUD_ITEMS_OFFSET, item_bytes, 0, NO_HUD_BITMAP, 1, report);
+		walk->placement(walk->context, items + (uint32_t)item_index * item_bytes, bitmap, 1);
 	}
 
 	return;
 }
 
-/* the size of a HUD definition whose placements hud_placements_convert
-converts, or 0 for any other group */
-static uint32_t hud_definition_bytes(
+/* the items of each weapon HUD crosshair or overlay in the block at `block` */
+static void hud_walk_weapon_items(
+	struct custom_edition_hud_walk const *walk,
+	uint8_t const *block,
+	uint32_t item_bytes)
+{
+	int32_t element_count;
+	uint8_t *elements = walk->block_elements(walk->context, block, WEAPON_HUD_CROSSHAIRS_OR_OVERLAYS_BYTES,
+		&element_count);
+	int32_t element_index;
+
+	for (element_index = 0; elements && element_index < element_count; element_index++)
+	{
+		uint8_t const *element = elements + (uint32_t)element_index * WEAPON_HUD_CROSSHAIRS_OR_OVERLAYS_BYTES;
+
+		hud_walk_items(walk, element + WEAPON_HUD_ITEMS_OFFSET, item_bytes,
+			element + WEAPON_HUD_CROSSHAIRS_OR_OVERLAYS_BITMAP_OFFSET);
+	}
+
+	return;
+}
+
+uint32_t custom_edition_hud_definition_bytes(
 	uint32_t group_tag)
 {
 	switch (group_tag)
@@ -3287,6 +3411,109 @@ static uint32_t hud_definition_bytes(
 	}
 }
 
+void custom_edition_hud_placements_walk(
+	uint8_t *definition,
+	uint32_t group_tag,
+	struct custom_edition_hud_walk const *walk)
+{
+	size_t index;
+
+	switch (group_tag)
+	{
+	case UNIT_HUD_INTERFACE_GROUP_TAG:
+		for (index = 0; index < sizeof(unit_hud_interface_elements) / sizeof(unit_hud_interface_elements[0]); index++)
+		{
+			uint8_t *placement = definition + unit_hud_interface_elements[index];
+
+			walk->placement(walk->context, placement, placement + HUD_ELEMENT_BITMAP_OFFSET, 0);
+		}
+		walk->placement(walk->context, definition + UNIT_HUD_INTERFACE_BLIPS_OFFSET, NULL, 0);
+		hud_walk_block(walk, definition + UNIT_HUD_INTERFACE_AUXILIARY_OVERLAYS_OFFSET,
+			UNIT_HUD_INTERFACE_AUXILIARY_OVERLAY_BYTES, 0, HUD_ELEMENT_BITMAP_OFFSET);
+		hud_walk_block(walk, definition + UNIT_HUD_INTERFACE_AUXILIARY_METERS_OFFSET,
+			UNIT_HUD_INTERFACE_AUXILIARY_METER_BYTES, UNIT_HUD_INTERFACE_AUXILIARY_METER_BACKGROUND_OFFSET,
+			HUD_ELEMENT_BITMAP_OFFSET);
+		hud_walk_block(walk, definition + UNIT_HUD_INTERFACE_AUXILIARY_METERS_OFFSET,
+			UNIT_HUD_INTERFACE_AUXILIARY_METER_BYTES, UNIT_HUD_INTERFACE_AUXILIARY_METER_METER_OFFSET,
+			HUD_ELEMENT_BITMAP_OFFSET);
+		break;
+	case WEAPON_HUD_INTERFACE_GROUP_TAG:
+		hud_walk_block(walk, definition + WEAPON_HUD_INTERFACE_STATICS_OFFSET,
+			WEAPON_HUD_STATIC_OR_METER_BYTES, WEAPON_HUD_ELEMENT_PLACEMENT_OFFSET, HUD_ELEMENT_BITMAP_OFFSET);
+		hud_walk_block(walk, definition + WEAPON_HUD_INTERFACE_METERS_OFFSET,
+			WEAPON_HUD_STATIC_OR_METER_BYTES, WEAPON_HUD_ELEMENT_PLACEMENT_OFFSET, HUD_ELEMENT_BITMAP_OFFSET);
+		hud_walk_weapon_items(walk, definition + WEAPON_HUD_INTERFACE_CROSSHAIRS_OFFSET, WEAPON_HUD_CROSSHAIR_ITEM_BYTES);
+		hud_walk_weapon_items(walk, definition + WEAPON_HUD_INTERFACE_OVERLAYS_OFFSET, WEAPON_HUD_OVERLAY_ITEM_BYTES);
+		break;
+	case GRENADE_HUD_INTERFACE_GROUP_TAG:
+		for (index = 0; index < sizeof(grenade_hud_interface_elements) / sizeof(grenade_hud_interface_elements[0]); index++)
+		{
+			uint8_t *placement = definition + grenade_hud_interface_elements[index];
+
+			walk->placement(walk->context, placement, placement + HUD_ELEMENT_BITMAP_OFFSET, 0);
+		}
+		hud_walk_items(walk, definition + GRENADE_HUD_INTERFACE_OVERLAY_ITEMS_OFFSET, WEAPON_HUD_OVERLAY_ITEM_BYTES,
+			definition + GRENADE_HUD_INTERFACE_OVERLAY_BITMAP_OFFSET);
+		break;
+	case HUD_GLOBALS_GROUP_TAG:
+		walk->placement(walk->context, definition + HUD_GLOBALS_MESSAGING_PLACEMENT_OFFSET, NULL, 0);
+		break;
+	default:
+		break;
+	}
+
+	return;
+}
+
+/* what hud_placements_convert walks with */
+struct hud_conversion
+{
+	struct load_state const *state;
+	struct custom_edition_conversion_report *report;
+};
+
+static uint8_t *hud_conversion_block_elements(
+	void *context,
+	uint8_t const *block,
+	uint32_t element_bytes,
+	int32_t *count)
+{
+	struct hud_conversion const *conversion = context;
+	uint32_t elements_offset;
+
+	if (!loaded_block_get(block, CUSTOM_EDITION_TAG_CACHE_ADDRESS, conversion->state->used_bytes, element_bytes, count,
+		&elements_offset) || !*count)
+	{
+		return NULL;
+	}
+
+	return conversion->state->tag_cache + elements_offset;
+}
+
+/* an element's placement halved where Halo PC halves it; a crosshair's or
+overlay's item's by its bitmap's flags alone (hud_placement_convert) */
+static void hud_conversion_placement(
+	void *context,
+	uint8_t *placement,
+	uint8_t const *bitmap,
+	int items)
+{
+	struct hud_conversion const *conversion = context;
+	int bitmap_halves_scale = bitmap && hud_bitmap_halves_scale(conversion->state, bitmap);
+
+	if (items)
+	{
+		if (bitmap_halves_scale)
+			hud_placement_convert(placement, 1, conversion->report);
+	}
+	else
+	{
+		hud_placement_convert(placement, bitmap_halves_scale, conversion->report);
+	}
+
+	return;
+}
+
 /* every placement of the HUD definition of group `group_tag` at `offset` */
 static void hud_placements_convert(
 	struct load_state const *state,
@@ -3294,45 +3521,15 @@ static void hud_placements_convert(
 	uint32_t offset,
 	struct custom_edition_conversion_report *report)
 {
-	uint8_t *definition = state->tag_cache + offset;
-	size_t index;
+	struct hud_conversion conversion;
+	struct custom_edition_hud_walk walk;
 
-	switch (group_tag)
-	{
-	case UNIT_HUD_INTERFACE_GROUP_TAG:
-		for (index = 0; index < sizeof(unit_hud_interface_elements) / sizeof(unit_hud_interface_elements[0]); index++)
-			hud_element_convert(state, definition + unit_hud_interface_elements[index], HUD_ELEMENT_BITMAP_OFFSET, report);
-		hud_element_convert(state, definition + UNIT_HUD_INTERFACE_BLIPS_OFFSET, NO_HUD_BITMAP, report);
-		hud_placement_block_convert(state, definition + UNIT_HUD_INTERFACE_AUXILIARY_OVERLAYS_OFFSET,
-			UNIT_HUD_INTERFACE_AUXILIARY_OVERLAY_BYTES, 0, HUD_ELEMENT_BITMAP_OFFSET, 0, report);
-		hud_placement_block_convert(state, definition + UNIT_HUD_INTERFACE_AUXILIARY_METERS_OFFSET,
-			UNIT_HUD_INTERFACE_AUXILIARY_METER_BYTES, UNIT_HUD_INTERFACE_AUXILIARY_METER_BACKGROUND_OFFSET,
-			HUD_ELEMENT_BITMAP_OFFSET, 0, report);
-		hud_placement_block_convert(state, definition + UNIT_HUD_INTERFACE_AUXILIARY_METERS_OFFSET,
-			UNIT_HUD_INTERFACE_AUXILIARY_METER_BYTES, UNIT_HUD_INTERFACE_AUXILIARY_METER_METER_OFFSET,
-			HUD_ELEMENT_BITMAP_OFFSET, 0, report);
-		break;
-	case WEAPON_HUD_INTERFACE_GROUP_TAG:
-		hud_placement_block_convert(state, definition + WEAPON_HUD_INTERFACE_STATICS_OFFSET,
-			WEAPON_HUD_STATIC_OR_METER_BYTES, WEAPON_HUD_ELEMENT_PLACEMENT_OFFSET, HUD_ELEMENT_BITMAP_OFFSET, 0, report);
-		hud_placement_block_convert(state, definition + WEAPON_HUD_INTERFACE_METERS_OFFSET,
-			WEAPON_HUD_STATIC_OR_METER_BYTES, WEAPON_HUD_ELEMENT_PLACEMENT_OFFSET, HUD_ELEMENT_BITMAP_OFFSET, 0, report);
-		weapon_hud_items_convert(state, definition + WEAPON_HUD_INTERFACE_CROSSHAIRS_OFFSET, WEAPON_HUD_CROSSHAIR_ITEM_BYTES, report);
-		weapon_hud_items_convert(state, definition + WEAPON_HUD_INTERFACE_OVERLAYS_OFFSET, WEAPON_HUD_OVERLAY_ITEM_BYTES, report);
-		break;
-	case GRENADE_HUD_INTERFACE_GROUP_TAG:
-		for (index = 0; index < sizeof(grenade_hud_interface_elements) / sizeof(grenade_hud_interface_elements[0]); index++)
-			hud_element_convert(state, definition + grenade_hud_interface_elements[index], HUD_ELEMENT_BITMAP_OFFSET, report);
-		if (hud_bitmap_halves_scale(state, definition + GRENADE_HUD_INTERFACE_OVERLAY_BITMAP_OFFSET))
-			hud_placement_block_convert(state, definition + GRENADE_HUD_INTERFACE_OVERLAY_ITEMS_OFFSET,
-				WEAPON_HUD_OVERLAY_ITEM_BYTES, 0, NO_HUD_BITMAP, 1, report);
-		break;
-	case HUD_GLOBALS_GROUP_TAG:
-		hud_element_convert(state, definition + HUD_GLOBALS_MESSAGING_PLACEMENT_OFFSET, NO_HUD_BITMAP, report);
-		break;
-	default:
-		break;
-	}
+	conversion.state = state;
+	conversion.report = report;
+	walk.block_elements = hud_conversion_block_elements;
+	walk.placement = hud_conversion_placement;
+	walk.context = &conversion;
+	custom_edition_hud_placements_walk(state->tag_cache + offset, group_tag, &walk);
 
 	return;
 }
@@ -3519,6 +3716,8 @@ static struct custom_edition_behaviour_map
 } const custom_edition_behaviour_maps[] =
 {
 #include "custom_edition_behaviours.inc"
+	/* Locally verified HUD data; not part of Chimera's generated list. */
+	{ "bigass_open_v1.1", 0xD2BC19F7, BEHAVIOUR(hud_number_scale) | BEHAVIOUR(xbox_ammo_meter_channels) },
 };
 
 #undef BEHAVIOUR
@@ -3537,6 +3736,7 @@ static char const *const custom_edition_behaviour_names[NUMBER_OF_CUSTOM_EDITION
 	"old_widescreen_fix",
 	"gearbox_shader_environment_types",
 	"block_multitexture_overlays",
+	"xbox_ammo_meter_channels",
 };
 
 /* the behaviours the map named `map_name` relies on, found as Chimera finds
@@ -3649,7 +3849,9 @@ enum cache_file_status custom_edition_cache_convert(
 	memset(report, 0, sizeof(*report));
 	report->problem_tag_index = NO_TAG_INDEX;
 	loaded_state_initialize(&state, tag_cache, loaded_bytes);
-	instances = loaded_tag_instances(&state, &tag_count);
+	/* (the loader's tags, little-endian: before they are turned for a
+	big-endian host, tag_swap.c) */
+	instances = state.big_endian ? NULL : loaded_tag_instances(&state, &tag_count);
 	if (!instances)
 	{
 		return _cache_file_status_bad_tag_instances_range;
@@ -3703,10 +3905,11 @@ enum cache_file_status custom_edition_cache_convert(
 		if (group_tag == SOUND_GROUP_TAG &&
 			tag_cache_offset(&state, read_u32(instance + TAG_INSTANCE_ADDRESS_OFFSET), SOUND_DEFINITION_BYTES, &offset))
 		{
-			sound_prepare(&state, offset, read_u32(instance + TAG_INSTANCE_HANDLE_OFFSET), report);
+			sound_prepare(&state, offset, read_u32(instance + TAG_INSTANCE_HANDLE_OFFSET));
 		}
-		if (hud_definition_bytes(group_tag) &&
-			tag_cache_offset(&state, read_u32(instance + TAG_INSTANCE_ADDRESS_OFFSET), hud_definition_bytes(group_tag), &offset))
+		if (custom_edition_hud_definition_bytes(group_tag) &&
+			tag_cache_offset(&state, read_u32(instance + TAG_INSTANCE_ADDRESS_OFFSET),
+				custom_edition_hud_definition_bytes(group_tag), &offset))
 		{
 			hud_placements_convert(&state, group_tag, offset, report);
 			hud_meters_convert(&state, group_tag, offset, report);
@@ -3725,6 +3928,10 @@ enum cache_file_status custom_edition_cache_convert(
 				multiplayer_pause_list_convert(&state, offset, report);
 		}
 		if (!shader_type)
+		{
+			continue;
+		}
+		if (!read_u32(instance + TAG_INSTANCE_ADDRESS_OFFSET))
 		{
 			continue;
 		}
@@ -3774,7 +3981,7 @@ void custom_edition_cache_combine_resource_offsets(
 	int32_t tag_index;
 
 	loaded_state_initialize(&state, tag_cache, loaded_bytes);
-	instances = loaded_tag_instances(&state, &tag_count);
+	instances = state.big_endian ? NULL : loaded_tag_instances(&state, &tag_count);
 	if (!instances)
 	{
 		return;
@@ -3871,4 +4078,90 @@ void custom_edition_cache_combine_resource_offsets(
 	}
 
 	return;
+}
+
+int32_t custom_edition_cache_sounds_silence(
+	uint8_t *tag_cache,
+	uint32_t loaded_bytes)
+{
+	struct load_state state;
+	uint8_t const *instances;
+	int32_t tag_count;
+	int32_t tag_index;
+	int32_t silenced_count = 0;
+
+	loaded_state_initialize(&state, tag_cache, loaded_bytes);
+	instances = loaded_tag_instances(&state, &tag_count);
+	if (!instances)
+	{
+		return 0;
+	}
+	for (tag_index = 0; tag_index < tag_count; tag_index++)
+	{
+		uint8_t const *instance = instances + (uint32_t)tag_index * TAG_INSTANCE_BYTES;
+		uint8_t *sound;
+		int16_t compression;
+		int decodable;
+		int32_t pitch_range_count;
+		uint32_t pitch_ranges_offset;
+		uint32_t offset;
+		int32_t pitch_range_index;
+
+		if (ordered_u32(state.big_endian, instance + TAG_INSTANCE_GROUP_OFFSET) != SOUND_GROUP_TAG ||
+			!tag_cache_offset(&state, ordered_u32(state.big_endian, instance + TAG_INSTANCE_ADDRESS_OFFSET),
+				SOUND_DEFINITION_BYTES, &offset))
+		{
+			continue;
+		}
+		sound = tag_cache + offset;
+		compression = ordered_s16(state.big_endian, sound + SOUND_COMPRESSION_OFFSET);
+		decodable = compression == SOUND_COMPRESSION_NONE || compression == SOUND_COMPRESSION_XBOX_ADPCM;
+		if (!ordered_block_get(
+			state.big_endian,
+			sound + SOUND_PITCH_RANGES_OFFSET,
+			CUSTOM_EDITION_TAG_CACHE_ADDRESS,
+			state.used_bytes,
+			SOUND_PITCH_RANGE_BYTES,
+			&pitch_range_count,
+			&pitch_ranges_offset))
+		{
+			continue;
+		}
+		for (pitch_range_index = 0; pitch_range_index < pitch_range_count; pitch_range_index++)
+		{
+			uint8_t const *pitch_range = tag_cache + pitch_ranges_offset + (uint32_t)pitch_range_index * SOUND_PITCH_RANGE_BYTES;
+			int32_t permutation_count;
+			uint32_t permutations_offset;
+			int32_t permutation_index;
+
+			if (!ordered_block_get(
+				state.big_endian,
+				pitch_range + SOUND_PITCH_RANGE_PERMUTATIONS_OFFSET,
+				CUSTOM_EDITION_TAG_CACHE_ADDRESS,
+				state.used_bytes,
+				SOUND_PERMUTATION_BYTES,
+				&permutation_count,
+				&permutations_offset))
+			{
+				continue;
+			}
+			for (permutation_index = 0; permutation_index < permutation_count; permutation_index++)
+			{
+				int16_t permutation_compression = ordered_s16(state.big_endian, tag_cache + permutations_offset +
+					(uint32_t)permutation_index * SOUND_PERMUTATION_BYTES + SOUND_PERMUTATION_COMPRESSION_OFFSET);
+
+				if (permutation_compression != SOUND_COMPRESSION_NONE && permutation_compression != SOUND_COMPRESSION_XBOX_ADPCM)
+				{
+					decodable = 0;
+				}
+			}
+		}
+		if (!decodable)
+		{
+			ordered_write_u32(state.big_endian, sound + SOUND_PITCH_RANGES_OFFSET + TAG_BLOCK_COUNT_OFFSET, 0);
+			silenced_count++;
+		}
+	}
+
+	return silenced_count;
 }

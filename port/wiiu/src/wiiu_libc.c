@@ -2,7 +2,8 @@
 WIIU_LIBC.C
 
 What the platform layer shared with the Linux builds calls of the C library and newlib, the Wii U's, does not have: pause and
-sysconf (xbox_kernel.c: Sleep(INFINITE) and GlobalMemoryStatus).
+sysconf (xbox_kernel.c: Sleep(INFINITE) and GlobalMemoryStatus); sigaction, alarm and getrusage (posix_server.c's, a dedicated
+server's signals and use of the processor: the Wii U runs no dedicated server, and its log's and settings' file helpers are there).
 
 Not run on a console.
 */
@@ -123,4 +124,33 @@ long sysconf(int name)
 		errno = EINVAL;
 		return -1;
 	}
+}
+
+/* (no signals are sent on the Wii U: none is handled, and no alarm is set; nothing counts the process's use) */
+struct sigaction;
+struct rusage;
+int sigaction(int number, const struct sigaction *action, struct sigaction *previous);
+int getrusage(int who, struct rusage *usage);
+
+int sigaction(int number, const struct sigaction *action, struct sigaction *previous)
+{
+	(void)number;
+	(void)action;
+	(void)previous;
+	errno = ENOSYS;
+	return -1;
+}
+
+unsigned int alarm(unsigned int seconds)
+{
+	(void)seconds;
+	return 0;
+}
+
+int getrusage(int who, struct rusage *usage)
+{
+	(void)who;
+	(void)usage;
+	errno = ENOSYS;
+	return -1;
 }

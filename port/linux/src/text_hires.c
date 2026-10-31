@@ -334,7 +334,7 @@ const unsigned char *text_hires_atlas_rows(unsigned long data, long *size, int f
 #else
 unsigned int text_hires_atlas_texture(unsigned long data)
 {
-	if (!data || data != placeholder_data || !atlas)
+	if (!data || data != placeholder_data || !atlas || !xgpu_gl_ready())
 		return 0;
 	if (!atlas_texture)
 	{

@@ -2,10 +2,16 @@
 WIIU_INPUT.C
 
 The GamePad (VPAD), the Pro Controllers and the Classic Controllers (KPAD) read as wiiu_input.h's pads, and their motors rumble. Wii Remotes alone (with or
-without a Nunchuk) are not read.
+without a Nunchuk) are not read: they have no second stick.
+
+Which port (the game's player) each controller drives is wiiu_pad_players.c's: a map from the controllers, known by their Bluetooth addresses, to players,
+which gives one that goes and comes back its player again whatever channel the system gives it, and the layout input.wiiu_controller_layout asks for. Once a
+frame (wiiu_input_poll, from xinput_wiiu.c's XGetDeviceChanges) every channel is read, the controllers that came and went are told to the map (the system's
+connect callback counts the changes a read could miss), the layout is arranged, and each controller's lights are set to the number of the player it drives.
 */
 
 #include "wiiu_input.h"
+#include "wiiu_pad_players.h"
 
 #include "wiiu_debug.h"
 #include "wiiu_shell.h"
@@ -13,6 +19,7 @@ without a Nunchuk) are not read.
 #include <padscore/kpad.h>
 #include <padscore/wpad.h>
 #include <vpad/input.h>
+#include <vpadbase/base.h>
 
 #include <coreinit/time.h>
 
@@ -20,14 +27,44 @@ without a Nunchuk) are not read.
 
 static int started;
 
+/* The system's connections and disconnections (KPADSetConnectCallback). The callback runs on the system's thread and only counts; the game's thread compares
+the counts in its next poll, so that a controller that went and came back between two polls is seen to have, and is named and lit again (the system lights a
+controller with its channel's number when it connects). */
+static volatile unsigned int connections[WIIU_PAD_CHANNELS];
+static volatile int connection_status[WIIU_PAD_CHANNELS];
+static unsigned int connections_seen[WIIU_PAD_CHANNELS];
+static KPADConnectCallback connect_chained[WIIU_PAD_CHANNELS];
+
+static void connect_callback(WPADChan channel, WPADError status)
+{
+	if ((unsigned int)channel >= WIIU_PAD_CHANNELS)
+		return;
+	connection_status[channel] = (int)status;
+	connections[channel]++;
+	/* (one set before this one, if there was: nothing else in the game sets one, but a plugin could) */
+	if (connect_chained[channel])
+		connect_chained[channel](channel, status);
+}
+
 static void start(void)
 {
+	unsigned int channel;
+
 	if (started)
 		return;
 	started = 1;
 	VPADInit();
 	KPADInit();
 	WPADEnableURCC(TRUE);
+	for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
+	{
+		const KPADConnectCallback previous = KPADSetConnectCallback((KPADChan)channel, connect_callback);
+
+		/* (never itself: it would call itself for ever) */
+		if (previous != connect_callback)
+			connect_chained[channel] = previous;
+	}
+	wiiu_log("Input: KPAD channels 1 to %u read (the system allows %u)", WIIU_PAD_CHANNELS, (unsigned)KPADGetMaxControllers());
 }
 
 static unsigned int from_vpad(uint32_t hold)
@@ -42,7 +79,7 @@ static unsigned int from_vpad(uint32_t hold)
 		{ VPAD_BUTTON_L, WIIU_PAD_L }, { VPAD_BUTTON_R, WIIU_PAD_R }, { VPAD_BUTTON_ZL, WIIU_PAD_ZL }, { VPAD_BUTTON_ZR, WIIU_PAD_ZR },
 		{ VPAD_BUTTON_PLUS, WIIU_PAD_PLUS }, { VPAD_BUTTON_MINUS, WIIU_PAD_MINUS }, { VPAD_BUTTON_UP, WIIU_PAD_UP },
 		{ VPAD_BUTTON_DOWN, WIIU_PAD_DOWN }, { VPAD_BUTTON_LEFT, WIIU_PAD_LEFT }, { VPAD_BUTTON_RIGHT, WIIU_PAD_RIGHT },
-		{ VPAD_BUTTON_STICK_L, WIIU_PAD_STICK_L }, { VPAD_BUTTON_STICK_R, WIIU_PAD_STICK_R },
+		{ VPAD_BUTTON_STICK_L, WIIU_PAD_STICK_L }, { VPAD_BUTTON_STICK_R, WIIU_PAD_STICK_R }, { VPAD_BUTTON_TV, WIIU_PAD_TV },
 	};
 	unsigned int result = 0;
 	unsigned int i;
@@ -109,19 +146,43 @@ static void merge_stick(float *x, float *y, float other_x, float other_y)
 	}
 }
 
-/* the Pro Controller or the Classic Controller on a KPAD channel, if there is one */
+/* the Pro Controllers on KPAD channels (they have motors; a Classic Controller's Wii Remote is not rumbled) */
 static unsigned int pro_present;
 
 /* What each controller last said. A read with no new sample (the game asks faster than the pads sample, about 200 times a second; the menus and the
 loops that wait for a frame do) leaves the pad as it was, as the system's own examples keep it: reporting it released made the sticks fall to the centre and
-the buttons let go between samples, a stutter in every look and a flicker in every held button. Only an error says the pad is gone. */
+the buttons let go between samples, a stutter in every look and a flicker in every held button. Only an error says the pad is gone. connected: something
+answers on the channel, read or not (a Wii Remote alone is connected, not present); sampled: the last read had a new sample. */
 static struct
 {
 	int present;
+	int connected;
+	int sampled;
 	struct wiiu_pad pad;
-} last_pro[WIIU_PAD_PORTS];
+} last_pro[WIIU_PAD_CHANNELS];
 static struct wiiu_pad last_vpad;
-static int controllers_separate;
+
+/* the controllers' players (wiiu_pad_players.c) and the layout asked for (input.wiiu_controller_layout: xinput_wiiu.c) */
+static struct wiiu_pad_players pad_players;
+static int pad_layout = WIIU_PAD_LAYOUT_AUTO;
+
+/* each channel's lights: the player number they were last set to (-1: not known, as after a connection, which the system lights with its channel's number),
+when a setting was last tried (one at a time a tenth of a second apart: the controller's queue refuses one while it is busy), and when to set them once more
+after a connection or the HOME Menu (0: no need), in case the system's own lighting of the controller came after ours */
+static struct
+{
+	int shown;
+	OSTime tried;
+	OSTime again_at;
+} lights[WIIU_PAD_CHANNELS] = { { -1, 0, 0 }, { -1, 0, 0 }, { -1, 0, 0 }, { -1, 0, 0 } };
+static int lights_foreground;
+
+/* the lights not known: set at the next poll, and again a second later */
+static void lights_forget(unsigned int channel, OSTime now)
+{
+	lights[channel].shown = -1;
+	lights[channel].again_at = now + (OSTime)OSSecondsToTicks(1);
+}
 
 /* The ranges the GamePad's sticks and gyro have given, in the log every few seconds while they grow: how far a stick goes each way (the look feels different
 up and down than left and right when the ranges are) and in what units the gyro is. */
@@ -288,13 +349,25 @@ static void ranges_note(const VPADStatus *status)
 	}
 }
 
-void wiiu_input_set_layout(int separate)
+void wiiu_input_set_layout(int layout)
 {
-	controllers_separate = separate != 0;
+	pad_layout = layout;
 }
 
-/* the Pro Controller or the Classic Controller on a KPAD channel, if there is one */
-static int read_pro(unsigned int channel, struct wiiu_pad *pad)
+static void rumble_stop_all(void);
+
+static void pad_gone(unsigned int channel)
+{
+	pro_present &= ~(1u << channel);
+	last_pro[channel].present = 0;
+	last_pro[channel].connected = 0;
+	memset(&last_pro[channel].pad, 0, sizeof(last_pro[channel].pad));
+	/* (whatever connects next is lit again: the system lights it with its channel's number) */
+	lights_forget(channel, OSGetSystemTime());
+}
+
+/* The controller on a KPAD channel now, into last_pro: a sample if there is a new one, else as it was. Returns 1 if it is one the game reads. */
+static int pad_sample(unsigned int channel)
 {
 	KPADStatus status;
 	KPADError error = KPAD_ERROR_OK;
@@ -302,11 +375,13 @@ static int read_pro(unsigned int channel, struct wiiu_pad *pad)
 
 	memset(&status, 0, sizeof(status));
 	got = KPADReadEx((KPADChan)channel, &status, 1, &error);
-	if (got >= 1 && error == KPAD_ERROR_OK)
+	last_pro[channel].sampled = got >= 1 && error == KPAD_ERROR_OK;
+	if (last_pro[channel].sampled)
 	{
 		struct wiiu_pad now;
 
 		memset(&now, 0, sizeof(now));
+		last_pro[channel].connected = 1;
 		if (status.extensionType == WPAD_EXT_PRO_CONTROLLER)
 		{
 			now.buttons = from_pro(status.pro.hold);
@@ -341,16 +416,141 @@ static int read_pro(unsigned int channel, struct wiiu_pad *pad)
 	}
 	else if (error != KPAD_ERROR_NO_SAMPLES && error != KPAD_ERROR_BUSY)
 	{
-		pro_present &= ~(1u << channel);
-		last_pro[channel].present = 0;
-		memset(&last_pro[channel].pad, 0, sizeof(last_pro[channel].pad));
+		pad_gone(channel);
 	}
-	if (!last_pro[channel].present)
+	return last_pro[channel].present;
+}
+
+/* the channel's controller's lights set to the player it drives (all off: none), once they differ from what was set and a tenth of a second after the last try */
+static void lights_update(unsigned int channel, OSTime now)
+{
+	const int player = last_pro[channel].present ? wiiu_pad_players_lights(&pad_players, (int)channel) : 0;
+	WPADError error;
+
+	if (lights[channel].again_at && now >= lights[channel].again_at)
+	{
+		lights[channel].again_at = 0;
+		lights[channel].shown = -1;
+	}
+	if (!last_pro[channel].connected || lights[channel].shown == player)
+		return;
+	if (lights[channel].tried && now - lights[channel].tried < (OSTime)OSMillisecondsToTicks(100))
+		return;
+	lights[channel].tried = now;
+	error = WPADControlLed((WPADChan)channel, player ? (WPADLed)(WPAD_LED_ONE << (player - 1)) : (WPADLed)0, NULL);
+	if (error == WPAD_ERROR_NONE)
+	{
+		lights[channel].shown = player;
+		wiiu_log("Input: channel %u's lights show player %d", channel + 1, player);
+	}
+}
+
+void wiiu_input_poll(int several_players)
+{
+	static OSTime probed_at;
+	const OSTime now = OSGetSystemTime();
+	const int foreground = wiiu_in_foreground();
+	const int probe_due = now - probed_at >= (OSTime)OSSecondsToTicks(1);
+	unsigned int channel;
+	int at_rest = 1;
+
+	start();
+	if (probe_due)
+		probed_at = now;
+	/* (in the background the HOME Menu has the controllers and may light them its way: lit again on coming back) */
+	if (foreground != lights_foreground)
+	{
+		lights_foreground = foreground;
+		for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
+			lights_forget(channel, now);
+	}
+	for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
+	{
+		const unsigned int count = connections[channel];
+		const int changed = count != connections_seen[channel];
+		int present;
+
+		if (changed)
+		{
+			connections_seen[channel] = count;
+			wiiu_log("Input: channel %u %s", channel + 1, connection_status[channel] == WPAD_ERROR_NONE ? "connected" : "disconnected");
+			/* (what was on the channel has gone, or may have: only a sample from now on says what is there, so that a controller that went and
+			another that came between two polls, a Wii Remote alone say, are not taken for one another, nor the old one's state for the new one's) */
+			pad_gone(channel);
+		}
+		/* (the system asked now and then whether anything is on the channel at all: the reads keep a controller's last state between samples, and
+		would keep one that went if neither a read's error nor the callback said so) */
+		if (probe_due && last_pro[channel].connected)
+		{
+			WPADExtensionType extension;
+
+			if (WPADProbe((WPADChan)channel, &extension) == WPAD_ERROR_NO_CONTROLLER)
+				pad_gone(channel);
+		}
+		present = pad_sample(channel);
+		/* (named from a sample of its own, not from a state the reads kept: a channel the system has not yet said is empty keeps the last
+		controller's, whose address the system may still give) */
+		if (present && last_pro[channel].sampled && (changed || !pad_players.channels[channel].present))
+		{
+			WPADAddress address;
+			int player;
+
+			memset(&address, 0, sizeof(address));
+			WPADGetAddress((WPADChan)channel, &address);
+			player = wiiu_pad_players_connect(&pad_players, (int)channel, address.btDeviceAddress);
+			wiiu_log("Input: a %s on channel %u (%02x:%02x:%02x:%02x:%02x:%02x) is player %d's", (pro_present & (1u << channel)) ? "Pro Controller" :
+				"Classic Controller", channel + 1, address.btDeviceAddress[0], address.btDeviceAddress[1], address.btDeviceAddress[2],
+				address.btDeviceAddress[3], address.btDeviceAddress[4], address.btDeviceAddress[5], player + 1);
+		}
+		else if (!present && pad_players.channels[channel].present)
+		{
+			wiiu_pad_players_disconnect(&pad_players, (int)channel);
+			wiiu_log("Input: channel %u's controller has gone", channel + 1);
+		}
+		if (present && !wiiu_pad_players_at_rest(&last_pro[channel].pad))
+			at_rest = 0;
+	}
+	if (wiiu_pad_players_arrange(&pad_players, pad_layout, several_players, at_rest))
+	{
+		int ports[WIIU_PAD_CHANNELS];
+
+		for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
+			ports[channel] = wiiu_pad_players_port(&pad_players, (int)channel);
+		wiiu_log("Input: the controllers of channels 1 to 4 drive players %d %d %d %d (0: none)", ports[0] + 1, ports[1] + 1, ports[2] + 1, ports[3] + 1);
+		/* (a motor left running by the port a controller had would run on for the port it has, whose player may never rumble it) */
+		rumble_stop_all();
+	}
+	for (channel = 0; foreground && channel < WIIU_PAD_CHANNELS; channel++)
+		lights_update(channel, now);
+}
+
+int wiiu_input_port_present(unsigned int port)
+{
+	unsigned int channel;
+
+	if (port == 0)
+		return 1;
+	for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
+	{
+		if (last_pro[channel].present && wiiu_pad_players_port(&pad_players, (int)channel) == (int)port)
+			return 1;
+	}
+	return 0;
+}
+
+int wiiu_input_controllers_merged(void)
+{
+	unsigned int channel;
+	int count = 0;
+
+	if (pad_players.layout != WIIU_PAD_LAYOUT_AUTO || pad_players.separate)
 		return 0;
-	pad->buttons |= last_pro[channel].pad.buttons;
-	merge_stick(&pad->left_x, &pad->left_y, last_pro[channel].pad.left_x, last_pro[channel].pad.left_y);
-	merge_stick(&pad->right_x, &pad->right_y, last_pro[channel].pad.right_x, last_pro[channel].pad.right_y);
-	return 1;
+	for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
+	{
+		if (last_pro[channel].present && pad_players.channels[channel].player)
+			count++;
+	}
+	return count;
 }
 
 static int touch_down;
@@ -390,8 +590,83 @@ static void read_touch(const VPADStatus *status)
 	}
 }
 
+/* ---------- the TV button (push to talk) and the GamePad's jack */
+
+static int tv_taken;
+static int tv_asked;
+static uint32_t tv_asked_ms;
+static int tv_probe;
+static int tv_held;
+static int headset = -1;
+static unsigned int mic_status;
+static unsigned int mic_status_told;
+
+static uint32_t input_ms(void)
+{
+	return (uint32_t)OSTicksToMilliseconds(OSGetSystemTime());
+}
+
+/* (from the game thread, which reads the GamePad: the TV menu taken while voice chat or the probe asks for the button, given back a second
+after the last asking, and never in the background, where the GamePad is the system's) */
+static void tv_update(void)
+{
+	const int probe = __atomic_load_n(&tv_probe, __ATOMIC_ACQUIRE);
+	const int want = (tv_asked && input_ms() - tv_asked_ms < 1000u) || probe;
+
+	if (want == tv_taken || !wiiu_in_foreground())
+		return;
+	VPADSetTVMenuInvalid(VPAD_CHAN_0, want ? TRUE : FALSE);
+	tv_taken = want;
+	if (!want)
+		tv_asked = 0;
+	wiiu_log(want ? "Input: the GamePad's TV button is push to talk (the system's TV menu is off)" :
+		"Input: the GamePad's TV button opens the system's TV menu again");
+}
+
+int wiiu_input_push_to_talk(void)
+{
+	start();
+	tv_asked = 1;
+	tv_asked_ms = input_ms();
+	tv_update();
+	return tv_taken && tv_held;
+}
+
+void wiiu_input_take_tv_button(int take)
+{
+	__atomic_store_n(&tv_probe, take ? 1 : 0, __ATOMIC_RELEASE);
+}
+
+int wiiu_input_headset(void)
+{
+	return __atomic_load_n(&headset, __ATOMIC_ACQUIRE);
+}
+
+unsigned int wiiu_input_mic_status(void)
+{
+	return __atomic_load_n(&mic_status, __ATOMIC_ACQUIRE);
+}
+
+/* the jack and the microphone's status byte, in the log as they change (the status byte at most 16 times: what its bits mean is unknown,
+0x08 has been read as the headset's microphone being the one used) */
+static void jack_note(const VPADStatus *status)
+{
+	const int now_headset = status->usingHeadphones ? 1 : 0;
+
+	if (now_headset != headset || (status->micStatus != mic_status && mic_status_told < 16u))
+	{
+		if (now_headset == headset)
+			mic_status_told++;
+		wiiu_log("Input: the GamePad's jack: %s (VPADBASEGetHeadphoneStatus %d), its microphone status 0x%02x", now_headset ? "a headset" : "empty",
+			(int)VPADBASEGetHeadphoneStatus(VPAD_CHAN_0), (unsigned)status->micStatus);
+	}
+	__atomic_store_n(&mic_status, (unsigned int)status->micStatus, __ATOMIC_RELEASE);
+	__atomic_store_n(&headset, now_headset, __ATOMIC_RELEASE);
+}
+
 int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 {
+	unsigned int channel;
 	int present = 0;
 
 	memset(pad, 0, sizeof(*pad));
@@ -420,6 +695,7 @@ int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 			ranges_note(&status);
 			fresh = 1;
 			read_touch(&status);
+			jack_note(&status);
 		}
 		else if (error != VPAD_READ_NO_SAMPLES && error != VPAD_READ_BUSY)
 		{
@@ -427,18 +703,27 @@ int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 		}
 		*pad = last_vpad;
 		wiiu_debug_input(pad);
+		/* (the TV button as the game sees it: the debug server's held one too) */
+		{
+			const int held = (pad->buttons & WIIU_PAD_TV) != 0;
+
+			if (held != tv_held && __atomic_load_n(&tv_probe, __ATOMIC_ACQUIRE))
+				wiiu_log("mic probe: the TV button is %s", held ? "down" : "up");
+			tv_held = held;
+		}
+		tv_update();
 		/* (after the debug server's held rates, which stand for the gyro's) */
 		if (fresh)
 			gyro_mouse_note(&status, pad->gyro_pitch, pad->gyro_yaw, status.gyro.z);
 	}
-	/* (merged: the controller of KPAD channel port joins this port; separate: the GamePad is port 0 alone and channel n-1 is port n) */
-	if (controllers_separate)
+	/* the controllers that drive this port now (wiiu_pad_players.c: the layout and the map, arranged by the frame's poll), read again for the latest sample */
+	for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
 	{
-		if (port > 0 && read_pro(port - 1, pad))
-			present = 1;
-	}
-	else if (read_pro(port, pad))
-	{
+		if (wiiu_pad_players_port(&pad_players, (int)channel) != (int)port || !pad_sample(channel))
+			continue;
+		pad->buttons |= last_pro[channel].pad.buttons;
+		merge_stick(&pad->left_x, &pad->left_y, last_pro[channel].pad.left_x, last_pro[channel].pad.left_y);
+		merge_stick(&pad->right_x, &pad->right_y, last_pro[channel].pad.right_x, last_pro[channel].pad.right_y);
 		present = 1;
 	}
 	return present;
@@ -448,6 +733,16 @@ int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 
 static float rumble_level[WIIU_PAD_PORTS];
 static uint32_t rumble_refreshed_ms[WIIU_PAD_PORTS];
+
+/* Every Pro Controller's motor to be stopped, and every port's level forgotten, so that the next rumble of each is sent whatever it is. The game's
+rumble is sent from its input thread (input_xbox.c's input_flush_rumble, every other refresh, port 0 always among them), the poll that moves the
+controllers runs on the game's: the poll asks, and the next rumble does it, so that the motors are driven from one thread. */
+static volatile int motors_stop;
+
+static void rumble_stop_all(void)
+{
+	motors_stop = 1;
+}
 
 void wiiu_input_rumble(unsigned int port, float strength)
 {
@@ -465,6 +760,22 @@ void wiiu_input_rumble(unsigned int port, float strength)
 	if (port >= WIIU_PAD_PORTS || !wiiu_in_foreground())
 		return;
 	start();
+	if (motors_stop)
+	{
+		unsigned int channel, other;
+
+		motors_stop = 0;
+		for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
+		{
+			if (pro_present & (1u << channel))
+				WPADControlMotor((WPADChan)channel, FALSE);
+		}
+		for (other = 0; other < WIIU_PAD_PORTS; other++)
+		{
+			rumble_level[other] = 0.0f;
+			rumble_refreshed_ms[other] = 0;
+		}
+	}
 	step = strength <= 0.05f ? 0u : strength < 0.35f ? 1u : strength < 0.7f ? 2u : 3u;
 	/* (a pattern runs for about a tenth of a second per byte: the same level is sent again before it ends, and a change at once) */
 	if (step == (unsigned int)(rumble_level[port] * 3.0f + 0.5f) && now - rumble_refreshed_ms[port] < 100u)
@@ -486,9 +797,15 @@ void wiiu_input_rumble(unsigned int port, float strength)
 		}
 	}
 	{
-		const unsigned int channel = controllers_separate ? port - 1 : port;
+		unsigned int channel;
 
-		if ((controllers_separate ? port > 0 : 1) && (pro_present & (1u << channel)))
-			WPADControlMotor((WPADChan)channel, step >= 2 ? TRUE : FALSE);
+		/* (every Pro Controller that drives the port: in "auto" with one player, all of them with the GamePad. The map is the game thread's poll's,
+		read here on the input thread: a controller that moves between the two is rumbled for its old port once more, and its motor stopped at the
+		next call: motors_stop) */
+		for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
+		{
+			if ((pro_present & (1u << channel)) && wiiu_pad_players_port(&pad_players, (int)channel) == (int)port)
+				WPADControlMotor((WPADChan)channel, step >= 2 ? TRUE : FALSE);
+		}
 	}
 }

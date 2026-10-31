@@ -57,21 +57,84 @@ buttons sit where the Xbox's do, so jump is under your thumb; the on-screen prom
 - **Skip a cutscene**: hold B (the jump button), + or a finger on the touch screen for one second.
 - **Performance overlay**: L + R + − shows or hides frame rate and timing at the top of the screen.
 
-## Two players (split screen)
+## Split screen (two to four players)
 
-Connect a Pro Controller, then in Settings → your profile → Gamepad Setup → Wii U GamePad set **Controllers** to **Separate**: the GamePad is
-player 1 and the Pro Controller player 2. With **Merged** (the default) a Pro Controller plays as player 1 alongside the GamePad, for playing on
-the TV alone. Start split screen from the Multiplayer menu, or a campaign with two players.
+The GamePad is always player 1. Connect up to three more controllers: Pro Controllers, Classic Controllers on Wii Remotes, or other pads through
+Bloopair. While you play alone, any of them plays as player 1 with the GamePad, so you can play on the TV with a Pro Controller.
+
+- **Multiplayer**: create a game (LAN, or internet), pick a map, and in the lobby choose **ADD PLAYER**. The controllers then become players of their
+  own: each one's lights show its number (2 to 4, in the order they connected). Each new player presses START on their controller and picks a
+  profile; once a second player is in, the others can just press START. Then START NOW.
+- **Campaign**: **CO-OP CAMPAIGN** in the Multiplayer menu, for two players; player 2 picks a profile with their own controller.
+- A controller that turns off or loses its connection keeps its player: turn it on again and it plays on.
+- With three or four players the game holds 30 frames a second and leaves out shadows, lens flares and some shine, so that every view stays
+  smooth. Settings → Video → **Split screen detail** and **Split screen FPS** change that.
+
+In Settings → your profile → Gamepad Setup → Wii U GamePad, **Controllers** is **Auto** (as above); **Separate** makes each controller its own
+player even when you play alone; **Merged** is the old behaviour (the first controller joins the GamePad, the others are players 2 to 4).
+
+On the same screen, **GamePad Shows: Player 1** puts player 1's view alone on the GamePad while the screen is split, so that the GamePad's player
+can look at their own screen; the menus are still shown whole. **TV** (the default) shows the TV's picture.
 
 ## System link and online
 
 System Link in the Multiplayer menu finds and hosts games on your local network, with other Wii Us and with OpenCE on PC built from the same
 version.
 
+## Halo Custom Edition maps
+
+The game also plays maps made for Halo Custom Edition on PC (`.map` files of cache version 609), as OpenCE on PC does
+([docs/custom_edition_caches.md](../../docs/custom_edition_caches.md)). They have not been tried on a console yet.
+
+- Put the maps **as they are** in `wiiu/apps/halo/data/custom_maps/` on the SD card: do not convert them with `convert_maps.py`, which is for the Xbox
+  maps only (a Custom Edition map's file must stay as it is: network games tell its versions apart by its contents, and send it to players who lack
+  it). The game turns each one for the Wii U in memory as it loads.
+- Put your own copies of Halo Custom Edition's `bitmaps.map`, `sounds.map` and `loc.map` (from the `maps` folder of your Halo Custom Edition
+  install) in the same folder. Most maps need them; a map that needs one that is not there is refused, and `data/debug.txt` names it.
+- A map can have a picture and a description beside it: `<name>.bmp` (an uncompressed 24- or 32-bit bitmap) and `<name>.txt`.
+- The maps are listed under **CUSTOM MULTIPLAYER** and **CUSTOM SINGLEPLAYER** in the map lists, by their file's names.
+- Maps that need **OpenSauce** (their header asks for its memory upgrades, data files and the like) are refused; maps that only carry
+  OpenSauce's header play as stock Custom Edition plays them.
+- In a network game on a Custom Edition map you do not have, the map (and the resource maps you lack) is downloaded from the host into
+  `custom_maps` (`network.map_download` in `config.toml`; and `network.map_share` to send yours to others). A download of a map of which you
+  have another version is named `<name>_<8 hex digits>.map`.
+- `game.custom_edition` in `config.toml` (on by default) turns them off; the game then has 23 MB more memory for everything else.
+
+A new map can use graphics shaders that `shaders.pack` does not have yet: what they draw is left out until they are added to the pack.
+
+## Voice chat
+
+In network games you can talk to the other players, into the GamePad's microphone or into a headset plugged into the GamePad's headphone jack.
+Hold the GamePad's **TV** button to talk (Settings → your profile → Audio Setup → **Voice chat**: Push to talk, the default), or choose **Open mic** to
+talk whenever you speak. Use a headset with Open mic: without one, the GamePad's microphone also picks up the game from the GamePad's speaker.
+**Voice volume** sets how loud the other players are. The Pro Controller has no microphone or jack, and USB headsets do not work. Voice chat has
+not been tried on a console yet.
+
 ## Settings worth knowing
 
 - **Render resolution** (Settings → Video): 720 lines is the default and the best balance; 900 and 1080 are sharper but slower.
+- **Dynamic resolution** (Settings → Video): draws fewer lines, down to **Lowest Lines**, while the GPU falls behind, and all of them again when
+  it catches up. The **Quality** graphics mode turns it on. Off by default.
 - Every setting is also in `config.toml`, each with a comment saying what it does.
+
+## Updates
+
+Release builds look for a new version each time the game starts, if the console is online (Settings → your profile → Network Setup →
+**Check for updates**, on by default). When there is one, a panel at the main menu says so:
+
+- **A**: update now. The new files (about 18 MB) are downloaded, checked, and put in place, and the game starts the new version by
+  itself. While the panel says the files are being put in place, the HOME button is off for a moment: don't turn the console off.
+- **B**: not now. The game asks again the next time it starts.
+- **X twice**: never ask again (this turns Check for updates off).
+
+A download stopped with B, with HOME or by closing the game goes on from where it stopped the next time you choose to update. The update
+needs the download's size and 32 MB more free on the SD card, and says so if they are not there. It changes only the release's own files
+(`halo.wuhb`, `shaders.pack`, `brokers.txt`): never your maps, saves, settings (`config.toml`) or anything in `data/`. A new version whose
+maps would have to be converted again is not offered.
+
+If the new version does not reach its main menu (it crashes before it gets there, or does not get there twice in a row), the game puts the
+version you had back by itself and tells you at the main menu. That version is not offered again (press Y there if you want it offered
+again); a later one is. Without a network, the game starts as it always does.
 
 ## If something goes wrong
 
@@ -79,3 +142,21 @@ version.
 - To report a problem, include these files from `wiiu/apps/halo/` on the SD card: `log.txt`, `log-previous.txt`, `crash.txt`, `blackbox.txt`,
   `exit-trail.txt` and `data/debug.txt`. Take them after the game is closed.
 - A map missing from `data/maps/` stops the game at the end of the level before it. Make sure every converted map is there.
+- A Custom Edition map that does not load takes you back to the menus; `data/debug.txt` says why, in its lines that start with
+  `custom edition:`.
+
+### If an update went wrong
+
+The updater keeps its files in `wiiu/apps/halo/update/` on the SD card: `<name>.part` (a download not finished), `<name>.new` (downloaded
+and checked, not yet in place), `<name>.old` (the version you had, kept until the new one has reached its main menu), `<name>.bad` (a
+version set aside, deleted at the next start), and its journal, `state.txt` and `state2.txt`. Whatever stops the console during an update,
+the next start finishes the update or undoes it. It cannot when Halo has gone from the Wii U Menu (the power was cut at the one moment
+`halo.wuhb` itself was being swapped), or when the new version crashes before it shows anything. Then, on a computer:
+
+1. In `wiiu/apps/halo/update/`, for each file ending in `.old` (`halo.wuhb.old`, `shaders.pack.old`, ...): delete the file of the same
+   name in `wiiu/apps/halo/`, if there is one, and move the `.old` file there without its `.old` (`update/halo.wuhb.old` becomes
+   `halo.wuhb`).
+2. Delete `update/state.txt` and `update/state2.txt`.
+
+That is the version you had, as it was. If there are no `.old` files, install a release by hand as in "Installing" and delete the
+`update` folder.

@@ -17,6 +17,12 @@ functions.
 Every read the game makes of the map (structure BSPs, bitmap pixels, sound
 samples) is served from the map, bitmaps.map or sounds.map according to
 where its offset falls in their combined offset space.
+
+A big-endian host (the Wii U) plays the map's file as it is, little-endian:
+its tags are turned to the host's order once they are converted, before
+anything else reads them, its model data as the models are made, and each
+structure BSP as it is read (tag_swap.c). Pixels and samples stay as the
+file has them, as the converted Xbox maps' do.
 */
 
 /* ---------- headers */
@@ -30,6 +36,7 @@ where its offset falls in their combined offset space.
 #include "cache_file_formats.h"
 #include "custom_edition_cache.h"
 #include "tag_schema.h"
+#include "tag_swap.h"
 #include "map_share.h"
 
 #include <stdlib.h>
@@ -375,6 +382,165 @@ static boolean custom_edition_resource_map_path(
 	return TRUE;
 }
 
+/* the locale resource map custom_edition_locale_open opened */
+static struct
+{
+	boolean open;
+	struct custom_edition_file file;
+	struct resource_map map;
+} custom_edition_locale;
+
+/* a unicode string list tag: its strings' block (count, address and
+definition), each element a tag_data of the string's UTF-16 characters
+(size, then the address 12 bytes in) */
+#define STRING_LIST_HEADER_BYTES 12
+#define STRING_LIST_ELEMENT_BYTES 20
+#define STRING_LIST_ELEMENT_ADDRESS_OFFSET 12
+#define STRING_LIST_MAXIMUM_COUNT 32767
+
+boolean custom_edition_locale_open(
+	void)
+{
+	char path[MAP_PATH_SIZE];
+	short folder;
+
+	custom_edition_locale_close();
+	for (folder = 0; folder < NUMBER_OF_MAPS_FOLDERS; folder++)
+	{
+		if (maps_folder_has(maps_folder(folder), resource_map_type_describe(_resource_map_locale), MAP_FILE_EXTENSION, path))
+		{
+			break;
+		}
+	}
+	if (folder == NUMBER_OF_MAPS_FOLDERS || !custom_edition_file_open(&custom_edition_locale.file, path))
+	{
+		return FALSE;
+	}
+	if (resource_map_open(&custom_edition_locale.file.source, _resource_map_locale, &custom_edition_locale.map) !=
+		_cache_file_status_ok)
+	{
+		error(_error_silent, "custom edition: '%s' is not a locale resource map", path);
+		custom_edition_file_close(&custom_edition_locale.file);
+		return FALSE;
+	}
+	custom_edition_locale.open = TRUE;
+
+	return TRUE;
+}
+
+void custom_edition_locale_close(
+	void)
+{
+	if (custom_edition_locale.open)
+	{
+		resource_map_close(&custom_edition_locale.map);
+		custom_edition_file_close(&custom_edition_locale.file);
+		custom_edition_locale.open = FALSE;
+	}
+
+	return;
+}
+
+/* port: a loc.map's value, little-endian as Halo PC wrote it, read by value
+(on a big-endian host too) */
+static uint32_t custom_edition_locale_u32(
+	byte const *bytes)
+{
+	return (uint32_t)bytes[0] | (uint32_t)bytes[1] << 8 | (uint32_t)bytes[2] << 16 | (uint32_t)bytes[3] << 24;
+}
+
+struct custom_edition_string_list *custom_edition_locale_strings(
+	char const *name)
+{
+	struct resource_map const *map = &custom_edition_locale.map;
+	struct resource_map_item const *item = NULL;
+	struct custom_edition_string_list *list = NULL;
+	byte *tag;
+	int32_t count, index;
+	uint32_t address, text_bytes = 0;
+	unsigned short *characters;
+
+	for (index = 0; custom_edition_locale.open && index < map->item_count && !item; index++)
+	{
+		if (!csstrcasecmp(map->items[index].name, name))
+		{
+			item = &map->items[index];
+		}
+	}
+	if (!item || item->size < STRING_LIST_HEADER_BYTES || !(tag = malloc(item->size)))
+	{
+		return NULL;
+	}
+	if (!custom_edition_locale.file.source.read(custom_edition_locale.file.source.context, item->data_offset, item->size, tag))
+	{
+		goto done;
+	}
+	/* (the tag's addresses count from its start; every string lies within
+	it, so together they are no longer than it) */
+	count = (int32_t)custom_edition_locale_u32(tag);
+	address = custom_edition_locale_u32(tag + sizeof(count));
+	if (count <= 0 || count > STRING_LIST_MAXIMUM_COUNT || address > item->size ||
+		(uint32_t)count > (item->size - address) / STRING_LIST_ELEMENT_BYTES)
+	{
+		goto done;
+	}
+	for (index = 0; index < count; index++)
+	{
+		byte const *element = tag + address + (uint32_t)index * STRING_LIST_ELEMENT_BYTES;
+		int32_t size;
+		uint32_t data;
+
+		size = (int32_t)custom_edition_locale_u32(element);
+		data = custom_edition_locale_u32(element + STRING_LIST_ELEMENT_ADDRESS_OFFSET);
+		if (size < 0 || (size & 1) || data > item->size || (uint32_t)size > item->size - data ||
+			(uint32_t)size > item->size - text_bytes)
+		{
+			goto done;
+		}
+		text_bytes += (uint32_t)size;
+	}
+	/* one block: the list, its strings' addresses and lengths, then their
+	characters, each terminated */
+	list = malloc(sizeof(*list) + (size_t)count * (sizeof(*list->strings) + sizeof(*list->lengths)) +
+		(size_t)text_bytes + (size_t)count * sizeof(unsigned short));
+	if (!list)
+	{
+		goto done;
+	}
+	list->count = count;
+	list->strings = (unsigned short const **)(list + 1);
+	list->lengths = (long *)(list->strings + count);
+	characters = (unsigned short *)(list->lengths + count);
+	for (index = 0; index < count; index++)
+	{
+		byte const *element = tag + address + (uint32_t)index * STRING_LIST_ELEMENT_BYTES;
+		int32_t size;
+		uint32_t data;
+		long length;
+		long unit;
+
+		size = (int32_t)custom_edition_locale_u32(element);
+		data = custom_edition_locale_u32(element + STRING_LIST_ELEMENT_ADDRESS_OFFSET);
+		length = size / 2;
+		/* (UTF-16 little-endian, as the tag has it, into this machine's
+		order) */
+		for (unit = 0; unit < length; unit++)
+			characters[unit] = (unsigned short)(tag[data + 2 * unit] | tag[data + 2 * unit + 1] << 8);
+		if (!length || characters[length - 1])
+		{
+			characters[length++] = 0;
+		}
+		list->strings[index] = characters;
+		list->lengths[index] = length;
+		characters += length;
+	}
+
+done:
+	free(tag);
+
+	return list;
+}
+
 static void custom_edition_cache_files_close(
 	void)
 {
@@ -396,6 +562,80 @@ static void custom_edition_cache_files_close(
 	return;
 }
 
+/* port: a swap's scratch memory (tag_swap.h), for `bytes` bytes, or NULL
+after logging that there is none */
+static void *custom_edition_swap_scratch(
+	unsigned long bytes)
+{
+	void *scratch = malloc(tag_swap_scratch_bytes(bytes));
+
+	if (!scratch)
+		error(_error_silent, "custom edition: out of memory for 0x%lX bytes of byte order scratch", tag_swap_scratch_bytes(bytes));
+	return scratch;
+}
+
+/* port: the map's tags, as its loader and conversion leave them
+(little-endian), turned to a big-endian host's order; nothing on a
+little-endian host */
+static boolean custom_edition_cache_tags_swap(
+	uint8_t *tag_cache,
+	uint32_t loaded_bytes)
+{
+#ifdef __BIG_ENDIAN__
+	struct tag_swap_report report;
+	void *scratch = custom_edition_swap_scratch(loaded_bytes);
+	boolean swapped;
+
+	if (!scratch)
+		return FALSE;
+	swapped = tag_swap_custom_edition_tags(tag_cache, loaded_bytes, scratch, &report);
+	free(scratch);
+	if (!swapped)
+	{
+		error(_error_silent, "custom edition: the map's tags cannot be turned to this machine's byte order: %s", report.problem);
+		return FALSE;
+	}
+	error(_error_silent, "custom edition: %ld tags turned to big-endian (%lu shorts, %lu words, %lu doubles; %ld tags of groups no schema has, %lu bytes of data no handler knows, left as they are)",
+		report.tags, report.shorts, report.words, report.doubles, report.groups_left, report.data_bytes_left);
+#else
+	(void)tag_cache;
+	(void)loaded_bytes;
+#endif
+
+	return TRUE;
+}
+
+/* port: the model data (read from the map) turned to a big-endian host's
+order by the converted models' parts; nothing on a little-endian host */
+static boolean custom_edition_cache_model_data_swap(
+	uint8_t const *tag_cache,
+	struct custom_edition_load_report const *report,
+	byte *model_data)
+{
+#ifdef __BIG_ENDIAN__
+	struct tag_swap_report swap;
+	void *scratch = custom_edition_swap_scratch(report->model_data_bytes);
+	boolean swapped;
+
+	if (!scratch)
+		return FALSE;
+	swapped = tag_swap_custom_edition_model_data(tag_cache, report->tag_data_bytes + report->resource_tag_bytes,
+		model_data, report->model_data_bytes, report->model_index_data_offset, scratch, &swap);
+	free(scratch);
+	if (!swapped)
+	{
+		error(_error_silent, "custom edition: the model data cannot be turned to this machine's byte order: %s", swap.problem);
+		return FALSE;
+	}
+#else
+	(void)tag_cache;
+	(void)report;
+	(void)model_data;
+#endif
+
+	return TRUE;
+}
+
 /* Converts the loaded map's models for this build from its model data,
 which is read for the purpose and let go. */
 static boolean custom_edition_cache_models_convert(
@@ -414,7 +654,7 @@ static boolean custom_edition_cache_models_convert(
 	{
 		error(_error_silent, "custom edition: cannot read the model data");
 	}
-	else
+	else if (custom_edition_cache_model_data_swap(tag_cache, report, model_data))
 	{
 		success = custom_edition_models_convert(
 			tag_cache,
@@ -449,6 +689,14 @@ static void custom_edition_behaviours_log(
 	{
 		if (!((behaviours >> behaviour) & 1))
 			continue;
+		if (behaviour == _custom_edition_behaviour_gearbox_meters ||
+			behaviour == _custom_edition_behaviour_old_widescreen_fix)
+		{
+			error(_error_silent,
+				"custom edition: relies on Halo PC's %s (Chimera's map list), partially supported (HUD tint/warning placement)",
+				custom_edition_behaviour_name(behaviour));
+			continue;
+		}
 		error(
 			_error_silent,
 			(FOLLOWED_BEHAVIOURS >> behaviour) & 1 ?
@@ -517,15 +765,28 @@ static boolean custom_edition_cache_tags_convert(
 	uint32_t loaded_bytes = report->tag_data_bytes + report->resource_tag_bytes;
 	struct custom_edition_conversion_report conversion;
 	enum cache_file_status status;
+	long regrouped;
 
+	/* (first: what follows selects tags by group, and a protected map's tag
+	table has them scrambled; the references to them keep the real ones) */
+	regrouped = tag_validate_custom_edition_infer_groups(
+		tag_cache,
+		(long)loaded_bytes,
+		report->tag_cache_bytes,
+		report->identity.name);
+	if (regrouped)
+	{
+		error(
+			_error_silent,
+			"custom edition: %ld tags had their group (scrambled by map protection) taken from the references to them",
+			regrouped);
+	}
+	
 	custom_edition_cache_combine_resource_offsets(
 		tag_cache,
 		loaded_bytes,
 		COMBINED_BITMAPS_OFFSET,
 		COMBINED_SOUNDS_OFFSET);
-	/* (before the conversion, which silences sounds this build cannot play) */
-	custom_edition_sounds_decode(tag_cache, loaded_bytes, (long)COMBINED_DECODED_OFFSET,
-		COMBINED_BITMAPS_OFFSET - COMBINED_DECODED_OFFSET);
 	status = custom_edition_cache_convert(tag_cache, loaded_bytes, report->identity.name, &conversion);
 	if (status != _cache_file_status_ok)
 	{
@@ -566,13 +827,6 @@ static boolean custom_edition_cache_tags_convert(
 			"custom edition: %ld animation overlays named animations their graphs do not have and were disabled",
 			(long)conversion.animation_overlays_disabled);
 	}
-	if (conversion.sounds_undecodable)
-	{
-		error(
-			_error_silent,
-			"custom edition: %ld sounds use a compression this build cannot decode (Custom Edition's Ogg Vorbis) and will not play",
-			(long)conversion.sounds_undecodable);
-	}
 	if (conversion.hud_placements_rescaled)
 	{
 		error(
@@ -593,9 +847,27 @@ static boolean custom_edition_cache_tags_convert(
 			conversion.pause_menu_trimmed ? "; the multiplayer pause menu is the Xbox's resume and quit" : "");
 	}
 
+	/* port: the tags in this host's order from here on (tag_swap.c); then
+	the sounds this build would not play decoded, and those it cannot
+	silenced */
+	if (!custom_edition_cache_tags_swap(tag_cache, loaded_bytes))
+	{
+		return FALSE;
+	}
+	custom_edition_sounds_decode(tag_cache, loaded_bytes, (long)COMBINED_DECODED_OFFSET,
+		COMBINED_BITMAPS_OFFSET - COMBINED_DECODED_OFFSET);
+	conversion.sounds_undecodable = custom_edition_cache_sounds_silence(tag_cache, loaded_bytes);
+	if (conversion.sounds_undecodable)
+	{
+		error(
+			_error_silent,
+			"custom edition: %ld sounds use a compression this build cannot decode and will not play",
+			(long)conversion.sounds_undecodable);
+	}
+
 	return custom_edition_cache_tags_validate(tag_cache, report) &&
 		custom_edition_bitmaps_verify(tag_cache, loaded_bytes) &&
-		custom_edition_reordered_bitmaps_find(tag_cache, loaded_bytes) &&
+		custom_edition_reordered_bitmaps_find(tag_cache, loaded_bytes, custom_edition_cache_globals.behaviours) &&
 		custom_edition_scripts_convert(tag_cache, loaded_bytes) &&
 		custom_edition_cache_models_convert(tag_cache, report);
 }
@@ -1094,6 +1366,32 @@ boolean custom_edition_structure_bsp_reference_valid(
 	return TRUE;
 }
 
+boolean custom_edition_structure_bsp_swap(
+	void *bsp,
+	long size)
+{
+#ifdef __BIG_ENDIAN__
+	struct tag_swap_report report;
+	void *scratch;
+	boolean swapped;
+
+	if (size <= 0 || !(scratch = custom_edition_swap_scratch((unsigned long)size)))
+		return FALSE;
+	swapped = tag_swap_custom_edition_structure_bsp(bsp, (unsigned long)size, (unsigned long)bsp, scratch, &report);
+	free(scratch);
+	if (!swapped)
+	{
+		error(_error_silent, "custom edition: a structure bsp cannot be turned to this machine's byte order: %s", report.problem);
+		return FALSE;
+	}
+#else
+	(void)bsp;
+	(void)size;
+#endif
+
+	return TRUE;
+}
+
 boolean custom_edition_cache_tags_loaded(
 	void)
 {
@@ -1124,6 +1422,12 @@ void custom_edition_cache_tags_unload(
 	custom_edition_cache_globals.loaded_bytes = 0;
 
 	return;
+}
+
+struct resource_map const *custom_edition_cache_bitmap_resources(void)
+{
+	return custom_edition_cache_tags_loaded() ?
+		custom_edition_cache_globals.resource_maps[_resource_map_bitmaps] : NULL;
 }
 
 void custom_edition_cache_read(

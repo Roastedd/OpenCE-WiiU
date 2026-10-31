@@ -44,6 +44,8 @@ int main(void)
 	CHECK(parse("press A", &r) && r.command == WIIU_DEBUG_PRESS && r.buttons == WIIU_PAD_A && r.milliseconds == WIIU_DEBUG_PRESS_DEFAULT_MS);
 	CHECK(parse("press a+up 1000", &r) && r.buttons == (WIIU_PAD_A | WIIU_PAD_UP) && r.milliseconds == 1000);
 	CHECK(parse("press STICKR+ZL 10000", &r) && r.buttons == (WIIU_PAD_STICK_R | WIIU_PAD_ZL) && r.milliseconds == 10000);
+	/* (voice chat's push to talk) */
+	CHECK(parse("press TV 3000", &r) && r.buttons == WIIU_PAD_TV && r.milliseconds == 3000);
 	CHECK(!parse("press A 10001", &r));
 	CHECK(!parse("press A 0", &r));
 	CHECK(!parse("press A -5", &r));
@@ -74,6 +76,24 @@ int main(void)
 	CHECK(parse("log 100", &r) && r.count == 100);
 	CHECK(!parse("log 101", &r));
 	CHECK(!parse("log 0", &r));
+
+	CHECK(parse("console (game_won)", &r) && r.command == WIIU_DEBUG_CONSOLE && !strcmp(r.text, "(game_won)"));
+	CHECK(parse("console   cheat_all_weapons  ", &r) && !strcmp(r.text, "cheat_all_weapons"));
+	CHECK(parse("console (object_teleport (player0) \"start point\")", &r) && !strcmp(r.text, "(object_teleport (player0) \"start point\")"));
+	CHECK(!parse("console", &r));
+	CHECK(!parse("console    ", &r));
+	{
+		char line[200];
+
+		memset(line, 'x', sizeof(line) - 1);
+		line[sizeof(line) - 1] = 0;
+		memcpy(line, "console ", 8);
+		line[8 + WIIU_DEBUG_CONSOLE_MAX - 1] = 0;
+		CHECK(parse(line, &r) && strlen(r.text) == WIIU_DEBUG_CONSOLE_MAX - 1);
+		line[8 + WIIU_DEBUG_CONSOLE_MAX - 1] = 'x';
+		line[8 + WIIU_DEBUG_CONSOLE_MAX] = 0;
+		CHECK(!parse(line, &r));
+	}
 
 	CHECK(!parse("", &r));
 	CHECK(!parse("   ", &r));

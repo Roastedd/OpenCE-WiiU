@@ -1,7 +1,8 @@
 /*
 VOICE_AUDIO.H
 
-Voice chat's sound (voice_audio.c): the microphone, Opus, and the other
+Voice chat's sound (voice_audio.c; the Wii U's is
+port/wiiu/src/wiiu_voice_audio.c): the microphone, Opus, and the other
 players' voices mixed into the game's output. Called by
 port/linux/game/network_voice.c (the game's side, so its flags are int) and
 dsound_sdl.c (the mix).
@@ -37,6 +38,11 @@ void voice_audio_forget_all(void);
 /* whether a speaker's voice is playing now */
 int voice_audio_speaking(int speaker);
 void voice_audio_set_volume(float volume);
+/* whether the voices this machine is sent are played: network_voice.c
+tells the host it hears voices only then, so that a machine that cannot
+play them is sent none (the Wii U's, port/wiiu/src/wiiu_voice_audio.c:
+not while its voice thread or its sound is down) */
+int voice_audio_hears(void);
 /* (dsound_sdl.c, on the audio thread) the voices added to the output
 (stereo, 48 kHz) */
 void voice_audio_mix(float *output, unsigned long frames);

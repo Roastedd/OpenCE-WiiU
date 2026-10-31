@@ -75,7 +75,11 @@ struct dk_command_header
 /* a render target or depth buffer, known by the physical address of its
 data (Data in its D3DSurface), as d3d8_gl.c knows them; its size in the
 game's pixels, and in the host's: the screen's targets are drawn at
-display.resolution_limit's scale (d3d8_dk.c), the rest at their own */
+display.resolution_limit's scale (d3d8_dk.c), the rest at their own. The
+active size is the part of the host's pixels the frame draws into, from the
+top left: all of them, unless dynamic resolution has lowered the screen's
+lines (d3d8_gx2.c, drs_fraction). The host makes one target for all the
+active sizes of a surface, so it knows a target by the other fields. */
 struct dk_surface
 {
 	uint32_t data;
@@ -84,6 +88,8 @@ struct dk_surface
 	uint32_t kind;
 	uint32_t pixel_width;
 	uint32_t pixel_height;
+	uint32_t active_width;
+	uint32_t active_height;
 };
 
 /* the surfaces later commands draw into (either can be DK_SURFACE_NONE) */
@@ -107,15 +113,31 @@ struct dk_command_clear
 	uint32_t rectangles[][4];
 };
 
-/* shows the back buffer, letterboxed to the display. A screenshot is asked
-for by a guest address of width * height * 4 bytes (debug.screenshot_every),
-which the host fills with the back buffer's pixels, R G B A in memory, once the
-GPU has drawn them (the frame waits for it); 0 asks for none */
+/* shows the back buffer's active part, letterboxed to the display. A
+screenshot is asked for by a guest address of active_width * active_height * 4
+bytes (debug.screenshot_every), which the host fills with those pixels of the
+back buffer, R G B A in memory, once the GPU has drawn them (the frame waits
+for it); 0 asks for none. The GamePad shows the rectangle gamepad (x, y,
+width, height in the back buffer's pixels: input.wiiu_gamepad_view's first
+split-screen window), or with a width of 0 what the TV shows. flags: what
+dynamic resolution's controller is to know of the frame (DK_PRESENT_*). */
+enum
+{
+	/* a menu has the screen: the controller is off, and the frames are
+	drawn with all the lines */
+	DK_PRESENT_MENUS = 1 << 0,
+	/* the frames come 30 a second (display.interpolation false), not 60: a
+	frame has twice the time */
+	DK_PRESENT_THIRTY = 1 << 1,
+};
+
 struct dk_command_present
 {
 	struct dk_command_header header;
 	struct dk_surface back_buffer;
 	uint32_t screenshot;
+	uint32_t gamepad[4];
+	uint32_t flags;
 };
 
 /* ---------- draws (DEKO3D.md, phase 6)
@@ -290,7 +312,11 @@ level of a compressed format is its 4x4 blocks, of BGRA its texels, depth
 slices after one another - the next face face_bytes on from the last. The
 host reads source_bytes from source when it runs the command. With
 source_bytes 0 the image is only made (its texels undefined), for
-DK_COMMAND_TEXTURE_ROWS to fill. */
+DK_COMMAND_TEXTURE_ROWS to fill. channels says which of the texels' red,
+green, blue and alpha (0 to 3) each of red, green, blue and alpha is sampled
+from, a byte each, red's lowest: DK_TEXTURE_CHANNELS_AS_STORED for all but a
+Halo Custom Edition map's textures that keep their channels elsewhere
+(xbox_textures_gx2.c). */
 struct dk_command_texture
 {
 	struct dk_command_header header;
@@ -304,7 +330,10 @@ struct dk_command_texture
 	uint32_t source;
 	uint32_t face_bytes;
 	uint32_t source_bytes;
+	uint32_t channels;
 };
+
+#define DK_TEXTURE_CHANNELS_AS_STORED 0x03020100u
 
 /* writes rows [top, top + rows) of one level of 2D BGRA image id (made by
 DK_COMMAND_TEXTURE), from the level's whole rows one after another at a

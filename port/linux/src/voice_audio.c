@@ -509,6 +509,13 @@ void voice_audio_set_volume(float volume)
 	voice_volume = volume < 0.0f ? 0.0f : volume > 2.0f ? 2.0f : volume;
 }
 
+/* (the desktop's are played whenever they come: the mix runs with the
+game's sound) */
+int voice_audio_hears(void)
+{
+	return 1;
+}
+
 void voice_audio_mix(float *output, unsigned long frames)
 {
 	int index;

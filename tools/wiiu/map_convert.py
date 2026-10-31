@@ -18,6 +18,13 @@ not know how to swap (a data field without a handler, a group without a
 schema) is left as it is and reported.
 
     map_convert.py --schema tag_schema.json --layouts tag_layouts.json --symbols schema_dump.nm in.map out.map
+
+A Halo Custom Edition map is never converted ahead of time: its file is played as it is (its hash is its network
+version, and map sharing sends its bytes), and the big-endian game turns its tags as they load
+(port/linux/game/tag_swap.c, whose tables tag_swap_tables.py makes from these same schema files). --custom-edition
+turns them here as the game does, to check the game's swap against this one: the input is the map's tags as its
+loader leaves them (cache_file_report --dump-tags), and --map the map, whose structure bsps and model data are turned
+too (to <output>.bsp<N>, <output>.model).
 """
 
 import argparse
@@ -34,6 +41,14 @@ TAG_CACHE_BASE_ADDRESS = 0x803A6000
 TAG_CACHE_SIZE = 0x1600000
 SCENARIO_STRUCTURE_BSPS_OFFSET = 0x5A4
 BUFFER_SIZE = 12
+# a Custom Edition map's tag cache (cache_file_formats.h), its tag index (0x28 bytes: no buffers, where its model
+# data is in the file) and its gbxmodel parts' vertices in the model data (68 bytes: 14 floats, two shorts, two floats)
+CUSTOM_EDITION_TAG_CACHE_ADDRESS = 0x40440000
+CUSTOM_EDITION_TAG_CACHE_BYTES = 0x1700000
+CUSTOM_EDITION_TAG_INDEX_WORDS = 10
+CUSTOM_EDITION_MODEL_INDEX_DATA_OFFSET = 0x1C
+GBXMODEL_VERTEX_BYTES = 68
+GBXMODEL_VERTEX_VALUES = ((4, 14), (2, 2), (4, 2))
 
 # the cache file header (cache_files_windows.c): its words and its one short
 HEADER_WORDS = (0x00, 0x04, 0x08, 0x10, 0x14, 0x64, 0x7FC)
@@ -55,6 +70,9 @@ DATA_HANDLERS = {
     "structure_bsp.sound_cluster_data": "bytes",
     # (a material's vertices, then its lightmap vertices: structure_vertices)
     "structure_material.compressed_vertex_data": "structure_vertices",
+    # (a Custom Edition map's: its environment vertices, 56 bytes, then its lightmap vertices, 20, all floats; the
+    # Xbox maps leave it empty)
+    "structure_material.uncompressed_vertex_data": 4,
     "string_list_entry.string": "bytes",
     "unicode_string_list_entry.string": 2,
     "scenario.hs_syntax_data": "hs_syntax_data",
@@ -402,6 +420,10 @@ class Converter:
     def __init__(self, schema: dict, layouts: dict, symbols: dict):
         self.definitions = schema["definitions"]
         self.groups = {g["tag"]: g["definition"] for g in schema["groups"]}
+        # (a Custom Edition map's groups laid out otherwise than this build's: its gbxmodels, schema_dump.c)
+        self.custom_edition_groups = {g["tag"]: g["definition"] for g in schema.get("custom_edition_groups", [])}
+        self.custom_edition = False
+        self.tag_cache_size = TAG_CACHE_SIZE
         self.runs = {}
         self.pointer_cache = {}
         self.bytes = {}
@@ -490,7 +512,7 @@ class Converter:
                     continue
                 child = self.definitions[field["child"]]
                 stride = child["size"]
-                if count < 0 or count > TAG_CACHE_SIZE // max(stride, 1):
+                if count < 0 or count > self.tag_cache_size // max(stride, 1):
                     raise Refused(f"{definition['name']}.{field['name']} has {count} elements")
                 start = map_.region_offset(address, count * stride)
                 if start is None:
@@ -561,7 +583,9 @@ class Converter:
             map_.unhandled[f"{name} past its elements"] += rest
 
     def tag(self, map_: Map, group: str, offset: int):
-        index = self.groups.get(group)
+        index = self.custom_edition_groups.get(group) if self.custom_edition else None
+        if index is None:
+            index = self.groups.get(group)
         if index is None or index < 0:
             map_.unhandled[f"group {group}"] += 1
             return
@@ -674,6 +698,120 @@ class Converter:
             map_.counts["pointers moved"] = len(map_.pointers)
         return map_
 
+    # ---------- Custom Edition maps, as port/linux/game/tag_swap.c turns them as they load
+
+    def custom_edition_begin(self):
+        self.custom_edition = True
+        self.tag_cache_size = CUSTOM_EDITION_TAG_CACHE_BYTES
+
+    def convert_custom_edition(self, data: bytearray) -> Map:
+        """a Custom Edition map's tags as its loader leaves them at 0x40440000 (cache_file_report --dump-tags: read,
+        joined by its resource maps' and converted for this build, little-endian), in big-endian, as the big-endian
+        game turns them (tag_swap.c): its tag index, its tag table and every tag of a group the schemas know"""
+        self.custom_edition_begin()
+        map_ = Map(data)
+        if len(data) < CUSTOM_EDITION_TAG_INDEX_WORDS * 4 or len(data) > CUSTOM_EDITION_TAG_CACHE_BYTES:
+            raise Refused("not a Custom Edition map's tags")
+        map_.regions.append((CUSTOM_EDITION_TAG_CACHE_ADDRESS, len(data), 0))
+        instances, _, _, tag_count = struct.unpack_from("<IiIi", data, 0)
+        signature = struct.unpack_from("<I", data, (CUSTOM_EDITION_TAG_INDEX_WORDS - 1) * 4)[0]
+        if signature != 0x74616773 or not 0 < tag_count <= 0xFFFF:
+            raise Refused("its tag index is damaged")
+        # (the tag index: the tag table, the scenario, the checksum, the count, and where the model data is in the file)
+        map_.swap(0, 4, CUSTOM_EDITION_TAG_INDEX_WORDS)
+        table = map_.region_offset(instances, tag_count * 0x20)
+        if table is None:
+            raise Refused("its tag table is outside the tags")
+        for index in range(tag_count):
+            entry = table + index * 0x20
+            group, _, _, _, _, base_address, _, _ = struct.unpack_from("<IIIiIIII", data, entry)
+            map_.swap(entry, 4, 8)
+            group_text = group.to_bytes(4, "big").decode("latin-1")
+            if group_text == "sbsp" or not base_address:
+                continue
+            start = map_.region_offset(base_address, 4)
+            if start is None:
+                raise Refused(f"tag {index} ({group_text}) is outside the tags")
+            self.tag(map_, group_text, start)
+            map_.counts["tags"] += 1
+        return map_
+
+    def custom_edition_structure_bsp(self, data: bytearray, address: int) -> Map:
+        """a Custom Edition map's structure bsp (its bytes in the map, which load at address) in big-endian, as the
+        game turns it when it loads it (tag_swap.c): its header, then its root"""
+        self.custom_edition_begin()
+        map_ = Map(data)
+        if len(data) < 0x18:
+            raise Refused("a structure bsp is smaller than its header")
+        map_.regions.append((address, len(data), 0))
+        root, vertex_count, vertex_buffers, index_count, index_buffers, signature = \
+            struct.unpack_from("<IiIiII", data, 0)
+        if signature != 0x73627370:
+            raise Refused("a structure bsp's header is damaged")
+        map_.swap(0, 4, 6)
+        for count, buffers in ((vertex_count, vertex_buffers), (index_count, index_buffers)):
+            if count:
+                start = map_.region_offset(buffers, count * BUFFER_SIZE)
+                if start is None or count < 0:
+                    raise Refused("a structure bsp's buffers are outside it")
+                map_.swap(start, 4, count * 3)
+        start = map_.region_offset(root, 4)
+        if start is None:
+            raise Refused("a structure bsp's root is outside it")
+        self.tag(map_, "sbsp", start)
+        map_.counts["bsps"] += 1
+        return map_
+
+    def custom_edition_model_data(self, tags: Map, data: bytearray, index_data_offset: int) -> Map:
+        """a Custom Edition map's model data (its parts' vertices, then from index_data_offset their strips) in
+        big-endian, as the game turns it before it makes its models' buffers (tag_swap.c): each gbxmodel part's
+        vertices and strip, by its fields in tags, the map's tags already turned; what several parts name is turned
+        once"""
+        self.custom_edition_begin()
+        result = Map(data)
+        model = self.custom_edition_groups["mod2"]
+        geometries = next(f for f in self.definitions[model]["fields"] if f["name"] == "geometries")
+        geometry = geometries["child"]
+        parts = next(f for f in self.definitions[geometry]["fields"] if f["name"] == "parts")
+        part = parts["child"]
+        geometry_bytes = self.definitions[geometry]["size"]
+        part_bytes = self.definitions[part]["size"]
+
+        def block(offset, field, element_bytes):
+            count, address = tags.u32(offset + field["offset"], True), tags.u32(offset + field["offset"] + 4, True)
+            if not count:
+                return []
+            start = tags.region_offset(address, count * element_bytes)
+            if start is None or count > self.tag_cache_size // element_bytes:
+                raise Refused("a model's block is outside the tags")
+            return [start + index * element_bytes for index in range(count)]
+
+        instances, tag_count = tags.u32(0, True), tags.u32(12, True)
+        table = tags.region_offset(instances, tag_count * 0x20)
+        for index in range(tag_count if table is not None else 0):
+            entry = table + index * 0x20
+            if tags.data[entry:entry + 4] != b"mod2" or not tags.u32(entry + 0x14, True):
+                continue
+            root = tags.region_offset(tags.u32(entry + 0x14, True), self.definitions[model]["size"])
+            if root is None:
+                raise Refused(f"model {index} is outside the tags")
+            for geometry_offset in block(root, geometries, geometry_bytes):
+                for part_offset in block(geometry_offset, parts, part_bytes):
+                    value = lambda path: field(self, tags, part, part_offset, path)
+                    vertex_count, vertex_offset = value("vertex_count"), value("vertex_offset")
+                    strip_start = index_data_offset + value("strip_offset")
+                    if vertex_offset + vertex_count * GBXMODEL_VERTEX_BYTES > len(data) or \
+                            strip_start + (value("strip_triangle_count") + 2) * 2 > len(data):
+                        raise Refused(f"a part of model {index} lies outside the model data")
+                    for vertex in range(vertex_count):
+                        at = vertex_offset + vertex * GBXMODEL_VERTEX_BYTES
+                        for width, count in GBXMODEL_VERTEX_VALUES:
+                            result.swap_unless_swapped(at, width, count)
+                            at += width * count
+                    result.swap_unless_swapped(strip_start, 2, value("strip_triangle_count") + 2)
+                    result.counts["parts"] += 1
+        return result
+
     def pointer_audit(self, map_: "Map", tag_data_offset: int, tag_data_size: int, bsp_regions):
         """the 4-byte words, in the tag data, whose value is an address in the tag cache and that nothing named as one: unmodelled pointers
         (or numbers that look like them), grouped by the definition of the element they are in and their offset there"""
@@ -710,6 +848,54 @@ def read_map(path: Path) -> bytearray:
     return bytearray(raw[:HEADER_SIZE] + zlib.decompress(raw[HEADER_SIZE:]))
 
 
+def custom_edition_main(converter: "Converter", args) -> int:
+    """--custom-edition: the tags (and with --map the structure bsps and the model data) turned and written"""
+    tags_data = bytearray(args.input.read_bytes())
+    try:
+        tags = converter.convert_custom_edition(tags_data)
+    except Refused as refusal:
+        print(f"{args.input.name}: refused: {refusal}", file=sys.stderr)
+        return 1
+    args.output.write_bytes(bytes(tags.data))
+    print(f"{args.input.name}: {tags.counts['tags']} tags; swapped {tags.counts[2]} shorts, {tags.counts[4]} words, "
+          f"{tags.counts[8]} doubles; {sum(tags.swapped)} of {len(tags_data)} bytes visited")
+    for name, size in tags.unhandled.most_common():
+        print(f"  left as it is: {name} ({size} {'tags' if name.startswith('group') else 'bytes'})")
+    if not args.map:
+        return 0
+    map_data = args.map.read_bytes()
+    # (the scenario's structure bsps: where each is in the map, how large, where it loads)
+    scenario = tags.u32(4, True) & 0xFFFF
+    table = tags.region_offset(tags.u32(0, True), tags.u32(12, True) * 0x20)
+    root = tags.region_offset(tags.u32(table + scenario * 0x20 + 0x14, True), SCENARIO_STRUCTURE_BSPS_OFFSET + 12)
+    count, address = tags.u32(root + SCENARIO_STRUCTURE_BSPS_OFFSET, True), tags.u32(root + SCENARIO_STRUCTURE_BSPS_OFFSET + 4, True)
+    references = tags.region_offset(address, count * 0x20) if count else None
+    for index in range(count if references is not None else 0):
+        file_offset, size, base_address = struct.unpack_from(">iiI", tags.data, references + index * 0x20)
+        try:
+            bsp = converter.custom_edition_structure_bsp(bytearray(map_data[file_offset:file_offset + size]), base_address)
+        except Refused as refusal:
+            print(f"{args.map.name}: structure bsp {index} refused: {refusal}", file=sys.stderr)
+            return 1
+        args.output.with_name(f"{args.output.name}.bsp{index}").write_bytes(bytes(bsp.data))
+        print(f"  structure bsp {index}: swapped {bsp.counts[2]} shorts, {bsp.counts[4]} words; "
+              f"{sum(bsp.swapped)} of {size} bytes visited")
+        for name, unhandled in bsp.unhandled.most_common():
+            print(f"    left as it is: {name} ({unhandled} bytes)")
+    model_offset, index_data_offset, model_bytes = (tags.u32(0x14, True), tags.u32(CUSTOM_EDITION_MODEL_INDEX_DATA_OFFSET, True),
+                                                    tags.u32(0x20, True))
+    try:
+        model = converter.custom_edition_model_data(tags, bytearray(map_data[model_offset:model_offset + model_bytes]),
+                                                    index_data_offset)
+    except Refused as refusal:
+        print(f"{args.map.name}: model data refused: {refusal}", file=sys.stderr)
+        return 1
+    args.output.with_name(f"{args.output.name}.model").write_bytes(bytes(model.data))
+    print(f"  model data: {model.counts['parts']} parts; swapped {model.counts[2]} shorts, {model.counts[4]} words; "
+          f"{sum(model.swapped)} of {model_bytes} bytes visited")
+    return 0
+
+
 def symbol_table(path: Path) -> dict:
     symbols = defaultdict(list)
     for line in path.read_text().splitlines():
@@ -728,11 +914,18 @@ def main():
     parser.add_argument("--audit", type=Path, help="write the coverage audit (words no layout covers) as JSON")
     parser.add_argument("--rebase", type=lambda text: int(text, 0), help="add this to every address in the map (the window's new base minus 0x80000000)")
     parser.add_argument("--audit-pointers", action="store_true", help="list the words that look like addresses and were not moved")
+    parser.add_argument("--custom-edition", action="store_true",
+                        help="input is a Custom Edition map's tags (cache_file_report --dump-tags), turned as the "
+                             "big-endian game turns them (tag_swap.c); --map names the map, for its structure bsps "
+                             "(to <output>.bsp<N>) and model data (to <output>.model)")
+    parser.add_argument("--map", type=Path, help="the Custom Edition map whose tags the input is")
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
     converter = Converter(json.loads(args.schema.read_text()), json.loads(args.layouts.read_text()),
                           symbol_table(args.symbols))
+    if args.custom_edition:
+        return custom_edition_main(converter, args)
     data = read_map(args.input)
     try:
         map_ = converter.convert(data, audit=args.audit is not None, rebase=args.rebase, audit_pointers=args.audit_pointers)

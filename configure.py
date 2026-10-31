@@ -17,6 +17,11 @@ from tools.web_build import generate_web_build, web_configure_inputs
 from tools.wiiu_build import generate_wiiu_build, wiiu_configure_inputs
 from tools.windows_build import generate_windows_build, windows_configure_inputs
 
+
+def is_windows() -> bool:
+    return os.name == "nt"
+
+
 # arguments
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -38,6 +43,12 @@ parser.add_argument(
     "--wiiu-cc",
     metavar="BINARY",
     help="the Wii U compiler for `ninja linux_wiiu` (default: wiiu-clang)",
+)
+parser.add_argument(
+    "--wiiu-lto",
+    action="store_true",
+    help="the Wii U build's game sources optimised together as one module (llvm-link, then one object; "
+    "tools/wiiu_build.py): devkitPPC's linker cannot do it at the link",
 )
 parser.add_argument(
     "--compiler-launcher",
@@ -105,6 +116,38 @@ parser.add_argument(
     type=str,
     help="Emscripten's emcc for `ninja web` (default: emcc on the PATH, then EMSDK's or ~/emsdk's)",
 )
+
+# no need to spam those extra flags when running on Windows
+if not is_windows():
+    parser.add_argument(
+        "--windows-cross",
+        action="store_true",
+        help="generate the Windows build (`ninja windows`) on Linux, cross-compiling "
+        "with clang against an MSVC toolchain (--windows-vctools-dir and --windows-sdk-dir), "
+        "and make it the default target",
+    )
+    parser.add_argument(
+        "--windows-cc",
+        metavar="BINARY",
+        help="compiler for the Windows cross build, `ninja windows` (default: clang). "
+             "Only clang is supported for now.",
+    )
+    parser.add_argument(
+        "--windows-vctools-dir",
+        metavar="DIR",
+        type=Path,
+        help="the Visual C++ tools of the MSVC toolchain a --windows-cross build compiles "
+        "and links against: the versioned folder under VC/Tools/MSVC, the one with `include` "
+        "and `lib` (default: VCToolsInstallDir)",
+    )
+    parser.add_argument(
+        "--windows-sdk-dir",
+        metavar="DIR",
+        type=Path,
+        help="the Windows SDK a --windows-cross build compiles and links against: the "
+        "folder with `Include` and `Lib`, each with a versioned folder (default: WindowsSdkDir)",
+    )
+
 args = parser.parse_args()
 try:
     check_profile_options(args.profile, args.pgo)
@@ -117,6 +160,7 @@ sln = SimpleNamespace(
     linux_cc=args.linux_cc,
     linux_target=args.linux_target,
     wiiu_cc=args.wiiu_cc,
+    wiiu_lto=args.wiiu_lto,
     compiler_launcher=args.compiler_launcher,
     port_release=args.release,
     port_profile=args.profile,
@@ -128,10 +172,11 @@ sln = SimpleNamespace(
     android_guest_cc=args.android_guest_cc,
     web_emcc=args.web_emcc,
 )
-
-
-def is_windows() -> bool:
-    return os.name == "nt"
+if not is_windows():
+    sln.windows_cc = args.windows_cc
+    sln.windows_cross = args.windows_cross
+    sln.windows_vctools_dir = args.windows_vctools_dir
+    sln.windows_sdk_dir = args.windows_sdk_dir
 
 
 # build.ninja
@@ -182,7 +227,7 @@ n.newline()
 
 # the build for this computer, where it could be generated (the Windows
 # build is left out when SDL cannot be fetched, for instance)
-default = "windows" if is_windows() else "linux"
+default = "windows" if is_windows() or sln.windows_cross else "linux"
 if f"\nbuild {default}: " in out.getvalue():
     n.comment("Default rule: the build for this computer")
     n.default(default)

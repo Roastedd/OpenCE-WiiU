@@ -317,6 +317,7 @@ symbols in this file:
 #include "render/render_debug.h"
 #include "saved games/game_state.h"
 #include "tag_files/tag_groups.h"
+#include "graphics_quality.h"
 
 /* ---------- constants */
 
@@ -721,6 +722,10 @@ void rasterizer_reset_state(
 void rasterizer_frame_begin(
 	struct rasterizer_frame_begin_parameters const *parameters)
 {
+	/* port: the detail settings onto the switches below, when config.toml
+	has changed (port/linux/game/graphics_quality.c) */
+	graphics_quality_apply();
+
 	if (rasterizer_debug_options.draw_environment <= 1)
 	{
 		rasterizer_debug_options.draw_environment_fog = rasterizer_debug_options.draw_environment;

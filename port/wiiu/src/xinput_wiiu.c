@@ -1,8 +1,30 @@
 /*
 XINPUT_WIIU.C
 
-Xbox controllers for the Wii U: the GamePad is the first controller (merged with a Pro Controller on channel 0, if one is connected), and Pro Controllers
-on channels 1 to 3 are the others (input.wiiu_controller_layout "separate": the GamePad alone is the first, and the controllers are the players after it). The debug keyboard and the memory units are not there.
+Xbox controllers for the Wii U: the GamePad is the first controller (port 0), and the Pro and Classic Controllers take ports as input.wiiu_controller_layout
+says (below). The debug keyboard and the memory units are not there.
+
+Players and joining. The game's players are its four gamepad ports: in a network game (split screen is one: the lobby of a game this machine hosts or
+joins) the menus make the controller of port n local player n (network_client_manager.c), a campaign's player 1 is the port that chose its profile and
+co-op's player 2 the port that chose the second (menu_functions.c's campaign_profile and coop_player2_choose, main.c's create_local_players), and the
+windows go to the local players in their ports' order (main.c's main_game_render), player 1 across the top with three. A second person joins with a press on
+their own controller: in the lobby a controller that is not playing presses START ("port lobby join") and chooses a profile, or ADD PLAYER first takes the
+next START of another controller; co-op's player 2 chooses a profile with their own controller. So a controller that is to join must be a port of its own
+when it is pressed, and one that only shares player 1's cannot join.
+
+The layouts. "merged" (as before): the controller of KPAD channel n is port n, so the first shares the GamePad's port, for one person playing on the TV.
+"separate": the GamePad alone is port 0 and each controller has a port of its own. "auto" (the default) is merged for one person and separate once a
+second joins, as the desktop build does with a lone gamepad and the keyboard (xinput_sdl.c's port_gamepad): while this machine has one player every
+controller drives player 1 with the GamePad, and once the menus have two players, or are adding one (pc_menu_split_players: co-op chosen, ADD PLAYER, a
+controller choosing its profile, a split screen game), each controller drives its own port; when the machine is back to one player, on the GamePad's
+port, they share again (one left on another port, the second of two whose first left, keeps its controller: pc_menu_split_players says so). With
+one player the controllers have no port of their own, so a second person's START is player 1's: they choose ADD PLAYER in the lobby (the line under its
+players says so) or CO-OP CAMPAIGN, and the controllers take their own ports, whose LEDs then show their numbers. A controller moves only while every
+controller is at rest, so that a held button is not pressed again on its new port. The GamePad is player 1 in every layout.
+
+Which port is each controller's own is wiiu_pad_players.c's map: the lowest player no controller has, given when it connects and kept for it, by its
+Bluetooth address, while it goes and comes back (its battery, its range, Bloopair's sleep), whatever channel the system then gives it. Each controller's
+lights show the number of the player it drives (wiiu_input.c): 1 while it shares the GamePad's, none if it drives nobody.
 
 The Xbox pad's four face buttons are matched to the Wii U's in the game by place (the Wii U's B is where the Xbox's A is): the player's thumb finds the
 action where it expects it, and the prompts on the screen show the icon of the letter that is there (hud_hires_tags.c, port_button_icon). In the menus
@@ -23,6 +45,8 @@ while no menu has the screen.
 #include "port_config.h"
 #include "wiiu_shell.h"
 #include "wiiu_input.h"
+#include "wiiu_pad_players.h"
+#include "wiiu_update.h"
 
 #include <coreinit/time.h>
 #include <string.h>
@@ -57,8 +81,9 @@ static SHORT stick(float value)
 /* input.wiiu_face_buttons: "label" (matched by letter), "position" (by place), or "auto" (the default: by letter in the menus, where the prompts name the
 letter and Nintendo's A accepts, by place in the game, where the thumb knows where jump is) */
 int wiiu_face_buttons_by_label(void);
-/* (hud_hires_tags.c's: 1 while a menu has the screen) */
+/* (hud_hires_tags.c's: 1 while a menu has the screen; 1 while it is the main menu's) */
 int port_menus_active(void);
+int port_main_menu_active(void);
 
 int wiiu_face_buttons_by_label(void)
 {
@@ -299,27 +324,37 @@ VOID WINAPI XInitDevices(DWORD preallocation_type_count, PXDEVICE_PREALLOC_TYPE 
 	(void)preallocation_types;
 }
 
-/* input.wiiu_controller_layout: "merged" or "separate" (wiiu_input.h) */
+/* input.wiiu_controller_layout: "auto" (the default), "separate" or "merged" (wiiu_input.h; wiiu_pad_players.h). An unknown value is auto's. */
 static void layout_apply(void)
 {
 	static unsigned long read_at = (unsigned long)-1;
 
 	if (read_at != config_changes())
 	{
+		const char *layout = config_string("input.wiiu_controller_layout");
+
 		read_at = config_changes();
-		wiiu_input_set_layout(!strcmp(config_string("input.wiiu_controller_layout"), "separate"));
+		wiiu_input_set_layout(!strcmp(layout, "separate") ? WIIU_PAD_LAYOUT_SEPARATE : !strcmp(layout, "merged") ? WIIU_PAD_LAYOUT_MERGED :
+			WIIU_PAD_LAYOUT_AUTO);
 	}
 }
 
+/* (port/linux/game/menu_functions.c: two or more players on this machine, or one being added: co-op's player 2, ADD PLAYER or a controller choosing its
+profile in the lobby, a split screen game; or one in the lobby on a controller other than the first. "auto" gives the controllers their own players
+then, as xinput_sdl.c gives a lone gamepad its own port) */
+unsigned char pc_menu_split_players(void);
+
+/* The ports with a pad, once a frame (input_xbox.c asks at the start of each, before it reads them): the controllers polled and arranged first
+(wiiu_input_poll), so that the frame's reads and the game's players agree. */
 static DWORD connected_gamepads(void)
 {
 	DWORD mask = 0;
 	unsigned int port;
-	struct wiiu_pad pad;
 
 	layout_apply();
+	wiiu_input_poll(pc_menu_split_players() != 0);
 	for (port = 0; port < PORT_COUNT; port++)
-		if (wiiu_input_read(port, &pad))
+		if (wiiu_input_port_present(port))
 			mask |= 1UL << port;
 	return mask | XDEVICE_PORT0_MASK;
 }
@@ -337,6 +372,23 @@ BOOL WINAPI XGetDeviceChanges(PXPP_DEVICE_TYPE device_type, PDWORD insertions, P
 		reported_gamepads = connected;
 	}
 	return *insertions || *removals;
+}
+
+/* how many controllers there are, as the game was last told (ADD PLAYER's screen asks: menu_functions.c), and that the last used was one
+(network_votekick.c's prompts: the Wii U has no keyboard) */
+int halo_gamepad_count(void)
+{
+	DWORD mask = reported_gamepads;
+	int count = 0;
+
+	for (; mask; mask &= mask - 1)
+		count++;
+	return count;
+}
+
+int halo_gamepad_last_used(void)
+{
+	return 1;
 }
 
 HANDLE WINAPI XInputOpen(PXPP_DEVICE_TYPE device_type, DWORD port, DWORD slot, PXINPUT_POLLING_PARAMETERS polling_parameters)
@@ -375,12 +427,24 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 {
 	int port = controller_port(device);
 	struct wiiu_pad pad;
+	int have_pad;
 
 	memset(state, 0, sizeof(*state));
 	if (port < 0)
 		return ERROR_DEVICE_NOT_CONNECTED;
 	layout_apply();
-	if (wiiu_input_read((unsigned int)port, &pad))
+	memset(&pad, 0, sizeof(pad));
+	have_pad = wiiu_input_read((unsigned int)port, &pad);
+	/* the updater's panel at the main menu (wiiu_update.c) is told where the game is, and has the pads' buttons while it is up: the menu
+	under it sees none */
+	if (port == 0)
+		wiiu_update_menus(port_main_menu_active(), port_menus_active());
+	if (wiiu_update_panel_input((unsigned int)port, have_pad ? pad.buttons : 0u))
+	{
+		memset(&pad, 0, sizeof(pad));
+		have_pad = 0;
+	}
+	if (have_pad)
 		pad_state(&pad, &state->Gamepad);
 	hold_to_skip((unsigned int)port, &state->Gamepad);
 	if (port == 0)

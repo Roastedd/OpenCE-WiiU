@@ -119,6 +119,7 @@ symbols in this file:
 #include "shaders/shader_definitions.h"
 #include "structures/structure_bsp_definitions.h"
 #include "tag_files/tag_groups.h"
+#include "structure_culling.h" /* port: port/linux/game/structure_culling.c */
 
 /* ---------- constants */
 
@@ -343,9 +344,10 @@ static boolean warned_about_environment_surfaces;
 static struct structure_visibility_globals structure_visibility_globals;
 static struct profile_section render_structure_visibility_portal_traversal =
 	{ "render_structure_visibility_portal_traversal", NONE, TRUE };
-static struct profile_section render_structure_visibility_subcluster_traversal =
+/* port: shared with the culling walk so both paths use the same profile sections */
+struct profile_section render_structure_visibility_subcluster_traversal =
 	{ "render_structure_visibility_subcluster_traversal", NONE, TRUE };
-static struct profile_section render_structure_visibility_surface_traversal =
+struct profile_section render_structure_visibility_surface_traversal =
 	{ "render_structure_visibility_surface_traversal", NONE, TRUE };
 real structure_sphere_threshold = 2.0f;
 
@@ -939,6 +941,26 @@ static boolean points_within_distance(
 	return FALSE;
 }
 
+#ifdef HALO_WIIU
+/* port: each byte's value/255, made once: the Wii U's processor converts an
+integer to a real through memory and divides slowly, and the traversal below
+dequantizes six bytes at every node and leaf it visits, every frame. The table
+holds the very quotients the division gives, so the bounds are the same. */
+static real structure_visibility_byte_fractions[UNSIGNED_CHAR_MAX + 1];
+static boolean structure_visibility_byte_fractions_made;
+
+static void structure_visibility_make_byte_fractions(void)
+{
+	short value;
+
+	for (value = 0; value <= UNSIGNED_CHAR_MAX; value++)
+	{
+		structure_visibility_byte_fractions[value] = (real)value / 255.f;
+	}
+	structure_visibility_byte_fractions_made = TRUE;
+}
+#endif
+
 static __inline real structure_visibility_dequantize_byte_to_real(
 	real min,
 	real max,
@@ -949,7 +971,11 @@ static __inline real structure_visibility_dequantize_byte_to_real(
 		return max;
 	}
 
+#ifdef HALO_WIIU
+	return (max - min) * structure_visibility_byte_fractions[value] + min;
+#else
 	return (max - min) * ((real)value / 255.f) + min;
+#endif
 }
 
 real_rectangle3d *dequantize_byte_to_real_rectangle3d(
@@ -957,6 +983,12 @@ real_rectangle3d *dequantize_byte_to_real_rectangle3d(
 	byte_rectangle3d const *compressed_rectangle,
 	real_rectangle3d *result)
 {
+#ifdef HALO_WIIU
+	if (!structure_visibility_byte_fractions_made)
+	{
+		structure_visibility_make_byte_fractions();
+	}
+#endif
 	result->x0 = structure_visibility_dequantize_byte_to_real(parent->x0, parent->x1, compressed_rectangle->x0);
 	result->x1 = structure_visibility_dequantize_byte_to_real(parent->x0, parent->x1, compressed_rectangle->x1);
 	result->y0 = structure_visibility_dequantize_byte_to_real(parent->y0, parent->y1, compressed_rectangle->y0);
@@ -2042,7 +2074,11 @@ void structure_visibility_compute(
 		0,
 		struct structure_visibility_cluster)->subclusters.count)
 	{
-		structure_visibility_traverse_subclusters(structure);
+		/* port: retain the original walk when culling is disabled or unavailable */
+		if (!structure_culling_traverse(structure))
+		{
+			structure_visibility_traverse_subclusters(structure);
+		}
 	}
 	else
 	{
@@ -2058,7 +2094,11 @@ void structure_visibility_compute(
 			warned_about_missing_subclusters = TRUE;
 		}
 
-		structure_visibility_traverse_surface_lists(structure);
+		/* port: retain the original walk when culling is disabled or unavailable */
+		if (!structure_culling_traverse(structure))
+		{
+			structure_visibility_traverse_surface_lists(structure);
+		}
 	}
 
 	/* port: a frame that reaches the structure triangles' limit is said once */

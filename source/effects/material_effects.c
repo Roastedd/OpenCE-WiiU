@@ -178,10 +178,17 @@ void material_effect_new_from_point(
 		{
 			long material_type;
 
-			/* The January build consumes the complete 32-bit material slot here. */
+			/* The January build consumes the complete 32-bit material slot here.
+			port: the slot is the 16-bit material type and its padding, and only
+			the low 16 bits are used (the short below), which on the Xbox are the
+			material type. Read whole on a big-endian machine, the low 16 bits are
+			the padding: whatever the stack held, so footsteps took another
+			material's effect, or a negative index halted the game in
+			material_effect_new (the Wii U, 2026-10-31). The material type itself
+			is what every machine uses. */
 			material_type = scenario_location_underwater(&collision.location, &collision.point, NULL)
 				? _material_effect_underwater_material_type
-				: *(long *)&collision.material_type;
+				: collision.material_type;
 			material_effect_new(
 				definition_index,
 				effect_index,

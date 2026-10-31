@@ -18,12 +18,15 @@ Not run on a console.
 #include "dk_commands.h"
 #include "dk_derive.h"
 #include "wiiu_debug.h"
+#include "wiiu_drs.h"
 #include "wiiu_shell.h"
 #include "port_config.h"
 #include "wiiu_indices.h"
 #include "wiiu_mip.h"
+#include "wiiu_font.h"
 #include "wiiu_overlay.h"
 #include "wiiu_stream_queue.h"
+#include "wiiu_update.h"
 
 /* d3d8_gx2.c: the queue of streams and its buffers (halo/gx2_thread.txt 7) */
 extern struct stream_queue dk_stream_queue;
@@ -77,6 +80,11 @@ void wiiu_foreground_gate(int is_game_thread);
 #define CONSTANTS_BUFFER 15
 #define SURFACE_PIXEL_WIDTH(surface) ((surface)->pixel_width ? (surface)->pixel_width : (surface)->width)
 #define SURFACE_PIXEL_HEIGHT(surface) ((surface)->pixel_height ? (surface)->pixel_height : (surface)->height)
+/* the part of a target the frame draws into, from its top left: all of it, unless dynamic resolution has lowered the screen's lines (dk_surface) */
+#define SURFACE_ACTIVE_WIDTH(surface) \
+	((surface)->active_width && (surface)->active_width < SURFACE_PIXEL_WIDTH(surface) ? (surface)->active_width : SURFACE_PIXEL_WIDTH(surface))
+#define SURFACE_ACTIVE_HEIGHT(surface) \
+	((surface)->active_height && (surface)->active_height < SURFACE_PIXEL_HEIGHT(surface) ? (surface)->active_height : SURFACE_PIXEL_HEIGHT(surface))
 
 struct target
 {
@@ -188,15 +196,24 @@ static struct
 	struct blit_vertex *overlay_quad;
 	OSTime overlay_previous_end, overlay_view_time;
 	unsigned long ring_total, draw_total, overlay_ring_previous, overlay_draw_previous;
+	/* the updater's panel (wiiu_update.c): its text drawn into a texture when it changes, over the middle of both screens while the main menu
+	has it */
+	GX2Texture panel_texture;
+	GX2Sampler panel_sampler;
+	unsigned panel_generation;
+	int panel_made, panel_shown;
 	/* the GPU's own time for a frame's draws (gpu_frame_begin, gpu_frame_end, gpu_poll): the slot of samples in use, each slot's state (0 free, 1 begun,
 	2 ended and not yet read) and when it ended; the frame now drawn is measured (1) or not (2: no free slot); the five seconds' sum and longest */
 	unsigned gpu_slot;
 	int gpu_frame_open;
 	uint8_t gpu_slot_state[GPU_SAMPLE_SLOTS];
 	OSTime gpu_slot_ended[GPU_SAMPLE_SLOTS];
+	unsigned gpu_slot_lines[GPU_SAMPLE_SLOTS]; /* the lines each slot's frame drew of the back buffer (dynamic resolution's step) */
 	OSTime gpu_window_ticks, gpu_window_longest;
 	unsigned gpu_window_frames;
-	float gpu_ms;
+	float gpu_ms; /* the last frame's read, the lines it drew, and how many frames have been read */
+	unsigned gpu_lines;
+	unsigned long gpu_reads;
 	unsigned overlay_frame;
 	/* the GPU test (halo/gpu_test.txt: 1): a frame's streams kept (test_armed 2), run again at its present, timed */
 	int test_armed, replaying;
@@ -220,6 +237,18 @@ static struct
 	volatile int mem1_lost; /* HOME: the eDRAM's targets are gone until mem1_restore */
 	volatile int resume_needed;
 	unsigned render_height; /* the lines the game draws at (halo/render_height.txt, 540 if none): the TV's 1080 lines cost 27 ms a frame in the menu */
+	/* Dynamic resolution: the lines the game thread draws its next frames at (host_gx2_drs_lines; render_height, the size of the screen's targets,
+	or fewer), the lines halo/drs_lines.txt forces for the run (0: none), and the targets cleared whole because a step changed (target_step) */
+	volatile unsigned drs_lines;
+	unsigned drs_forced;
+	unsigned drs_clears;
+	/* its controller (wiiu_drs.c), display.dynamic_resolution and its floor as last read (at config_changes' drs_read_at), the GPU times read
+	when it last ran (gpu_reads), and the five seconds' numbers for the log */
+	struct wiiu_drs drs;
+	int drs_on, drs_read;
+	unsigned drs_floor;
+	unsigned long drs_read_at, drs_gpu_reads;
+	unsigned drs_drops, drs_rises, drs_waits, drs_frames, drs_menu_frames;
 	int trace_frame; /* halo/gx2_trace.txt: the frame whose draws are logged (-1: none) */
 	int debug_mode; /* and, after it, a mode: 1 draws without blending, 2 without culling */
 	int features_off; /* and a third number: bit 0 no mip levels, bit 1 no 3D and cube textures, bit 2 no mip composites, bit 3 visibility tests on, bit 4 samplers ignore mips,
@@ -690,6 +719,7 @@ static void gt_log(unsigned frames);
 static void gpu_poll(void);
 static void gpu_frame_begin(void);
 static int overlay_make(void);
+static int panel_make(void);
 
 /* room in the ring, noted as written to (the caller writes it before it is flushed, which is at the end of the stream or the present) */
 static void *ring_reserve(uint32_t size)
@@ -1246,6 +1276,8 @@ struct image
 	uint8_t *base;
 	/* where each level is, as the surface says (its first slice), the pitch of its rows (blocks, for the compressed formats) and the size of a slice of it */
 	uint32_t level_offset[MIP_LIMIT], level_pitch[MIP_LIMIT], level_slice_bytes[MIP_LIMIT];
+	/* the texels' channel each channel is sampled from (dk_command_texture's channels) */
+	uint32_t channels;
 	GX2Texture texture;
 };
 
@@ -1330,9 +1362,26 @@ static uint8_t *image_level(const struct image *image, unsigned level, unsigned 
 	return image->base + image->level_offset[level] + (size_t)slice * image->level_slice_bytes[level];
 }
 
+/* the component map that samples each of red, green, blue and alpha from the texels' channel channels names for it (a byte each, red's lowest:
+dk_command_texture). The texels are the DDS file's bytes, whose components are red to alpha, or a Direct3D color's bytes, blue first, which the map puts right:
+a Halo Custom Edition texture that keeps its channels elsewhere (a multipurpose map, a HUD meter) is sampled in the order the game reads them, as xbox_textures.c's
+texture swizzle samples it, the texels left as they are */
+static uint32_t image_component_map(int compressed, uint32_t channels)
+{
+	static const GX2_SQ_SEL stored[2][4] =
+	{
+		{ GX2_SQ_SEL_B, GX2_SQ_SEL_G, GX2_SQ_SEL_R, GX2_SQ_SEL_A },
+		{ GX2_SQ_SEL_R, GX2_SQ_SEL_G, GX2_SQ_SEL_B, GX2_SQ_SEL_A },
+	};
+	const GX2_SQ_SEL *select = stored[compressed ? 1 : 0];
+
+	return GX2_COMP_MAP(select[channels & 3], select[(channels >> 8) & 3], select[(channels >> 16) & 3], select[(channels >> 24) & 3]);
+}
+
 /* makes the texture's surface with all its levels. The compressed formats are in the 1D tiled layout (wiiu_tile.c), BGRA linear; the texels are the DDS file's bytes / a
 Direct3D color's bytes (blue first), which the component map puts right */
-static int image_surface(struct image *image, uint32_t kind, uint32_t format, uint32_t width, uint32_t height, uint32_t depth, uint32_t levels)
+static int image_surface(struct image *image, uint32_t kind, uint32_t format, uint32_t width, uint32_t height, uint32_t depth, uint32_t levels,
+	uint32_t channels)
 {
 	GX2Surface *surface = &image->texture.surface;
 	GX2SurfaceFormat gx_format;
@@ -1431,8 +1480,8 @@ static int image_surface(struct image *image, uint32_t kind, uint32_t format, ui
 	image->texture.viewNumMips = levels;
 	image->texture.viewFirstSlice = 0;
 	image->texture.viewNumSlices = kind == DK_TEXTURE_CUBE ? 6 : kind == DK_TEXTURE_3D ? image->depth : 1;
-	image->texture.compMap = image->compressed ? GX2_COMP_MAP(GX2_SQ_SEL_R, GX2_SQ_SEL_G, GX2_SQ_SEL_B, GX2_SQ_SEL_A) :
-		GX2_COMP_MAP(GX2_SQ_SEL_B, GX2_SQ_SEL_G, GX2_SQ_SEL_R, GX2_SQ_SEL_A);
+	image->channels = channels;
+	image->texture.compMap = image_component_map(image->compressed, channels);
 	GX2InitTextureRegs(&image->texture);
 	image->supported = 1;
 	return 1;
@@ -1503,8 +1552,16 @@ static void texture_make(const struct dk_command_texture *command)
 		image->height == command->height && image->depth == (command->depth ? command->depth : 1) && image->requested_levels == command->levels))
 	{
 		image_release(image);
-		image_surface(image, command->kind, command->format, command->width, command->height, command->depth, command->levels);
+		image_surface(image, command->kind, command->format, command->width, command->height, command->depth, command->levels, command->channels);
 		gx.textures_made++;
+	}
+	/* (the same image's texels in another channel order: a Custom Edition map's texture given its own, or given back the stored one; the draws already
+	made took the old registers with them) */
+	else if (image->channels != command->channels)
+	{
+		image->channels = command->channels;
+		image->texture.compMap = image_component_map(image->compressed, command->channels);
+		GX2InitTextureRegs(&image->texture);
 	}
 	if (gx.texture_log < 80 && command->format == DK_TEXTURE_BGRA && command->kind == DK_TEXTURE_2D && command->source_bytes)
 	{
@@ -2368,6 +2425,24 @@ static int initialize(void)
 		}
 		wiiu_log("GX2: the game draws at %u lines (display.render_lines, or halo/render_height.txt)", gx.render_height);
 	}
+	/* Dynamic resolution's targets are those lines; a frame can draw fewer. A note in halo/drs_lines.txt draws that many for the whole run, whatever
+	display.dynamic_resolution says, and the controller does not run: for a run that tries one step (0.9, 0.8 and 0.75 of 720 lines are 648, 576 and
+	540; of 1080, 972, 864 and 810), or the targets' own lines with the controller off. */
+	{
+		FILE *file = fopen(WIIU_DATA_DIRECTORY "/drs_lines.txt", "r");
+		unsigned lines = 0;
+
+		if (file)
+		{
+			if (fscanf(file, "%u", &lines) == 1 && lines >= 240 && lines <= gx.render_height)
+				gx.drs_forced = lines;
+			fclose(file);
+		}
+		gx.drs_lines = gx.drs_forced ? gx.drs_forced : gx.render_height;
+		if (gx.drs_forced)
+			wiiu_log("GX2: dynamic resolution: the frames draw %u of the targets' %u lines for this run (halo/drs_lines.txt); its controller is off", gx.drs_forced,
+				gx.render_height);
+	}
 	/* halo/mem1.txt: 1, the game's render targets (the big ones) are made in the eDRAM */
 	{
 		FILE *file = fopen(WIIU_DATA_DIRECTORY "/mem1.txt", "r");
@@ -2453,6 +2528,9 @@ static int initialize(void)
 		gx.overlay_shown = on != 0;
 		wiiu_log("GX2: the performance overlay is %s (halo/overlay.txt 1 shows it from the start; L + R + - on the GamePad shows or hides it)", gx.overlay_shown ? "shown" : "hidden");
 	}
+	gx.panel_made = panel_make();
+	if (!gx.panel_made)
+		wiiu_log("GX2: no memory for the updater's panel: it is not drawn");
 	{
 		/* how fast the index range runs on this machine: over a buffer made as the game's index buffers are (calloc), written, then read at once, then again, then with a 1 MB sweep between
 		(the L1 holds 32 KB; the L2 the core has 0.5 to 2 MB) */
@@ -2741,6 +2819,14 @@ static void gx_gate(void)
 	}
 }
 
+/* whether a surface is a target's: all but the part drawn into, which dynamic resolution's step changes between frames (target_step), is the same.
+One target serves every step, so a change of step makes none, and the screen's targets stay where they were made, in the eDRAM. */
+static int surface_is_target(const struct dk_surface *a, const struct dk_surface *b)
+{
+	return a->data == b->data && a->width == b->width && a->height == b->height && a->kind == b->kind && a->pixel_width == b->pixel_width &&
+		a->pixel_height == b->pixel_height;
+}
+
 static struct target *target_get(const struct dk_surface *surface)
 {
 	struct target *target;
@@ -2751,7 +2837,7 @@ static struct target *target_get(const struct dk_surface *surface)
 	if (surface->kind == DK_SURFACE_NONE || !surface->width || !surface->height)
 		return NULL;
 	for (i = 0; i < gx.target_count; i++)
-		if (!memcmp(&gx.targets[i].surface, surface, sizeof(*surface)))
+		if (surface_is_target(&gx.targets[i].surface, surface))
 		{
 			if (gx.targets[i].unusable && OSGetSystemTime() - gx.targets[i].remade_at > OSMillisecondsToTicks(1000))
 				target_remake(&gx.targets[i], 1);
@@ -2849,11 +2935,31 @@ static void context_resume(void)
 	gx.vertex_parameters_dirty = gx.pixel_parameters_dirty = 1;
 }
 
+/* A target bound to be drawn into at another step of dynamic resolution than it was last drawn at (the step changes between frames): cleared whole
+first. What the step before drew outside the new part would otherwise stay there, where a draw that samples near the part's edge (a blur's taps, the
+blit's filter) can read it; cleared, the edge reads black. A target made since was cleared when it was made. */
+static void target_step(struct target *target, const struct dk_surface *surface)
+{
+	if (!target || (target->surface.active_width == surface->active_width && target->surface.active_height == surface->active_height))
+		return;
+	target->surface.active_width = surface->active_width;
+	target->surface.active_height = surface->active_height;
+	if (target->surface.kind == DK_SURFACE_DEPTH)
+		GX2ClearDepthStencilEx(&target->depth, 1.0f, 0, (GX2ClearFlags)(GX2_CLEAR_FLAGS_DEPTH | GX2_CLEAR_FLAGS_STENCIL));
+	else
+		GX2ClearColor(&target->color, 0.0f, 0.0f, 0.0f, 0.0f);
+	target->last_used = ++gx.use_serial;
+	gx.drs_clears++;
+}
+
 static void targets_bind(const struct dk_command_targets *command)
 {
 	gx.target_missing = 0;
 	gx.color = target_get(&command->color);
 	gx.depth = target_get(&command->depth);
+	/* (the clears use the context; context_resume, below, sets the frame's again) */
+	target_step(gx.color, &command->color);
+	target_step(gx.depth, &command->depth);
 	/* (a pass that asks for a colour and a depth target of which one has no memory is not drawn at all: half of it would draw into what the context last had; a pass
 	that asks for only one, as the game's colour-only and depth-only passes do, is drawn as before) */
 	if (gx.target_missing)
@@ -2957,12 +3063,14 @@ static void clear(const struct dk_command_clear *command)
 	const struct target *size_from = gx.color ? gx.color : gx.depth;
 	int whole_rectangle = 1;
 
+	/* (a clear of all the part the frame draws into is a clear of the whole target: at a lower step of dynamic resolution the rest is outside every
+	viewport, and is better clear than left with what the step before drew there) */
 	if (command->rectangle_count && size_from)
 	{
 		const uint32_t *rectangle = command->rectangles[0];
 
-		whole_rectangle = command->rectangle_count == 1 && !rectangle[0] && !rectangle[1] && rectangle[2] >= SURFACE_PIXEL_WIDTH(&size_from->surface) &&
-			rectangle[3] >= SURFACE_PIXEL_HEIGHT(&size_from->surface);
+		whole_rectangle = command->rectangle_count == 1 && !rectangle[0] && !rectangle[1] && rectangle[2] >= SURFACE_ACTIVE_WIDTH(&size_from->surface) &&
+			rectangle[3] >= SURFACE_ACTIVE_HEIGHT(&size_from->surface);
 	}
 	if (gx.color && (command->flags & color_flags))
 	{
@@ -3054,8 +3162,9 @@ static void gpu_frame_begin(void)
 	gx.gpu_frame_open = 1;
 }
 
-/* at the frame's present, before anything of it is drawn on the screens */
-static void gpu_frame_end(void)
+/* at the frame's present, before anything of it is drawn on the screens; lines: what the frame drew of the back buffer (dynamic resolution's
+controller counts a time only at the step it was measured at) */
+static void gpu_frame_end(unsigned lines)
 {
 	const unsigned slot = gx.gpu_slot;
 
@@ -3064,6 +3173,7 @@ static void gpu_frame_end(void)
 		gpu_sample(&gpu_samples[slot][1]);
 		gx.gpu_slot_state[slot] = 2;
 		gx.gpu_slot_ended[slot] = OSGetSystemTime();
+		gx.gpu_slot_lines[slot] = lines;
 		gx.gpu_slot = (slot + 1) % GPU_SAMPLE_SLOTS;
 	}
 	gx.gpu_frame_open = 0;
@@ -3108,6 +3218,8 @@ static void gpu_poll(void)
 				const OSTime ticks = (OSTime)((ended - begun) * (uint64_t)OSSecondsToTicks(1) / GPU_TIMER_HZ);
 
 				gx.gpu_ms = (float)OSTicksToMicroseconds(ticks) / 1000.0f;
+				gx.gpu_lines = gx.gpu_slot_lines[slot];
+				gx.gpu_reads++;
 				gx.gpu_window_ticks += ticks;
 				if (ticks > gx.gpu_window_longest)
 					gx.gpu_window_longest = ticks;
@@ -3213,6 +3325,143 @@ static void overlay_draw(GX2ColorBuffer *screen, GX2ContextState *context, unsig
 	GX2DrawEx(GX2_PRIMITIVE_MODE_TRIANGLES, 6, 0, 1);
 }
 
+/* ---------- the updater's panel (wiiu_update.c): its lines in the 3x5 font on a dark box, over the middle of each screen while the main menu has it */
+
+#define PANEL_WIDTH 256u
+#define PANEL_HEIGHT 64u
+
+static int panel_make(void)
+{
+	GX2Surface *surface = &gx.panel_texture.surface;
+
+	surface->dim = GX2_SURFACE_DIM_TEXTURE_2D;
+	surface->width = PANEL_WIDTH;
+	surface->height = PANEL_HEIGHT;
+	surface->depth = 1;
+	surface->mipLevels = 1;
+	surface->format = GX2_SURFACE_FORMAT_UNORM_R8_G8_B8_A8;
+	surface->aa = GX2_AA_MODE1X;
+	surface->use = GX2_SURFACE_USE_TEXTURE;
+	surface->tileMode = GX2_TILE_MODE_LINEAR_ALIGNED;
+	GX2CalcSurfaceSizeAndAlignment(surface);
+	surface->image = gx_alloc_raw(surface->imageSize, surface->alignment ? surface->alignment : 256);
+	if (!surface->image)
+		return 0;
+	memset(surface->image, 0, surface->imageSize);
+	gx.panel_texture.viewNumMips = 1;
+	gx.panel_texture.viewNumSlices = 1;
+	gx.panel_texture.compMap = GX2_COMP_MAP(GX2_SQ_SEL_R, GX2_SQ_SEL_G, GX2_SQ_SEL_B, GX2_SQ_SEL_A);
+	GX2InitTextureRegs(&gx.panel_texture);
+	GX2InitSampler(&gx.panel_sampler, GX2_TEX_CLAMP_MODE_CLAMP, GX2_TEX_XY_FILTER_MODE_POINT);
+	return 1;
+}
+
+/* the panel's lines drawn into its texture: a dark box with a green edge, its first line (the title) green, the others white */
+static void panel_refresh(const char *text)
+{
+	static uint8_t pixels[PANEL_WIDTH * PANEL_HEIGHT * 4];
+	GX2Surface *surface = &gx.panel_texture.surface;
+	text_layer layer;
+	const char *line = text;
+	unsigned x, y, row = 0;
+
+	for (y = 0; y < PANEL_HEIGHT; y++)
+		for (x = 0; x < PANEL_WIDTH; x++)
+		{
+			uint8_t *pixel = pixels + ((size_t)y * PANEL_WIDTH + x) * 4;
+			const int edge = x == 0 || y == 0 || x == PANEL_WIDTH - 1 || y == PANEL_HEIGHT - 1;
+
+			pixel[0] = edge ? 0x70 : 0x0c;
+			pixel[1] = edge ? 0xb0 : 0x10;
+			pixel[2] = edge ? 0x70 : 0x14;
+			pixel[3] = edge ? 0xff : 0xe6;
+		}
+	/* (two rows of pixels in from the edge: ten rows of 6-pixel cells fit under it) */
+	text_layer_init(&layer, pixels + 2 * PANEL_WIDTH * 4, PANEL_WIDTH, PANEL_HEIGHT - 4, 1);
+	while (*line && row < layer.rows)
+	{
+		char part[80];
+		const size_t length = strcspn(line, "\n");
+
+		snprintf(part, sizeof(part), "%.*s", (int)(length < sizeof(part) - 1 ? length : sizeof(part) - 1), line);
+		layer.color[0] = row ? 0xff : 0x90;
+		layer.color[1] = row ? 0xff : 0xe0;
+		layer.color[2] = row ? 0xff : 0x90;
+		layer.color[3] = 0xff;
+		text_layer_puts(&layer, 1, row, part);
+		row++;
+		line += length;
+		if (*line == '\n')
+			line++;
+	}
+	for (y = 0; y < PANEL_HEIGHT; y++)
+		memcpy((uint8_t *)surface->image + (size_t)y * surface->pitch * 4, pixels + (size_t)y * PANEL_WIDTH * 4, PANEL_WIDTH * 4);
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, surface->image, surface->imageSize);
+}
+
+/* each present: whether there is a panel to draw, its texture drawn again when its text has changed */
+static void panel_update(void)
+{
+	static char text[704];
+	unsigned generation = gx.panel_generation;
+
+	gx.panel_shown = gx.panel_made && wiiu_update_panel(text, sizeof(text), &generation);
+	if (gx.panel_shown && generation != gx.panel_generation)
+	{
+		gx.panel_generation = generation;
+		panel_refresh(text);
+	}
+}
+
+/* the panel over the middle of a screen, below the main menu's title, in whole pixels per texel (its vertices are the ring's: each screen's draw its own) */
+static void panel_draw(GX2ColorBuffer *screen, GX2ContextState *context)
+{
+	static const unsigned corner_x[6] = { 0, 1, 0, 1, 1, 0 };
+	static const unsigned corner_y[6] = { 0, 0, 1, 0, 1, 1 };
+	const float screen_width = (float)screen->surface.width, screen_height = (float)screen->surface.height;
+	struct blit_vertex *vertices = ring_reserve(6 * sizeof(struct blit_vertex));
+	unsigned scale = (unsigned)(screen_width * 0.9f) / PANEL_WIDTH, i;
+	float x0, x1, y0, y1;
+
+	if (!vertices)
+		return;
+	if (scale > 4)
+		scale = 4;
+	if (!scale)
+		scale = 1;
+	x1 = (float)(PANEL_WIDTH * scale) / screen_width;
+	x0 = -x1;
+	y1 = 1.0f - 2.0f * (0.62f * screen_height - 0.5f * (float)(PANEL_HEIGHT * scale)) / screen_height;
+	y0 = y1 - 2.0f * (float)(PANEL_HEIGHT * scale) / screen_height;
+	for (i = 0; i < 6; i++)
+	{
+		struct blit_vertex *v = &vertices[i];
+
+		v->x = corner_x[i] ? x1 : x0;
+		v->y = corner_y[i] ? y0 : y1;
+		v->u = (float)corner_x[i];
+		v->v = (float)corner_y[i];
+		v->r = v->g = v->b = v->a = 1.0f;
+	}
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER, vertices, 6 * sizeof(struct blit_vertex));
+	GX2SetContextState(context);
+	GX2SetColorBuffer(screen, GX2_RENDER_TARGET_0);
+	GX2SetViewport(0.0f, 0.0f, screen_width, screen_height, 0.0f, 1.0f);
+	GX2SetScissor(0, 0, (uint32_t)screen_width, (uint32_t)screen_height);
+	blit_state();
+	GX2SetColorControl(GX2_LOGIC_OP_COPY, 1, FALSE, TRUE);
+	GX2SetBlendControl(GX2_RENDER_TARGET_0, GX2_BLEND_MODE_SRC_ALPHA, GX2_BLEND_MODE_INV_SRC_ALPHA, GX2_BLEND_COMBINE_MODE_ADD, TRUE, GX2_BLEND_MODE_ONE,
+		GX2_BLEND_MODE_INV_SRC_ALPHA, GX2_BLEND_COMBINE_MODE_ADD);
+	GX2SetFetchShader(&gx.blit.fetchShader);
+	GX2SetVertexShader(gx.blit.vertexShader);
+	GX2SetPixelShader(gx.blit.pixelShader);
+	GX2SetShaderMode(GX2_SHADER_MODE_UNIFORM_REGISTER);
+	GX2SetAttribBuffer(0, 6 * sizeof(struct blit_vertex), sizeof(struct blit_vertex), vertices);
+	GX2SetPixelTexture(&gx.panel_texture, gx.sampler_location);
+	GX2SetPixelSampler(&gx.panel_sampler, gx.sampler_location);
+	GX2DrawEx(GX2_PRIMITIVE_MODE_TRIANGLES, 6, 0, 1);
+}
+
 /* the hold-to-skip bar (xinput_wiiu.c says how far the hold is, 0 to 1): a grey frame and a white fill growing from the left, at the bottom middle of each screen, as games
 show a held skip. Its vertices are the ring's (each screen's draw its own: the GPU reads them after this returns). */
 static volatile float skip_progress;
@@ -3275,12 +3524,15 @@ static void skip_bar_draw(GX2ColorBuffer *screen, GX2ContextState *context, floa
 	GX2DrawEx(GX2_PRIMITIVE_MODE_TRIANGLES, 12, 0, 1);
 }
 
-static void blit_to(struct target *source, GX2ColorBuffer *screen, GX2ContextState *context)
+/* the back buffer's rectangle (x, y, width and height in its pixels: the part the frame drew, or the GamePad's view of a part of it), letterboxed, onto
+the screen whose color buffer and context state are given; quad holds the blit's vertices, one for each screen (the GPU reads them after this returns) */
+static void blit_to(struct target *source, const uint32_t rectangle[4], struct blit_vertex *quad, GX2ColorBuffer *screen, GX2ContextState *context)
 {
-	const float source_width = (float)source->color.surface.width, source_height = (float)source->color.surface.height;
+	const float pool_width = (float)source->color.surface.width, pool_height = (float)source->color.surface.height;
+	const float source_width = (float)rectangle[2], source_height = (float)rectangle[3];
 	const float screen_width = (float)screen->surface.width, screen_height = (float)screen->surface.height;
 	float width = screen_width, height = screen_width * source_height / source_width;
-	float x0, y0, x1, y1;
+	float x0, y0, x1, y1, u[2], v[2];
 	static const unsigned corner_x[6] = { 0, 1, 0, 1, 1, 0 };
 	static const unsigned corner_y[6] = { 0, 0, 1, 0, 1, 1 };
 	unsigned i;
@@ -3294,17 +3546,24 @@ static void blit_to(struct target *source, GX2ColorBuffer *screen, GX2ContextSta
 	x1 = x0 + width / screen_width * 2.0f;
 	y1 = 1.0f - ((screen_height - height) / 2.0f) / screen_height * 2.0f;
 	y0 = y1 - height / screen_height * 2.0f;
+	/* The texture coordinates of the rectangle's edges. An edge inside the target is half a pixel in from it: the filter then never reaches the pixels
+	beyond, which the frame did not draw (at a lower step of dynamic resolution) or which are another window's (the GamePad's view). An edge of the
+	target is its own edge, where the sampler clamps; the whole target is sampled 0 to 1, as before. */
+	u[0] = rectangle[0] ? ((float)rectangle[0] + 0.5f) / pool_width : 0.0f;
+	u[1] = rectangle[0] + rectangle[2] < source->color.surface.width ? ((float)(rectangle[0] + rectangle[2]) - 0.5f) / pool_width : 1.0f;
+	v[0] = rectangle[1] ? ((float)rectangle[1] + 0.5f) / pool_height : 0.0f;
+	v[1] = rectangle[1] + rectangle[3] < source->color.surface.height ? ((float)(rectangle[1] + rectangle[3]) - 0.5f) / pool_height : 1.0f;
 	for (i = 0; i < 6; i++)
 	{
-		struct blit_vertex *v = &gx.quad[i];
+		struct blit_vertex *vertex = &quad[i];
 
-		v->x = corner_x[i] ? x1 : x0;
-		v->y = corner_y[i] ? y0 : y1;
-		v->u = (float)corner_x[i];
-		v->v = (float)corner_y[i];
-		v->r = v->g = v->b = v->a = 1.0f;
+		vertex->x = corner_x[i] ? x1 : x0;
+		vertex->y = corner_y[i] ? y0 : y1;
+		vertex->u = u[corner_x[i]];
+		vertex->v = v[corner_y[i]];
+		vertex->r = vertex->g = vertex->b = vertex->a = 1.0f;
 	}
-	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER, gx.quad, 6 * sizeof(struct blit_vertex));
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER, quad, 6 * sizeof(struct blit_vertex));
 	GX2Invalidate((GX2InvalidateMode)(GX2_INVALIDATE_MODE_COLOR_BUFFER | GX2_INVALIDATE_MODE_TEXTURE), source->color.surface.image,
 		source->color.surface.imageSize);
 	GX2SetContextState(context);
@@ -3322,7 +3581,7 @@ static void blit_to(struct target *source, GX2ColorBuffer *screen, GX2ContextSta
 	GX2SetVertexShader(gx.blit.vertexShader);
 	GX2SetPixelShader(gx.blit.pixelShader);
 	GX2SetShaderMode(GX2_SHADER_MODE_UNIFORM_REGISTER);
-	GX2SetAttribBuffer(0, 6 * sizeof(struct blit_vertex), sizeof(struct blit_vertex), gx.quad);
+	GX2SetAttribBuffer(0, 6 * sizeof(struct blit_vertex), sizeof(struct blit_vertex), quad);
 	gx.attrib[0].buffer = NULL;
 	GX2SetPixelTexture(&source->texture, gx.sampler_location);
 	GX2SetPixelSampler(&gx.sampler, gx.sampler_location);
@@ -3418,14 +3677,19 @@ static void visibility_end(uint32_t index)
 	query.ended++;
 }
 
-/* the back buffer's pixels, R G B A in memory, for debug.screenshot_every (d3d8_gx2.c writes the file): copied by the GPU into a linear surface, which the
-CPU can read */
-static void screenshot_take(struct target *source, uint32_t address)
+/* the back buffer's pixels the frame drew (width by height from its top left: all of it, but at a lower step of dynamic resolution), R G B A in
+memory, for debug.screenshot_every (d3d8_gx2.c writes the file): copied by the GPU into a linear surface, which the CPU can read */
+static void screenshot_take(struct target *source, uint32_t address, uint32_t width, uint32_t height)
 {
 	ring_flush();
 	GX2Surface linear = source->color.surface;
 	uint8_t *out = (uint8_t *)(uintptr_t)address;
 	unsigned y;
+
+	if (width > linear.width)
+		width = linear.width;
+	if (height > linear.height)
+		height = linear.height;
 
 	linear.tileMode = GX2_TILE_MODE_LINEAR_ALIGNED;
 	linear.use = GX2_SURFACE_USE_TEXTURE;
@@ -3444,8 +3708,8 @@ static void screenshot_take(struct target *source, uint32_t address)
 	GX2CopySurface(&source->color.surface, 0, 0, &linear, 0, 0);
 	GX2DrawDone();
 	GX2Invalidate(GX2_INVALIDATE_MODE_CPU, linear.image, linear.imageSize);
-	for (y = 0; y < linear.height; y++)
-		memcpy(out + (size_t)y * linear.width * 4, (uint8_t *)linear.image + (size_t)y * linear.pitch * 4, (size_t)linear.width * 4);
+	for (y = 0; y < height; y++)
+		memcpy(out + (size_t)y * width * 4, (uint8_t *)linear.image + (size_t)y * linear.pitch * 4, (size_t)width * 4);
 	MEMFreeToDefaultHeap(linear.image);
 	context_resume();
 }
@@ -3507,6 +3771,81 @@ static void gpu_test_run(void)
 	gx.test_log_used = 0;
 }
 
+/* ---------- dynamic resolution (wiiu_drs.c): the lines the game thread's next frames draw */
+
+/* display.dynamic_resolution and display.dynamic_resolution_floor, read again when config.toml's settings have changed (the menus write them); the
+controller starts again at the most lines when either has changed */
+static void drs_settings(void)
+{
+	const unsigned long changes = config_changes();
+	long fewest;
+	int on;
+
+	if (gx.drs_read && gx.drs_read_at == changes)
+		return;
+	gx.drs_read_at = changes;
+	on = config_boolean("display.dynamic_resolution") != 0;
+	fewest = config_integer("display.dynamic_resolution_floor");
+	fewest = fewest < 540 ? 540 : fewest > 810 ? 810 : fewest;
+	if (gx.drs_read && on == gx.drs_on && (unsigned)fewest == gx.drs_floor)
+		return;
+	gx.drs_read = 1;
+	gx.drs_on = on;
+	gx.drs_floor = (unsigned)fewest;
+	wiiu_drs_reset(&gx.drs, gx.render_height, gx.drs_floor);
+	wiiu_log("GX2: dynamic resolution is %s (display.dynamic_resolution): %u lines, down to %u (display.dynamic_resolution_floor %u)", on ? "on" : "off",
+		gx.render_height, wiiu_drs_lines(&gx.drs, gx.drs.lowest), gx.drs_floor);
+}
+
+/* At a frame's present, after its wait for the flip (wait_ticks), frame_ticks after the present before: the controller's step for the frames the
+game thread draws next (host_gx2_drs_lines), unless halo/drs_lines.txt fixed it for the run or display.dynamic_resolution is off. It runs here,
+not on the game thread, because the GPU's times are read here and the flip is waited for here. */
+static void drs_present(const struct dk_command_present *command, OSTime wait_ticks, OSTime frame_ticks)
+{
+	struct wiiu_drs_frame frame;
+	unsigned before, step;
+
+	if (gx.drs_forced)
+		return;
+	drs_settings();
+	if (!gx.drs_on)
+	{
+		gx.drs_lines = gx.render_height;
+		return;
+	}
+	memset(&frame, 0, sizeof(frame));
+	if (gx.gpu_reads != gx.drs_gpu_reads)
+	{
+		frame.gpu_ms = gx.gpu_ms;
+		frame.gpu_lines = gx.gpu_lines;
+		gx.drs_gpu_reads = gx.gpu_reads;
+	}
+	frame.flip_wait_ms = (float)OSTicksToMicroseconds(wait_ticks) / 1000.0f;
+	frame.frame_ms = (float)OSTicksToMicroseconds(frame_ticks) / 1000.0f;
+	frame.budget_ms = (command->flags & DK_PRESENT_THIRTY) ? 1000.0f / 30.0f : 1000.0f / 60.0f;
+	frame.menu = (command->flags & DK_PRESENT_MENUS) != 0;
+	before = gx.drs.step;
+	step = wiiu_drs_frame(&gx.drs, &frame);
+	gx.drs_lines = wiiu_drs_lines(&gx.drs, step);
+	gx.drs_drops += gx.drs.step > before;
+	gx.drs_rises += gx.drs.step < before;
+	gx.drs_waits += frame.flip_wait_ms > 1.0f;
+	gx.drs_menu_frames += frame.menu != 0;
+	gx.drs_frames++;
+}
+
+/* the vertices of a screen's blit: the ring's, so that each screen's quad, and each frame's, is its own until the GPU has drawn it (the GamePad's view
+and a change of dynamic resolution's step give them other texture coordinates than the TV's and the last frame's); the quad made at the start if the
+ring is full */
+static struct blit_vertex *blit_quad(void)
+{
+	struct blit_vertex *quad = ring_reserve(6 * sizeof(struct blit_vertex));
+
+	return quad ? quad : gx.quad;
+}
+/* (port/linux/game/graphics_quality.c's: whether the split screen's views hold the frames to 30 a second, for the overlay's 30HZ) */
+int graphics_quality_split_screen_capped(void);
+
 static void present(const struct dk_command_present *command)
 {
 	struct target *back = target_get(&command->back_buffer);
@@ -3514,8 +3853,14 @@ static void present(const struct dk_command_present *command)
 	const OSTime present_start = now;
 	OSTime wait_ticks = 0;
 	const OSTime cpu_ticks = gx.overlay_previous_end ? present_start - gx.overlay_previous_end : 0;
+	/* the part of the back buffer the frame drew, which the screens show: all of it, but at a lower step of dynamic resolution */
+	const uint32_t drawn[4] = { 0, 0, SURFACE_ACTIVE_WIDTH(&command->back_buffer), SURFACE_ACTIVE_HEIGHT(&command->back_buffer) };
+	/* and the part the GamePad shows: input.wiiu_gamepad_view's window (d3d8_gx2.c's gamepad_view_make), if the command names one within what the
+	frame drew, else the TV's */
+	const uint32_t *gamepad = command->gamepad[2] && command->gamepad[3] && command->gamepad[0] < drawn[2] && command->gamepad[1] < drawn[3] &&
+		command->gamepad[2] <= drawn[2] - command->gamepad[0] && command->gamepad[3] <= drawn[3] - command->gamepad[1] ? command->gamepad : drawn;
 
-	gpu_frame_end();
+	gpu_frame_end(drawn[3]);
 	gpu_poll();
 	if (gx.overlay_on)
 	{
@@ -3528,6 +3873,7 @@ static void present(const struct dk_command_present *command)
 		if (gx.overlay_shown && !(gx.overlay_frame++ & 1))
 			overlay_refresh();
 	}
+	panel_update();
 	if (gx.test_armed == 2)
 	{
 		gx.test_armed = 3;
@@ -3535,7 +3881,7 @@ static void present(const struct dk_command_present *command)
 	}
 	ring_flush();
 	if (back && command->screenshot)
-		screenshot_take(back, command->screenshot);
+		screenshot_take(back, command->screenshot, drawn[2], drawn[3]);
 	/* (before the frame is drawn, as the screenshot above is: the screens' buffers then hold the frame before) */
 	wiiu_debug_present(back ? &back->color : NULL, WHBGfxGetTVColourBuffer(), WHBGfxGetDRCColourBuffer());
 	/* WHBGfx's own Begin/FinishRender wait for the vsync before the frame and for the GPU to finish (GX2DrawDone) after it, so that the CPU could never build a frame while
@@ -3543,20 +3889,24 @@ static void present(const struct dk_command_present *command)
 	screens' buffers are copied to the scan buffers and swapped. At most one swap is queued. */
 	if (back)
 	{
-		blit_to(back, WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState());
+		blit_to(back, drawn, blit_quad(), WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState());
 		if (gx.overlay_shown)
 			overlay_draw(WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState(), 3); /* (768 pixels of the TV's 1920) */
 		if (skip_progress > 0.0f)
 			skip_bar_draw(WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState(), skip_progress);
+		if (gx.panel_shown)
+			panel_draw(WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState());
 	}
 	GX2CopyColorBufferToScanBuffer(WHBGfxGetTVColourBuffer(), GX2_SCAN_TARGET_TV);
 	if (back)
 	{
-		blit_to(back, WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState());
+		blit_to(back, gamepad, blit_quad(), WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState());
 		if (gx.overlay_shown)
 			overlay_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState(), 2); /* (512 of the GamePad's 854) */
 		if (skip_progress > 0.0f)
 			skip_bar_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState(), skip_progress);
+		if (gx.panel_shown)
+			panel_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState());
 	}
 	GX2CopyColorBufferToScanBuffer(WHBGfxGetDRCColourBuffer(), GX2_SCAN_TARGET_DRC);
 	/* (the frame's work is handed to the GPU before the swap, whose wait for the display is then not in the time the work is said to have taken) */
@@ -3588,6 +3938,7 @@ static void present(const struct dk_command_present *command)
 		gx.wait_ticks += OSGetSystemTime() - wait_start;
 		wait_ticks = OSGetSystemTime() - wait_start;
 	}
+	drs_present(command, wait_ticks, gx.last_present ? OSGetSystemTime() - gx.last_present : 0);
 	if (gx.overlay_on)
 	{
 		const OSTime end = OSGetSystemTime();
@@ -3599,9 +3950,12 @@ static void present(const struct dk_command_present *command)
 
 			/* (by how many of the display's refreshes the frame took: one is 60 a second) */
 			gx.frame_buckets[frame_ms < 20.0f ? 0 : frame_ms < 36.7f ? 1 : frame_ms < 53.3f ? 2 : 3]++;
-			gx.overlay.render_width = (unsigned)((float)gx.render_height * 16.0f / 9.0f + 0.5f);
-			gx.overlay.render_height = gx.render_height;
-			gx.overlay.interpolation = config_boolean("display.interpolation");
+			/* (what the frame drew: dynamic resolution's step shows) */
+			gx.overlay.render_width = drawn[2];
+			gx.overlay.render_height = drawn[3];
+			/* (as the game draws: display.interpolation, unless the split screen's views hold the frames to 30 a second; asked here, on the GX2 thread,
+			without halo_interpolation_enabled's remembered reading, which is the game thread's) */
+			gx.overlay.interpolation = config_boolean("display.interpolation") && !graphics_quality_split_screen_capped();
 			overlay_push(&gx.overlay, (float)OSTicksToMicroseconds(end - gx.overlay_previous_end) / 1000.0f, (float)OSTicksToMicroseconds(cpu_ticks) / 1000.0f,
 				(float)OSTicksToMicroseconds(end - present_start) / 1000.0f, (float)OSTicksToMicroseconds(wait_ticks) / 1000.0f, gx.gpu_ms, (unsigned)draws,
 				(unsigned)(ring / 1024));
@@ -3700,6 +4054,16 @@ static void present(const struct dk_command_present *command)
 		gx.ring_bytes = gx.ring_calls = gx.ring_largest = gx.index_bytes = 0;
 		wiiu_log("GX2:   waiting for the display's flip: %.1f ms a frame", (double)OSTicksToMicroseconds(gx.wait_ticks) / 1000.0 / (double)gx.window_frames);
 		gx.wait_ticks = 0;
+		/* (dynamic resolution: the step, what changed it, and what the controller saw; the frame times' percentiles are the overlay's line) */
+		if (gx.drs_forced)
+			wiiu_log("GX2:   dynamic resolution: %u of %u lines (halo/drs_lines.txt; the controller is off); %u targets cleared at a change of step",
+				gx.drs_lines, gx.render_height, gx.drs_clears);
+		else if (gx.drs_on)
+			wiiu_log("GX2:   dynamic resolution: %u of %u lines (the controller); since the last note %u drops and %u rises, %u of %u frames waited over "
+				"1 ms for the flip, %u had a menu; the GPU's time at this step %.2f ms on average over %u frames (-1: none yet); %u targets cleared at "
+				"a change of step", gx.drs_lines, gx.render_height, gx.drs_drops, gx.drs_rises, gx.drs_waits, gx.drs_frames, gx.drs_menu_frames,
+				(double)wiiu_drs_average(&gx.drs), gx.drs.gpu_count, gx.drs_clears);
+		gx.drs_drops = gx.drs_rises = gx.drs_waits = gx.drs_frames = gx.drs_menu_frames = gx.drs_clears = 0;
 		wiiu_log("GX2:   frame times: longest %llu ms, %u over 40 ms; shaders loaded %u (%llu ms loading)", (unsigned long long)OSTicksToMilliseconds(gx.longest_frame),
 			gx.slow_frames, gx.shaders_loaded, (unsigned long long)OSTicksToMilliseconds(gx.shader_ticks));
 		gx.longest_frame = 0;
@@ -4476,4 +4840,13 @@ uint32_t host_gx2_visibility(uint32_t index)
 unsigned int host_gx2_output_height(void)
 {
 	return gt_start() ? gx.render_height : 480u;
+}
+
+/* for d3d8_gx2.c's halo_screen_commit, between the game thread's frames: the lines its next frames draw of the screen's targets (dynamic resolution:
+halo/drs_lines.txt's, or the controller's, set by the GX2 thread at its presents), 0 before GX2 is made */
+unsigned int host_gx2_drs_lines(void);
+
+unsigned int host_gx2_drs_lines(void)
+{
+	return gx.ready ? gx.drs_lines : 0u;
 }

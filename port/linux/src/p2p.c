@@ -47,6 +47,24 @@ link games as if they were on one LAN, without a server of this project's.
   joiners' system link lists, and joining works as on a LAN. A peer reaches
   only the game's own ports (xnet.c says which it has), and has a few
   stand-ins and connections at a time.
+- In the process (network.tunnel_in_process, on by default on the Wii U,
+  whose system gives a program 27 sockets, where a host's stand-ins took
+  three for each peer, four while it joins): what a peer sends the game
+  needs no stand-in.
+  Its datagram goes into the inbox of the game's socket that has the port
+  it was sent to, which xnet.c reads before the socket itself, as from the
+  peer's address; its connection to a port the game listens on waits for
+  the game's accept there, which takes it under a number no system socket
+  has, and xnet.c reads and writes it here, on its stream. A host's sockets
+  are then its own, however many peers it has. What the game reaches out to
+  (a joiner's connection to its host, and what its connected socket sends)
+  still goes through stand-ins, a few for each machine it reaches. Nothing
+  the tunnel sends changes.
+- The server browser times the tunnel to each public game's host (its
+  ping): a probe makes the tunnel as a join does, with the listing's token,
+  keeps the shortest of a few pings' round trips, and says goodbye. The
+  game sees nothing of a probe's peer; a join of its host takes its tunnel
+  up.
 
 The work happens on a thread of its own, under p2p_lock (let go of for
 whatever may wait: DNS, the desktop's link handlers); the game's threads
@@ -55,8 +73,11 @@ only look up and create stand-ins.
 
 #include "platform.h"
 #include "posix.h"
+#include "server_master.h"
 #include "port_config.h"
 #include "p2p_internal.h"
+#include "player_link.h"
+#include "log_address.h"
 #include "ikcp.h"
 #ifdef HALO_PROFILE
 #include "profile_trace.h"
@@ -109,6 +130,17 @@ enum
 	MAXIMUM_STUN_SERVERS = 4,
 	STREAM_BUFFER_SIZE = 16384,
 	STREAM_CHUNK_SIZE = 1024,
+	/* in the process (network.tunnel_in_process): the bytes of datagrams a
+	game socket's inbox holds, as a socket's buffer would (past them a
+	datagram is lost: the game's own queue for them is as large), and the
+	game's sockets that can have one at once */
+	INBOX_SIZE = 128 * 1024,
+	MAXIMUM_INBOXES = 16,
+	/* (a datagram's header in an inbox: its size, the peer's port and
+	address) */
+	INBOX_HEADER_SIZE = 8,
+	/* ... how long a peer's connection waits for the game to take it */
+	ACCEPT_TIMEOUT = 5000,
 	/* the most unacknowledged messages a stream sends ahead */
 	STREAM_WINDOW = 128,
 	KCP_MTU = 1200,
@@ -123,6 +155,10 @@ enum
 	JOIN_TIMEOUT = 90000,
 	/* another player of the game joined, asked for (p2p_reach_player) */
 	PLAYER_REACH_TIMEOUT = 30000,
+	/* a public game's host probed for its ping (p2p_probe_start): its
+	round trip timed over this many pings, and given up after this long */
+	PROBE_PINGS = 3,
+	PROBE_TIMEOUT = 15000,
 	STREAM_LINGER_TIME = 10000,
 	PROXY_IDLE_TIME = 60000,
 	STUN_RETRY_INTERVAL = 500,
@@ -166,7 +202,16 @@ enum
 	/* connecting to the local game */
 	_stream_connecting,
 	_stream_open_state,
+	/* in the process: waiting for the game to take it from its listening
+	socket (p2p_stream_accept) */
+	_stream_accepting,
 };
+
+/* the numbers the game knows the connections taken in the process by: none
+is a system socket's (Linux's and the Wii U's are small, as Windows'
+handles are), and a closed one is not given again for 16 million more */
+#define STREAM_SOCKET_BASE 0x7E000000
+#define STREAM_SOCKET_MASK 0x00FFFFFF
 
 struct peer
 {
@@ -204,6 +249,12 @@ struct peer
 	unsigned long endpoint_heard_time;
 	unsigned long sent_time;
 	unsigned long round_trip;
+	/* the pings answered, and the shortest round trip of them */
+	int pongs;
+	unsigned long shortest_round_trip;
+	/* a public game's host probed for its ping (p2p_probe_start): none of
+	its traffic is the game's */
+	int probe;
 };
 
 /* a UDP stand-in for one port of a peer */
@@ -227,6 +278,11 @@ struct game_port
 	unsigned short port;
 	unsigned char stream;
 	unsigned char listening;
+	/* a datagram socket connected (p2p_socket_connected): to that address
+	and port, as the game named them */
+	unsigned char connected;
+	unsigned long connected_address;
+	unsigned short connected_port;
 };
 
 /* a stand-in closed lately (p2p_incoming) */
@@ -273,8 +329,36 @@ struct stream
 	int remote_closed;
 	unsigned long created_time;
 	unsigned long closed_time;
+	/* in the process: the number the game took it by (0: not taken, or let
+	go of), the game's listening socket it waits on until then and that
+	socket's port, and the peer's address (kept for the game once the peer
+	is gone); whether the game's reads and sends wait; and whether it ended
+	while the game held it (its KCP let go: the game reads what is pending,
+	then its end) */
+	int game_socket;
+	int listening_socket;
+	unsigned short game_port;
+	unsigned long peer_address;
+	int blocking;
+	int ended;
 	unsigned char pending[STREAM_BUFFER_SIZE];
 	int pending_size;
+};
+
+/* in the process: the datagrams peers sent one of the game's datagram
+sockets, waiting for the game to read them, oldest first: a ring of
+INBOX_SIZE bytes, each a header (INBOX_HEADER_SIZE: its size, the peer's
+port and address, as they came) and the datagram */
+struct inbox
+{
+	/* free while bytes is NULL */
+	int socket;
+	unsigned char *bytes;
+	int start;
+	int used;
+	/* the datagrams it holds, and their bytes (without their headers) */
+	int count;
+	int data_bytes;
 };
 
 struct stun_server
@@ -388,6 +472,15 @@ static struct
 		unsigned long time;
 	} reaching[P2P_MAXIMUM_PLAYER_JOINS];
 
+	/* the server browser's probes of public games' hosts
+	(p2p_probe_start): each host's identifier, and since when */
+	struct
+	{
+		int used;
+		unsigned char identifier[P2P_IDENTIFIER_SIZE];
+		unsigned long time;
+	} probes[P2P_MAXIMUM_PROBES];
+
 	/* joining: until the host is reached, or JOIN_TIMEOUT */
 	int join_requested;
 	int joining;
@@ -395,6 +488,13 @@ static struct
 	unsigned char join_host_hash[P2P_KEY_HASH_SIZE];
 	unsigned char join_token[P2P_TOKEN_SIZE];
 	unsigned long join_time;
+	/* the join's progress (p2p_join_progress): one was asked for this run;
+	its host answered; it was given up (JOIN_TIMEOUT); the host's game
+	refused it (its rejection code, -1 if not) */
+	int join_started;
+	int join_answered;
+	int join_gave_up;
+	int join_refused;
 
 	char clipboard[P2P_LINK_SIZE];
 	int has_clipboard;
@@ -408,7 +508,28 @@ static struct
 	int upnp_released;
 	struct p2p_candidate upnp_candidate;
 	unsigned long upnp_time;
+	/* network.public_address, looked up (an address and port joiners reach
+	this machine at, behind a NAT with one forwarded port): offered first;
+	the text it was looked up from, and when */
+	struct p2p_candidate public_candidate;
+	int has_public;
+	char public_text[256];
+	unsigned long public_time;
+	int public_logged;
+
+	/* network.tunnel_in_process, read once as internet play starts; the
+	number the next connection the game takes in the process gets */
+	int in_process;
+	unsigned long next_game_socket;
+	/* for the net: lines (p2p_statistics) */
+	struct p2p_statistics counts;
 } p2p = { 0, 0, -1, 0, -1, .hosting_socket = -1 };
+
+/* in the process: the game's sockets' inboxes, under inbox_lock alone (the
+game's reads need not wait for the p2p thread's pass); one who holds
+p2p_lock may take it, never the other way round */
+static struct inbox inboxes[MAXIMUM_INBOXES];
+static pthread_mutex_t inbox_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* the proxy (its index + 1) with each local port (all of theirs are on
 p2p.local_address) */
@@ -525,15 +646,6 @@ static void make_address(struct sockaddr_in *address, unsigned long ip, unsigned
 	address->sin_family = AF_INET;
 	address->sin_port = port;
 	address->sin_addr.s_addr = ip;
-}
-
-static const char *address_text(unsigned long ip, unsigned short port, char *text)
-{
-	unsigned long value = network_long(ip);
-
-	sprintf(text, "%lu.%lu.%lu.%lu:%u", value >> 24, (value >> 16) & 255, (value >> 8) & 255, value & 255,
-		network_short(port));
-	return text;
 }
 
 /* a UDP or TCP socket bound to ip:port (0 for any), not blocking; its port
@@ -663,7 +775,7 @@ static struct peer *find_peer_by_address(unsigned long address)
 
 	for (index = 0; index < P2P_MAXIMUM_PEERS; index++)
 	{
-		if (p2p.peers[index].used && p2p.peers[index].virtual_address == address)
+		if (p2p.peers[index].used && !p2p.peers[index].probe && p2p.peers[index].virtual_address == address)
 			return &p2p.peers[index];
 	}
 	return NULL;
@@ -874,10 +986,20 @@ static void peer_send_to(struct peer *peer, const struct p2p_candidate *to, cons
 	if (peer->connection >= 0)
 	{
 		p2p_webrtc_send(peer->connection, packet, TUNNEL_HEADER_SIZE + sealed);
+		p2p.counts.packets_sent++;
+		p2p.counts.bytes_sent += (unsigned long)(TUNNEL_HEADER_SIZE + sealed);
 		return;
 	}
 	make_address(&address, to->address, to->port);
-	posix_socket_sendto(p2p.tunnel_socket, packet, TUNNEL_HEADER_SIZE + sealed, 0, &address, sizeof(address));
+	/* (a send the system refuses, its buffer full, loses the packet: the
+	net: lines count them) */
+	if (posix_socket_sendto(p2p.tunnel_socket, packet, TUNNEL_HEADER_SIZE + sealed, 0, &address, sizeof(address)) < 0)
+	{
+		p2p.counts.send_failures++;
+		return;
+	}
+	p2p.counts.packets_sent++;
+	p2p.counts.bytes_sent += (unsigned long)(TUNNEL_HEADER_SIZE + sealed);
 }
 
 /* to a peer the tunnel has reached; dropped otherwise */
@@ -899,7 +1021,7 @@ static void peer_ping(struct peer *peer, const struct p2p_candidate *to)
 	peer_send_to(peer, to, inner, sizeof(inner));
 }
 
-static void stream_free(struct stream *stream);
+static void stream_finish(struct stream *stream);
 static void proxy_close(struct proxy *proxy);
 static void listener_close(struct listener *listener);
 
@@ -912,7 +1034,7 @@ static void release_peer_links(int peer_index, int streams_only)
 	for (index = 0; index < MAXIMUM_STREAMS; index++)
 	{
 		if (p2p.streams[index].used && p2p.streams[index].peer == peer_index)
-			stream_free(&p2p.streams[index]);
+			stream_finish(&p2p.streams[index]);
 	}
 	if (streams_only)
 		return;
@@ -952,11 +1074,13 @@ static int address_retired(unsigned long address)
 
 static void drop_peer(struct peer *peer, const char *reason)
 {
-	struct retired_session *retired = &p2p.retired[p2p.retired_next++ % MAXIMUM_RETIRED_SESSIONS];
 	int ask_again = p2p.joining && peer->is_host && !memcmp(peer->identifier, p2p.join_host, P2P_IDENTIFIER_SIZE);
 
-	platform_log("Internet play: %s %s: %s", peer->is_host && !peer->is_player ? "host" : "player", peer->name,
-		reason);
+	if (!peer->probe)
+	{
+		platform_log("Internet play: %s %s: %s", peer->is_host && !peer->is_player ? "host" : "player", peer->name,
+			reason);
+	}
 	if (peer->connected)
 	{
 		unsigned char bye = _packet_bye;
@@ -967,16 +1091,32 @@ static void drop_peer(struct peer *peer, const char *reason)
 	if (peer->connection >= 0)
 		p2p_webrtc_close(peer->connection);
 	/* a session that ended does not come back: its packets would pass
-	again */
-	memcpy(retired->secret, peer->secret, P2P_SHA256_SIZE);
-	retired->virtual_address = peer->virtual_address;
-	memcpy(retired->identifier, peer->identifier, P2P_IDENTIFIER_SIZE);
+	again. (Not a probe's, which pushes no other's out: its request ended
+	with it, and the game never had its address) */
+	if (!peer->probe)
+	{
+		struct retired_session *retired = &p2p.retired[p2p.retired_next++ % MAXIMUM_RETIRED_SESSIONS];
+
+		memcpy(retired->secret, peer->secret, P2P_SHA256_SIZE);
+		retired->virtual_address = peer->virtual_address;
+		memcpy(retired->identifier, peer->identifier, P2P_IDENTIFIER_SIZE);
+	}
 	memset(peer, 0, sizeof(*peer));
 	/* still joining: a new request, with a nonce of its own (the host
 	makes no second session from one request, which anyone who saw it could
 	send again) */
 	if (ask_again)
 		p2p_signal_join(p2p.join_host_hash, p2p.join_token);
+}
+
+/* whether an offered address could be a machine's: not 0.0.0.0/8,
+multicast, reserved or broadcast (224.0.0.0 up), nor port 0. Loopback and
+LAN addresses stay: two copies on one machine or network use them */
+static int candidate_usable(const struct p2p_candidate *candidate)
+{
+	unsigned long first = network_long(candidate->address) >> 24;
+
+	return first != 0 && first < 224 && candidate->port != 0;
 }
 
 static void add_candidates(struct peer *peer, const struct p2p_candidate *candidates, int count)
@@ -987,6 +1127,8 @@ static void add_candidates(struct peer *peer, const struct p2p_candidate *candid
 	{
 		int known;
 
+		if (!candidate_usable(&candidates[index]))
+			continue;
 		for (known = 0; known < peer->candidate_count; known++)
 		{
 			if (peer->candidates[known].address == candidates[index].address &&
@@ -1089,11 +1231,21 @@ int p2p_peer_offered(const unsigned char *peer_identifier, const unsigned char *
 		peer->virtual_address = virtual_address_for(peer_identifier);
 		peer->is_host = is_host;
 		peer->is_player = offered == _p2p_offered_player;
+		peer->probe = offered == _p2p_offered_probe;
 		p2p_key_hash(public_key, peer->key_hash);
 		peer->connection = -1;
 		peer->offered_time = p2p_now();
-		platform_log("Internet play: reaching %s %s%s", offered == _p2p_offered_host ? "host" : "player", peer->name,
-			webrtc->kind == _p2p_webrtc_browser ? " (a browser)" : "");
+		/* (the host of the join under way answered it: p2p_join_progress) */
+		if (offered == _p2p_offered_host && (p2p.joining || p2p.join_requested) &&
+			!memcmp(peer_identifier, p2p.join_host, P2P_IDENTIFIER_SIZE))
+		{
+			p2p.join_answered = 1;
+		}
+		if (!peer->probe)
+		{
+			platform_log("Internet play: reaching %s %s%s", offered == _p2p_offered_host ? "host" : "player",
+				peer->name, webrtc->kind == _p2p_webrtc_browser ? " (a browser)" : "");
+		}
 	}
 	add_candidates(peer, candidates, count);
 	peer->connection = p2p_webrtc_offered(peer->connection, (int)(peer - p2p.peers), peer->secret, webrtc,
@@ -1161,14 +1313,16 @@ static void peer_heard(struct peer *peer, unsigned long address, unsigned short 
 	peer->heard_time = now;
 	if (!peer->connected)
 	{
-		char text[32];
+		char text[LOG_ADDRESS_SIZE];
 
 		peer->connected = 1;
 		peer->endpoint.address = address;
 		peer->endpoint.port = port;
 		peer->endpoint_heard_time = now;
+		if (peer->probe)
+			return;
 		platform_log("Internet play: connected to %s %s at %s", peer->is_host && !peer->is_player ? "host" : "player",
-			peer->name, address_text(address, port, text));
+			peer->name, log_address_ipv4(address, port, text, sizeof(text)));
 		if (peer->is_host && !peer->is_player)
 		{
 			if (p2p.joining && !memcmp(p2p.join_host, peer->identifier, P2P_IDENTIFIER_SIZE))
@@ -1295,6 +1449,98 @@ static void stun_setup(void)
 	}
 }
 
+/* network.public_address ("host[:port]"; the port the router forwards to
+the tunnel's, else the tunnel's own), looked up as it changes and every
+PUBLIC_ADDRESS_SECONDS: a host name's address may change. Under p2p_lock,
+on the p2p thread */
+static void public_address_update(void)
+{
+	enum { PUBLIC_ADDRESS_SECONDS = 300 };
+	const char *setting = config_string("network.public_address");
+	char host[256];
+	const char *colon;
+	unsigned long port = 0, address;
+
+	if (!setting[0])
+	{
+		p2p.has_public = 0;
+		p2p.public_text[0] = 0;
+		return;
+	}
+	if (!strcmp(setting, p2p.public_text) && p2p.public_time &&
+		!elapsed(p2p.public_time, PUBLIC_ADDRESS_SECONDS * 1000UL))
+	{
+		return;
+	}
+	snprintf(p2p.public_text, sizeof(p2p.public_text), "%s", setting);
+	p2p.public_time = p2p_now() | 1;
+	snprintf(host, sizeof(host), "%s", setting);
+	/* (an IPv6 address, bracketed or not, is no candidate: the tunnel is
+	IPv4's) */
+	colon = strchr(host, ':');
+	if (host[0] == '[' || (colon && strchr(colon + 1, ':')))
+	{
+		if (!p2p.public_logged)
+			platform_log("Internet play: network.public_address %s is IPv6, which the tunnel does not use: left "
+				"out", setting);
+		p2p.public_logged = 1;
+		p2p.has_public = 0;
+		return;
+	}
+	if (colon)
+	{
+		char *end;
+
+		port = strtoul(colon + 1, &end, 10);
+		host[colon - host] = 0;
+		if (*end || port == 0 || port > 65535)
+		{
+			if (!p2p.public_logged)
+				platform_log("Internet play: network.public_address %s has no port 1 to 65535: left out", setting);
+			p2p.public_logged = 1;
+			p2p.has_public = 0;
+			return;
+		}
+	}
+	address = p2p_resolve(host);
+	if (!address)
+	{
+		platform_log("Internet play: cannot look up network.public_address %s", host);
+		p2p.has_public = 0;
+		return;
+	}
+	p2p.public_candidate.address = address;
+	p2p.public_candidate.port = port ? network_short((unsigned short)port) : p2p.tunnel_port;
+	if (!p2p.has_public || !p2p.public_logged)
+	{
+		char text[64];
+
+		platform_log("Internet play: joiners are offered network.public_address, %s",
+			log_address_ipv4(p2p.public_candidate.address, p2p.public_candidate.port, text, sizeof(text)));
+	}
+	p2p.has_public = 1;
+	p2p.public_logged = 1;
+}
+
+/* (p2p.h) network.public_address as looked up, "a.b.c.d:port"; 0 if none */
+int p2p_public_address(char *text, int size)
+{
+	int has;
+
+	pthread_mutex_lock(&p2p_lock);
+	has = p2p.has_public;
+	if (has)
+	{
+		unsigned long address = network_long(p2p.public_candidate.address);
+		unsigned short port = network_short(p2p.public_candidate.port);
+
+		snprintf(text, (size_t)size, "%lu.%lu.%lu.%lu:%u", (address >> 24) & 255, (address >> 16) & 255,
+			(address >> 8) & 255, address & 255, (unsigned)port);
+	}
+	pthread_mutex_unlock(&p2p_lock);
+	return has;
+}
+
 static void stun_update(void)
 {
 	int index;
@@ -1307,12 +1553,15 @@ static void stun_update(void)
 
 		if (!server->address && !server->attempts)
 		{
-			/* looked up once, here on the p2p thread */
+			/* looked up here on the p2p thread, until it is found */
 			server->address = p2p_resolve(server->host);
 			if (!server->address)
 			{
 				platform_log("Internet play: cannot look up the STUN server %s", server->host);
+				/* (looked up again a refresh's time from now, below: the
+				network may not have been up yet) */
 				server->attempts = STUN_ATTEMPTS;
+				server->sent_time = p2p_now();
 				continue;
 			}
 		}
@@ -1329,7 +1578,7 @@ static void stun_update(void)
 		{
 			stun_send(server);
 		}
-		else if (server->attempts >= STUN_ATTEMPTS && server->address && elapsed(server->sent_time, STUN_REFRESH_INTERVAL))
+		else if (server->attempts >= STUN_ATTEMPTS && elapsed(server->sent_time, STUN_REFRESH_INTERVAL))
 		{
 			server->attempts = 0;
 		}
@@ -1382,14 +1631,14 @@ static void stun_received(const unsigned char *packet, int size, const struct so
 			}
 			if (!server->has_mapped)
 			{
-				char text[32];
+				char text[LOG_ADDRESS_SIZE];
 				int other;
 
 				memcpy(&server->mapped.address, ip, 4);
 				memcpy(&server->mapped.port, port, 2);
 				server->has_mapped = 1;
 				platform_log("Internet play: this machine's public address is %s (from %s)",
-					address_text(server->mapped.address, server->mapped.port, text), server->host);
+					log_address_ipv4(server->mapped.address, server->mapped.port, text, sizeof(text)), server->host);
 				for (other = 0; other < p2p.stun_count; other++)
 				{
 					if (other != index && p2p.stun[other].has_mapped &&
@@ -1418,6 +1667,9 @@ int p2p_local_candidates(struct p2p_candidate *candidates, int maximum_count)
 	int count = 0;
 	int index;
 
+	/* (network.public_address first: the operator's word for it) */
+	if (p2p.has_public && count < maximum_count)
+		candidates[count++] = p2p.public_candidate;
 	if (lan && count < maximum_count)
 	{
 		candidates[count].address = lan;
@@ -1776,7 +2028,7 @@ int p2p_broadcast_targets(unsigned short port, unsigned long *addresses, unsigne
 	{
 		struct proxy *proxy;
 
-		if (!p2p.peers[index].used || !p2p.peers[index].connected)
+		if (!p2p.peers[index].used || !p2p.peers[index].connected || p2p.peers[index].probe)
 			continue;
 		proxy = find_proxy(index, port, 1);
 		if (proxy)
@@ -1845,7 +2097,7 @@ int p2p_peer_address(const unsigned char *peer_identifier, unsigned long *addres
 	pthread_mutex_lock(&p2p_lock);
 	/* reached or not (until it is, sending there fails: p2p_outgoing) */
 	peer = find_peer(peer_identifier);
-	if (peer)
+	if (peer && !peer->probe)
 	{
 		*address = peer->virtual_address;
 		result = 1;
@@ -1854,7 +2106,43 @@ int p2p_peer_address(const unsigned char *peer_identifier, unsigned long *addres
 	return result;
 }
 
+void p2p_statistics(struct p2p_statistics *statistics)
+{
+	int index;
+
+	memset(statistics, 0, sizeof(*statistics));
+	if (!p2p.running)
+		return;
+	pthread_mutex_lock(&p2p_lock);
+	*statistics = p2p.counts;
+	statistics->peers = 0;
+	statistics->streams = 0;
+	for (index = 0; index < P2P_MAXIMUM_PEERS; index++)
+		statistics->peers += p2p.peers[index].used && p2p.peers[index].connected && !p2p.peers[index].probe;
+	for (index = 0; index < MAXIMUM_STREAMS; index++)
+		statistics->streams += p2p.streams[index].used && p2p.streams[index].game_socket != 0;
+	pthread_mutex_unlock(&p2p_lock);
+}
+
+int p2p_peer_ping(const unsigned char *peer_identifier)
+{
+	struct peer *peer;
+	int ping = -1;
+
+	if (!p2p.running)
+		return -1;
+	pthread_mutex_lock(&p2p_lock);
+	peer = find_peer(peer_identifier);
+	if (peer && peer->connected && !peer->probe && peer->pongs)
+		ping = (int)peer->round_trip;
+	pthread_mutex_unlock(&p2p_lock);
+	return ping;
+}
+
 /* ---------- the game's ports: all that peers may reach */
+
+static void stream_local_closed(struct stream *stream);
+static void inbox_free(int socket);
 
 void p2p_socket_port(int socket, int stream, int listening, unsigned short port)
 {
@@ -1924,9 +2212,56 @@ void p2p_socket_closed(int socket, unsigned short datagram_port)
 		if (p2p.proxies[index].socket >= 0 && p2p.proxies[index].pinned_socket == socket)
 			p2p.proxies[index].pinned_socket = -1;
 	}
+	/* (in the process: the peers' connections it did not take are closed,
+	as the system's are with a listening socket, and what its inbox held
+	goes: a socket given its number later has none of it) */
+	for (index = 0; index < MAXIMUM_STREAMS; index++)
+	{
+		struct stream *stream = &p2p.streams[index];
+
+		if (stream->used && stream->state == _stream_accepting && stream->listening_socket == socket)
+			stream_local_closed(stream);
+	}
+	inbox_free(socket);
 	if (p2p.hosting_socket == socket)
 		p2p.hosting_socket = -1;
 	pthread_mutex_unlock(&p2p_lock);
+}
+
+void p2p_socket_connected(int socket, unsigned long address, unsigned short port)
+{
+	int index;
+
+	if (!p2p.running)
+		return;
+	pthread_mutex_lock(&p2p_lock);
+	for (index = 0; index < MAXIMUM_GAME_PORTS; index++)
+	{
+		struct game_port *entry = &p2p.game_ports[index];
+
+		if (entry->port && entry->socket == socket && !entry->stream)
+		{
+			entry->connected = 1;
+			entry->connected_address = address;
+			entry->connected_port = port;
+		}
+	}
+	pthread_mutex_unlock(&p2p_lock);
+}
+
+/* the game's socket listening on this port, or -1 */
+static int game_listening_socket(unsigned short port)
+{
+	int index;
+
+	for (index = 0; index < MAXIMUM_GAME_PORTS; index++)
+	{
+		struct game_port const *entry = &p2p.game_ports[index];
+
+		if (entry->port == port && entry->stream && entry->listening)
+			return entry->socket;
+	}
+	return -1;
 }
 
 /* whether a peer may reach this port of the game's: one a socket of the
@@ -1994,15 +2329,196 @@ static void proxy_readable(struct proxy *proxy)
 	}
 }
 
+/* ---------- in the process: the game's sockets' inboxes */
+
+/* copies size bytes into the inbox's ring at offset from its oldest byte,
+round its end */
+static void inbox_write(struct inbox *inbox, int offset, const void *data, int size)
+{
+	int at = (inbox->start + offset) % INBOX_SIZE;
+	int first = size < INBOX_SIZE - at ? size : INBOX_SIZE - at;
+
+	memcpy(inbox->bytes + at, data, (size_t)first);
+	memcpy(inbox->bytes, (const unsigned char *)data + first, (size_t)(size - first));
+}
+
+static void inbox_read(const struct inbox *inbox, int offset, void *data, int size)
+{
+	int at = (inbox->start + offset) % INBOX_SIZE;
+	int first = size < INBOX_SIZE - at ? size : INBOX_SIZE - at;
+
+	memcpy(data, inbox->bytes + at, (size_t)first);
+	memcpy((unsigned char *)data + first, inbox->bytes, (size_t)(size - first));
+}
+
+/* a datagram from the peer's address and port put after the others; 0 if
+the inbox has no room for it, which loses it as a full socket would */
+static int inbox_put(struct inbox *inbox, unsigned long address, unsigned short port, const void *data, int size)
+{
+	unsigned char header[INBOX_HEADER_SIZE];
+	unsigned int address_bytes = (unsigned int)address;
+
+	if (size < 0 || size > 0xFFFF || size > INBOX_SIZE - INBOX_HEADER_SIZE - inbox->used)
+		return 0;
+	header[0] = (unsigned char)(size >> 8);
+	header[1] = (unsigned char)size;
+	memcpy(header + 2, &port, 2);
+	memcpy(header + 4, &address_bytes, 4);
+	inbox_write(inbox, inbox->used, header, INBOX_HEADER_SIZE);
+	inbox_write(inbox, inbox->used + INBOX_HEADER_SIZE, data, size);
+	inbox->used += INBOX_HEADER_SIZE + size;
+	inbox->count++;
+	inbox->data_bytes += size;
+	return 1;
+}
+
+/* the oldest datagram taken out: as much of it as length takes copied to
+buffer, its peer's address and port; its whole size, or -1 if none waits */
+static int inbox_take(struct inbox *inbox, void *buffer, int length, unsigned long *address, unsigned short *port)
+{
+	unsigned char header[INBOX_HEADER_SIZE];
+	unsigned int address_bytes;
+	int size;
+
+	if (inbox->used < INBOX_HEADER_SIZE)
+		return -1;
+	inbox_read(inbox, 0, header, INBOX_HEADER_SIZE);
+	size = header[0] << 8 | header[1];
+	memcpy(port, header + 2, 2);
+	memcpy(&address_bytes, header + 4, 4);
+	*address = address_bytes;
+	inbox_read(inbox, INBOX_HEADER_SIZE, buffer, length < 0 ? 0 : size < length ? size : length);
+	inbox->start = (inbox->start + INBOX_HEADER_SIZE + size) % INBOX_SIZE;
+	inbox->used -= INBOX_HEADER_SIZE + size;
+	inbox->count--;
+	inbox->data_bytes -= size;
+	return size;
+}
+
+/* (under inbox_lock) the socket's inbox, or NULL */
+static struct inbox *inbox_of(int socket)
+{
+	int index;
+
+	for (index = 0; index < MAXIMUM_INBOXES; index++)
+	{
+		if (inboxes[index].bytes && inboxes[index].socket == socket)
+			return &inboxes[index];
+	}
+	return NULL;
+}
+
+/* (under p2p_lock) the game closed the socket: its inbox goes */
+static void inbox_free(int socket)
+{
+	struct inbox *inbox;
+
+	pthread_mutex_lock(&inbox_lock);
+	inbox = inbox_of(socket);
+	if (inbox)
+	{
+		free(inbox->bytes);
+		memset(inbox, 0, sizeof(*inbox));
+	}
+	pthread_mutex_unlock(&inbox_lock);
+}
+
+/* in the process: a datagram a peer sent from its port to the game's port,
+put in the inbox of the game's datagram socket that has the port (made
+with the first). A socket the game connected elsewhere takes none, as the
+system passes a connected socket only its peer's */
+static void datagram_deliver(struct peer *peer, unsigned short source_port, unsigned short port,
+	const unsigned char *data, int size)
+{
+	struct game_port const *entry = NULL;
+	struct inbox *inbox;
+	int delivered = 0;
+	int index;
+
+	for (index = 0; index < MAXIMUM_GAME_PORTS && !entry; index++)
+	{
+		if (p2p.game_ports[index].port == port && !p2p.game_ports[index].stream)
+			entry = &p2p.game_ports[index];
+	}
+	if (entry && (!entry->connected ||
+		(entry->connected_address == peer->virtual_address && entry->connected_port == source_port)))
+	{
+		pthread_mutex_lock(&inbox_lock);
+		inbox = inbox_of(entry->socket);
+		for (index = 0; index < MAXIMUM_INBOXES && !inbox; index++)
+		{
+			if (!inboxes[index].bytes && (inboxes[index].bytes = malloc(INBOX_SIZE)) != NULL)
+			{
+				/* (a free one is all 0 but its new bytes, inbox_free) */
+				inbox = &inboxes[index];
+				inbox->socket = entry->socket;
+			}
+		}
+		delivered = inbox && inbox_put(inbox, peer->virtual_address, source_port, data, size);
+		pthread_mutex_unlock(&inbox_lock);
+	}
+	if (delivered)
+		p2p.counts.datagrams_delivered++;
+	else
+		p2p.counts.datagrams_lost++;
+}
+
+int p2p_in_process(void)
+{
+	return p2p.running && p2p.in_process;
+}
+
+int p2p_datagram_receive(int socket, void *buffer, int length, unsigned long *address, unsigned short *port)
+{
+	struct inbox *inbox;
+	int size = -1;
+
+	if (!p2p_in_process())
+		return -1;
+	pthread_mutex_lock(&inbox_lock);
+	inbox = inbox_of(socket);
+	if (inbox)
+		size = inbox_take(inbox, buffer, length, address, port);
+	pthread_mutex_unlock(&inbox_lock);
+	return size;
+}
+
+int p2p_datagram_waiting(int socket, int *bytes)
+{
+	struct inbox *inbox;
+	int count = 0;
+
+	if (bytes)
+		*bytes = 0;
+	if (!p2p_in_process())
+		return 0;
+	pthread_mutex_lock(&inbox_lock);
+	inbox = inbox_of(socket);
+	if (inbox)
+	{
+		count = inbox->count;
+		if (bytes)
+			*bytes = inbox->data_bytes;
+	}
+	pthread_mutex_unlock(&inbox_lock);
+	return count;
+}
+
 /* a datagram from a peer to the game */
 static void datagram_received(struct peer *peer, const unsigned char *inner, int size)
 {
 	struct proxy *proxy;
 	struct sockaddr_in to;
 
-	/* only to the game */
-	if (size < 5 || !game_port_open(0, get_short(inner + 3)))
+	/* only to the game, from a peer of its */
+	if (size < 5 || peer->probe || !game_port_open(0, get_short(inner + 3)))
 		return;
+	/* (in the process: to the game's socket's inbox, with no stand-in) */
+	if (p2p.in_process)
+	{
+		datagram_deliver(peer, get_short(inner + 1), get_short(inner + 3), inner + 5, size - 5);
+		return;
+	}
 	proxy = find_proxy((int)(peer - p2p.peers), get_short(inner + 1), 1);
 	if (!proxy)
 		return;
@@ -2070,10 +2586,37 @@ static void stream_free(struct stream *stream)
 	stream->socket = -1;
 }
 
+/* a connection the game holds in the process is over before the game let
+go of it (both ends closed and all delivered, the tunnel gave up on it, or
+its peer went): its KCP goes now, and its peer (whose place another may
+take), and the game reads what is pending, then its end, until it closes it
+(p2p_stream_close lets the stream go) */
+static void stream_end(struct stream *stream)
+{
+	if (stream->ended)
+		return;
+	ikcp_release(stream->kcp);
+	stream->kcp = NULL;
+	p2p.finished[p2p.finished_next++ % 16] = stream->conversation;
+	stream->ended = 1;
+	stream->peer = -1;
+}
+
+/* a stream is over: let go of, unless the game holds it (stream_end) */
+static void stream_finish(struct stream *stream)
+{
+	if (stream->game_socket)
+		stream_end(stream);
+	else
+		stream_free(stream);
+}
+
 static void stream_message(struct stream *stream, unsigned char type, const void *data, int size)
 {
 	unsigned char message[1 + STREAM_CHUNK_SIZE];
 
+	if (!stream->kcp)
+		return;
 	message[0] = type;
 	memcpy(message + 1, data, (size_t)size);
 	ikcp_send(stream->kcp, (const char *)message, size + 1);
@@ -2145,6 +2688,19 @@ static void stream_opened(struct stream *stream, const unsigned char *data, int 
 	if (stream->state != _stream_awaiting_open || size < 4)
 		return;
 	stream->remote_port = get_short(data + 2);
+	/* in the process: no connection is made to the game, which takes it
+	from its listening socket (p2p_stream_accept), only one of the game's */
+	if (p2p.in_process)
+	{
+		stream->game_port = get_short(data);
+		stream->listening_socket = game_listening_socket(stream->game_port);
+		stream->peer_address = p2p.peers[stream->peer].virtual_address;
+		if (stream->listening_socket < 0)
+			stream_local_closed(stream);
+		else
+			stream->state = _stream_accepting;
+		return;
+	}
 	/* only to where the game listens: nothing else here is the peer's to
 	reach */
 	if (game_port_open(1, get_short(data)))
@@ -2171,7 +2727,7 @@ static void stream_received(struct peer *peer, const unsigned char *data, int si
 	int count = 0, opening = 0;
 	int index;
 
-	if (size < 24)
+	if (size < 24 || peer->probe)
 		return;
 	conversation = ikcp_getconv(data);
 	for (index = 0; index < MAXIMUM_STREAMS && !stream; index++)
@@ -2220,10 +2776,22 @@ static void stream_flush_pending(struct stream *stream)
 	}
 }
 
+/* whether what the peer sends is kept: for a socket carrying the stream,
+or, in the process, for the game to read (from before it takes the
+connection); else it is dropped */
+static int stream_keeps_data(const struct stream *stream)
+{
+	return stream->socket >= 0 || stream->game_socket ||
+		(stream->state == _stream_accepting && !stream->local_closed);
+}
+
 static void stream_update(struct stream *stream)
 {
 	unsigned char message[1 + STREAM_CHUNK_SIZE];
 
+	/* (one that ended while the game holds it has no KCP left) */
+	if (stream->ended)
+		return;
 	ikcp_update(stream->kcp, p2p_now());
 	/* what the peer sent */
 	for (;;)
@@ -2251,7 +2819,7 @@ static void stream_update(struct stream *stream)
 			stream_opened(stream, message + 1, size - 1);
 			break;
 		case _stream_data:
-			if (stream->socket >= 0)
+			if (stream_keeps_data(stream))
 			{
 				memcpy(stream->pending + stream->pending_size, message + 1, (size_t)(size - 1));
 				stream->pending_size += size - 1;
@@ -2268,14 +2836,348 @@ static void stream_update(struct stream *stream)
 	if (stream->remote_closed && !stream->pending_size && stream->socket >= 0)
 		stream_local_closed(stream);
 	/* finished: both ends closed and everything delivered, or the tunnel
-	gave up on it */
+	gave up on it (one the game holds in the process ends, and goes when
+	the game closes it) */
 	if ((stream->local_closed && stream->remote_closed && !ikcp_waitsnd(stream->kcp)) ||
 		(stream->closed_time && elapsed(stream->closed_time, STREAM_LINGER_TIME)) ||
 		(stream->state == _stream_awaiting_open && elapsed(stream->created_time, STREAM_LINGER_TIME)) ||
 		stream->kcp->state == (IUINT32)-1)
 	{
-		stream_free(stream);
+		stream_finish(stream);
 	}
+}
+
+/* ---------- in the process: the peers' connections the game takes */
+
+int p2p_stream_socket(int socket)
+{
+	/* (no lock: only a number of the range can be one) */
+	return ((unsigned int)socket & ~(unsigned int)STREAM_SOCKET_MASK) == STREAM_SOCKET_BASE;
+}
+
+/* (under p2p_lock) the connection the game took by this number, or NULL */
+static struct stream *game_stream(int socket)
+{
+	int index;
+
+	if (!p2p_stream_socket(socket))
+		return NULL;
+	for (index = 0; index < MAXIMUM_STREAMS; index++)
+	{
+		if (p2p.streams[index].used && p2p.streams[index].game_socket == socket)
+			return &p2p.streams[index];
+	}
+	return NULL;
+}
+
+/* (under p2p_lock) a connection waiting to be taken from the listening
+socket: the oldest, or NULL */
+static struct stream *accepting_stream(int listening_socket)
+{
+	struct stream *oldest = NULL;
+	int index;
+
+	for (index = 0; index < MAXIMUM_STREAMS; index++)
+	{
+		struct stream *stream = &p2p.streams[index];
+
+		if (stream->used && stream->state == _stream_accepting && !stream->local_closed &&
+			stream->listening_socket == listening_socket &&
+			(!oldest || (long)(stream->created_time - oldest->created_time) < 0))
+		{
+			oldest = stream;
+		}
+	}
+	return oldest;
+}
+
+int p2p_stream_waiting(int listening_socket)
+{
+	int waiting;
+
+	if (!p2p_in_process())
+		return 0;
+	pthread_mutex_lock(&p2p_lock);
+	waiting = accepting_stream(listening_socket) != NULL;
+	pthread_mutex_unlock(&p2p_lock);
+	return waiting;
+}
+
+int p2p_stream_accept(int listening_socket, unsigned long *address, unsigned short *port)
+{
+	struct stream *stream;
+	int socket = -1;
+
+	if (!p2p_in_process())
+		return -1;
+	pthread_mutex_lock(&p2p_lock);
+	stream = accepting_stream(listening_socket);
+	if (stream)
+	{
+		socket = (int)(STREAM_SOCKET_BASE | (p2p.next_game_socket++ & STREAM_SOCKET_MASK));
+		stream->game_socket = socket;
+		stream->listening_socket = -1;
+		stream->state = _stream_open_state;
+		*address = stream->peer_address;
+		*port = stream->remote_port;
+	}
+	pthread_mutex_unlock(&p2p_lock);
+	return socket;
+}
+
+int p2p_stream_receive(int socket, void *buffer, int length)
+{
+	int result;
+
+	pthread_mutex_lock(&p2p_lock);
+	for (;;)
+	{
+		struct stream *stream = game_stream(socket);
+
+		if (!stream)
+		{
+			result = -WSAENOTSOCK;
+			break;
+		}
+		if (length <= 0)
+		{
+			result = 0;
+			break;
+		}
+		if (stream->pending_size > 0)
+		{
+			result = stream->pending_size < length ? stream->pending_size : length;
+			memcpy(buffer, stream->pending, (size_t)result);
+			memmove(stream->pending, stream->pending + result, (size_t)(stream->pending_size - result));
+			stream->pending_size -= result;
+			break;
+		}
+		/* (its end, once what it carried is read: the peer closed it, or it
+		ended, as the game's socket to a stand-in sees the stand-in close) */
+		if (stream->remote_closed || stream->ended)
+		{
+			result = 0;
+			break;
+		}
+		if (!stream->blocking)
+		{
+			result = -WSAEWOULDBLOCK;
+			break;
+		}
+		pthread_mutex_unlock(&p2p_lock);
+		Sleep(2);
+		pthread_mutex_lock(&p2p_lock);
+	}
+	pthread_mutex_unlock(&p2p_lock);
+	return result;
+}
+
+int p2p_stream_send(int socket, const void *buffer, int length)
+{
+	int sent = 0;
+	int result;
+
+	pthread_mutex_lock(&p2p_lock);
+	for (;;)
+	{
+		struct stream *stream = game_stream(socket);
+
+		if (!stream)
+		{
+			result = -WSAENOTSOCK;
+			break;
+		}
+		/* (nothing more once it is over at either end: the game reads its
+		end) */
+		if (stream->ended || stream->remote_closed || stream->local_closed)
+		{
+			result = sent ? sent : -WSAECONNRESET;
+			break;
+		}
+		/* (as much as the tunnel's window has room for: the rest is the
+		game's to send again, as with a full socket) */
+		while (sent < length && ikcp_waitsnd(stream->kcp) < STREAM_WINDOW)
+		{
+			int size = length - sent < STREAM_CHUNK_SIZE ? length - sent : STREAM_CHUNK_SIZE;
+
+			stream_message(stream, _stream_data, (const unsigned char *)buffer + sent, size);
+			sent += size;
+		}
+		if (sent == length || (sent && !stream->blocking))
+		{
+			result = sent;
+			break;
+		}
+		if (!stream->blocking)
+		{
+			result = -WSAEWOULDBLOCK;
+			break;
+		}
+		pthread_mutex_unlock(&p2p_lock);
+		Sleep(2);
+		pthread_mutex_lock(&p2p_lock);
+	}
+	pthread_mutex_unlock(&p2p_lock);
+	return result;
+}
+
+int p2p_stream_close(int socket)
+{
+	struct stream *stream;
+	int result = 0;
+
+	pthread_mutex_lock(&p2p_lock);
+	stream = game_stream(socket);
+	if (!stream)
+		result = -WSAENOTSOCK;
+	else
+	{
+		/* (what the game sent still goes, then the close: the stream lingers
+		as one whose socket closed does, stream_update) */
+		stream->game_socket = 0;
+		if (stream->ended)
+			stream_free(stream);
+		else
+			stream_local_closed(stream);
+	}
+	pthread_mutex_unlock(&p2p_lock);
+	return result;
+}
+
+int p2p_stream_set_blocking(int socket, int blocking)
+{
+	struct stream *stream;
+	int result = 0;
+
+	pthread_mutex_lock(&p2p_lock);
+	stream = game_stream(socket);
+	if (!stream)
+		result = -WSAENOTSOCK;
+	else
+		stream->blocking = blocking != 0;
+	pthread_mutex_unlock(&p2p_lock);
+	return result;
+}
+
+/* (under p2p_lock) what a select says of a connection the game took: its
+end is something to read, and a send that would fail does not wait */
+static void stream_ready(const struct stream *stream, int *readable, int *writeable)
+{
+	*readable = stream->pending_size > 0 || stream->remote_closed || stream->ended;
+	*writeable = stream->ended || stream->remote_closed || stream->local_closed ||
+		ikcp_waitsnd(stream->kcp) < STREAM_WINDOW;
+}
+
+int p2p_stream_ready(int socket, int *readable, int *writeable)
+{
+	struct stream *stream;
+	int result = 0;
+
+	*readable = 0;
+	*writeable = 0;
+	pthread_mutex_lock(&p2p_lock);
+	stream = game_stream(socket);
+	if (!stream)
+		result = -WSAENOTSOCK;
+	else
+		stream_ready(stream, readable, writeable);
+	pthread_mutex_unlock(&p2p_lock);
+	return result;
+}
+
+int p2p_select_ready(const int *sockets, int count, int list, unsigned char *ready)
+{
+	int unknown = 0;
+	int any = 0;
+	int index;
+
+	memset(ready, 0, (size_t)(count > 0 ? count : 0));
+	if (count <= 0)
+		return 0;
+	if (!p2p_in_process())
+	{
+		/* (none is taken in the process: a number of theirs is no socket) */
+		for (index = 0; index < count; index++)
+			unknown |= p2p_stream_socket(sockets[index]);
+		return unknown ? -1 : 0;
+	}
+	/* (the connections and the listening sockets' waiting ones, under the
+	p2p lock once; then the inboxes, under theirs) */
+	pthread_mutex_lock(&p2p_lock);
+	for (index = 0; index < count; index++)
+	{
+		if (p2p_stream_socket(sockets[index]))
+		{
+			struct stream const *stream = game_stream(sockets[index]);
+			int readable, writeable;
+
+			if (!stream)
+			{
+				unknown = 1;
+				continue;
+			}
+			stream_ready(stream, &readable, &writeable);
+			ready[index] = (unsigned char)(list == 0 ? readable : list == 1 ? writeable : 0);
+		}
+		else if (list == 0)
+		{
+			ready[index] = (unsigned char)(accepting_stream(sockets[index]) != NULL);
+		}
+	}
+	pthread_mutex_unlock(&p2p_lock);
+	if (list == 0)
+	{
+		pthread_mutex_lock(&inbox_lock);
+		for (index = 0; index < count; index++)
+		{
+			struct inbox const *inbox;
+
+			if (ready[index] || p2p_stream_socket(sockets[index]))
+				continue;
+			inbox = inbox_of(sockets[index]);
+			ready[index] = (unsigned char)(inbox && inbox->count > 0);
+		}
+		pthread_mutex_unlock(&inbox_lock);
+	}
+	for (index = 0; index < count; index++)
+		any |= ready[index];
+	return unknown ? -1 : any;
+}
+
+int p2p_stream_waiting_bytes(int socket)
+{
+	struct stream *stream;
+	int result;
+
+	pthread_mutex_lock(&p2p_lock);
+	stream = game_stream(socket);
+	result = stream ? stream->pending_size : -WSAENOTSOCK;
+	pthread_mutex_unlock(&p2p_lock);
+	return result;
+}
+
+int p2p_stream_address(int socket, int peer, unsigned long *address, unsigned short *port)
+{
+	struct stream *stream;
+	int result = 0;
+
+	pthread_mutex_lock(&p2p_lock);
+	stream = game_stream(socket);
+	if (!stream)
+		result = -WSAENOTSOCK;
+	else if (peer)
+	{
+		*address = stream->peer_address;
+		*port = stream->remote_port;
+	}
+	else
+	{
+		/* (where a stand-in's connection to the game would have come to) */
+		*address = p2p.local_address;
+		*port = stream->game_port;
+	}
+	pthread_mutex_unlock(&p2p_lock);
+	return result;
 }
 
 static void stream_readable(struct stream *stream)
@@ -2320,7 +3222,14 @@ static void tunnel_received(const unsigned char *packet, int size, const struct 
 	its number, can be STUN's magic cookie) */
 	if (size < 1 || packet[0] != TUNNEL_MAGIC)
 	{
-		if (size >= 20 && packet[4] == 0x21 && packet[5] == 0x12 && packet[6] == 0xA4 && packet[7] == 0x42)
+		unsigned char answer[128];
+		int answer_size;
+
+		/* (a master server's probe of a dedicated server's port, answered
+		to where it came from: server_master.c) */
+		if (server_master_probe(packet, size, from->sin_addr.s_addr, answer, &answer_size))
+			posix_socket_sendto(p2p.tunnel_socket, answer, answer_size, 0, from, sizeof(*from));
+		else if (size >= 20 && packet[4] == 0x21 && packet[5] == 0x12 && packet[6] == 0xA4 && packet[7] == 0x42)
 			stun_received(packet, size, from);
 		return;
 	}
@@ -2339,6 +3248,8 @@ static void tunnel_received(const unsigned char *packet, int size, const struct 
 		size - TUNNEL_HEADER_SIZE, inner);
 	if (inner_size < 1)
 		return;
+	p2p.counts.packets_received++;
+	p2p.counts.bytes_received += (unsigned long)size;
 	newest = counter > peer->receive_highest;
 	packet_received(peer, counter);
 	peer_heard(peer, from->sin_addr.s_addr, from->sin_port, newest);
@@ -2363,6 +3274,8 @@ static void tunnel_received(const unsigned char *packet, int size, const struct 
 
 			memcpy(&sent, inner + 1, 4);
 			peer->round_trip = (unsigned int)p2p_now() - sent;
+			if (!peer->pongs++ || peer->round_trip < peer->shortest_round_trip)
+				peer->shortest_round_trip = peer->round_trip;
 		}
 		break;
 	case _packet_datagram:
@@ -2412,6 +3325,125 @@ static void tunnel_readable(void)
 		if (!p2p_webrtc_received(packet, size, from.sin_addr.s_addr, from.sin_port))
 			tunnel_received(packet, size, &from);
 	}
+}
+
+/* ---------- the server browser's probes of public games' hosts */
+
+/* the probe of the host with this identifier, or -1 */
+static int probe_index(const unsigned char *host)
+{
+	int index;
+
+	for (index = 0; index < P2P_MAXIMUM_PROBES; index++)
+	{
+		if (p2p.probes[index].used && !memcmp(p2p.probes[index].identifier, host, P2P_IDENTIFIER_SIZE))
+			return index;
+	}
+	return -1;
+}
+
+/* a probe ends: its request, and its peer (unless a join took it up), go;
+the browser is told the shortest round trip timed, if any */
+static void probe_end(int index)
+{
+	unsigned char host[P2P_IDENTIFIER_SIZE];
+	struct peer *peer;
+	int ping;
+
+	memcpy(host, p2p.probes[index].identifier, P2P_IDENTIFIER_SIZE);
+	p2p.probes[index].used = 0;
+	p2p_signal_stop_probe(host);
+	peer = find_peer(host);
+	ping = peer && peer->pongs ? (int)peer->shortest_round_trip : -1;
+	if (peer && peer->probe)
+		drop_peer(peer, "probed");
+	p2p_lobby_probed(host, ping);
+}
+
+int p2p_probe_start(const unsigned char *host_hash, const unsigned char *token)
+{
+#ifdef HALO_WEB
+	/* (a browser reaches a host only by a WebRTC connection of its own) */
+	return 0;
+#else
+	unsigned char host[P2P_IDENTIFIER_SIZE];
+	struct peer *peer;
+	int free_index = -1;
+	int index;
+
+	p2p_identifier_from_hash(host_hash, host);
+	peer = find_peer(host);
+	/* (this machine's own game, and a host the tunnel reaches already: no
+	tunnel to make) */
+	if (!memcmp(host, identifier, P2P_IDENTIFIER_SIZE) || (peer && peer->connected && !peer->probe))
+	{
+		p2p_lobby_probed(host, peer && peer->pongs ? (int)peer->round_trip : -1);
+		return 1;
+	}
+	if (probe_index(host) >= 0)
+		return 1;
+	/* (a session with it under way, or a join of it: their own) */
+	if (peer || ((p2p.joining || p2p.join_requested) && !memcmp(host, p2p.join_host, P2P_IDENTIFIER_SIZE)))
+		return 0;
+	for (index = 0; index < P2P_MAXIMUM_PROBES && free_index < 0; index++)
+	{
+		if (!p2p.probes[index].used)
+			free_index = index;
+	}
+	if (free_index < 0)
+		return 0;
+	/* (the request carries the public address) */
+	p2p.stun_started = 1;
+	if (!stun_settled())
+		return 0;
+	p2p_signal_start();
+	if (!p2p_signal_probe(host_hash, token))
+		return 0;
+	p2p.probes[free_index].used = 1;
+	memcpy(p2p.probes[free_index].identifier, host, P2P_IDENTIFIER_SIZE);
+	p2p.probes[free_index].time = p2p_now();
+	return 1;
+#endif
+}
+
+/* the probes timed (PROBE_PINGS answered) end, as do those not reached in
+PROBE_TIMEOUT, and all of them once the browser closes */
+static void update_probes(void)
+{
+	int browsing = p2p_lobby_browsing();
+	int index;
+
+	for (index = 0; index < P2P_MAXIMUM_PROBES; index++)
+	{
+		struct peer const *peer;
+
+		if (!p2p.probes[index].used)
+			continue;
+		peer = find_peer(p2p.probes[index].identifier);
+		if (!browsing || (peer && peer->probe && peer->pongs >= PROBE_PINGS) ||
+			elapsed(p2p.probes[index].time, PROBE_TIMEOUT))
+		{
+			probe_end(index);
+		}
+	}
+}
+
+/* a join of a host being probed: the probe's tunnel, if it reached the
+host, is the join's (1); else the probe is given up, as the join's own
+session could not be made beside its */
+static int probe_taken_up(const unsigned char *host)
+{
+	int index = probe_index(host);
+	struct peer *peer = find_peer(host);
+	int taken = peer && peer->probe && peer->connected;
+
+	if (taken)
+		peer->probe = 0;
+	if (index >= 0)
+		probe_end(index);
+	else if (peer && peer->probe)
+		drop_peer(peer, "probe given up for a join");
+	return taken;
 }
 
 /* ---------- invites */
@@ -2472,6 +3504,27 @@ static int parse_invite(const char *text, unsigned char *host_hash, unsigned cha
 	return 1;
 }
 
+/* the host of the public game this machine joined from the server browser
+(p2p_join_listing), till another invite is joined: its identifier */
+static unsigned char listed_host[P2P_IDENTIFIER_SIZE];
+static int listed_host_known;
+/* the listing joined is a dedicated server's that a master server lists (an
+approved operator's, by its key: a player's host cannot say it is one) */
+static int listed_host_dedicated;
+/* ... and the masters that listed it, by their key ids */
+static unsigned char listed_host_masters[P2P_LISTING_MAXIMUM_MASTERS][P2P_LISTING_MASTER_KEY_ID_SIZE];
+static int listed_host_master_count;
+
+/* a new join's progress (p2p_join_progress): answered, its host reached
+already (a probe's tunnel) */
+static void join_progress_begin(int answered)
+{
+	p2p.join_started = 1;
+	p2p.join_answered = answered;
+	p2p.join_gave_up = 0;
+	p2p.join_refused = -1;
+}
+
 /* under p2p_lock: parse_invite's result */
 static int join_invite(const char *text)
 {
@@ -2484,9 +3537,36 @@ static int join_invite(const char *text)
 			"cannot join");
 	if (parsed <= 0)
 		return parsed;
+	/* (any invite's game is no listed one, unless p2p_join_listing says) */
+	listed_host_known = 0;
+	listed_host_dedicated = 0;
+	listed_host_master_count = 0;
 	p2p_identifier_from_hash(hash, host);
 	if (!memcmp(host, identifier, P2P_IDENTIFIER_SIZE))
 		return 1;
+	if (probe_taken_up(host))
+	{
+		int index;
+
+		/* (a join of another game under way ends, and the last game's
+		players are not this one's) */
+		if (p2p.joining)
+			p2p_signal_stop_joining();
+		p2p.joining = p2p.join_requested = 0;
+		for (index = 0; index < P2P_MAXIMUM_PLAYER_JOINS; index++)
+		{
+			if (p2p.reaching[index].used && p2p.reaching[index].asked)
+				p2p_signal_stop_joining_player(p2p.reaching[index].identifier);
+		}
+		memset(p2p.reaching, 0, sizeof(p2p.reaching));
+		memcpy(p2p.join_host, host, sizeof(host));
+		memcpy(p2p.join_host_hash, hash, sizeof(hash));
+		memcpy(p2p.join_token, token, sizeof(token));
+		join_progress_begin(1);
+		platform_log("Internet play: joining %s's game, reached already; it is listed under Multiplayer, "
+			"System Link", find_peer(host)->name);
+		return 1;
+	}
 	peer = find_peer(host);
 	if (peer && peer->connected)
 	{
@@ -2500,7 +3580,35 @@ static int join_invite(const char *text)
 	memcpy(p2p.join_host_hash, hash, sizeof(hash));
 	memcpy(p2p.join_token, token, sizeof(token));
 	p2p.join_requested = 1;
+	join_progress_begin(0);
 	return 1;
+}
+
+/* (p2p.h) */
+const char *p2p_invite_log_text(const char *invite, char *text, int size)
+{
+	enum { SHOWN_DIGITS = 8 };
+	const char *start = invite;
+	const char *search;
+	size_t kept;
+
+	/* (after "halo://join/" or "halo://key/", if there is one) */
+	for (search = invite; *search; search++)
+	{
+		if (!strncmp(search, "://", 3))
+		{
+			const char *slash = strchr(search + 3, '/');
+
+			start = slash ? slash + 1 : search + 3;
+			break;
+		}
+	}
+	kept = (size_t)(start - invite) + SHOWN_DIGITS;
+	if (strlen(invite) <= kept)
+		snprintf(text, (size_t)size, "%s", invite);
+	else
+		snprintf(text, (size_t)size, "%.*s... (the rest is left out of the log)", (int)kept, invite);
+	return text;
 }
 
 int p2p_join_invite(const char *text)
@@ -2514,6 +3622,113 @@ int p2p_join_invite(const char *text)
 	if (result > 0 && !p2p.running)
 		platform_log("Internet play is off (network.online in config.toml): the invite is ignored");
 	return result > 0;
+}
+
+int p2p_join_listing(const struct p2p_listing *listing)
+{
+	unsigned char hash[P2P_KEY_HASH_SIZE], token[P2P_TOKEN_SIZE];
+
+	if (!p2p_join_invite(listing->invite))
+		return 0;
+	/* (its host as the invite names it, as the tunnel knows its peers) */
+	pthread_mutex_lock(&p2p_lock);
+	if (parse_invite(listing->invite, hash, token) > 0)
+	{
+		p2p_identifier_from_hash(hash, listed_host);
+		listed_host_known = 1;
+		listed_host_dedicated = listing->dedicated && listing->master;
+		listed_host_master_count = listing->master ? listing->master_key_id_count : 0;
+		if (listed_host_master_count > P2P_LISTING_MAXIMUM_MASTERS)
+			listed_host_master_count = P2P_LISTING_MAXIMUM_MASTERS;
+		memcpy(listed_host_masters, listing->master_key_ids, sizeof(listed_host_masters));
+	}
+	pthread_mutex_unlock(&p2p_lock);
+	return 1;
+}
+
+int p2p_joined_listed_host(void)
+{
+	struct peer *peer;
+	int reached;
+
+	if (!p2p.running)
+		return 0;
+	pthread_mutex_lock(&p2p_lock);
+	peer = listed_host_known ? find_peer(listed_host) : NULL;
+	reached = peer && peer->connected;
+	pthread_mutex_unlock(&p2p_lock);
+	return reached;
+}
+
+int p2p_joined_listed_dedicated(void)
+{
+	int dedicated;
+
+	if (!p2p_joined_listed_host())
+		return 0;
+	pthread_mutex_lock(&p2p_lock);
+	dedicated = listed_host_dedicated;
+	pthread_mutex_unlock(&p2p_lock);
+	return dedicated;
+}
+
+int p2p_joined_listing_masters(unsigned char (*key_ids)[P2P_LISTING_MASTER_KEY_ID_SIZE], int maximum)
+{
+	int count;
+
+	pthread_mutex_lock(&p2p_lock);
+	count = listed_host_known ? listed_host_master_count : 0;
+	if (count > maximum)
+		count = maximum;
+	memcpy(key_ids, listed_host_masters, (size_t)count * P2P_LISTING_MASTER_KEY_ID_SIZE);
+	pthread_mutex_unlock(&p2p_lock);
+	return count;
+}
+
+int p2p_join_progress(int *stage, char *reason, int size)
+{
+	/* (the game's rejection codes in their order: network_game_protocol.h's
+	version too old, too new, bad join token, bad password, full, closed,
+	blacklisted machine, then the port's: a name refused, and a dedicated
+	server's VPN policy's) */
+	static const char *const refusals[] = { "version", "version", "token", "password", "full", "closed", "banned",
+		"name", "vpn", "vpn_blocked", "link", "link_age", "link_in_use", "address_full" };
+	struct peer *peer;
+	const char *why = "";
+
+	pthread_mutex_lock(&p2p_lock);
+	peer = p2p.join_started ? find_peer(p2p.join_host) : NULL;
+	*stage = P2P_JOIN_NONE;
+	if (p2p.join_started && p2p.join_refused >= 0)
+	{
+		*stage = P2P_JOIN_FAILED;
+		why = p2p.join_refused < (int)(sizeof(refusals) / sizeof(*refusals)) ? refusals[p2p.join_refused] : "closed";
+		/* (a server that blocks VPNs, on a master this machine knows but holds
+		no pass of: link Discord with that one, player_link.c) */
+		if (!strcmp(why, "vpn") && player_link_needed_master() >= 0)
+			why = "vpn_master";
+	}
+	else if (peer && peer->connected && peer->is_host && !peer->is_player)
+		*stage = P2P_JOIN_CONNECTED;
+	else if (p2p.joining || p2p.join_requested)
+		*stage = peer || p2p.join_answered ? P2P_JOIN_ANSWERED : P2P_JOIN_ASKING;
+	else if (p2p.join_started && p2p.join_gave_up)
+	{
+		*stage = P2P_JOIN_FAILED;
+		why = p2p.join_answered ? "no_route" : "no_answer";
+	}
+	pthread_mutex_unlock(&p2p_lock);
+	if (reason && size > 0)
+		snprintf(reason, (size_t)size, "%s", why);
+	return *stage;
+}
+
+void p2p_join_refused(int rejection_code)
+{
+	pthread_mutex_lock(&p2p_lock);
+	if (p2p.join_started && rejection_code >= 0)
+		p2p.join_refused = rejection_code;
+	pthread_mutex_unlock(&p2p_lock);
 }
 
 void p2p_invite_received(const char *text)
@@ -2547,6 +3762,7 @@ static void update_joining(void)
 	else if (p2p.joining && elapsed(p2p.join_time, JOIN_TIMEOUT))
 	{
 		p2p.joining = 0;
+		p2p.join_gave_up = 1;
 		p2p_signal_stop_joining();
 		platform_log("Internet play: no answer from the invite's host; it may have stopped hosting or quit");
 	}
@@ -2641,13 +3857,23 @@ static void make_invite(void)
 	snprintf(p2p.invite, sizeof(p2p.invite), "halo://join/%s", text);
 }
 
+void p2p_token_listed(const unsigned char *token)
+{
+	if (p2p.has_token && !memcmp(token, p2p.token, P2P_TOKEN_SIZE))
+		p2p.token_listed = 1;
+}
+
 void p2p_new_invite_if_listed(void)
 {
 	if (!p2p.has_token || !p2p.token_listed)
 		return;
 	make_invite();
-	platform_log("Internet play: a new invite, so that the one listed lets no one in (private, or a new password): %s",
-		p2p.invite);
+	{
+		char shown[128];
+
+		platform_log("Internet play: a new invite, so that the one listed lets no one in (private, or a new password): %s",
+			p2p_invite_log_text(p2p.invite, shown, sizeof(shown)));
+	}
 	if (p2p.hosting)
 	{
 		p2p_signal_host(p2p.token);
@@ -2680,8 +3906,14 @@ static void update_hosting(void)
 		p2p.stun_started = 1;
 		p2p_signal_start();
 		p2p_signal_host(p2p.token);
-		platform_log("Internet play: hosting. Invite players with this link (it only works while this "
-			"copy of the game runs): %s", p2p.invite);
+		{
+			char shown[128];
+
+			/* (whole on the clipboard and in the menus) */
+			platform_log("Internet play: hosting. Invite players with this link (it only works while this "
+				"copy of the game runs; it is on the clipboard): %s",
+				p2p_invite_log_text(p2p.invite, shown, sizeof(shown)));
+		}
 		if (!p2p.invite_copied)
 		{
 			memcpy(p2p.clipboard, p2p.invite, sizeof(p2p.clipboard));
@@ -2725,6 +3957,24 @@ int p2p_peer_key_hash(unsigned long virtual_address, unsigned char *peer_identif
 	{
 		memcpy(peer_identifier, peer->identifier, P2P_IDENTIFIER_SIZE);
 		memcpy(key_hash, peer->key_hash, P2P_KEY_HASH_SIZE);
+		result = 1;
+	}
+	pthread_mutex_unlock(&p2p_lock);
+	return result;
+}
+
+int p2p_peer_binding(unsigned long virtual_address, unsigned char *binding)
+{
+	struct peer *peer;
+	int result = 0;
+
+	if (!p2p.running)
+		return 0;
+	pthread_mutex_lock(&p2p_lock);
+	peer = find_peer_by_address(virtual_address);
+	if (peer)
+	{
+		player_link_binding(peer->secret, binding);
 		result = 1;
 	}
 	pthread_mutex_unlock(&p2p_lock);
@@ -2779,6 +4029,18 @@ int p2p_reach_player(const unsigned char *key_hash)
 	}
 	pthread_mutex_unlock(&p2p_lock);
 	return result;
+}
+
+int p2p_nat_strict(void)
+{
+	int strict;
+
+	if (!p2p.running)
+		return 0;
+	pthread_mutex_lock(&p2p_lock);
+	strict = p2p.reported_symmetric && !p2p.upnp_forwarded;
+	pthread_mutex_unlock(&p2p_lock);
+	return strict;
 }
 
 int p2p_peer_reached(const unsigned char *peer_identifier, unsigned long *address)
@@ -2859,13 +4121,13 @@ static void *upnp_thread(void *unused)
 	p2p.upnp_time = p2p_now();
 	if (forwarded)
 	{
-		char text[32];
+		char text[LOG_ADDRESS_SIZE];
 
 		if (!p2p.upnp_forwarded || p2p.upnp_candidate.address != address ||
 			p2p.upnp_candidate.port != external_port)
 		{
 			platform_log("Internet play: the router forwards %s to this machine (UPnP)",
-				address_text(address, external_port, text));
+				log_address_ipv4(address, external_port, text, sizeof(text)));
 		}
 		p2p.upnp_forwarded = 1;
 		p2p.upnp_candidate.address = address;
@@ -2931,7 +4193,7 @@ static int upnp_needed(void)
 	{
 		struct peer const *peer = &p2p.peers[index];
 
-		if (peer->used && !peer->connected &&
+		if (peer->used && !peer->connected && !peer->probe &&
 			((p2p.hosting && !peer->is_host) || elapsed(peer->offered_time, UPNP_JOIN_DELAY)))
 		{
 			return 1;
@@ -3318,13 +4580,17 @@ static void *p2p_thread(void *unused)
 				stream_writeable(&p2p.streams[entry]);
 			}
 		}
-		/* a connection to the game that failed is in neither list */
+		/* a connection to the game that failed is in neither list (and in
+		the process, one the game does not take) */
 		for (index = 0; index < MAXIMUM_STREAMS; index++)
 		{
 			struct stream *stream = &p2p.streams[index];
 
-			if (stream->used && stream->state == _stream_connecting && elapsed(stream->created_time, 5000))
+			if (stream->used && ((stream->state == _stream_connecting && elapsed(stream->created_time, 5000)) ||
+				(stream->state == _stream_accepting && elapsed(stream->created_time, ACCEPT_TIMEOUT))))
+			{
 				stream_local_closed(stream);
+			}
 		}
 #ifdef HALO_PROFILE
 		profile_trace_end(p2p_profile_names.streams);
@@ -3343,8 +4609,10 @@ static void *p2p_thread(void *unused)
 		profile_trace_end(p2p_profile_names.kcp_update);
 #endif
 		update_peers();
+		update_probes();
 		webrtc_busy = p2p_webrtc_update();
 		expire_proxies();
+		public_address_update();
 		stun_update();
 		update_hosting();
 		/* the server browser (p2p_lobby.c): signalling while browsing too */
@@ -3427,6 +4695,7 @@ void p2p_initialize(unsigned long local_address)
 		p2p.handoff_socket = open_socket(SOCK_DGRAM, network_long(0x7F000001), network_short(HANDOFF_PORT), NULL);
 #endif
 	stun_setup();
+	p2p.in_process = config_boolean("network.tunnel_in_process");
 	if (pthread_create(&thread, NULL, p2p_thread, NULL) != 0)
 	{
 		close_socket(&p2p.tunnel_socket);
@@ -3435,6 +4704,9 @@ void p2p_initialize(unsigned long local_address)
 	}
 	pthread_detach(thread);
 	p2p.running = 1;
+	if (p2p.in_process)
+		platform_log("Internet play: the peers' datagrams and connections are handed to the game in the process "
+			"(network.tunnel_in_process), with no stand-in sockets");
 	if (command_line_invite(invite, sizeof(invite)))
 		p2p_join_invite(invite);
 }

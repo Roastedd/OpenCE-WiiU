@@ -33,12 +33,12 @@ def in_the_repository(monkeypatch):
     monkeypatch.chdir(ROOT)
 
 
-def graph(monkeypatch, found=True, release=False):
+def graph(monkeypatch, found=True, release=False, lto=False):
     """build.ninja's Wii U part, as configure.py writes it, its long lines joined again"""
     monkeypatch.setattr(wiiu_build, "find_wiiu_cc", lambda sln: "wiiu-clang" if found else None)
     out = io.StringIO()
     sln = SimpleNamespace(build_dir=Path("build"), wiiu_cc=None, port_release=release, port_profile=False,
-                          compiler_launcher=None)
+                          compiler_launcher=None, wiiu_lto=lto)
     wiiu_build.generate_wiiu_build(ninja_syntax.Writer(out), sln)
     return re.sub(r" \$\n +", " ", out.getvalue())
 
@@ -145,6 +145,26 @@ def test_every_object_is_checked_and_the_link_is_the_wii_us(monkeypatch):
     assert re.search(r"^build build/linux-wiiu/halo\.wuhb: wiiu_wuhb build/linux-wiiu/halo\.rpx", text, re.M)
 
 
+def test_the_game_as_one_module_is_checked_and_linked_as_one_object(monkeypatch):
+    """configure.py --wiiu-lto: every game source as LLVM IR, one module of them compiled to one checked object in the
+    link; the platform layer's units are still objects of their own; without it, nothing is IR"""
+    text = graph(monkeypatch, lto=True)
+    sources = linux_build.game_sources(wiiu_build._load_port_config())
+    for source in sources:
+        assert re.search(r"^build build/linux-wiiu/obj/" + re.escape(source.with_suffix(".ll").as_posix().replace(" ", "$ ")) + r"[ :][^\n]*wiiu_cc_ir ",
+                         text, re.M), source
+        assert not is_compiled(text, source.as_posix()), source
+    lto = re.search(r"^build build/linux-wiiu/obj/game_lto\.o[^\n]*: wiiu_lto ([^\n]*)", text, re.M)
+    assert lto and "build/linux-wiiu/obj/source/main/main.ll" in lto.group(1)
+    rule = re.search(r"^rule wiiu_lto\n  command = ([^\n]*)", text, re.M).group(1)
+    assert rule.startswith("llvm-link ") and "wiiu_check_objects.py --quiet $out" in rule
+    assert "-flto -S" in re.search(r"^rule wiiu_cc_ir\n  command = ([^\n]*)", text, re.M).group(1)
+    elf = re.search(r"^build build/linux-wiiu/halo\.elf [^\n]*: wiiu_link ([^\n]*)", text, re.M).group(1)
+    assert "build/linux-wiiu/obj/game_lto.o" in elf and "build/linux-wiiu/obj/source/main/main.o" not in elf
+    assert is_compiled(text, "port/wiiu/src/wiiu_posix_net.c")
+    assert ": wiiu_cc_ir " not in graph(monkeypatch)
+
+
 def test_audio_ps_is_one_explicit_exactly_audited_assembly_object(monkeypatch):
     text = graph(monkeypatch)
     obj = "build/linux-wiiu/obj/port/wiiu/src/wiiu_resampler_ps_asm.o"
@@ -176,6 +196,34 @@ def test_the_games_main_is_the_shells_to_run(monkeypatch):
         assert "-fshort-wchar" not in flags and "-femulated-tls" in flags, name
     # the Xbox kernel's Win32 shims are compiled, not left to stubs
     assert is_compiled(text, "port/linux/src/xbox_kernel.c")
+
+
+def test_the_updaters_units_have_their_libraries_and_defines(monkeypatch):
+    """port/wiiu/src/wiiu_update*.c: Mbed TLS's and Monocypher's headers, the build number, and the releases' repository and key only
+    when configure.py's environment gives them (the updater is off without them); a repository or key of another form stops it"""
+    for name in ("HALO_BUILD_NUMBER", "HALO_UPDATE_REPOSITORY", "HALO_UPDATE_PUBLIC_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    text = graph(monkeypatch)
+    for name in wiiu_build.WIIU_UPDATE_UNITS:
+        flags = compile_flags(text, f"port/wiiu/src/{name}").split()
+        assert "-Iport/third_party/mbedtls/include" in flags and "-Iport/third_party/monocypher" in flags, name
+        assert "-DHALO_BUILD_NUMBER=0" in flags and "-fshort-wchar" not in flags, name
+        assert not [flag for flag in flags if flag.startswith(("-DHALO_UPDATE_REPOSITORY", "-DHALO_UPDATE_PUBLIC_KEY"))], name
+    assert "HALO_BUILD_NUMBER" not in compile_flags(text, "port/wiiu/src/wiiu_shell.c")
+    monkeypatch.setenv("HALO_BUILD_NUMBER", "12")
+    monkeypatch.setenv("HALO_UPDATE_REPOSITORY", "owner/halo-wiiu.releases")
+    monkeypatch.setenv("HALO_UPDATE_PUBLIC_KEY", "ab" * 32)
+    flags = compile_flags(graph(monkeypatch), "port/wiiu/src/wiiu_update.c").split()
+    assert "-DHALO_BUILD_NUMBER=12" in flags
+    assert '-DHALO_UPDATE_REPOSITORY=\\"owner/halo-wiiu.releases\\"' in flags
+    assert '-DHALO_UPDATE_PUBLIC_KEY=\\"' + "ab" * 32 + '\\"' in flags
+    for name, value in (("HALO_UPDATE_PUBLIC_KEY", "AB" * 32), ("HALO_UPDATE_PUBLIC_KEY", "ab" * 31), ("HALO_UPDATE_REPOSITORY", "no-slash"),
+                        ("HALO_UPDATE_REPOSITORY", "owner/repo; rm -rf /")):
+        monkeypatch.setenv(name, value)
+        with pytest.raises(ValueError):
+            graph(monkeypatch)
+        monkeypatch.setenv("HALO_UPDATE_PUBLIC_KEY", "ab" * 32)
+        monkeypatch.setenv("HALO_UPDATE_REPOSITORY", "owner/halo-wiiu.releases")
 
 
 def test_the_wii_us_own_units_are_built_as_the_platform_layer_is(monkeypatch, tmp_path):

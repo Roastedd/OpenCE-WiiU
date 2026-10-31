@@ -19,11 +19,13 @@ in the PC bitmaps' layout), copied to port/assets/menus/svg, at up to 4
 times their size. The pictures with no redraw (renders, screenshots, logos)
 are the Xbox map's bitmap of the same name, where it has the same pictures
 in the same order (XBOX_BITMAPS: the player's own ui.map draws them, and
-nothing is shipped), else the --placeholder image, fitted to each frame
-where the PC version's picture is (--pictures: only their bounds are read),
-else to the part of it the widgets show;
-port/assets/menus/NON_HANDDRAWN.md lists both, the placeholders as ones to
-be redrawn.
+nothing is shipped), else this port's own drawing of the frame
+(port/assets/menus/drawn, drawn at twice its size as
+tools/render_menu_art.py draws it), else the --placeholder image, fitted to
+each frame where the PC version's picture is (--pictures: only their bounds
+are read), else to the part of it the widgets show;
+port/assets/menus/NON_HANDDRAWN.md lists them all, the placeholders as ones
+to be redrawn.
 
 What this engine (the Xbox's) has no use for is written but never runs: the
 PC version's mouse events (the port's own mouse support clicks with A), and
@@ -50,6 +52,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hud_assets import bleed, render_svg  # noqa: E402
 import port_settings  # noqa: E402
+import render_menu_art  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 MENUS = ROOT / "port/assets/menus"
@@ -68,12 +71,31 @@ LEFT_OUT = {
     # port_settings.WIDGET_PATCHES)
     "ui\\shell\\main_menu\\multiplayer_type_select\\checking_updates_screen_create",
     "ui\\shell\\main_menu\\multiplayer_type_select\\checking_updates_screen_join",
+    # (the server browser's Filters' PING, which is not known before a game
+    # is joined (the browser does not ping the master servers' servers), and
+    # TEAMPLAY OPTIONS, which the port's Filters leave to GAME TYPE)
+    "ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\filters\\op_ping",
+    "ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\filters\\op_game_options",
 }
-# children moved: (parent, child) to (x, y); the main menu's Quit up into
-# Credits' place; Multiplayer's Edit Gametypes and divider below Co-op,
-# keeping its 32-unit highlight inside the description panel's bottom curve.
+# children moved: (parent, child) to (x, y); the main menu's Quit a row below
+# Mods, which takes Credits' place; Multiplayer's Edit Gametypes and divider
+# below Co-op, keeping its 32-unit highlight inside the description panel's
+# bottom curve (port_settings.WIDGET_PATCHES)
 CHILD_OFFSETS = {
-    ("ui\\shell\\main_menu\\main_menu_select_list", "ui\\shell\\main_menu\\main_menu_item_quit_game"): (192, 391),
+    # the server browser's source tab (ALL GAMES, DEDICATED, P2P GAMES), 20
+    # units wider than CE's for its words (port_settings.WIDGET_PATCHES): 9
+    # units left, so that its words and arrows are centred in the tab the
+    # screen's border picture outlines (its own box is gone)
+    ("ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\op_browser_mode",
+     "ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\browser_mode_spinner"): (16, 1),
+    # Player Options' rows 27 apart, not 30, so that the host's AIM ASSIST and
+    # SHIELD EFFECTS fit below them and above the help, which some fill with
+    # three lines (port_settings.WIDGET_PATCHES)
+    **{("ui\\shell\\main_menu\\settings_select\\multiplayer_setup\\player_options_edit\\player_options_menu",
+        f"ui\\shell\\main_menu\\settings_select\\multiplayer_setup\\player_options_edit\\op_{row}"): (54, 73 + 27 * index)
+       for index, row in enumerate(port_settings.PLAYER_OPTIONS_ROWS)},
+    ("ui\\shell\\main_menu\\main_menu_select_list", "ui\\shell\\main_menu\\main_menu_item_quit_game"):
+        port_settings.QUIT_ITEM_PLACE,
     ("ui\\shell\\main_menu\\multiplayer_type_select\\multiplayer_type_select_list",
      "ui\\shell\\main_menu\\multiplayer_type_select\\multiplayer_type_gametypes_item"): (0, 358),
     ("ui\\shell\\main_menu\\multiplayer_type_select\\multiplayer_type_select_screen",
@@ -83,6 +105,15 @@ CHILD_OFFSETS = {
     **{("ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\join_game_items_list",
         f"ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\server_item_{row}"): (10, 102 + 17 * (row - 1))
        for row in range(1, 16)},
+    # the server browser's count of servers, wider to the left
+    # (port_settings.WIDGET_PATCHES)
+    ("ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\screen_stats_container",
+     "ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\server_count_label"): (410, 60),
+    # the server browser's Filters' rows, closed up where PING and TEAMPLAY
+    # OPTIONS were (LEFT_OUT)
+    **{("ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\filters\\filters_options_menu",
+        f"ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\filters\\op_{row}"): (54, 133 + 30 * index)
+       for index, row in enumerate(("game_type", "installed_maps"))},
     # the map lists' first row, the SINGLEPLAYER or MULTIPLAYER chooser
     # (port_settings.MAP_KIND_CHOOSER), where the gametype list has its own
     **{(f"ui\\shell\\main_menu\\{list_tag}", "ui\\shell\\main_menu\\new_select\\list_item_0"): (82, 73)
@@ -149,6 +180,9 @@ WIRED = {
     "mouse emit x event", "emit custom activation event", "single prev cl item activated", "controls back handler",
     "gamespy back handler", "gamespy dismiss error", "gamespy dismiss filters", "gamespy screen init",
     "gamespy screen dispose", "mp type set mode",
+    # (the server browser's: menu_functions.c's lobby_browser_*)
+    "gamespy select header", "gamespy select button", "gamespy select item", "gamespy screen update",
+    "gamespy update filter settings",
     "campaign menu init", "campaign menu continue", "difficulty item select", "solo map list update",
     "load game menu init", "load game menu dispose", "load game menu activated", "load game list update",
     "load game menu delete request", "load game menu delete finish",
@@ -274,6 +308,31 @@ def text_value(utf16: bytes) -> str:
     return text.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "")
 
 
+def strings_xml(lists: dict) -> str:
+    """strings.xml: the PC version's string lists (each tag's strings), with
+    the port's changes to them (port_settings.STRING_OVERRIDES and
+    STRING_INSERTS). Each list names its tag (map=) and each of its strings
+    that is the PC version's its index there (map=), which a map in another
+    language has in its language (menu_tags.c's map_strings)."""
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+             "<!-- The PC version's menus' text (tools/ce_menus.py) -->", "<menus>"]
+    for tag in sorted(lists):
+        strings = lists[tag]
+        originals = list(range(len(strings)))
+        if our_name(tag) in port_settings.STRING_OVERRIDES:
+            strings = port_settings.STRING_OVERRIDES[our_name(tag)]
+            originals = port_settings.OVERRIDE_ORIGINALS.get(our_name(tag), [None] * len(strings))
+        for index, texts in port_settings.STRING_INSERTS.get(our_name(tag), []):
+            strings = strings[:index] + texts + strings[index:]
+            originals = originals[:index] + [None] * len(texts) + originals[index:]
+        lines.append(f"\t<strings{attributes([('name', our_name(tag)), ('map', tag)])}>")
+        lines += [f"\t\t<string{attributes([('text', text), ('map', original)])}/>"
+                  for text, original in zip(strings, originals)]
+        lines.append("\t</strings>")
+    lines.append("</menus>")
+    return "\n".join(lines) + "\n"
+
+
 def flag_names(value: int, names: list) -> str:
     return " ".join(name for bit, name in enumerate(names) if value >> bit & 1) or None
 
@@ -290,6 +349,7 @@ class Art:
         self.tags, self.redraws, self.shown, self.pictures_folder = tags, redraws, shown, pictures
         self.placeholder = Image.open(placeholder).convert("RGBA")
         self.pictures = []  # (frame, size, PC picture) of the frames drawn as the placeholder
+        self.drawings = []  # (frame, width, height, what it shows) of the frames drawn from drawn/
         self.xbox_frames = []  # (PC frame, Xbox bitmap, its frame) drawn from the Xbox map
         self.added_frames = []  # (our bitmap, Xbox bitmap, its frame): port_settings.BITMAP_FRAMES
         self.svgs = []
@@ -389,11 +449,21 @@ class Art:
                     sys.exit(f"{svg}: {image.shape[1]}x{image.shape[0]}, not {scale}x {width}x{height}")
                 Image.fromarray(bleed(image), "RGBA").save(output, optimize=True)
                 return
-        # (no redraw: the placeholder, as large as fits, in the middle of where
-        # the PC version's picture is (only its bounds are read), else of the
-        # part the widgets show: a widget draws its bitmap from the top left,
-        # cut to its size)
+        # (no redraw: this port's own drawing of the frame, drawn/, which
+        # tools/render_menu_art.py draws at twice its size)
         name = self.frame_sources(relative, index, count)[-1]
+        drawing = render_menu_art.DRAWN / f"{name}.svg"
+        if drawing.is_file():
+            if render_menu_art.frame_size(drawing) != (width, height):
+                sys.exit(f"{drawing}: not {width}x{height}, the frame's size")
+            render_menu_art.render(drawing, output)
+            self.drawings.append((output.relative_to(MENUS).as_posix(), width, height,
+                                  render_menu_art.title(drawing)))
+            return
+        # (no drawing either: the placeholder, as large as fits, in the middle
+        # of where the PC version's picture is (only its bounds are read), else
+        # of the part the widgets show: a widget draws its bitmap from the top
+        # left, cut to its size)
         image = Image.new("RGBA", (width * PLACEHOLDER_SCALE, height * PLACEHOLDER_SCALE), (0, 0, 0, 0))
         area = (0, 0, min([width] + [w for w, _ in shown]), min([height] + [h for _, h in shown]))
         original = self.pictures_folder / f"{name}.png" if self.pictures_folder else None
@@ -527,7 +597,8 @@ def widget_xml(tag: str, widget: dict, tags: Tags, functions: list, inputs: list
         name = patch.get("swap", {}).get(our_name(child_tag), our_name(child_tag))
         lines += [f"{inner}{line}" for line in patch.get("insert_before", {}).get(our_name(child_tag), [])]
         pairs = [("widget", name), ("x", x or None), ("y", y or None),
-                 ("controller", str(child["custom controller index"] + 1) if child["flags"] & 1 else None)]
+                 ("controller", str(child["custom controller index"] + 1) if child["flags"] & 1 else None),
+                 ("platform", patch.get("child_platforms", {}).get(our_name(child_tag)))]
         lines.append(f"{inner}<child{attributes(pairs)}/>")
     lines += [f"{inner}{line}" for line in patch.get("children", [])]
     lines.append(f"{indent}</widget>")
@@ -551,19 +622,107 @@ def pause_art(art):
             (port_settings.pause_box_svg(piece, height), 4 if piece == "center" else 16, 256) for height in heights]))
     for piece in ("left", "center", "right"):
         lines.append(art.port_picture(f"pause/objectives_{piece}", [
-            (port_settings.pause_box_svg(piece, 195, header=True), 4 if piece == "center" else 16, 256)]))
+            (port_settings.pause_box_svg(piece, height, header=True), 4 if piece == "center" else 16, 256)
+            for height in port_settings.PAUSE_BOX_EXTRA_HEIGHTS]))
     return lines
+
+
+def non_handdrawn(art: Art) -> str:
+    """NON_HANDDRAWN.md: the pictures that are not redraws, and where each
+    is drawn from"""
+    report = [
+        "# Menu pictures that are not redraws",
+        "",
+        "The menus' bitmaps are drawn from the high-res redraws (`svg/`, from ui-svg-handmade) where there is",
+        "one. The PC version's pictures that have none (3D renders, screenshots and logos) are not in this",
+        "repository.",
+        "",
+        "## From the Xbox's map",
+        "",
+        "These have the same pictures, in the same order, in the Xbox's `ui.map`, which the menus draw them",
+        "from (the player's own; nothing is shipped). `mp_map_grafix`: the Xbox's has the 13 Xbox maps' pictures",
+        "(the PC version's first 13) and its \"?\"; the PC version's other 8 are its own maps'.",
+        "",
+    ]
+    report += [f"- `{tag}`" for tag in sorted(XBOX_BITMAPS)]
+    report += [
+        "",
+        "These frames are drawn from a frame of the Xbox map's bitmap of the same name, whose other frames differ:",
+        "the same picture, or for the profile settings the Xbox's picture for the same thing.",
+        "",
+        "| The PC version's frame | The Xbox's frame |",
+        "| --- | --- |",
+    ]
+    report += [f"| `{name}.png` | `{tag}` frame {index} |" for name, tag, index in sorted(art.xbox_frames)]
+    report += [
+        "",
+        "These frames are added after a bitmap's, drawn scaled from the Xbox map's (the profile settings'",
+        "picture of Gamepad Setup: the Xbox's Controller Setup's pictures of the button settings).",
+        "",
+        "| Our bitmap | The Xbox's frame |",
+        "| --- | --- |",
+    ]
+    report += [f"| `{name}` | `{tag}` frame {index} |" for name, tag, index in art.added_frames]
+    if art.drawings:
+        report += [
+            "",
+            "## Drawn for this port",
+            "",
+            "The Xbox's map has none of these (or other pictures under the name), and the PC version's are 3D",
+            "renders and screenshots, which are not shipped. Each frame is an original drawing of what its item",
+            "is for, in the menus' style: an SVG in `drawn/`, under the frame's path, which",
+            "`tools/render_menu_art.py` draws at twice the frame's size.",
+            "",
+            "| File | Size | What it shows |",
+            "| --- | --- | --- |",
+        ]
+        report += [f"| `{png}` | {w}x{h} | {shows} |" for png, w, h, shows in sorted(art.drawings)]
+    if art.pictures:
+        report += [
+            "",
+            "## Placeholders, to be redrawn",
+            "",
+            "The Xbox's map has none of these (or other pictures under the name), so each frame is a placeholder",
+            "until it is redrawn.",
+            "",
+            "| File | Size | The PC version's picture |",
+            "| --- | --- | --- |",
+        ]
+        report += [f"| `{png}` | {w}x{h} | `{source}` |" for png, w, h, source in sorted(art.pictures)]
+    placeholders = (f"{len(art.pictures)} {'is a placeholder' if len(art.pictures) == 1 else 'are placeholders'}"
+                    if art.pictures else "none is a placeholder")
+    report += ["", f"{len(art.drawings)} of {len(art.pngs)} frames are drawn for this port; {placeholders}.",
+               "", "The PC version's `ui\\gamespy` and `ui\\ticker` fonts are drawn with `ui\\small_ui`, which",
+               "the Xbox's map has.", ""]
+    return "\n".join(report)
+
+
+def regenerate_settings():
+    """Write port-owned settings and register any new screens for embedding."""
+    screens = port_settings.settings_files()
+    for name, lines in screens.items():
+        (CE / name).write_text("\n".join(lines))
+    manifest = MENUS / "menus.json"
+    data = json.loads(manifest.read_text())
+    files = set(data["files"]) | {"ce/" + name for name in screens}
+    data["files"] = sorted(name for name in files if name.endswith(".xml")) + sorted(
+        name for name in files if not name.endswith(".xml"))
+    manifest.write_text(json.dumps(data, indent=1) + "\n")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--tags", type=Path, required=True)
-    parser.add_argument("--definitions", type=Path, required=True)
-    parser.add_argument("--redraws", type=Path, required=True)
-    parser.add_argument("--placeholder", type=Path, required=True, help="the picture for frames with no redraw")
+    parser.add_argument("--settings-only", action="store_true", help="regenerate port-owned settings screens and their manifest")
+    parser.add_argument("--tags", type=Path, required="--settings-only" not in sys.argv)
+    parser.add_argument("--definitions", type=Path, required="--settings-only" not in sys.argv)
+    parser.add_argument("--redraws", type=Path, required="--settings-only" not in sys.argv)
+    parser.add_argument("--placeholder", type=Path, required="--settings-only" not in sys.argv, help="the picture for frames with no redraw")
     parser.add_argument("--pictures", type=Path,
                         help="the PC version's pictures, as PNGs by tag path: only where each is, to place its placeholder")
     arguments = parser.parse_args()
+    if arguments.settings_only:
+        regenerate_settings()
+        return
     tags = Tags(arguments.tags, arguments.definitions)
     # (the names of the Xbox's own as the game has them, which the tags' own
     # names give a little differently: "create&edit", "NULL")
@@ -616,18 +775,9 @@ def main() -> None:
     for name, lines in [*port_settings.settings_files().items(), *port_settings.multiplayer_files().items()]:
         (CE / name).write_text("\n".join(lines))
     # their strings
-    lines = ['<?xml version="1.0" encoding="UTF-8"?>',
-             "<!-- The PC version's menus' text (tools/ce_menus.py) -->", "<menus>"]
-    for tag in sorted(string_lists):
-        strings = [text_value(item["string"]) for item in tags.load(tag, "unicode_string_list")["strings"]]
-        strings = port_settings.STRING_OVERRIDES.get(our_name(tag), strings)
-        for index, texts in port_settings.STRING_INSERTS.get(our_name(tag), []):
-            strings = strings[:index] + texts + strings[index:]
-        lines.append(f"\t<strings{attributes([('name', our_name(tag))])}>")
-        lines += [f"\t\t<string{attributes([('text', text)])}/>" for text in strings]
-        lines.append("\t</strings>")
-    lines.append("</menus>")
-    (CE / "strings.xml").write_text("\n".join(lines) + "\n")
+    (CE / "strings.xml").write_text(strings_xml({
+        tag: [text_value(item["string"]) for item in tags.load(tag, "unicode_string_list")["strings"]]
+        for tag in string_lists}))
     # their bitmaps
     lines = ['<?xml version="1.0" encoding="UTF-8"?>',
              "<!-- The PC version's menus' bitmaps, drawn from the redraws, else the PC version's own pictures"
@@ -641,6 +791,12 @@ def main() -> None:
         ((ROOT / "port/assets/icons/lucide" / f"{icon}.svg").read_text().replace('stroke="currentColor"',
                                                                                  'stroke="#FFFFFF"'), 24, 24)
         for icon in ("volume-2", "volume-x")]))
+    # (the main menu's MODS, in the redraws' own letters, and the mods'
+    # status icons: Lucide's, port/assets/icons/lucide)
+    lines.append(art.port_picture("main_menu/menu_mods", port_settings.menu_item_frames("MODS", art.redraws)))
+    lines.append(art.port_picture("mods/status", port_settings.mod_status_frames(ROOT / "port/assets/icons/lucide")))
+    lines.append(art.port_picture("mods/status_small",
+                                  port_settings.mod_status_frames(ROOT / "port/assets/icons/lucide", 16)))
     # (nothing: what a game map draws for a frame of ui.map's it has not,
     # menu_tags.c)
     lines.append(art.port_picture("blank", [
@@ -648,54 +804,7 @@ def main() -> None:
     lines.append("</menus>")
     (CE / "bitmaps.xml").write_text("\n".join(lines) + "\n")
     # what is not hand-drawn
-    report = [
-        "# Menu pictures that are not redraws",
-        "",
-        "The menus' bitmaps are drawn from the high-res redraws (`svg/`, from ui-svg-handmade) where there is",
-        "one. The PC version's pictures that have none (3D renders, screenshots and logos) are not in this",
-        "repository.",
-        "",
-        "## From the Xbox's map",
-        "",
-        "These have the same pictures, in the same order, in the Xbox's `ui.map`, which the menus draw them",
-        "from (the player's own; nothing is shipped). `mp_map_grafix`: the Xbox's has the 13 Xbox maps' pictures",
-        "(the PC version's first 13) and its \"?\"; the PC version's other 8 are its own maps'.",
-        "",
-    ]
-    report += [f"- `{tag}`" for tag in sorted(XBOX_BITMAPS)]
-    report += [
-        "",
-        "These frames are drawn from a frame of the Xbox map's bitmap of the same name, whose other frames differ:",
-        "the same picture, or for the profile settings the Xbox's picture for the same thing.",
-        "",
-        "| The PC version's frame | The Xbox's frame |",
-        "| --- | --- |",
-    ]
-    report += [f"| `{name}.png` | `{tag}` frame {index} |" for name, tag, index in sorted(art.xbox_frames)]
-    report += [
-        "",
-        "These frames are added after a bitmap's, drawn scaled from the Xbox map's (the profile settings'",
-        "picture of Gamepad Setup: the Xbox's Controller Setup's pictures of the button settings).",
-        "",
-        "| Our bitmap | The Xbox's frame |",
-        "| --- | --- |",
-    ]
-    report += [f"| `{name}` | `{tag}` frame {index} |" for name, tag, index in art.added_frames]
-    report += [
-        "",
-        "## Placeholders, to be redrawn",
-        "",
-        "The Xbox's map has none of these (or other pictures under the name), so each frame is a placeholder",
-        "until it is redrawn.",
-        "",
-        "| File | Size | The PC version's picture |",
-        "| --- | --- | --- |",
-    ]
-    report += [f"| `{png}` | {w}x{h} | `{source}` |" for png, w, h, source in sorted(art.pictures)]
-    report += ["", f"{len(art.pictures)} of {len(art.pngs)} frames are placeholders.",
-               "", "The PC version's `ui\\gamespy` and `ui\\ticker` fonts are drawn with `ui\\small_ui`, which",
-               "the Xbox's map has.", ""]
-    (MENUS / "NON_HANDDRAWN.md").write_text("\n".join(report))
+    (MENUS / "NON_HANDDRAWN.md").write_text(non_handdrawn(art))
     # what is not wired
     used = Counter()
     for path in CE.glob("*.xml"):
@@ -731,7 +840,8 @@ def main() -> None:
     }, indent=1) + "\n")
     size = sum((MENUS / name).stat().st_size for name in files)
     print(f"{len(widgets)} widgets in {len(folders)} files, {len(string_lists)} string lists, {len(bitmaps)} bitmaps "
-          f"({len(art.pngs)} frames, {len(art.pictures)} not redrawn); {size // 1024} KB; fonts {dict(fonts)}")
+          f"({len(art.pngs)} frames, {len(art.drawings)} drawn for this port, {len(art.pictures)} placeholders); "
+          f"{size // 1024} KB; fonts {dict(fonts)}")
 
 
 if __name__ == "__main__":

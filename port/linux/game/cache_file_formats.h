@@ -252,6 +252,8 @@ enum custom_edition_channel_order
 	where this build's meters take the fill order from color and discard
 	what has no alpha */
 	_custom_edition_channels_hud_meter,
+	/* Authored Xbox-order meters, including sheets also used as artwork. */
+	_custom_edition_channels_hud_meter_xbox,
 
 	NUMBER_OF_CUSTOM_EDITION_CHANNEL_ORDERS
 };
@@ -281,6 +283,8 @@ enum custom_edition_behaviour
 	_custom_edition_behaviour_gearbox_shader_environment_types,
 	/* HUD multitexture overlays are not drawn (hud_draw.c) */
 	_custom_edition_behaviour_block_multitexture_overlays,
+	/* Bigass Open's ammo sheet has fill in color and shape in alpha. */
+	_custom_edition_behaviour_xbox_ammo_meter_channels,
 
 	NUMBER_OF_CUSTOM_EDITION_BEHAVIOURS
 };
@@ -305,7 +309,8 @@ struct custom_edition_conversion_report
 	pointed past the nodes */
 	int32_t node_links_cut;
 	/* sounds in a compression this build cannot decode (Ogg Vorbis), made
-	unplayable */
+	unplayable: custom_edition_cache_sounds_silence's count, which the
+	conversion leaves 0 for its caller to fill */
 	int32_t sounds_undecodable;
 	/* HUD element placements with Halo PC's high resolution scale, whose
 	scale was halved */
@@ -390,22 +395,65 @@ enum cache_file_status custom_edition_cache_load(
 their bytes need to change: every shader's type as this build numbers them,
 transparent chicago extended shaders made transparent chicago shaders,
 bitmaps and sound permutations in the state of ones not yet drawn or played
-and naming their own tags, sounds this build cannot decode made unplayable,
-animation overlays naming animations that do not exist made to name none;
-and what this build can of the Halo PC behaviours the map named `map_name`
-relies on. Returns the first problem: tags already converted stay
-converted. */
+and naming their own tags, animation overlays naming animations that do not
+exist made to name none; and what this build can of the Halo PC behaviours
+the map named `map_name` relies on. Returns the first problem: tags already
+converted stay converted. The tags must be as the loader left them
+(little-endian): on a big-endian host, tag_swap.c turns them afterwards. */
 enum cache_file_status custom_edition_cache_convert(
 	uint8_t *tag_cache,
 	uint32_t loaded_bytes,
 	char const *map_name,
 	struct custom_edition_conversion_report *report);
 
+/* Makes every sound of a tag cache custom_edition_cache_load filled that
+this build cannot decode unplayable (its pitch ranges emptied: the game
+neither plays nor loads it, sound_manager.c's
+sound_definition_is_playable), returning how many there were: this build
+plays Xbox ADPCM, and Custom Edition also has Ogg Vorbis, which would be
+decoded as ADPCM noise. After the conversion and after the game has decoded
+what it can (custom_edition_sounds.c); in the tags' order, either. */
+int32_t custom_edition_cache_sounds_silence(
+	uint8_t *tag_cache,
+	uint32_t loaded_bytes);
+
+/* A walk of the placements of a HUD definition (custom_edition_hud_placements_walk):
+`block_elements` gives the first of the `element_bytes`-byte elements of the
+tag block at `block`, their count in *count (NULL: none to walk), and
+`placement` is called for each placement: of an element drawing the bitmap
+the tag reference at `bitmap` names (NULL: none of its own), or (`items`)
+of an item of a crosshair or overlay drawing it. */
+struct custom_edition_hud_walk
+{
+	uint8_t *(*block_elements)(void *context, uint8_t const *block, uint32_t element_bytes, int32_t *count);
+	void (*placement)(void *context, uint8_t *placement, uint8_t const *bitmap, int items);
+	void *context;
+};
+
+/* the size of a HUD definition of group `group_tag` (unit, weapon and
+grenade HUD interfaces, the HUD globals), whose placements
+custom_edition_hud_placements_walk walks, or 0 for any other group */
+uint32_t custom_edition_hud_definition_bytes(
+	uint32_t group_tag);
+/* Walks every placement of the HUD definition at `definition` (of group
+`group_tag`, a Custom Edition map's or this build's: they lie alike). The
+Custom Edition maps' conversion halves those Halo PC halves; mods scale those
+of their larger bitmaps (port/linux/game/mod_bitmaps.c). */
+void custom_edition_hud_placements_walk(
+	uint8_t *definition,
+	uint32_t group_tag,
+	struct custom_edition_hud_walk const *walk);
+
 /* the name of a Halo PC behaviour, as Chimera's map list names it */
 char const *custom_edition_behaviour_name(
 	short behaviour);
 
-/* In a tag cache custom_edition_cache_load filled (`loaded_bytes` of it in
+/* The functions below read a loaded tag cache in the order its values are
+in: little-endian as the loader leaves them, or big-endian once tag_swap.c
+has turned them for a big-endian host (its tag index's signature says
+which).
+
+In a tag cache custom_edition_cache_load filled (`loaded_bytes` of it in
 use), the definition of the next tag of group `group_tag` after tag
 `*tag_index` (NONE, -1, to start from the first): `*tag_index` becomes its
 index, and NULL is returned when no tag after it has a definition of
@@ -481,5 +529,22 @@ void custom_edition_cache_combine_resource_offsets(
 	uint32_t loaded_bytes,
 	uint32_t bitmaps_offset,
 	uint32_t sounds_offset);
+
+/* A procedure the loader calls with each structure BSP of a Custom Edition
+map as it reads it (tag_validate_custom_edition_note_structure_bsp, set by
+cache_files.c: a protected map's BSP names the groups whose own tags are
+scrambled); NULL for none. Declared here so that its caller and its
+definition agree (the web build's linker refuses a mismatch). */
+typedef void (*custom_edition_structure_bsp_proc)(
+	void *tag_cache,
+	unsigned long tag_data_bytes,
+	long bsp_index,
+	void *bsp,
+	unsigned long bsp_bytes,
+	unsigned long bsp_address,
+	char const *map_name);
+
+void custom_edition_structure_bsp_proc_set(
+	custom_edition_structure_bsp_proc proc);
 
 #endif

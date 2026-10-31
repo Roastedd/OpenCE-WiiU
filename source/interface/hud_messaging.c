@@ -146,6 +146,7 @@ symbols in this file:
 #include "text/text_group.h"
 #include "text/unicode.h"
 #include "network_coop.h" /* port: port/linux/game/network_coop.c */
+#include "controller_remap.h" /* port: port/linux/game/controller_remap_game.c */
 
 #include <stddef.h>
 
@@ -539,6 +540,13 @@ static void render_state_bitmap(
 	real scale;
 	point2d point;
 
+	/* port: keep gameplay prompts on the high-resolution HUD path, which
+	draws a button by its place among the HUD globals' button icons: before
+	the map's own picture of it is looked for, which a Custom Edition map's
+	message icons (13 sequences to the Xbox's 24) may not have, so that the
+	button was not drawn */
+	if (hud_hires_button_draw(icon, cursor_bounds, color))
+		return;
 	if (icon->frame_rate)
 		frame_index = game_time_get() / icon->frame_rate;
 	hud_retrieve_bitmap_and_bounding_rect(
@@ -550,9 +558,6 @@ static void render_state_bitmap(
 	if (bitmap && _texture_cache_bitmap_get_hardware_format(
 		(struct bitmap_data *)bitmap, FALSE, TRUE))
 	{
-		/* port: keep gameplay prompts on the high-resolution HUD path. */
-		if (hud_hires_button_draw(icon, cursor_bounds, color))
-			return;
 		bitmap = hud_hires_sprite_bitmap(bitmap, icon->sequence_index);
 		scale = local_player_count() > 1 ? 0.75f : 1.0f;
 		point.x = (short)(icon->offset.x * scale + cursor_bounds->x0);
@@ -1436,6 +1441,9 @@ void hud_messaging_update(
 			input_abstraction_get_local_player_preferences(
 				local_player_index,
 				&preferences);
+			/* port: physical prompt buttons for optional controller layouts
+			(port/linux/game/controller_remap_game.c); profile data stays stock. */
+			controller_remap_prompt(local_player_index, &preferences);
 			if (objective_active)
 			{
 				struct hud_color_definition *objective_color =
@@ -1787,7 +1795,7 @@ void hud_messaging_update(
 								draw_string_set_indents(line_cursor.x0 - line_bounds.x0, 0);
 								draw_unicode_string_compute_bounds(
 									&line_bounds,
-									L"<no button icon>",
+									(icon_index == CONTROLLER_REMAP_UNBOUND ? L"UNBOUND" : L"<no button icon>") /* port: explicit cleared controller action */,
 									&text_bounds,
 									&line_cursor);
 								line_cursor.x0 -= 3;
@@ -1797,7 +1805,7 @@ void hud_messaging_update(
 									NULL,
 									NULL,
 									0,
-									L"<no button icon>");
+									(icon_index == CONTROLLER_REMAP_UNBOUND ? L"UNBOUND" : L"<no button icon>") /* port: explicit cleared controller action */);
 								line_bounds.y0 = line_cursor.y0;
 							}
 						}

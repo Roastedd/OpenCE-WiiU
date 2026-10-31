@@ -18,7 +18,10 @@ The files are named by the key's hash (shader_key_wire.h: the hash gx2_shaders.c
 #include <string.h>
 #include <stdlib.h>
 
-struct xgpu_capabilities xgpu_capabilities = { 0, 0, 0, 0, 0, 0, "300 es" };
+/* (named: upstream's merge added astc and color_buffer_half_float before the shading language) */
+struct xgpu_capabilities xgpu_capabilities = { .shading_language = "300 es" };
+/* (upstream's display.reversed_depth is desktop GL's; the Wii U's depth is Direct3D's) */
+BOOL xgpu_reversed_depth = FALSE;
 int config_boolean(const char *name) { (void)name; return 0; }
 const char *config_string(const char *name) { (void)name; return ""; }
 

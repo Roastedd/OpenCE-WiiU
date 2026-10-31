@@ -43,6 +43,7 @@ characters of a level name (game_engine.c, struct game_engine_stage). */
 
 /* ---------- structures */
 
+struct bitmap_data;
 struct cache_file_tag_header;
 struct custom_edition_load_report;
 struct scenario_object_datum;
@@ -55,6 +56,9 @@ it shipped: read from bitmaps.map, sounds.map or loc.map. FALSE when no
 Custom Edition map is loaded. */
 boolean custom_edition_cache_stock_tag(
 	long tag_index);
+
+/* Borrowed until map unload; reads remain bounds checked by the source. */
+struct resource_map const *custom_edition_cache_bitmap_resources(void);
 
 /* When `header` (CACHE_FILE_HEADER_BYTES bytes, with `build` its build
 string field) is a Custom Edition cache header that reached the Xbox loader,
@@ -157,6 +161,27 @@ struct cache_file_tag_header *custom_edition_cache_tags_load(
 (paths.custom_edition) */
 boolean custom_edition_install_present(
 	void);
+
+/* The locale resource map (loc.map) of the maps folders, which holds the
+text of the Custom Edition the maps come from, in its language: opened (FALSE
+if there is none, or it is not one) until custom_edition_locale_close. */
+boolean custom_edition_locale_open(
+	void);
+void custom_edition_locale_close(
+	void);
+/* The strings of its unicode string list tag `name` (as
+"ui\\shell\\main_menu\\..."): each string's UTF-16 characters, its
+terminator included, lengths[index] of them from strings[index]. One
+block, released with free(); NULL if it holds no such list, or one that
+does not fit in its tag. */
+struct custom_edition_string_list
+{
+	long count;
+	unsigned short const **strings;
+	long *lengths;
+};
+struct custom_edition_string_list *custom_edition_locale_strings(
+	char const *name);
 boolean custom_edition_cache_tags_loaded(
 	void);
 /* Whether the structure bsp reference (of the loaded map's scenario) names
@@ -165,6 +190,14 @@ logged when not. */
 struct scenario_structure_bsp_reference;
 boolean custom_edition_structure_bsp_reference_valid(
 	struct scenario_structure_bsp_reference const *reference);
+/* A structure bsp of the loaded map just read (`size` bytes at `bsp`, where
+it loads), turned to this host's byte order: the file's little-endian is a
+big-endian host's other order (tag_swap.c), which the map's tags were turned
+to as they loaded. Nothing on a little-endian host. FALSE after logging why
+when it cannot be: the bsp must not be used. */
+boolean custom_edition_structure_bsp_swap(
+	void *bsp,
+	long size);
 /* Whether the Custom Edition map loaded relies on a Halo PC behaviour (enum
 custom_edition_behaviour, cache_file_formats.h); FALSE when none is loaded. */
 boolean custom_edition_cache_relies_on(
@@ -199,9 +232,27 @@ FALSE after logging why it cannot. custom_edition_bitmaps_dispose forgets
 them either way. */
 boolean custom_edition_reordered_bitmaps_find(
 	byte *tag_cache,
-	unsigned long loaded_bytes);
+	unsigned long loaded_bytes,
+	unsigned long behaviours);
+/* As custom_edition_reordered_bitmaps_find, in the loaded map's tags, which
+the validator has checked: for the bitmaps of mods (mod_bitmaps.c), Halo
+PC's on any map. FALSE after logging why it cannot. */
+boolean custom_edition_loaded_reordered_bitmaps_find(
+	void);
+/* The order (enum custom_edition_channel_order) Halo PC keeps the channels
+of bitmap `bitmap_index` of the tag `handle` names in, of those found. */
+short custom_edition_bitmap_channel_order(
+	long handle,
+	long bitmap_index);
+/* Whether the texture cache can draw `bitmap` from pixels laid out as a
+Halo PC tag lays them out (rasterizer_xbox_bitmap_rebuild_hardware_format
+makes them the hardware's): the game's bitmap_verify, a format with a
+hardware texture, sizes it can swizzle, and every pixel its levels need. */
+boolean custom_edition_bitmap_drawable(
+	struct bitmap_data *bitmap);
 /* Decodes every sound permutation of a tag cache custom_edition_cache_load
-filled (its resource offsets combined) that this build would not play: Ogg
+filled (its resource offsets combined, converted and in this host's byte
+order: after tag_swap.c on a big-endian one) that this build would not play: Ogg
 Vorbis, uncompressed, or mono at 44 kHz. Each is encoded again in memory as
 Xbox ADPCM in a format this build plays, its samples at decoded_offset and
 on in the combined offset space, where custom_edition_sounds_read serves
@@ -217,7 +268,7 @@ boolean custom_edition_sounds_decode(
 `compression` (16-bit PCM, little-endian or `big_endian`; Xbox ADPCM; Ogg
 Vorbis), `channels` channels at `rate`, encoded as Xbox ADPCM at
 `encoded_rate`: a buffer of the game's allocator of *encoded_bytes; NULL
-when they cannot be (loose_sounds.c) */
+when they cannot be (mod_sounds.c) */
 byte *custom_edition_sounds_encode(
 	byte const *data,
 	long data_bytes,
