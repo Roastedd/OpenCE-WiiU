@@ -112,7 +112,10 @@ NEGATIVE_CONTROLS = {
     "listing-unlabelled": (("memcpy(data, signature_label, sizeof(signature_label) - 1);\n\tmemcpy(data + sizeof",
                             "memset(data, 0, sizeof(signature_label) - 1);\n\tmemcpy(data + sizeof"), "listing_signed",
                            "listing-read"),
-    "listing-signs-less": (("bytes, (size_t)listing->signed_size);", "bytes, (size_t)listing->signed_size - 1);"),
+    # (the signature checked over one byte less: the copy shortened instead left the last byte the stack's, which can
+    # be the listing's own, a zero, and pass on a big-endian host)
+    "listing-signs-less": (("(int)(sizeof(signature_label) - 1) + listing->signed_size,",
+                            "(int)(sizeof(signature_label) - 1) + listing->signed_size - 1,"),
                            "listing_signed", "listing-read"),
     "listing-any-format": (("bytes[2] != LISTING_FORMAT)", "0)"), "listing_read", "listing-bounds"),
     "listing-names-long": (("if (length > maximum || *offset + length > size)", "if (*offset + length > size)"),
