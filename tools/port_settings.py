@@ -65,12 +65,21 @@ SCREENS = {
             # menu_functions.c's graphics_mode_settle writes the settings of)
             ("GRAPHICS MODE:", "display.graphics_mode",
              [("PERFORMANCE", "performance"), ("BALANCED", "balanced"), ("QUALITY", "quality"), ("CUSTOM", "custom")],
-             "Performance: 60 frames, less detail. Balanced: 720\nlines at 60. Quality: 1080 lines at 30. Custom:\nthe rows as set. Lines from the next start.",
+             "Performance: 60 frames, less detail. Balanced: 720\nlines at 60. Quality: up to 1080 lines at 30.\nCustom: the rows as set. Lines from the next start.",
              "wiiu"),
             # (the Wii U: port/wiiu/src/wiiu_gx2.c reads it when the game starts)
             ("RENDER RESOLUTION:", "display.render_lines",
              [("480", "480"), ("540", "540"), ("720", "720"), ("900", "900"), ("1080", "1080")],
              "The lines the game draws (TV and GamePad scale it).\n720 holds 60 most places. From the next start.",
+             "wiiu"),
+            # (the Wii U's dynamic resolution: port/wiiu/src/wiiu_drs.c, which
+            # port/wiiu/src/wiiu_gx2.c runs at each frame; Quality turns it on)
+            ("DYNAMIC RESOLUTION:", "display.dynamic_resolution", ON_OFF,
+             "Draw fewer lines while the GPU falls behind,\nand all of them again when it catches up.",
+             "wiiu"),
+            ("LOWEST LINES:", "display.dynamic_resolution_floor",
+             [("540", "540"), ("576", "576"), ("648", "648"), ("720", "720"), ("810", "810")],
+             "The fewest lines dynamic resolution draws.\nOf 720 lines it goes to 540, of 1080 to 810.",
              "wiiu"),
             ("FRAME RATE LIMIT:", "display.max_fps",
              [("AUTO", "0"), ("30", "30"), ("60", "60"), ("120", "120"), ("144", "144"), ("165", "165"),

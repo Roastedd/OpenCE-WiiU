@@ -9,11 +9,12 @@ display.bump_mapping. They are set when config.toml's settings have changed, at 
 (rasterizer_frame_begin), so a console command (init.txt) holds until a setting is changed.
 
 display.graphics_mode names a set of values for them and for display.render_lines (the Wii U's lines, from the next
-start) and display.interpolation: performance (the frame rate first: 60 frames a second where the game thread allows it,
-with what costs it most of the detail left out), balanced (720 lines at 60, all the Xbox drew), quality (1080 lines at
-30 frames a second, all the Xbox drew) or custom (the settings as they are). The menus write a mode's values when it is
-chosen, and custom when a setting a mode sets is changed by hand (menu_functions.c), so the settings always hold what is
-drawn and the menus show it.
+start), display.dynamic_resolution (the Wii U's: fewer lines while the GPU falls behind, port/wiiu/src/wiiu_drs.c) and
+display.interpolation: performance (the frame rate first: 60 frames a second where the game thread allows it, with what
+costs it most of the detail left out), balanced (720 lines at 60, all the Xbox drew), quality (up to 1080 lines at 30
+frames a second, all the Xbox drew: dynamic resolution keeps the frames in their time where 1080 lines would not) or
+custom (the settings as they are). The menus write a mode's values when it is chosen, and custom when a setting a mode
+sets is changed by hand (menu_functions.c), so the settings always hold what is drawn and the menus show it.
 */
 
 #include "cseries.h"
@@ -44,7 +45,7 @@ static char const *const graphics_modes[] = { "performance", "balanced", "qualit
 /* each setting a mode sets, and its value in each mode. Performance leaves out what the console measurements found
 costs the game thread most for what it shows (runs/wiiu/session-20261030/ab); quality draws 1080 lines at 30 frames a
 second, which the GPU has the time for when the game thread does not (2026-10-30: about 4 ms of the GPU's time a frame
-at 720 lines in Blood Gulch). */
+at 720 lines in Blood Gulch), and dynamic resolution draws fewer where it has not (the menu at 1080 lines took 27 ms). */
 static struct
 {
 	char const *setting;
@@ -52,6 +53,7 @@ static struct
 } const graphics_mode_values[] =
 {
 	{ "display.render_lines", { "720", "720", "1080" } },
+	{ "display.dynamic_resolution", { "false", "false", "true" } },
 	{ "display.interpolation", { "true", "true", "false" } },
 	{ "display.grass", { "false", "true", "true" } },
 	{ "display.decals", { "true", "true", "true" } },

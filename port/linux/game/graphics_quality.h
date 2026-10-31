@@ -4,7 +4,7 @@ GRAPHICS_QUALITY.H
 The detail settings (display.grass, display.decals, display.particles, display.object_shadows, display.lens_flares,
 display.specular, display.bump_mapping) set on the engine's own switches, and the graphics modes
 (display.graphics_mode: performance, balanced, quality, custom), each of which is a set of values for them and for
-display.render_lines and display.interpolation (graphics_quality.c).
+display.render_lines, display.dynamic_resolution and display.interpolation (graphics_quality.c).
 */
 
 #ifndef HALO_GRAPHICS_QUALITY_H

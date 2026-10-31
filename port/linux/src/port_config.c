@@ -111,6 +111,14 @@ static const struct config_setting config_settings[] =
 		"GamePad's are scaled from it; 1080 is the TV's own). More lines cost more of the\n"
 		"GPU's time: the menu at 1080 took 27 ms a frame. A note in halo/render_height.txt\n"
 		"overrides it for one run." },
+	{ "display.dynamic_resolution", _config_boolean, "false", "HALO_WIIU_DYNAMIC_RESOLUTION", _environment_value, _platform_wiiu,
+		"Draw fewer lines while the GPU falls behind: 0.9, 0.8 or 0.75 of\n"
+		"display.render_lines, down to display.dynamic_resolution_floor, and all of them\n"
+		"again when it catches up. The HUD and the text are drawn at the same lines. Off\n"
+		"in the menus. A note in halo/drs_lines.txt draws that many lines for one run." },
+	{ "display.dynamic_resolution_floor", _config_integer, "540", "HALO_WIIU_DYNAMIC_RESOLUTION_FLOOR", _environment_value, _platform_wiiu,
+		"The fewest lines dynamic resolution draws, 540 to 810 (of 720 lines, 540 is the\n"
+		"lowest step; of 1080, the lowest is 810)." },
 	{ "display.vsync", _config_boolean, "true", "HALO_NO_VSYNC", _environment_set_is_false, _platform_all,
 		"Wait for the display between frames; false draws as fast as possible." },
 	{ "display.max_fps", _config_integer, "0", "HALO_MAX_FPS", _environment_value, _platform_desktop,
@@ -126,11 +134,12 @@ static const struct config_setting config_settings[] =
 		"Draw a frame for every display refresh, blending between the game's 30\n"
 		"ticks a second; false keeps the original 30 frames a second." },
 	{ "display.graphics_mode", _config_string, "\"balanced\"", "HALO_GRAPHICS_MODE", _environment_value, _platform_wiiu,
-		"A set of the settings below and of display.render_lines and\n"
-		"display.interpolation (port/linux/game/graphics_quality.c): \"performance\"\n"
-		"(60 frames a second where the game allows it, with less detail),\n"
-		"\"balanced\" (720 lines at 60, everything the Xbox drew), \"quality\" (1080\n"
-		"lines at 30) or \"custom\" (the settings as they are). The menus write a\n"
+		"A set of the settings below and of display.render_lines,\n"
+		"display.dynamic_resolution and display.interpolation\n"
+		"(port/linux/game/graphics_quality.c): \"performance\" (60 frames a second\n"
+		"where the game allows it, with less detail), \"balanced\" (720 lines at 60,\n"
+		"everything the Xbox drew), \"quality\" (up to 1080 lines at 30, with dynamic\n"
+		"resolution) or \"custom\" (the settings as they are). The menus write a\n"
 		"mode's values when it is chosen; changing one of them there makes it\n"
 		"custom." },
 	{ "display.grass", _config_boolean, "true", "HALO_GRASS", _environment_value, _platform_all,

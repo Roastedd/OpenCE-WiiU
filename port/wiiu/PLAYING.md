@@ -71,6 +71,8 @@ version.
 ## Settings worth knowing
 
 - **Render resolution** (Settings → Video): 720 lines is the default and the best balance; 900 and 1080 are sharper but slower.
+- **Dynamic resolution** (Settings → Video): draws fewer lines, down to **Lowest Lines**, while the GPU falls behind, and all of them again when
+  it catches up. The **Quality** graphics mode turns it on. Off by default.
 - Every setting is also in `config.toml`, each with a comment saying what it does.
 
 ## If something goes wrong

@@ -1,6 +1,6 @@
 """The graphics modes and detail settings (port/linux/game/graphics_quality.c): a mode writes its values and then matches, the
-settings reach the engine's switches when config.toml has changed and not otherwise (a console command holds until then), and an
-unknown or custom mode writes nothing."""
+settings reach the engine's switches when config.toml has changed and not otherwise (a console command holds until then), quality
+turns dynamic resolution on and the other modes off (its floor is no mode's), and an unknown or custom mode writes nothing."""
 import re
 import subprocess
 import sys
@@ -17,6 +17,9 @@ FAULTS = {
     "always_applied": ("if (read_at == config_changes())\n\t\treturn;", "if (read_at == config_changes() && 0)\n\t\treturn;"),
     # (a mode's value not written when the setting differs)
     "no_write": ("!config_write(graphics_mode_values[index].setting", "!(1 || config_write(graphics_mode_values[index].setting"),
+    # (quality without dynamic resolution: 1080 lines held whatever the GPU takes)
+    "quality_fixed_lines": ('{ "display.dynamic_resolution", { "false", "false", "true" } }',
+                            '{ "display.dynamic_resolution", { "false", "false", "false" } }'),
 }
 
 
@@ -49,6 +52,7 @@ static boolean decals_enabled, render_particles_enabled, render_particle_systems
 /* config.toml: names and their text, as the settings were */
 static struct { const char *name; char value[32]; } settings[] = {
 	{ "display.graphics_mode", "balanced" }, { "display.render_lines", "720" }, { "display.interpolation", "true" },
+	{ "display.dynamic_resolution", "false" }, { "display.dynamic_resolution_floor", "540" },
 	{ "display.grass", "true" }, { "display.decals", "true" }, { "display.particles", "true" }, { "display.object_shadows", "true" },
 	{ "display.lens_flares", "true" }, { "display.specular", "true" }, { "display.bump_mapping", "true" },
 };
@@ -87,7 +91,8 @@ int main(void)
 	if (!graphics_quality_mode_matches("balanced") || graphics_quality_mode_matches("performance")) return 2;
 	/* performance written: its values, then the switches at the next frame */
 	if (!graphics_quality_mode_write("performance") || !graphics_quality_mode_matches("performance")) return 3;
-	if (strcmp(setting("display.grass"), "false") || strcmp(setting("display.render_lines"), "720")) return 4;
+	if (strcmp(setting("display.grass"), "false") || strcmp(setting("display.render_lines"), "720") ||
+		strcmp(setting("display.dynamic_resolution"), "false")) return 4;
 	graphics_quality_apply();
 	if (rasterizer_debug_options.draw_detail_objects || render_shadows || rasterizer_debug_options.draw_lens_flares) return 5;
 	if (rasterizer_debug_options.draw_environment_specular_lights || rasterizer_debug_options.draw_environment_reflections ||
@@ -97,18 +102,25 @@ int main(void)
 	rasterizer_debug_options.draw_detail_objects = 1;
 	graphics_quality_apply();
 	if (!rasterizer_debug_options.draw_detail_objects) return 8;
-	/* quality: 1080 lines at 30 frames, all drawn */
+	/* quality: up to 1080 lines at 30 frames, with dynamic resolution, all drawn; its floor is left as it was */
 	if (!graphics_quality_mode_write("quality") || strcmp(setting("display.render_lines"), "1080") ||
-		strcmp(setting("display.interpolation"), "false")) return 9;
+		strcmp(setting("display.interpolation"), "false") || strcmp(setting("display.dynamic_resolution"), "true") ||
+		strcmp(setting("display.dynamic_resolution_floor"), "540")) return 9;
 	graphics_quality_apply();
 	if (!rasterizer_debug_options.draw_detail_objects || !render_shadows || !rasterizer_debug_options.draw_lens_flares) return 10;
+	/* dynamic resolution turned off by hand: no longer quality (the menus then make it custom); balanced turns it off */
+	config_write("display.dynamic_resolution", "false");
+	if (graphics_quality_mode_matches("quality")) return 14;
+	if (!graphics_quality_mode_write("balanced") || strcmp(setting("display.dynamic_resolution"), "false") ||
+		!graphics_quality_mode_matches("balanced")) return 15;
 	/* custom and an unknown mode write nothing and match whatever is set */
 	writes = 0;
 	if (!graphics_quality_mode_write("custom") || !graphics_quality_mode_write("ultra") || writes) return 11;
 	if (!graphics_quality_mode_matches("custom")) return 12;
 	/* the settings a mode sets, and not others */
 	if (!graphics_quality_mode_setting("display.specular") || graphics_quality_mode_setting("display.fov") ||
-		graphics_quality_mode_setting("display.graphics_mode")) return 13;
+		graphics_quality_mode_setting("display.graphics_mode") || !graphics_quality_mode_setting("display.dynamic_resolution") ||
+		graphics_quality_mode_setting("display.dynamic_resolution_floor")) return 13;
 	return 0;
 }
 '''
