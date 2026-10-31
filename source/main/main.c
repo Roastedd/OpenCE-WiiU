@@ -3268,6 +3268,14 @@ void main_loop_of_death(
 		shell_idle();
 		event_manager_update();
 		telnet_console_process();
+#ifdef HALO_WIIU
+		/* port: the Wii U debug server's scripts (port/wiiu/src/wiiu_debug.c) */
+		{
+			void wiiu_debug_console_run(void);
+
+			wiiu_debug_console_run();
+		}
+#endif
 		process_ui_widgets();
 		main_pregame_render();
 		main_rasterizer_throttle();
@@ -3541,6 +3549,14 @@ static boolean main_loop_iteration(
 		shell_idle();
 		event_manager_update();
 		telnet_console_process();
+#ifdef HALO_WIIU
+		/* port: the Wii U debug server's scripts (port/wiiu/src/wiiu_debug.c) */
+		{
+			void wiiu_debug_console_run(void);
+
+			wiiu_debug_console_run();
+		}
+#endif
 		profile_scope_exit(main_platform_events_section)
 
 		if (!shell_application_is_paused())
