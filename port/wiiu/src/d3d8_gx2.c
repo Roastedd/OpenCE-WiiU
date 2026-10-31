@@ -484,6 +484,13 @@ static uint32_t render_states_dirty[RENDER_STATE_WORDS];
 static BOOL render_states_all = TRUE;
 static uint32_t texture_states_dirty[D3DTSS_MAXSTAGES] = { ~0u, ~0u, ~0u, ~0u };
 
+/* The producer's last-sent values, not memory shared with the GX2 thread.
+A setter only needs to mark a word when the requested value differs from
+that copy. Comparing the current game table would miss a direct prewrite. */
+static DWORD render_states_told[D3DRS_MAX];
+static DWORD texture_states_told[D3DTSS_MAXSTAGES][D3DTSS_MAX];
+static BOOL states_told_valid;
+
 static inline void render_state_mark(unsigned long state)
 {
 	if (state < D3DRS_MAX)
@@ -501,6 +508,28 @@ static inline void texture_state_mark(DWORD stage, unsigned long type)
 {
 	if (stage < D3DTSS_MAXSTAGES && type < D3DTSS_MAX)
 		texture_states_dirty[stage] |= 1u << type;
+}
+
+/* Store every requested value, including a restoration after a direct
+write, while leaving already-sent words out of the next sparse scan. */
+static inline void render_state_store(unsigned long state, DWORD value)
+{
+	if (state < D3DRS_MAX)
+	{
+		if (!states_told_valid || render_states_told[state] != value)
+			render_state_mark(state);
+		D3D__RenderState[state] = value;
+	}
+}
+
+static inline void texture_state_store(DWORD stage, unsigned long type, DWORD value)
+{
+	if (stage < D3DTSS_MAXSTAGES && type < D3DTSS_MAX)
+	{
+		if (!states_told_valid || texture_states_told[stage][type] != value)
+			texture_state_mark(stage, type);
+		D3D__TextureState[stage][type] = value;
+	}
 }
 
 /* changed when a register's current value (SetVertexData) or the byte order the streams were found in (halo_stream_endian_forget) may have: a
@@ -1935,32 +1964,33 @@ void D3DFASTCALL D3DDevice_SetRenderState_Simple(DWORD method, DWORD value)
 	const unsigned long slot = (method - SIMPLE_METHOD_BASE) / 4;
 	unsigned long state;
 
-	(void)value;
 	if (!simple_states_made)
 		simple_states_make();
 	state = slot < SIMPLE_METHOD_SLOTS ? simple_states[slot] : 0;
 	if (state && state <= D3DRS_SIMPLE_MAX && D3DSIMPLERENDERSTATEENCODE[state - 1] == method)
-		render_state_mark(state - 1);
+	{
+		/* Simple's caller normally writes value after this call. Retain a
+		mark for raw callers whose value and table word disagree too. */
+		if (!states_told_valid || render_states_told[state - 1] != value || D3D__RenderState[state - 1] != value)
+			render_state_mark(state - 1);
+	}
 	else
 		render_states_all = TRUE;
 }
 
 void D3DFASTCALL D3DDevice_SetRenderState_Deferred(D3DRENDERSTATETYPE state, DWORD value)
 {
-	render_state_mark((unsigned long)state);
-	if ((unsigned long)state < D3DRS_MAX)
-		D3D__RenderState[state] = value;
+	render_state_store((unsigned long)state, value);
 }
 
 void WINAPI D3DDevice_SetRenderState_ZBias(DWORD value);
 
 void WINAPI D3DDevice_SetRenderStateNotInline(D3DRENDERSTATETYPE state, DWORD value)
 {
-	render_state_mark((unsigned long)state);
 	if (state == D3DRS_ZBIAS)
 		D3DDevice_SetRenderState_ZBias(value);
-	else if ((unsigned long)state < D3DRS_MAX)
-		D3D__RenderState[state] = value;
+	else
+		render_state_store((unsigned long)state, value);
 }
 
 /* As the Xbox's D3D8 does it: a z bias is a polygon offset of -bias depth
@@ -1984,7 +2014,7 @@ void WINAPI D3DDevice_SetRenderState_ZBias(DWORD value)
 }
 
 #define COMPLEX_RENDER_STATE(name, state) \
-	void WINAPI D3DDevice_SetRenderState_##name(DWORD value) { render_state_mark(state); D3D__RenderState[state] = value; }
+	void WINAPI D3DDevice_SetRenderState_##name(DWORD value) { render_state_store(state, value); }
 
 COMPLEX_RENDER_STATE(PSTextureModes, D3DRS_PSTEXTUREMODES)
 COMPLEX_RENDER_STATE(VertexBlend, D3DRS_VERTEXBLEND)
@@ -2016,37 +2046,27 @@ COMPLEX_RENDER_STATE(DoNotCullUncompressed, D3DRS_DONOTCULLUNCOMPRESSED)
 
 void D3DFASTCALL D3DDevice_SetTextureState_Deferred(DWORD stage, D3DTEXTURESTAGESTATETYPE type, DWORD value)
 {
-	texture_state_mark(stage, (unsigned long)type);
-	if (stage < D3DTSS_MAXSTAGES && (unsigned long)type < D3DTSS_MAX)
-		D3D__TextureState[stage][type] = value;
+	texture_state_store(stage, (unsigned long)type, value);
 }
 
 void WINAPI D3DDevice_SetTextureState_TexCoordIndex(DWORD stage, DWORD value)
 {
-	texture_state_mark(stage, D3DTSS_TEXCOORDINDEX);
-	if (stage < D3DTSS_MAXSTAGES)
-		D3D__TextureState[stage][D3DTSS_TEXCOORDINDEX] = value;
+	texture_state_store(stage, D3DTSS_TEXCOORDINDEX, value);
 }
 
 void WINAPI D3DDevice_SetTextureState_BorderColor(DWORD stage, DWORD value)
 {
-	texture_state_mark(stage, D3DTSS_BORDERCOLOR);
-	if (stage < D3DTSS_MAXSTAGES)
-		D3D__TextureState[stage][D3DTSS_BORDERCOLOR] = value;
+	texture_state_store(stage, D3DTSS_BORDERCOLOR, value);
 }
 
 void WINAPI D3DDevice_SetTextureState_ColorKeyColor(DWORD stage, DWORD value)
 {
-	texture_state_mark(stage, D3DTSS_COLORKEYCOLOR);
-	if (stage < D3DTSS_MAXSTAGES)
-		D3D__TextureState[stage][D3DTSS_COLORKEYCOLOR] = value;
+	texture_state_store(stage, D3DTSS_COLORKEYCOLOR, value);
 }
 
 void WINAPI D3DDevice_SetTextureState_BumpEnv(DWORD stage, D3DTEXTURESTAGESTATETYPE type, DWORD value)
 {
-	texture_state_mark(stage, (unsigned long)type);
-	if (stage < D3DTSS_MAXSTAGES && (unsigned long)type < D3DTSS_MAX)
-		D3D__TextureState[stage][type] = value;
+	texture_state_store(stage, (unsigned long)type, value);
 }
 
 void WINAPI D3DDevice_SetTexture(DWORD stage, D3DBaseTexture *texture)
@@ -2603,9 +2623,6 @@ static unsigned long long constants_told;
 /* what the GX2 thread holds a copy of (dk_derive.h): the render and texture stage states it was last told, and the draw's facts. It derives the draw's
 state, shader keys, samplers and uniforms from them; on this thread a draw only finds its textures and tells what changed. The copy is sent whole again
 after each present (states_resync), which also finds a state written by a way that did not mark it (render_states_dirty, texture_states_dirty). */
-static DWORD render_states_told[D3DRS_MAX];
-static DWORD texture_states_told[D3DTSS_MAXSTAGES][D3DTSS_MAX];
-static BOOL states_told_valid;
 static struct dk_draw_facts facts_told;
 static BOOL facts_known;
 static unsigned long states_missed;

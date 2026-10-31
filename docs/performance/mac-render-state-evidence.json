@@ -1,0 +1,183 @@
+{
+  "counts": {
+    "baseline": {
+      "digest": "3599a1f106da2276",
+      "locks": "ec90e29cf5d40ffb",
+      "lines": "10988",
+      "draws": "5776",
+      "log": "29",
+      "states-missed": "0",
+      "targets-missed": "0",
+      "most-queued": "0",
+      "render-marks": "41914",
+      "texture-marks": "783",
+      "state-visits": "355235"
+    },
+    "candidate": {
+      "digest": "3599a1f106da2276",
+      "locks": "ec90e29cf5d40ffb",
+      "lines": "10988",
+      "draws": "5776",
+      "log": "29",
+      "states-missed": "0",
+      "targets-missed": "0",
+      "most-queued": "0",
+      "render-marks": "41706",
+      "texture-marks": "556",
+      "state-visits": "354839"
+    }
+  },
+  "timings": [
+    {
+      "pair": 0,
+      "name": "baseline",
+      "seconds": 0.7875477130000945,
+      "digest": "3599a1f106da2276",
+      "locks": "ec90e29cf5d40ffb"
+    },
+    {
+      "pair": 0,
+      "name": "candidate",
+      "seconds": 0.7840168940019794,
+      "digest": "3599a1f106da2276",
+      "locks": "ec90e29cf5d40ffb"
+    },
+    {
+      "pair": 1,
+      "name": "candidate",
+      "seconds": 0.8028556469944306,
+      "digest": "3599a1f106da2276",
+      "locks": "ec90e29cf5d40ffb"
+    },
+    {
+      "pair": 1,
+      "name": "baseline",
+      "seconds": 0.7865391570085194,
+      "digest": "3599a1f106da2276",
+      "locks": "ec90e29cf5d40ffb"
+    },
+    {
+      "pair": 2,
+      "name": "baseline",
+      "seconds": 0.813149503999739,
+      "digest": "3599a1f106da2276",
+      "locks": "ec90e29cf5d40ffb"
+    },
+    {
+      "pair": 2,
+      "name": "candidate",
+      "seconds": 0.7961079669912579,
+      "digest": "3599a1f106da2276",
+      "locks": "ec90e29cf5d40ffb"
+    },
+    {
+      "pair": 3,
+      "name": "candidate",
+      "seconds": 0.7778359210060444,
+      "digest": "3599a1f106da2276",
+      "locks": "ec90e29cf5d40ffb"
+    },
+    {
+      "pair": 3,
+      "name": "baseline",
+      "seconds": 0.804425144000561,
+      "digest": "3599a1f106da2276",
+      "locks": "ec90e29cf5d40ffb"
+    },
+    {
+      "pair": 4,
+      "name": "baseline",
+      "seconds": 0.8025985870044678,
+      "digest": "3599a1f106da2276",
+      "locks": "ec90e29cf5d40ffb"
+    },
+    {
+      "pair": 4,
+      "name": "candidate",
+      "seconds": 0.785854384987033,
+      "digest": "3599a1f106da2276",
+      "locks": "ec90e29cf5d40ffb"
+    },
+    {
+      "pair": 5,
+      "name": "candidate",
+      "seconds": 0.8040125910047209,
+      "digest": "3599a1f106da2276",
+      "locks": "ec90e29cf5d40ffb"
+    },
+    {
+      "pair": 5,
+      "name": "baseline",
+      "seconds": 0.7966911210096441,
+      "digest": "3599a1f106da2276",
+      "locks": "ec90e29cf5d40ffb"
+    },
+    {
+      "pair": 6,
+      "name": "baseline",
+      "seconds": 0.8130068140017102,
+      "digest": "3599a1f106da2276",
+      "locks": "ec90e29cf5d40ffb"
+    },
+    {
+      "pair": 6,
+      "name": "candidate",
+      "seconds": 0.7977818310027942,
+      "digest": "3599a1f106da2276",
+      "locks": "ec90e29cf5d40ffb"
+    },
+    {
+      "pair": 7,
+      "name": "candidate",
+      "seconds": 0.8834745009953622,
+      "digest": "3599a1f106da2276",
+      "locks": "ec90e29cf5d40ffb"
+    },
+    {
+      "pair": 7,
+      "name": "baseline",
+      "seconds": 0.8500423090008553,
+      "digest": "3599a1f106da2276",
+      "locks": "ec90e29cf5d40ffb"
+    },
+    {
+      "pair": 8,
+      "name": "baseline",
+      "seconds": 0.8014966390037443,
+      "digest": "3599a1f106da2276",
+      "locks": "ec90e29cf5d40ffb"
+    },
+    {
+      "pair": 8,
+      "name": "candidate",
+      "seconds": 0.7980282800126588,
+      "digest": "3599a1f106da2276",
+      "locks": "ec90e29cf5d40ffb"
+    }
+  ],
+  "limits": "QEMU host replay; not console GPU/CPU time or b30 frame time.",
+  "medians": {
+    "baseline": 0.8025985870044678,
+    "candidate": 0.7977818310027942
+  },
+  "source_base": "de64efdea42b1543bc695c67dbdcf8afbd639859",
+  "branch": "codex/render-objects-mac-20261031",
+  "final_source_sha256": "97f568b2dd3adf4b87b28d0c58f36fb5a36de74c2d3df70f4480578041ca2872",
+  "baseline_source_sha256": "33aa5d04a351b3a8a73f37281c8bd67e1bc2680a111c37943b9fd5d14d573aeb",
+  "mac_reference": {
+    "ppc_sha256": "33c536018095e41f0998c94573227ff05aee04465449b84a24616d59a95001cb",
+    "functions": {
+      "raster_state_setter": "0x0032af50",
+      "texture_stage_state_setter": "0x0032e950",
+      "vertex_shader_binding": "0x00329b80"
+    },
+    "scope": "Static local Ghidra/instruction analysis; no game launch, source transplant or CPU equivalence claim."
+  },
+  "wiiu_lto_build": {
+    "wuhb_sha256": "4f74100e61516b609a8cededbeb143a37e9559c8b13b90233ae791ebd4d773e3",
+    "elf_sha256": "f415c18fb746d159b1459f9f8fbe695271b5c288bd4bcfdad2c423a49ec34851",
+    "missing_stubs": 0,
+    "flags": "--linux-target=wiiu --release --wiiu-lto",
+    "console_tested": false
+  }
+}

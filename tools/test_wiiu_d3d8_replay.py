@@ -151,7 +151,7 @@ class D3D8ReplayTest(unittest.TestCase):
 
     def test_a_setter_that_does_not_mark_its_state_is_found_at_the_frame_end(self):
         # (the frame's end compares the words no setter marked with the GX2 thread's copy, and logs any that differ)
-        mutation = ("port/wiiu/src/d3d8_gx2.c", "{ render_state_mark(state); D3D__RenderState[state] = value; }", "{ D3D__RenderState[state] = value; }")
+        mutation = ("port/wiiu/src/d3d8_gx2.c", "{ render_state_store(state, value); }", "{ D3D__RenderState[state] = value; }")
         with tempfile.TemporaryDirectory(prefix="opence-d3d8-replay-") as folder:
             values = replay(self.build_in(folder, [mutation]), "sync", "lag", 1, frames=60)
         self.assertNotEqual(values["digest"], DIGEST)
