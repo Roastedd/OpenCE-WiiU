@@ -3870,11 +3870,14 @@ static void present(const struct dk_command_present *command)
 		wiiu_log("GX2:   waiting for the display's flip: %.1f ms a frame", (double)OSTicksToMicroseconds(gx.wait_ticks) / 1000.0 / (double)gx.window_frames);
 		gx.wait_ticks = 0;
 		/* (dynamic resolution: the step, what changed it, and what the controller saw; the frame times' percentiles are the overlay's line) */
-		if (gx.drs_forced || gx.drs_on)
-			wiiu_log("GX2:   dynamic resolution: %u of %u lines (%s); since the last note %u drops and %u rises, %u of %u frames waited over 1 ms for the flip, "
-				"%u had a menu; the GPU's time at this step %.2f ms on average over %u frames; %u targets cleared at a change of step", gx.drs_lines,
-				gx.render_height, gx.drs_forced ? "halo/drs_lines.txt" : "the controller", gx.drs_drops, gx.drs_rises, gx.drs_waits, gx.drs_frames,
-				gx.drs_menu_frames, (double)wiiu_drs_average(&gx.drs), gx.drs.gpu_count, gx.drs_clears);
+		if (gx.drs_forced)
+			wiiu_log("GX2:   dynamic resolution: %u of %u lines (halo/drs_lines.txt; the controller is off); %u targets cleared at a change of step",
+				gx.drs_lines, gx.render_height, gx.drs_clears);
+		else if (gx.drs_on)
+			wiiu_log("GX2:   dynamic resolution: %u of %u lines (the controller); since the last note %u drops and %u rises, %u of %u frames waited over "
+				"1 ms for the flip, %u had a menu; the GPU's time at this step %.2f ms on average over %u frames (-1: none yet); %u targets cleared at "
+				"a change of step", gx.drs_lines, gx.render_height, gx.drs_drops, gx.drs_rises, gx.drs_waits, gx.drs_frames, gx.drs_menu_frames,
+				(double)wiiu_drs_average(&gx.drs), gx.drs.gpu_count, gx.drs_clears);
 		gx.drs_drops = gx.drs_rises = gx.drs_waits = gx.drs_frames = gx.drs_menu_frames = gx.drs_clears = 0;
 		wiiu_log("GX2:   frame times: longest %llu ms, %u over 40 ms; shaders loaded %u (%llu ms loading)", (unsigned long long)OSTicksToMilliseconds(gx.longest_frame),
 			gx.slow_frames, gx.shaders_loaded, (unsigned long long)OSTicksToMilliseconds(gx.shader_ticks));
