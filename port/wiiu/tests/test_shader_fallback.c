@@ -1,5 +1,6 @@
 /* gx2_shaders.c's pack lookup, its own source compiled with the rest of the game stood in for (tools/test_wiiu_shader_fallback.py): a pixel key the
-pack lacks is drawn with its stand-in, a key left out of the pack is skipped, and every key the pack lacks is written down once. The fixtures are keys met on the console and what the pack builder (pack_gen.c, on a little-endian computer) made of them: the
+pack lacks is drawn with its canonical key's shader, else with its stand-in, a key left out of the pack is skipped, and every key the pack lacks is
+written down once. The fixtures are keys met on the console and what the pack builder (pack_gen.c, on a little-endian computer) made of them: the
 console, big-endian, must find the same hashes. */
 #include <stdarg.h>
 #include <stdint.h>
@@ -75,60 +76,60 @@ void halo_stream_endian_forget(void)
 
 #include SHADERS_SOURCE
 
-/* ---------- keys met on the console, and their hashes and stand-ins' hashes as the pack builder made them */
+/* ---------- keys met on the console, and their hashes, canonical keys' hashes and stand-ins' hashes as the pack builder made them */
 
 static const struct fixture
 {
 	const char *name, *wire;
-	uint64_t hash, stand_in;
+	uint64_t hash, canonical, stand_in;
 } fixtures[] =
 {
-	/* Blood Gulch, 2026-10-30: missed; t0 times C0, faded to white by V0's alpha, alpha tested */
+	/* Blood Gulch, 2026-10-30: missed, its shader in the pack under another key; t0 times C0, faded to white by V0's alpha, alpha tested */
 	{ "bg",
 		"00000000000000000000000000000000000000003c1c201c000000000000000000200c1400140000000000000000000000000000000000000000000000000000"
 		"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c0000"
 		"00000000000000000000010800000c0c08050c250000140c0b0c0d2c000000000b010b1c0000050c000000000000000000000000c0000000c0000000000c0000"
 		"000c0000000c000000000000000c0000000c00000100000000000000000000000000000001000000010000000000000000000000040200000100000000000000"
-		, 0x0702c19a9886244aull, 0xba67c6196c856cb2ull },
+		, 0x0702c19a9886244aull, 0xce7372d9645436e6ull, 0xba67c6196c856cb2ull },
 	/* the pixel key tools/wiiu/shader_exclude.txt leaves out (a bump-mapped cube-map reflection) */
 	{ "excluded",
 		"000000000000000000000000000000000000000000001d1d0000000000000000000b0f2d00000c0c000000000000000000000000000000000000000000000000"
 		"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000d0000000"
 		"000000000000000020010b0b00000c0ccd11cc3120a020cc01110c311d0d150c0000000000000000000000000000000000000000cd000000c0000000000c0300"
 		"000c0000000c0000cd10000000000000000000000200000000000000110100000000000021460600010101030000000000000000000000000100000000000000"
-		, 0xf770249ae846dc29ull, 0x74d5c8564437e5fcull },
+		, 0xf770249ae846dc29ull, 0x2547f0f09189a2ceull, 0x74d5c8564437e5fcull },
 	{ "untextured",
 		"00000000000000000000000000000000000000000000000000000000000000000000000000110000000000000000000000000000000000000000000000000000"
 		"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 		"00000000000000000000000000000c0c15240804010c010c0c04050be1142002090809081d0b040800000000000000000000000000000000d000000045000000"
 		"cd100000b4000000000d000000080000000c00000100000000000000000000000000000000000000000000000000000000000000000000000100000000000000"
-		, 0x59b024bfa1e6573bull, 0x634d96bea9a99134ull },
+		, 0x59b024bfa1e6573bull, 0x34ef81132b092d1aull, 0x634d96bea9a99134ull },
 	/* stage 0 projected 2D on a cube texture: the stand-in samples the cube */
 	{ "projected_cube",
 		"000000000000000000000000000000000000000000001d1d000000000000000004000f0500140d0c000000000000000000000000000000000000000000000000"
 		"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000d0000000"
 		"00000000000000000000080800000c0c152408040000140c0b0c0d2c1d0d150c0000000000000000000000000000000000000000c0000000d000000045000000"
 		"000c0000000c0000cd10000000000000000000000300000000000000000000000000000001000000030000000000000000000000000000000100000000000000"
-		, 0x79b8e0a46ddba7b6ull, 0x819b9f2245c713acull },
+		, 0x79b8e0a46ddba7b6ull, 0x8a880e4b4473f8f8ull, 0x819b9f2245c713acull },
 	{ "cube",
 		"000000000000000000000000110c122c0000000000001d1d00000000000000000c000000001c0000000000000000000000000000000000000000000000000000"
 		"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c000000000000d0000000"
 		"0000000000000000110912080000140c0000050c010c022c0b0c0d2c1d0d150c0000000000000000000000000000000000000000000c0000000c0000000c0000"
 		"000c0000000c0000cd10000000000000000000000211010000000000000000000000000023000000030100000000000000000000000000000100000000000000"
-		, 0x386f761880b63820ull, 0xd2737482f6a0b174ull },
+		, 0x386f761880b63820ull, 0x1f16a7b33583051bull, 0xd2737482f6a0b174ull },
 	/* stage 0's alpha kill on: so is the stand-in's */
 	{ "kill",
 		"081208120000206c20b1200820112012000000000000000000000000000000000000180c001c0000000000000000000000000000000000000000000000000000"
 		"00000000000000000000000000000000000000000000000000000000000000000000000000000000000c0200c0000000000c0000004c00000000000000000000"
 		"000000000000000020e82011021c013c021c200c2001200c0c04050be1142002090809081d0b0408000000000000000000000000000c0200000c0000000c0000"
 		"004c0000b4000000000d000000080000000c00000411010000000000000000000000000001000000010000000100000000000000000000000100000000000000"
-		, 0xdaa3af05a00ece20ull, 0x546d79983f480525ull },
+		, 0xdaa3af05a00ece20ull, 0x3a5b8e7be001529cull, 0x546d79983f480525ull },
 	{ "volume",
 		"20a920080c0c1c1c5c5c0000000015140000000000001d1d000000000000000000000f0c00141c1c000000000000000000000000000000000000000000000000"
 		"00000000000000000000000000000000000000000000000000000000000000000000000000000000000c0000004c0200004d00004000000000000000d0000000"
 		"000000000000000020b820190000000000000000a01d051c0b0c0d2c1d0d150c0000000000000000000000000000000000000000000c00000000000000000000"
 		"000c0000000c0000cd10000000000000000000000401000000000000000000000000000042000000020200000000000000000000000000000100000000000000"
-		, 0x2b8c63bd67a2f7faull, 0xb4004f0e2ec01868ull },
+		, 0x2b8c63bd67a2f7faull, 0xf14f11dcea0009acull, 0xb4004f0e2ec01868ull },
 	/* Blood Gulch's sky (2026-10-31, halo/gx2_trace.txt: drawn first, blended by its alpha): t0, blended toward stage 1's C0 by C0's alpha, and t0's
 	alpha; its stand-in is the texture and the texture's alpha */
 	{ "sky",
@@ -136,7 +137,7 @@ static const struct fixture
 		"00000000000000000000000000000000000000000000000000000000000000000000000000000000c000000000000000000c000000000000004c0000000c0000"
 		"00000000000000000000200801110c31200c200a01110c3100000000000000000b010b1c0000050c000000000000000000000000c0000000000c0000000c0000"
 		"000c00000000000000000000000c0000000c00000211010000000000000000000000000001000000010000000000000000000000000000000100000000000000"
-		, 0xbcee7733c9e02908ull, 0x7240bdb617108c54ull },
+		, 0xbcee7733c9e02908ull, 0xaab1da95d772c661ull, 0x7240bdb617108c54ull },
 };
 
 /* the stand-ins' hashes in their numbered order (shader_key_fallback_numbered), made by check_fixtures; FNV-1a 64 of them, each as 8 bytes least
@@ -332,7 +333,7 @@ static void random_key(struct nv2a_pixel_shader_key *key)
 
 /* ---------- the checks */
 
-/* the hashes and stand-ins are those the pack builder made, on this machine as on a little-endian one */
+/* the hashes, canonical keys and stand-ins are those the pack builder made, on this machine as on a little-endian one */
 static void check_fixtures(void)
 {
 	uint64_t digest = SHADER_KEY_HASH_INIT;
@@ -340,7 +341,7 @@ static void check_fixtures(void)
 
 	for (i = 0; i < SHADER_KEY_FALLBACKS; i++)
 	{
-		struct nv2a_pixel_shader_key fallback;
+		struct nv2a_pixel_shader_key fallback, canonical;
 		unsigned char bytes[8], *at = bytes;
 
 		shader_key_fallback_numbered(i, &fallback);
@@ -350,14 +351,18 @@ static void check_fixtures(void)
 		digest = shader_key_hash(digest, bytes, sizeof(bytes));
 		for (j = 0; j < i; j++)
 			CHECK(numbered[j] != numbered[i]);
+		shader_key_canonical(&fallback, &canonical);
+		CHECK(hash_of(&canonical) == numbered[i]);
 	}
 	CHECK(digest == NUMBERED_DIGEST);
 	for (i = 0; i < sizeof(fixtures) / sizeof(fixtures[0]); i++)
 	{
-		struct nv2a_pixel_shader_key key, fallback;
+		struct nv2a_pixel_shader_key key, canonical, fallback;
 
 		key_of(&fixtures[i], &key);
 		CHECK(hash_of(&key) == fixtures[i].hash);
+		shader_key_canonical(&key, &canonical);
+		CHECK(hash_of(&canonical) == fixtures[i].canonical);
 		CHECK(shader_key_fallback(&key, &fallback));
 		CHECK(hash_of(&fallback) == fixtures[i].stand_in);
 	}
@@ -456,25 +461,91 @@ static void check_stand_ins(void)
 		fallback.combiner_state[D3DRS_PSALPHAINPUTS0] == 0x00200000u);
 }
 
-/* random keys: each has a stand-in, one of those the pack has, but for NEVER */
-static void check_random(void)
+/* the canonical key: what the generator does not read cleared, the rest kept */
+static void check_canonical(void)
 {
-	struct nv2a_pixel_shader_key key, fallback;
+	struct nv2a_pixel_shader_key key, other, canonical, again;
 	unsigned i;
 
+	key_of(fixture_named("bg"), &key);
+	shader_key_canonical(&key, &canonical);
+	/* stale stages past the count, the constants, the unnamed state, the Switch's mode bits: the same canonical key */
+	other = key;
+	other.combiner_state[D3DRS_PSRGBINPUTS0 + 5] = 0x12345678u;
+	other.combiner_state[D3DRS_PSALPHAOUTPUTS0 + 7] = 0xc0u;
+	other.combiner_state[D3DRS_PSCONSTANT0_0 + 3] = 0xff00ff00u;
+	other.combiner_state[D3DRS_PSFINALCOMBINERCONSTANT1] = 1;
+	other.combiner_state[D3DRS_PSCOMBINERCOUNT + 1] = 7;
+	other.texture_modes |= 0x50000000u;
+	other.combiner_state[D3DRS_PSCOMPAREMODE] = 0xf;
+	other.alpha_kill[2] = 1;
+	other.color_sign[3] = 0xf;
+	other.sampler_type[1] = _xgpu_sampler_2d;
+	other.combiner_state[D3DRS_PSCOMBINERCOUNT] |= 0x00f00000u;
+	shader_key_canonical(&other, &again);
+	CHECK(hash_of(&other) != hash_of(&key) && hash_of(&again) == hash_of(&canonical));
+	/* what is read is kept: a stage the count runs, a 3D sampler declared, the alpha test, the fog's mode */
+	other = key;
+	other.combiner_state[D3DRS_PSRGBINPUTS0] ^= 0x01000000u;
+	shader_key_canonical(&other, &again);
+	CHECK(hash_of(&again) != hash_of(&canonical));
+	other = key;
+	other.sampler_type[1] = _xgpu_sampler_3d;
+	shader_key_canonical(&other, &again);
+	CHECK(hash_of(&again) != hash_of(&canonical));
+	other = key;
+	other.alpha_test_function = D3DCMP_LESS;
+	shader_key_canonical(&other, &again);
+	CHECK(hash_of(&again) != hash_of(&canonical));
+	other = key;
+	other.fog_table_mode = D3DFOG_LINEAR;
+	shader_key_canonical(&other, &again);
+	CHECK(hash_of(&again) != hash_of(&canonical));
+	other = key;
+	other.alpha_test_samples = 4;
+	shader_key_canonical(&other, &again);
+	CHECK(hash_of(&again) != hash_of(&canonical));
+	other.alpha_test_function = D3DCMP_EQUAL;
+	shader_key_canonical(&other, &again);
+	other.alpha_test_samples = 0;
+	shader_key_canonical(&other, &canonical);
+	CHECK(hash_of(&again) == hash_of(&canonical));
+	shader_key_canonical(&key, &canonical);
+	/* ALWAYS writes no test, as no test; the fog's mode means nothing without fog */
+	other = key;
+	other.alpha_test_function = 0;
+	shader_key_canonical(&other, &again);
+	other.alpha_test_function = D3DCMP_ALWAYS;
+	shader_key_canonical(&other, &canonical);
+	CHECK(hash_of(&again) == hash_of(&canonical));
+	other.fog_enable = 0;
+	other.fog_table_mode = D3DFOG_EXP;
+	shader_key_canonical(&other, &again);
+	other.fog_table_mode = 0;
+	shader_key_canonical(&other, &canonical);
+	CHECK(hash_of(&again) == hash_of(&canonical));
+	/* random keys: canonical once and for all, and their stand-in that of their canonical key */
 	for (i = 0; i < 100000; i++)
 	{
+		struct nv2a_pixel_shader_key fallback, canonical_fallback;
 		int has;
 
 		random_key(&key);
+		shader_key_canonical(&key, &canonical);
+		shader_key_canonical(&canonical, &again);
+		CHECK(hash_of(&again) == hash_of(&canonical));
 		has = shader_key_fallback(&key, &fallback);
+		CHECK(has == shader_key_fallback(&canonical, &canonical_fallback));
 		CHECK(has == (key.alpha_test_function != D3DCMP_NEVER));
 		if (has)
+		{
+			CHECK(hash_of(&fallback) == hash_of(&canonical_fallback));
 			stand_in_name(hash_of(&fallback));
+		}
 	}
 }
 
-/* the lookup: exact, stand-in, left out, none; and what is written down */
+/* the lookup: exact, canonical, stand-in, left out, none; and what is written down */
 static void check_lookup(void)
 {
 	static const uint32_t words[8] = { 0, 0x0020001b, 0x0836106c, 0x2f100ff8, 0, 0x0020001b, 0x0836106c, 0x2f100ff9 };
@@ -483,13 +554,15 @@ static void check_lookup(void)
 	struct entry entries[8 + SHADER_KEY_FALLBACKS];
 	struct nv2a_pixel_shader_key key, other;
 	unsigned count = 0, i, queued_before;
-	char stand_in_line[64];
+	char equivalent_name[64];
 
 	vertex_missing.program_hash = shader_vertex_program_hash(words, 2);
 	entries[count++] = (struct entry){ DK_SHADER_STAGE_VERTEX, shader_vertex_key(vertex_found.program_hash, vertex_found.packed_mask), "vertex" };
 	entries[count++] = (struct entry){ DK_SHADER_STAGE_VERTEX + 2, shader_vertex_key(vertex_left_out.program_hash, vertex_left_out.packed_mask), NULL };
 	entries[count++] = (struct entry){ DK_SHADER_STAGE_PIXEL, fixture_named("cube")->hash, "cube" };
+	entries[count++] = (struct entry){ DK_SHADER_STAGE_PIXEL, fixture_named("bg")->canonical, "bg's canonical key" };
 	entries[count++] = (struct entry){ DK_SHADER_STAGE_PIXEL + 2, fixture_named("excluded")->hash, NULL };
+	entries[count++] = (struct entry){ DK_SHADER_STAGE_PIXEL, fixture_named("excluded")->canonical, "the left-out key's canonical key" };
 	for (i = 0; i < SHADER_KEY_FALLBACKS; i++)
 	{
 		unsigned j;
@@ -499,14 +572,14 @@ static void check_lookup(void)
 		if (j == i)
 			entries[count++] = (struct entry){ DK_SHADER_STAGE_PIXEL, numbered[i], stand_in_name(numbered[i]) };
 	}
-	CHECK(count == 4 + SHADER_KEY_FALLBACKS);
+	CHECK(count == 6 + SHADER_KEY_FALLBACKS);
 	restart();
 	pack_write(entries, count, -1);
 
 	/* vertex keys: there, left out (not written down), missing (written down once, with its program) */
 	CHECK(!strcmp(shader_of(dk_shader_for_draw(DK_SHADER_STAGE_VERTEX, &vertex_found)), "vertex"));
 	CHECK(dk_shader_found(DK_SHADER_STAGE_VERTEX) == DK_SHADER_FOUND_EXACT);
-	CHECK(strstr(last_log, "the pack has 1 vertex and 115 pixel shaders, 2 keys left out"));
+	CHECK(strstr(last_log, "the pack has 1 vertex and 117 pixel shaders, 2 keys left out"));
 	CHECK(!dk_shader_for_draw(DK_SHADER_STAGE_VERTEX, &vertex_left_out));
 	CHECK(dk_shader_found(DK_SHADER_STAGE_VERTEX) == DK_SHADER_FOUND_LEFT_OUT && !queued_vertex && !unavailable);
 	dk_shader_program_note(vertex_missing.program_hash, words, 2);
@@ -518,20 +591,20 @@ static void check_lookup(void)
 	/* a pixel key in the pack: its own shader, nothing written down */
 	key_of(fixture_named("cube"), &key);
 	CHECK(!strcmp(pixel(&key, DK_SHADER_FOUND_EXACT), "cube") && !queued_pixel);
-	/* Blood Gulch's key: its stand-in, written down once, said once in the log */
+	/* Blood Gulch's key: its canonical key's shader, written down once, said once in the log */
 	key_of(fixture_named("bg"), &key);
 	log_lines = 0;
-	CHECK(!strcmp(pixel(&key, DK_SHADER_FOUND_FALLBACK), stand_in_name(fixture_named("bg")->stand_in)));
+	CHECK(!strcmp(pixel(&key, DK_SHADER_FOUND_EQUIVALENT), "bg's canonical key"));
 	CHECK(queued_pixel == 1 && last_queued == fixture_named("bg")->hash && log_lines == 1);
-	snprintf(stand_in_line, sizeof(stand_in_line), "drawn with its stand-in, %016llx", (unsigned long long)fixture_named("bg")->stand_in);
-	CHECK(strstr(last_log, "pixel key 0702c19a9886244a is not in the pack") && strstr(last_log, stand_in_line));
-	CHECK(!strcmp(pixel(&key, DK_SHADER_FOUND_FALLBACK), stand_in_name(fixture_named("bg")->stand_in)) && queued_pixel == 1 && log_lines == 1);
-	/* the same key with another stale stage (past the count): another key, the same stand-in */
+	snprintf(equivalent_name, sizeof(equivalent_name), "drawn with the shader of its canonical key, %016llx",
+		(unsigned long long)fixture_named("bg")->canonical);
+	CHECK(strstr(last_log, "pixel key 0702c19a9886244a is not in the pack") && strstr(last_log, equivalent_name));
+	CHECK(!strcmp(pixel(&key, DK_SHADER_FOUND_EQUIVALENT), "bg's canonical key") && queued_pixel == 1 && log_lines == 1);
+	/* the same key with another stale stage: another key, the same canonical key's shader */
 	other = key;
 	other.combiner_state[D3DRS_PSRGBINPUTS0 + 6] = 0x2c0d0c0bu;
-	CHECK(!strcmp(pixel(&other, DK_SHADER_FOUND_FALLBACK), stand_in_name(fixture_named("bg")->stand_in)) && queued_pixel == 2 &&
-		last_queued == hash_of(&other));
-	/* the left-out key: skipped though its stand-in is there, not written down, also from the memo */
+	CHECK(!strcmp(pixel(&other, DK_SHADER_FOUND_EQUIVALENT), "bg's canonical key") && queued_pixel == 2 && last_queued == hash_of(&other));
+	/* the left-out key: skipped though its canonical key's shader is there, not written down, also from the memo */
 	key_of(fixture_named("excluded"), &key);
 	CHECK(!pixel(&key, DK_SHADER_FOUND_LEFT_OUT) && queued_pixel == 2);
 	CHECK(!pixel(&key, DK_SHADER_FOUND_LEFT_OUT) && queued_pixel == 2);
@@ -577,7 +650,7 @@ static void check_lookup(void)
 	CHECK(found_told == FOUND_TOLD_LIMIT && log_lines == FOUND_TOLD_LIMIT);
 	/* and what was found before is found the same after many other keys */
 	key_of(fixture_named("bg"), &key);
-	CHECK(!strcmp(pixel(&key, DK_SHADER_FOUND_FALLBACK), stand_in_name(fixture_named("bg")->stand_in)));
+	CHECK(!strcmp(pixel(&key, DK_SHADER_FOUND_EQUIVALENT), "bg's canonical key"));
 	key_of(fixture_named("cube"), &key);
 	CHECK(!strcmp(pixel(&key, DK_SHADER_FOUND_EXACT), "cube"));
 }
@@ -644,7 +717,7 @@ int main(void)
 {
 	check_fixtures();
 	check_stand_ins();
-	check_random();
+	check_canonical();
 	check_lookup();
 	check_old_pack();
 	check_bad_packs();

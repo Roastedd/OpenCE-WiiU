@@ -750,14 +750,19 @@ The files (`posix_files.c`'s `UTIME_OMIT`, `pread` and `pwrite`), the null rende
 ## Shaders the pack lacks
 
 The shaders are compiled ahead of time into `halo/shaders.pack` (`gx2_shaders.c`, `tools/wiiu/shader_pack.sh`), so a key nobody
-met before has none, and its draws were skipped: models, the first-person weapon, the sky and the HUD vanished on Blood Gulch
-(2026-10-30) until their keys were in the pack. A pixel key the pack lacks is now drawn with a stand-in (`shader_key_fallback`,
-`shader_key_wire.h`): what the key's final color and alpha depend on is followed through its combiner program, and the stand-in
-keeps what it can of that: stage 0's texture (2D, 3D or cube, as the key samples it) times the diffuse color, each where the color
-or the alpha depends on them (untextured, the diffuse color, else C0, else nothing), with the key's alpha test and alpha kill. It
-is itself a key, generated like every other (`pack_gen.c`), so it meets every vertex shader; the pack has all 114 of them. Such
-draws are rough, not missing. A key in `tools/wiiu/shader_exclude.txt` is marked in the pack (stage 2 or 3, no shader) and still
-skipped, and a vertex key the pack lacks still skips the draw. The 5-second log counts the draws made with a stand-in, and the
+met before has none. A pixel key holds render states its shader never reads (the combiner stages past the count keep the values
+of the last draw that used them): the 2200 pixel keys met by 2026-10-30 have 186 shaders between them. So a pixel key the pack
+lacks is looked for again as its canonical key (`shader_key_canonical`, `shader_key_wire.h`: what `nv2a_psh.c` does not read
+set to 0), whose shader is the same; the pack builder writes every key's shader under its canonical key too, and stops if the two
+GLSL texts differ (`pack_gen.c`; `pack_gen --check` tries random keys). Failing that, the draw is made with a stand-in
+(`shader_key_fallback`): what the key's final color and alpha depend on is followed through its combiner program, and the
+stand-in keeps what it can of that: stage 0's texture (2D, 3D or cube, as the key samples it) times the diffuse color, each where
+the color or the alpha depends on them (untextured, the diffuse color, else C0, else nothing), with the key's alpha test and alpha
+kill. It is itself a key, generated like every other, so it meets every vertex shader; the pack has all 114 of them. Models, the
+first-person weapon, the sky and the HUD are then drawn roughly rather than not at all (on 2026-10-31, with 29 of Blood Gulch's
+shaders taken out of a test pack, 8400 of 11100 draws were stand-ins, and the sky was drawn once its stand-in followed its alpha).
+A key in `tools/wiiu/shader_exclude.txt` is marked in the pack (stage 2 or 3, no shader) and still skipped, and a vertex key the
+pack lacks still skips the draw. The 5-second log counts the draws made with a canonical key's shader and with a stand-in, and the
 first 40 such keys are logged by name; each key is written down for the next pack as before.
 
 ## Owned missing-shader capture
