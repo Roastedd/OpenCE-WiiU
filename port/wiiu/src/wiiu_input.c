@@ -57,7 +57,13 @@ static void start(void)
 	KPADInit();
 	WPADEnableURCC(TRUE);
 	for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
-		connect_chained[channel] = KPADSetConnectCallback((KPADChan)channel, connect_callback);
+	{
+		const KPADConnectCallback previous = KPADSetConnectCallback((KPADChan)channel, connect_callback);
+
+		/* (never itself: it would call itself for ever) */
+		if (previous != connect_callback)
+			connect_chained[channel] = previous;
+	}
 	wiiu_log("Input: KPAD channels 1 to %u read (the system allows %u)", WIIU_PAD_CHANNELS, (unsigned)KPADGetMaxControllers());
 }
 
@@ -623,21 +629,14 @@ int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 static float rumble_level[WIIU_PAD_PORTS];
 static uint32_t rumble_refreshed_ms[WIIU_PAD_PORTS];
 
-/* every Pro Controller's motor stopped, and every port's level forgotten, so that the next rumble of each is sent whatever it is */
+/* Every Pro Controller's motor to be stopped, and every port's level forgotten, so that the next rumble of each is sent whatever it is. The game's
+rumble is sent from its input thread (input_xbox.c's input_flush_rumble, every other refresh, port 0 always among them), the poll that moves the
+controllers runs on the game's: the poll asks, and the next rumble does it, so that the motors are driven from one thread. */
+static volatile int motors_stop;
+
 static void rumble_stop_all(void)
 {
-	unsigned int channel, port;
-
-	for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
-	{
-		if (pro_present & (1u << channel))
-			WPADControlMotor((WPADChan)channel, FALSE);
-	}
-	for (port = 0; port < WIIU_PAD_PORTS; port++)
-	{
-		rumble_level[port] = 0.0f;
-		rumble_refreshed_ms[port] = 0;
-	}
+	motors_stop = 1;
 }
 
 void wiiu_input_rumble(unsigned int port, float strength)
@@ -656,6 +655,22 @@ void wiiu_input_rumble(unsigned int port, float strength)
 	if (port >= WIIU_PAD_PORTS || !wiiu_in_foreground())
 		return;
 	start();
+	if (motors_stop)
+	{
+		unsigned int channel, other;
+
+		motors_stop = 0;
+		for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
+		{
+			if (pro_present & (1u << channel))
+				WPADControlMotor((WPADChan)channel, FALSE);
+		}
+		for (other = 0; other < WIIU_PAD_PORTS; other++)
+		{
+			rumble_level[other] = 0.0f;
+			rumble_refreshed_ms[other] = 0;
+		}
+	}
 	step = strength <= 0.05f ? 0u : strength < 0.35f ? 1u : strength < 0.7f ? 2u : 3u;
 	/* (a pattern runs for about a tenth of a second per byte: the same level is sent again before it ends, and a change at once) */
 	if (step == (unsigned int)(rumble_level[port] * 3.0f + 0.5f) && now - rumble_refreshed_ms[port] < 100u)
@@ -679,7 +694,9 @@ void wiiu_input_rumble(unsigned int port, float strength)
 	{
 		unsigned int channel;
 
-		/* (every Pro Controller that drives the port: in "auto" with one player, all of them with the GamePad) */
+		/* (every Pro Controller that drives the port: in "auto" with one player, all of them with the GamePad. The map is the game thread's poll's,
+		read here on the input thread: a controller that moves between the two is rumbled for its old port once more, and its motor stopped at the
+		next call: motors_stop) */
 		for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
 		{
 			if ((pro_present & (1u << channel)) && wiiu_pad_players_port(&pad_players, (int)channel) == (int)port)
