@@ -24,7 +24,12 @@ and links build/linux-wiiu/halo.elf and halo.rpx, with a report of the sizes aga
 multiply-adds: tools/wiiu_check_objects.py), and the link for weak references nothing defines and for newlib's
 wide-character functions, which assume a 32-bit wchar_t (tools/wiiu_link_check.py).
 
-Not optimised together at the link (no -flto, no profile): devkitPPC's linker does not read LLVM bitcode.
+devkitPPC's linker does not read LLVM bitcode, so the link cannot optimise the game as one module the way the Linux
+builds' does (configure.py --lto). With configure.py --wiiu-lto the game's sources (those the Linux builds optimise
+together) are compiled to LLVM IR instead, linked into one module by llvm-link, and that module is compiled to one
+object, which is checked and linked like any other: calls between the game's files can then be inlined (the accessors
+datum_get, tag_block_get_element and cache_get_tag_instance were 6% of the game thread's time in the 2026-10-29
+profile). Without it, each file is optimised alone. No profile is used either way.
 """
 
 import json
@@ -190,6 +195,23 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
         depfile="$out.d",
         deps="gcc",
     )
+    # (configure.py --wiiu-lto: the game's sources as LLVM IR, linked into one module and compiled to one object, which
+    # is checked as every object is; -S, because wiiu-clang strips a section from what -c makes, which IR does not have)
+    n.rule(
+        name="wiiu_cc_ir",
+        command=f"{compile_launcher(sln)}$wiiu_cc -MMD -MF $out.d $cflags -flto -S $in -o $out",
+        description="WIIU CC IR $out",
+        depfile="$out.d",
+        deps="gcc",
+    )
+    n.rule(
+        name="wiiu_lto",
+        command="llvm-link -o $out.bc @$out.rsp && $wiiu_cc $cflags -c $out.bc -o $out"
+                " && $python tools/wiiu_check_objects.py --quiet $out",
+        description="WIIU LTO $out",
+        rspfile="$out.rsp",
+        rspfile_content="$in_newline",
+    )
     n.rule(
         name="wiiu_stubs",
         command='$python tools/wiiu_stubs.py --link "$wiiu_ld $ldflags" --libs "$libs" --objects $out.rsp'
@@ -238,12 +260,16 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
     sdk_flags = f"-idirafter {XDK_INCLUDE}"
     objects: List[Path] = []
 
-    def add_object(source: Path, cflags: str) -> Path:
-        obj = obj_dir / source.with_suffix(".o")
-        objects.append(obj)
+    lto = getattr(sln, "wiiu_lto", False)
+    ir_modules: List[Path] = []
+
+    def add_object(source: Path, cflags: str, ir: bool = False) -> Path:
+        """the source's object, or with ir (the game's sources under --wiiu-lto) its LLVM IR for the one module"""
+        obj = obj_dir / source.with_suffix(".ll" if ir else ".o")
+        (ir_modules if ir else objects).append(obj)
         n.build(
             outputs=obj,
-            rule="wiiu_cc",
+            rule="wiiu_cc_ir" if ir else "wiiu_cc",
             inputs=source,
             # (the SDK declarations are system headers, which the depfile leaves out)
             implicit=[*xdk_headers(), prefix_header, semantics_header, platform_semantics_header],
@@ -268,10 +294,16 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
         if source.as_posix() == "source/shell/shell_xbox.c":
             # (the Wii U's own main, port/wiiu/src/wiiu_main.c, runs the game's on a thread of its own, as the web build's does)
             flags += " -Dmain=halo_game_main"
-        add_object(source, flags)
+        add_object(source, flags, ir=lto)
     for source in sorted(Path(config["game_sources"]).glob("*.c")):
-        add_object(source, game_cflags)
-    add_object(STB_VORBIS_SOURCE, game_cflags)
+        add_object(source, game_cflags, ir=lto)
+    add_object(STB_VORBIS_SOURCE, game_cflags, ir=lto)
+    if lto:
+        # (the game as one module: its code generation flags are the game's, which the IR's functions also carry)
+        game_object = obj_dir / "game_lto.o"
+        objects.append(game_object)
+        n.build(outputs=game_object, rule="wiiu_lto", inputs=ir_modules, implicit=[Path("tools/wiiu_check_objects.py")],
+                variables={"cflags": f"{abi} -w"})
 
     platform_dir = Path(config["platform_sources"])
     platform_cflags = " ".join([

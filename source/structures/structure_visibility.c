@@ -939,6 +939,26 @@ static boolean points_within_distance(
 	return FALSE;
 }
 
+#ifdef HALO_WIIU
+/* port: each byte's value/255, made once: the Wii U's processor converts an
+integer to a real through memory and divides slowly, and the traversal below
+dequantizes six bytes at every node and leaf it visits, every frame. The table
+holds the very quotients the division gives, so the bounds are the same. */
+static real structure_visibility_byte_fractions[UNSIGNED_CHAR_MAX + 1];
+static boolean structure_visibility_byte_fractions_made;
+
+static void structure_visibility_make_byte_fractions(void)
+{
+	short value;
+
+	for (value = 0; value <= UNSIGNED_CHAR_MAX; value++)
+	{
+		structure_visibility_byte_fractions[value] = (real)value / 255.f;
+	}
+	structure_visibility_byte_fractions_made = TRUE;
+}
+#endif
+
 static __inline real structure_visibility_dequantize_byte_to_real(
 	real min,
 	real max,
@@ -949,7 +969,11 @@ static __inline real structure_visibility_dequantize_byte_to_real(
 		return max;
 	}
 
+#ifdef HALO_WIIU
+	return (max - min) * structure_visibility_byte_fractions[value] + min;
+#else
 	return (max - min) * ((real)value / 255.f) + min;
+#endif
 }
 
 real_rectangle3d *dequantize_byte_to_real_rectangle3d(
@@ -957,6 +981,12 @@ real_rectangle3d *dequantize_byte_to_real_rectangle3d(
 	byte_rectangle3d const *compressed_rectangle,
 	real_rectangle3d *result)
 {
+#ifdef HALO_WIIU
+	if (!structure_visibility_byte_fractions_made)
+	{
+		structure_visibility_make_byte_fractions();
+	}
+#endif
 	result->x0 = structure_visibility_dequantize_byte_to_real(parent->x0, parent->x1, compressed_rectangle->x0);
 	result->x1 = structure_visibility_dequantize_byte_to_real(parent->x0, parent->x1, compressed_rectangle->x1);
 	result->y0 = structure_visibility_dequantize_byte_to_real(parent->y0, parent->y1, compressed_rectangle->y0);

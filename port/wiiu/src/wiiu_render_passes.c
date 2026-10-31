@@ -1,0 +1,68 @@
+/*
+WIIU_RENDER_PASSES.C
+
+The game thread's time in each part of a window's rendering (source/render/render.c marks where each begins), said in the
+log every five seconds as the milliseconds each part takes a window. The frame parts line (d3d8_gx2.c) says how long the
+rendering takes as a whole (13 to 14 ms a frame on a30, 2026-10-30); this says where those milliseconds go, so that what
+is moved off the game thread or made cheaper is chosen by measurement. A part's time includes the Direct3D layer's work
+for its draws; "begin" (rasterizer_window_begin) includes the wait for room in the GX2 thread's queue, which at the main menu
+is most of a frame (15.6 ms a window at 60 frames a second, 2026-10-31). A mark costs a read of the time base.
+*/
+
+#include <coreinit/time.h>
+
+#include <stdio.h>
+#include <string.h>
+
+void platform_log(const char *format, ...);
+void wiiu_render_pass(int pass);
+
+/* the parts, in the order render_window does them; the mark numbered PASS_COUNT ends the window */
+static const char *const pass_names[] =
+{
+	"visibility", "begin", "sky", "objects", "lightmaps", "shadows", "decals",
+	"specular", "transparent", "effects", "detail", "hud", "end",
+};
+#define PASS_COUNT ((int)(sizeof(pass_names) / sizeof(pass_names[0])))
+
+static OSTime pass_ticks[PASS_COUNT];
+static OSTime pass_started, logged_at;
+static int current_pass = -1;
+static unsigned long windows;
+
+/* one log line of the parts from first to last (a Wii U log line holds 199 characters) */
+static void passes_log(int first, int last)
+{
+	char line[200];
+	size_t used = 0;
+	int pass;
+
+	for (pass = first; pass <= last && used < sizeof(line); pass++)
+	{
+		used += (size_t)snprintf(line + used, sizeof(line) - used, "%s%s %.2f", pass == first ? "" : ", ", pass_names[pass],
+			(double)OSTicksToMicroseconds(pass_ticks[pass]) / 1000.0 / (double)windows);
+	}
+	platform_log("render passes, ms a window (%lu windows): %s", windows, line);
+}
+
+void wiiu_render_pass(int pass)
+{
+	const OSTime now = OSGetSystemTime();
+
+	if (current_pass >= 0)
+		pass_ticks[current_pass] += now - pass_started;
+	pass_started = now;
+	current_pass = pass >= 0 && pass < PASS_COUNT ? pass : -1;
+	if (pass != PASS_COUNT)
+		return;
+	windows++;
+	if (!logged_at)
+		logged_at = now;
+	if (now - logged_at < (OSTime)OSSecondsToTicks(5))
+		return;
+	passes_log(0, PASS_COUNT / 2 - 1);
+	passes_log(PASS_COUNT / 2, PASS_COUNT - 1);
+	memset(pass_ticks, 0, sizeof(pass_ticks));
+	windows = 0;
+	logged_at = now;
+}

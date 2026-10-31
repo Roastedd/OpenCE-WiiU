@@ -33,12 +33,12 @@ def in_the_repository(monkeypatch):
     monkeypatch.chdir(ROOT)
 
 
-def graph(monkeypatch, found=True, release=False):
+def graph(monkeypatch, found=True, release=False, lto=False):
     """build.ninja's Wii U part, as configure.py writes it, its long lines joined again"""
     monkeypatch.setattr(wiiu_build, "find_wiiu_cc", lambda sln: "wiiu-clang" if found else None)
     out = io.StringIO()
     sln = SimpleNamespace(build_dir=Path("build"), wiiu_cc=None, port_release=release, port_profile=False,
-                          compiler_launcher=None)
+                          compiler_launcher=None, wiiu_lto=lto)
     wiiu_build.generate_wiiu_build(ninja_syntax.Writer(out), sln)
     return re.sub(r" \$\n +", " ", out.getvalue())
 
@@ -143,6 +143,26 @@ def test_every_object_is_checked_and_the_link_is_the_wii_us(monkeypatch):
     assert re.search(r"^build linux_wiiu: phony build/linux-wiiu/halo\.rpx build/linux-wiiu/halo\.wuhb build/linux-wiiu/halo\.sizes\.txt",
                      text, re.M)
     assert re.search(r"^build build/linux-wiiu/halo\.wuhb: wiiu_wuhb build/linux-wiiu/halo\.rpx", text, re.M)
+
+
+def test_the_game_as_one_module_is_checked_and_linked_as_one_object(monkeypatch):
+    """configure.py --wiiu-lto: every game source as LLVM IR, one module of them compiled to one checked object in the
+    link; the platform layer's units are still objects of their own; without it, nothing is IR"""
+    text = graph(monkeypatch, lto=True)
+    sources = linux_build.game_sources(wiiu_build._load_port_config())
+    for source in sources:
+        assert re.search(r"^build build/linux-wiiu/obj/" + re.escape(source.with_suffix(".ll").as_posix().replace(" ", "$ ")) + r"[ :][^\n]*wiiu_cc_ir ",
+                         text, re.M), source
+        assert not is_compiled(text, source.as_posix()), source
+    lto = re.search(r"^build build/linux-wiiu/obj/game_lto\.o[^\n]*: wiiu_lto ([^\n]*)", text, re.M)
+    assert lto and "build/linux-wiiu/obj/source/main/main.ll" in lto.group(1)
+    rule = re.search(r"^rule wiiu_lto\n  command = ([^\n]*)", text, re.M).group(1)
+    assert rule.startswith("llvm-link ") and "wiiu_check_objects.py --quiet $out" in rule
+    assert "-flto -S" in re.search(r"^rule wiiu_cc_ir\n  command = ([^\n]*)", text, re.M).group(1)
+    elf = re.search(r"^build build/linux-wiiu/halo\.elf [^\n]*: wiiu_link ([^\n]*)", text, re.M).group(1)
+    assert "build/linux-wiiu/obj/game_lto.o" in elf and "build/linux-wiiu/obj/source/main/main.o" not in elf
+    assert is_compiled(text, "port/wiiu/src/wiiu_posix_net.c")
+    assert ": wiiu_cc_ir " not in graph(monkeypatch)
 
 
 def test_audio_ps_is_one_explicit_exactly_audited_assembly_object(monkeypatch):

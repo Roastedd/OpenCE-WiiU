@@ -199,10 +199,88 @@ int posix_socket_last_error(void)
 	return last_error;
 }
 
+/* halo/socket_probe.txt "1" (the FTP helper cannot delete a file, so "0" or an empty file is none), at the first socket the game makes: how many sockets nsysnet gives the app, the numbers it gives them and
+what poll does with them, said in the log; then the probe's sockets are closed. wut's poll is nsysnet's select underneath, whose sets hold the sockets numbered
+0 to 31 (NSYSNET_FD_SETSIZE): a socket numbered 32 or more would fail every poll it is in with EINVAL. A host's sockets grow with its machines (internet play's
+tunnel holds four or five for each peer), so this measures how many machines a Wii U can host. */
+#define SOCKET_PROBE_MOST 96
+int __wut_get_nsysnet_fd(int fd);
+
+static void socket_probe_poll(const char *what, const int *sockets, int count)
+{
+	struct pollfd descriptors[SOCKET_PROBE_MOST];
+	int index, result;
+
+	for (index = 0; index < count; index++)
+	{
+		descriptors[index].fd = sockets[index];
+		descriptors[index].events = POLLIN;
+		descriptors[index].revents = 0;
+	}
+	errno = 0;
+	result = poll(descriptors, (nfds_t)count, 0);
+	wiiu_log("Socket probe: a poll of %s (%d sockets): %d, errno %d", what, count, result, result < 0 ? errno : 0);
+}
+
+static void socket_probe(void)
+{
+	int sockets[SOCKET_PROBE_MOST];
+	int count = 0, refused = 0, lowest = -1, highest = -1, lowest_index = 0, highest_index = 0, index;
+	FILE *file = fopen(WIIU_DATA_DIRECTORY "/socket_probe.txt", "r");
+	int wanted;
+
+	if (!file)
+		return;
+	wanted = fgetc(file) == '1';
+	fclose(file);
+	if (!wanted)
+		return;
+	while (count < SOCKET_PROBE_MOST)
+	{
+		const int made = socket(AF_INET, count % 2 ? SOCK_STREAM : SOCK_DGRAM, 0);
+		int number;
+
+		if (made < 0)
+		{
+			refused = errno;
+			break;
+		}
+		number = __wut_get_nsysnet_fd(made);
+		if (lowest < 0 || number < lowest)
+		{
+			lowest = number;
+			lowest_index = count;
+		}
+		if (number > highest)
+		{
+			highest = number;
+			highest_index = count;
+		}
+		sockets[count++] = made;
+	}
+	wiiu_log("Socket probe: %d sockets made, datagram and stream in turn, nsysnet's numbers %d to %d; %s %d", count, lowest, highest,
+		count < SOCKET_PROBE_MOST ? "the next was refused, errno" : "the probe stopped at its most,", count < SOCKET_PROBE_MOST ? refused : count);
+	if (count)
+	{
+		socket_probe_poll("the lowest numbered", &sockets[lowest_index], 1);
+		socket_probe_poll("the highest numbered", &sockets[highest_index], 1);
+		socket_probe_poll("all of them", sockets, count);
+	}
+	for (index = 0; index < count; index++)
+		close(sockets[index]);
+}
+
 int posix_socket(int family, int type, int protocol)
 {
+	static int probed;
+
 	if (unusable())
 		return -1;
+	if (!probed)
+	{
+		probed = 1;
+		socket_probe();
+	}
 	{
 		int result = socket(family, type, protocol);
 

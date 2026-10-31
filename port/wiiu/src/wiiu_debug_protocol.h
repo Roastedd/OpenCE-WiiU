@@ -14,6 +14,8 @@ One command to a line, words separated by spaces:
 	gyro 0 0.2 1000                the GamePad's gyro: pitch and yaw turn rates (rotations a second, -10 to 10) for some milliseconds
 	tap 427 240 150                a finger on the GamePad's touch screen (854x480 pixels) for some milliseconds
 	log 20                         the last lines of the shell's log
+	console (game_won)             a script, run by the game's thread at its next frame as its console runs one (only with config.toml's
+	                               debug.wiiu_console true: the server takes no password)
 */
 
 #ifndef HALO_WIIU_DEBUG_PROTOCOL_H
@@ -30,6 +32,7 @@ enum
 	WIIU_DEBUG_LOG,
 	WIIU_DEBUG_TAP,
 	WIIU_DEBUG_GYRO,
+	WIIU_DEBUG_CONSOLE,
 };
 
 enum
@@ -43,6 +46,7 @@ enum
 #define WIIU_DEBUG_HOLD_MAX_MS 10000u
 #define WIIU_DEBUG_LOG_DEFAULT 20u
 #define WIIU_DEBUG_LOG_MAX 100u
+#define WIIU_DEBUG_CONSOLE_MAX 160u
 
 typedef struct wiiu_debug_request
 {
@@ -55,6 +59,7 @@ typedef struct wiiu_debug_request
 	float tap[2];           /* tap: x, y in the GamePad's pixels */
 	unsigned int milliseconds;
 	unsigned int count;     /* log: lines */
+	char text[WIIU_DEBUG_CONSOLE_MAX]; /* console: the script */
 	char error[96];         /* when parsing failed */
 } wiiu_debug_request;
 

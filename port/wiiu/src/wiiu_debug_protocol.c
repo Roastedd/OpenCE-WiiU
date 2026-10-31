@@ -203,9 +203,24 @@ int wiiu_debug_parse(const char *line, wiiu_debug_request *request)
 		if ((at = next_word(at, word, sizeof(word))) && (!number(word, WIIU_DEBUG_LOG_MAX, &request->count) || !request->count))
 			return fail(request, "log takes 1 to 100 lines");
 	}
+	else if (!strcmp(word, "console"))
+	{
+		size_t length;
+
+		request->command = WIIU_DEBUG_CONSOLE;
+		while (*at == ' ')
+			at++;
+		length = strlen(at);
+		while (length && at[length - 1] == ' ')
+			length--;
+		if (!length || length >= sizeof(request->text))
+			return fail(request, "console takes a script of 1 to 159 characters");
+		memcpy(request->text, at, length);
+		request->text[length] = 0;
+	}
 	else
 	{
-		return fail(request, "unknown command (hello quit screenshot press stick tap gyro log)");
+		return fail(request, "unknown command (hello quit screenshot press stick tap gyro log console)");
 	}
 	return 1;
 }

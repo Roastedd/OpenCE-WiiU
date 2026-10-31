@@ -618,6 +618,10 @@ static const struct config_setting config_settings[] =
 		_platform_all,
 		"The port of the script console (telnet_console); the Xbox's was 23, which\n"
 		"only the administrator can listen on." },
+	{ "debug.wiiu_console", _config_boolean, "false", "HALO_WIIU_CONSOLE", _environment_value, _platform_wiiu,
+		"The debug server (port 4310, tools/wiiu/wiiu_debug.py) runs scripts it is\n"
+		"sent (\"console (game_won)\") as the game's console does, with no password:\n"
+		"for testing; false refuses them." },
 	{ "debug.touch_targets", _config_boolean, "false", "HALO_TOUCH_TARGETS", _environment_set_is_true, _platform_all,
 		"Outline the menus' tap targets (item green, value blue, list slot yellow,\n"
 		"legend button red, the band beside a list's slots orange; the virtual\n"

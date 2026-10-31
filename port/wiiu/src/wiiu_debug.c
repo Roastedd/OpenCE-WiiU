@@ -15,6 +15,8 @@ surface (the GPU does the untiling) and says so, and the server sends the pixels
 #include "wiiu_input.h"
 #include "wiiu_shell.h"
 
+#include "port_config.h"
+
 #include <coreinit/cache.h>
 #include <coreinit/memdefaultheap.h>
 #include <coreinit/thread.h>
@@ -501,6 +503,28 @@ static void do_quit(void)
 	}
 }
 
+/* console: a script the server took, run by the game's thread at its next frame (wiiu_debug_console_run, from main.c where the telnet console's
+are), as its console runs one. The server takes no password, so it runs scripts only with config.toml's debug.wiiu_console (off unless set). One
+script waits at a time: the state goes 0 (none) -> 1 (waiting, its text written) -> 0 (taken), each step published with release ordering. */
+static char console_script[WIIU_DEBUG_CONSOLE_MAX];
+static int console_state;
+
+unsigned char hs_compile_and_evaluate(char const *expression);
+
+void wiiu_debug_console_run(void)
+{
+	char script[WIIU_DEBUG_CONSOLE_MAX];
+	unsigned char done;
+
+	if (!__atomic_load_n(&console_state, __ATOMIC_ACQUIRE))
+		return;
+	memcpy(script, console_script, sizeof(script));
+	__atomic_store_n(&console_state, 0, __ATOMIC_RELEASE);
+	wiiu_log("Debug console: %s", script);
+	done = hs_compile_and_evaluate(script);
+	wiiu_log("Debug console: %s", done ? "done" : "not done (the log says why)");
+}
+
 static void do_request(const wiiu_debug_request *request)
 {
 	char text[96];
@@ -542,6 +566,18 @@ static void do_request(const wiiu_debug_request *request)
 		tapping = 1;
 		wiiu_log("Debug: a tap at %.0f,%.0f for %u ms", request->tap[0], request->tap[1], request->milliseconds);
 		send_text("ok\n");
+		break;
+	case WIIU_DEBUG_CONSOLE:
+		if (!config_boolean("debug.wiiu_console"))
+			send_text("error the script console is off (config.toml's debug.wiiu_console)\n");
+		else if (__atomic_load_n(&console_state, __ATOMIC_ACQUIRE))
+			send_text("error a script is still waiting for the game's next frame\n");
+		else
+		{
+			memcpy(console_script, request->text, sizeof(console_script));
+			__atomic_store_n(&console_state, 1, __ATOMIC_RELEASE);
+			send_text("ok the game's thread runs it at its next frame (log says what it did)\n");
+		}
 		break;
 	case WIIU_DEBUG_LOG:
 	{

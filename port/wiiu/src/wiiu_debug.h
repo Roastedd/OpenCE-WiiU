@@ -28,6 +28,9 @@ struct wiiu_pad;
 /* The shell, once the game's thread runs. memory writes a line about the memory into out (and returns its length); it may be NULL. */
 void wiiu_debug_start(size_t (*memory)(char *out, size_t capacity));
 
+/* The game's thread, once a frame (main.c): runs the script a console request left, if debug.wiiu_console allows them */
+void wiiu_debug_console_run(void);
+
 /* Every log line, from any thread (the shell's echo) */
 void wiiu_debug_log_line(const char *line);
 
