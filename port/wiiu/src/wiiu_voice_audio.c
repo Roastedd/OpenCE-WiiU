@@ -1030,9 +1030,6 @@ menus to be up and the GamePad read; the TV button is taken for its length, and 
 static struct
 {
 	int32_t available[PROBE_POLLS], position[PROBE_POLLS];
-	int32_t consume_available[PROBE_POLLS], consume_position[PROBE_POLLS];
-	int32_t after_available[PROBE_POLLS], after_position[PROBE_POLLS];
-	uint32_t consumed[PROBE_POLLS];
 } probe;
 
 static MICError probe_status(MICStatus *status)
@@ -1218,12 +1215,12 @@ static void probe_run(void)
 	static const char *const state_names[9] = { "rate", "gain", "gain range", "gain range", "gain range", "mute", "?", "echo cancellation",
 		"auto selection" };
 	const uint32_t ring = MIC_RING_SAMPLES;
-	uint32_t index, moves, early_moves, consume_samples = 0, consume_bytes = 0, polls_consumed = 0;
-	int32_t position_highest = 0;
+	uint32_t index, moves, early_moves, moved_as_consumed = 0, polls_consumed = 0;
+	int32_t position_highest = 0, consumed_highest = 0;
 	MICStatus status;
 	MICError error;
-	int mode = WIIU_MIC_CONSUME, gap;
-	uint32_t unit_bytes = 2;
+	int mode, gap;
+	uint32_t unit_bytes;
 	const char *verdict;
 	unsigned char *recording;
 	uint32_t recorded = 0, second_count = 0, second_started, peak = 0, recording_started;
@@ -1310,20 +1307,16 @@ static void probe_run(void)
 			consumed_error = MICSetDataConsumed(microphone_handle, (int)waiting);
 		OSUnlockMutex(&microphone_lock);
 		probe_status(&after);
-		probe.consume_available[index] = status.availableData;
-		probe.consume_position[index] = status.bufferPos;
-		probe.after_available[index] = after.availableData;
-		probe.after_position[index] = after.bufferPos;
-		probe.consumed[index] = waiting;
+		if (status.bufferPos > consumed_highest)
+			consumed_highest = status.bufferPos;
+		if (after.bufferPos > consumed_highest)
+			consumed_highest = after.bufferPos;
+		/* (a read index moves on by what was consumed, in its own unit; round the ring, in either: twice the samples is a
+		whole number of rings of samples) */
 		if (waiting)
 		{
-			const uint32_t moved_samples = ((uint32_t)after.bufferPos % ring + ring - (uint32_t)status.bufferPos % ring) % ring;
-			const uint32_t moved_bytes = ((uint32_t)after.bufferPos % (2u * ring) + 2u * ring - (uint32_t)status.bufferPos % (2u * ring)) %
-				(2u * ring);
-
 			polls_consumed++;
-			consume_samples += moved_samples == waiting % ring;
-			consume_bytes += moved_bytes == (2u * waiting) % (2u * ring);
+			moved_as_consumed += ((uint32_t)after.bufferPos % ring + ring - (uint32_t)status.bufferPos % ring) % ring == waiting % ring;
 		}
 		if (index < PROBE_LOGGED || index == PROBE_POLLS - 1)
 			wiiu_log("mic probe: consumed %u: before availableData %d, bufferPos %d; MICSetDataConsumed(%u) %d; after availableData %d, "
@@ -1331,26 +1324,9 @@ static void probe_run(void)
 				after.bufferPos);
 		probe_sleep();
 	}
-	wiiu_log("mic probe: consuming, bufferPos moved by the samples consumed after %u of %u readings, by twice that (bytes) after %u",
-		(unsigned)consume_samples, (unsigned)polls_consumed, (unsigned)consume_bytes);
-	/* the finding: bufferPos moving by itself from the start (before the ring could fill) is a write position, in bytes if it went past
-	the ring's samples; availableData growing while bufferPos stands is a read index that consuming moves */
-	if (early_moves >= 10u)
-	{
-		mode = WIIU_MIC_POSITION;
-		unit_bytes = position_highest >= (int32_t)ring ? 1u : 2u;
-		verdict = unit_bytes == 1 ? "position bytes" : "position samples";
-	}
-	else if (probe.available[24] > probe.available[0] + 1000)
-	{
-		mode = WIIU_MIC_CONSUME;
-		unit_bytes = consume_bytes > consume_samples ? 1u : 2u;
-		verdict = unit_bytes == 1 ? "consume bytes" : "consume samples";
-	}
-	else
-	{
-		verdict = "unknown";
-	}
+	wiiu_log("mic probe: consuming, bufferPos moved on by what was consumed after %u of %u readings, and went up to %d",
+		(unsigned)moved_as_consumed, (unsigned)polls_consumed, (int)consumed_highest);
+	verdict = wiiu_mic_probe_finding(probe.position, probe.available, PROBE_POLLS, ring, consumed_highest, &mode, &unit_bytes);
 	wiiu_log("mic probe: the reading is \"%s\" (%s)", verdict, !strcmp(verdict, "unknown") ? "nothing moved: no sound came, the "
 		"recording reads by consuming" : "written to mic_probe_result.txt, which audio.wiiu_microphone_read \"auto\" follows");
 	file = fopen(PROBE_RESULT_FILE, "w");
@@ -1361,8 +1337,8 @@ static void probe_run(void)
 		fprintf(file, "# unconsumed: bufferPos moved in %u of %u polls (%u of the first 24), up to %d; availableData %d, %d after 250 ms, %d after 1 s\n",
 			(unsigned)moves, (unsigned)(PROBE_POLLS - 1), (unsigned)early_moves, (int)position_highest, (int)probe.available[0],
 			(int)probe.available[24], (int)probe.available[PROBE_POLLS - 1]);
-		fprintf(file, "# consuming: bufferPos moved by the samples consumed %u of %u times, by the bytes %u times\n", (unsigned)consume_samples,
-			(unsigned)polls_consumed, (unsigned)consume_bytes);
+		fprintf(file, "# consuming: bufferPos moved on by what was consumed %u of %u times, up to %d\n", (unsigned)moved_as_consumed,
+			(unsigned)polls_consumed, (int)consumed_highest);
 		fclose(file);
 	}
 	/* ten seconds as the finding reads them, raw (32 kHz, big-endian from the system, little-endian in the file), with each second's level

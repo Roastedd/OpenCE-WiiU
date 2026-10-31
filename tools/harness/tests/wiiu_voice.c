@@ -187,13 +187,15 @@ static void ring_store(unsigned char *ring, uint32_t at, int16_t value)
 	ring[2 * at + 1] = (unsigned char)value;
 }
 
-/* Cemu's: availableData samples wait from bufferPos, the read index, until consumed; a full ring takes no more */
+/* Cemu's: availableData samples wait from bufferPos, the read index, until consumed; a full ring takes no more (or, overwriting,
+moves the read index on over its oldest) */
 struct consume_system
 {
 	unsigned char ring[2 * RING];
 	uint32_t read, waiting;
 	uint32_t unit_bytes;
 	int ignores_consumption;
+	int overwrites;
 	/* what it keeps, in order, for the reader to be checked against */
 	int16_t kept[2 * RING];
 	uint32_t kept_first, kept_count;
@@ -206,6 +208,13 @@ static void consume_system_hear(struct consume_system *system, uint32_t count)
 	{
 		const int16_t value = sample_value(system->made++);
 
+		if (system->waiting == RING && system->overwrites)
+		{
+			system->read = (system->read + 1) % RING;
+			system->waiting--;
+			system->kept_first = (system->kept_first + 1) % (2 * RING);
+			system->kept_count--;
+		}
 		if (system->waiting == RING)
 			continue;
 		ring_store(system->ring, (system->read + system->waiting) % RING, value);
@@ -269,6 +278,69 @@ static int read_matches(struct wiiu_mic_reader *reader, const unsigned char *rin
 			matches = FALSE;
 	}
 	return matches;
+}
+
+/* the probe's two seconds (wiiu_voice_audio.c's probe_run) over a simulated system, a poll every 10 ms: one with nothing
+consumed, one consuming each reading at once; its finding */
+enum
+{
+	SYSTEM_CONSUME,
+	SYSTEM_CONSUME_OVERWRITING,
+	SYSTEM_POSITION,
+	SYSTEM_SILENT,
+};
+
+static const char *probe_simulated(int kind, uint32_t unit, int *mode, uint32_t *unit_bytes)
+{
+	static struct consume_system consume;
+	static struct position_system position;
+	int32_t positions[100], availables[100], consumed_highest = 0;
+	uint32_t poll;
+
+	memset(&consume, 0, sizeof(consume));
+	memset(&position, 0, sizeof(position));
+	consume.unit_bytes = position.unit_bytes = unit;
+	consume.overwrites = kind == SYSTEM_CONSUME_OVERWRITING;
+	for (poll = 0; poll < 100; poll++)
+	{
+		if (kind == SYSTEM_POSITION)
+		{
+			position_system_hear(&position, 320);
+			positions[poll] = (int32_t)(position.write * (2u / unit));
+			availables[poll] = 4096;
+		}
+		else if (kind == SYSTEM_SILENT)
+		{
+			positions[poll] = availables[poll] = 0;
+		}
+		else
+		{
+			consume_system_hear(&consume, 320);
+			consume_system_status(&consume, &availables[poll], &positions[poll]);
+		}
+	}
+	for (poll = 0; poll < 100; poll++)
+	{
+		int32_t available = 0, at = 0, after_available, after_at = 0;
+
+		if (kind == SYSTEM_POSITION)
+		{
+			position_system_hear(&position, 320);
+			at = after_at = (int32_t)(position.write * (2u / unit));
+		}
+		else if (kind != SYSTEM_SILENT)
+		{
+			consume_system_hear(&consume, 320);
+			consume_system_status(&consume, &available, &at);
+			consume_system_consumed(&consume, (uint32_t)available);
+			consume_system_status(&consume, &after_available, &after_at);
+		}
+		if (at > consumed_highest)
+			consumed_highest = at;
+		if (after_at > consumed_highest)
+			consumed_highest = after_at;
+	}
+	return wiiu_mic_probe_finding(positions, availables, 100, RING, consumed_highest, mode, unit_bytes);
 }
 
 /* ---------- the resampler */
@@ -755,6 +827,39 @@ int main(int argc, char **argv)
 		position_system_hear(&system, 320);
 		CHECK(!read_matches(&reader, system.ring, 4096, (int32_t)(system.write * 2u), &expected, &consume),
 			"a write position read as a read index gave the samples made");
+		return 0;
+	}
+	CASE("probe-finding")
+	{
+		static const struct
+		{
+			int kind;
+			uint32_t unit;
+			const char *finding;
+			int mode;
+			uint32_t unit_bytes;
+		} systems[] =
+		{
+			{ SYSTEM_CONSUME, 2, "consume samples", WIIU_MIC_CONSUME, 2 },
+			{ SYSTEM_CONSUME, 1, "consume bytes", WIIU_MIC_CONSUME, 1 },
+			/* (a read index the system moves on once the ring is full is still a read index) */
+			{ SYSTEM_CONSUME_OVERWRITING, 2, "consume samples", WIIU_MIC_CONSUME, 2 },
+			{ SYSTEM_POSITION, 1, "position bytes", WIIU_MIC_POSITION, 1 },
+			{ SYSTEM_POSITION, 2, "position samples", WIIU_MIC_POSITION, 2 },
+			/* (nothing moved: consume's reading, the default) */
+			{ SYSTEM_SILENT, 2, "unknown", WIIU_MIC_CONSUME, 2 },
+		};
+		unsigned index;
+
+		for (index = 0; index < sizeof(systems) / sizeof(systems[0]); index++)
+		{
+			int mode = -1;
+			uint32_t unit_bytes = 0;
+			const char *finding = probe_simulated(systems[index].kind, systems[index].unit, &mode, &unit_bytes);
+
+			CHECK(!strcmp(finding, systems[index].finding) && mode == systems[index].mode && unit_bytes == systems[index].unit_bytes,
+				"system %u: found \"%s\" (mode %d, %u bytes a unit), not \"%s\"", index, finding, mode, unit_bytes, systems[index].finding);
+		}
 		return 0;
 	}
 	CASE("stale")

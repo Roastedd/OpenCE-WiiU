@@ -166,6 +166,14 @@ void wiiu_mic_reader_span(struct wiiu_mic_reader *reader, int32_t available, int
 /* count samples of the ring from first (round its end) as floats (1 at full scale); count */
 uint32_t wiiu_mic_ring_samples(const unsigned char *ring, uint32_t ring_samples, uint32_t first, uint32_t count, float *output);
 
+/* The microphone probe's finding (wiiu_voice_audio.c), from a second of statuses with nothing consumed (bufferPos and
+availableData at a poll every 10 ms) and the highest bufferPos while every reading was consumed at once: bufferPos moving by
+itself before the ring could have filled is a write position; availableData growing while it stands is a read index. Either
+counts bytes if bufferPos went past the ring's samples. The mode and unit found, and the words the probe writes for them
+("unknown": nothing moved, the mode and unit then consume's) */
+const char *wiiu_mic_probe_finding(const int32_t *positions, const int32_t *availables, uint32_t polls, uint32_t ring_samples,
+	int32_t consumed_highest, int *mode, uint32_t *unit_bytes);
+
 /* ---------- Opus packets, from the voice thread back to the game thread */
 
 struct wiiu_voice_packet

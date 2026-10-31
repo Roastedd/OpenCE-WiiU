@@ -472,6 +472,44 @@ uint32_t wiiu_mic_ring_samples(const unsigned char *ring, uint32_t ring_samples,
 	return count;
 }
 
+/* (the first 25 polls, 250 ms, are less than the ring's 320 ms: a read index the system moves on only once the ring is full
+is not taken for a write position) */
+#define PROBE_EARLY_POLLS 25u
+/* (moves in 5 of those 24 intervals: a write position moves at every poll the system has written since, a read index not at all
+before it is consumed) */
+#define PROBE_EARLY_MOVES 5u
+
+const char *wiiu_mic_probe_finding(const int32_t *positions, const int32_t *availables, uint32_t polls, uint32_t ring_samples,
+	int32_t consumed_highest, int *mode, uint32_t *unit_bytes)
+{
+	const uint32_t early = polls < PROBE_EARLY_POLLS ? polls : PROBE_EARLY_POLLS;
+	int32_t highest = 0;
+	uint32_t index, early_moves = 0;
+
+	*mode = WIIU_MIC_CONSUME;
+	*unit_bytes = 2u;
+	for (index = 0; index < polls; index++)
+	{
+		if (positions[index] > highest)
+			highest = positions[index];
+		if (index && index < early && positions[index] != positions[index - 1])
+			early_moves++;
+	}
+	if (early_moves >= PROBE_EARLY_MOVES)
+	{
+		*mode = WIIU_MIC_POSITION;
+		*unit_bytes = highest >= (int32_t)ring_samples ? 1u : 2u;
+		return *unit_bytes == 1u ? "position bytes" : "position samples";
+	}
+	/* (a second of consuming takes a read index three times round the ring: past its samples, it counts bytes) */
+	if (early >= 2 && availables[early - 1] > availables[0] + 1000)
+	{
+		*unit_bytes = consumed_highest >= (int32_t)ring_samples ? 1u : 2u;
+		return *unit_bytes == 1u ? "consume bytes" : "consume samples";
+	}
+	return "unknown";
+}
+
 /* ---------- Opus packets, from the voice thread back to the game thread */
 
 uint32_t wiiu_voice_packet_take(struct wiiu_voice_queue *queue, uint32_t now_ms, uint32_t maximum_age_ms, uint32_t maximum,

@@ -1,6 +1,7 @@
 """The Wii U's voice chat without the console (port/wiiu/src/wiiu_voice_core.c, wiiu_voice.c): the queues between its
 threads, a speaker's ring for the mixer, the 32 to 48 kHz resampler, the microphone's frames, both readings of the system's
-microphone ring, the stale packets and a speaker's sequence; and a fault in each that a case must catch.
+microphone ring and the probe's finding of which it is, the stale packets and a speaker's sequence; and a fault in each that
+a case must catch.
 
 Big-endian as the console is (verify.sh's harness runs):
 
@@ -18,7 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import CHECK_FAILED, build, constant, mutated, read, run  # noqa: E402
 
 CASES = ["constants", "queue-order", "queue-backlog", "queue-race", "queue-threads", "ring", "resampler-dc",
-         "resampler-response", "resampler-chunks", "capture", "tone", "mic-consume", "mic-position", "stale", "sequence"]
+         "resampler-response", "resampler-chunks", "capture", "tone", "mic-consume", "mic-position", "probe-finding", "stale",
+         "sequence"]
 
 # a fault in wiiu_voice_core.c, and the case that must catch it
 NEGATIVE_CONTROLS = {
@@ -64,6 +66,15 @@ NEGATIVE_CONTROLS = {
     # (what the system wrote before the opening read as this opening's)
     "mic-position-from-zero": (("\t\t\treader->read = at;\n\t\t\treader->started = 1;\n",
                                 "\t\t\treader->read = 0;\n\t\t\treader->started = 1;\n"), "mic-position"),
+    # (any move of bufferPos taken for a write position: a read index the system moves on over a full ring misread)
+    "probe-moves-anytime": (("if (index && index < early && positions[index] != positions[index - 1])",
+                             "if (index && positions[index] != positions[index - 1])"), "probe-finding"),
+    # (a read index taken to count samples however far it goes)
+    "probe-consume-unit-ignored": (("\t\t*unit_bytes = consumed_highest >= (int32_t)ring_samples ? 1u : 2u;\n", "\t\t*unit_bytes = 2u;\n"),
+                                   "probe-finding"),
+    # (a write position taken to count bytes however far it goes)
+    "probe-position-unit-ignored": (("\t\t*unit_bytes = highest >= (int32_t)ring_samples ? 1u : 2u;\n", "\t\t*unit_bytes = 1u;\n"),
+                                    "probe-finding"),
     # (packets kept however old: a talk's tail sent seconds later)
     "stale-kept": (("now_ms - record.queued_ms > maximum_age_ms || ", ""), "stale"),
     # (a late or repeated packet played)

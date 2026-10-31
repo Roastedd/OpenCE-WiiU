@@ -213,8 +213,8 @@ there. (It writes the recording to the card from the voice thread, after recordi
 | --- | --- |
 | `MICInit(instance 0, ...): handle H, error E`, `MICOpen: error E` | whether the microphone opens from the voice thread's core (error 0), and how long that takes |
 | `state N (name): error E, value V` | mic.rpl's states 0 to 8 (Cemu's names, partly guessed: 0 the rate, 1 the gain, 2 to 4 its range, 5 mute, 7 echo cancellation, 8 auto selection) |
-| `unconsumed N: ... availableData A, bufferPos P; samples at bufferPos ...` | a second with nothing consumed: `P` moving by itself from the start is a write position; `A` growing while `P` stands is a read index. The samples show where the sound is |
-| `consumed N: before ...; MICSetDataConsumed(n) e; after ...` | a second consuming each reading: a read index moves on by `n` (samples) or `2n` (bytes), and `availableData` falls |
+| `unconsumed N: ... availableData A, bufferPos P; samples at bufferPos ...` | a second with nothing consumed: `P` moving by itself from the start (in the first 250 ms, before the ring could fill) is a write position, counting bytes if it goes past 10240; `A` growing while `P` stands is a read index. The samples show where the sound is |
+| `consumed N: before ...; MICSetDataConsumed(n) e; after ...`, then `consuming, bufferPos moved on by what was consumed after X of Y readings, and went up to Z` | a second consuming each reading: a read index moves on by what was consumed and `availableData` falls; one that goes past the ring's 10240 samples (`Z`) counts bytes |
 | `the reading is "consume samples"` (or `consume bytes`, `position bytes`, `position samples`, `unknown`) | the finding, which is also the first line of `mic_probe_result.txt`; `audio.wiiu_microphone_read` `"auto"` reads by it from then on (`unknown`: nothing moved, no sound came) |
 | `N samples in M ms, level L of full scale, peak P` | each second of the recording: about 32000 samples a second if the rate is 32 kHz and the reading right, and a level that rises as you speak |
 | `the TV button is down` / `up` | the TV button reaches the game with the system's TV menu off |
