@@ -157,6 +157,7 @@ static struct
 	void *ring_dirty_from, *ring_dirty_to;
 	unsigned shaders_loaded, fetch_full;
 	unsigned draws_made, skipped_target, skipped_state, skipped_shader, skipped_ring, ring_overflows;
+	unsigned skipped_missing; /* of skipped_state, the draws whose shader (vertex or pixel) the pack has not: a key in the shader-misses files */
 	unsigned textures_made, textures_unsupported, texture_short, layouts_logged;
 	unsigned texture_log;
 	unsigned sampler_levels[4];
@@ -202,7 +203,8 @@ static struct
 	double exit_after;
 	int hiz; /* halo/hiz.txt: 1, the big depth target has hierarchical Z */
 	unsigned fail_allocations; /* halo/mem1_fail.txt: that many allocations of targets made again after HOME fail (a test) */
-	int gpu_test_wanted; /* halo/gpu_test.txt 1, read at the start: the GPU test runs once the game draws 250 or more a frame */
+	int gpu_test_wanted; /* halo/gpu_test.txt "1 [DRAWS]", read at the start: the GPU test runs once the game draws DRAWS (250) or more a frame */
+	int gpu_test_draws;
 	volatile uint32_t mem1_restoring; /* a thread is making the targets again (the acquire callback, or the GX2 thread after 3 s): one at a time */
 	volatile int target_missing; /* target_get answered NULL for a target that has no memory (targets_bind then binds neither) */
 	int mem1; /* halo/mem1.txt: 1, the big render targets are made in the eDRAM (MEM1) instead of the DDR3 */
@@ -2084,6 +2086,8 @@ static void draw(const struct dk_command_draw *command)
 	if (!gx.vs_handle || !gx.ps_handle || !gx.format_set)
 	{
 		gx.skipped_state++;
+		if (gx.format_set)
+			gx.skipped_missing++;
 		return;
 	}
 	{
@@ -2413,8 +2417,13 @@ static int initialize(void)
 		{
 			int asked = 0;
 
-			gx.gpu_test_wanted = fscanf(file, "%d", &asked) == 1 && asked == 1;
+			gx.gpu_test_draws = 0;
+			gx.gpu_test_wanted = fscanf(file, "%d %d", &asked, &gx.gpu_test_draws) >= 1 && asked == 1;
+			if (gx.gpu_test_draws <= 0)
+				gx.gpu_test_draws = 250;
 			fclose(file);
+			if (gx.gpu_test_wanted)
+				wiiu_log("GX2: the GPU test runs at the first frame of %d draws or more after the 300th (gpu_test.txt)", gx.gpu_test_draws);
 		}
 	}
 	if (overlay_make())
@@ -3335,7 +3344,7 @@ static void screenshot_take(struct target *source, uint32_t address)
 /* The GPU test. The commands of one frame, kept as they were handed over, are run again and again without the game (30 frames' worth, or what the ring has room for), then waited for:
 the time for each is the GPU's if it is more than the CPU's side of a frame (the commands need 2-4 ms of the GX2 thread), which is the question - could the GPU draw this frame in the time a 60 Hz display
 gives it, whatever is done to the CPU? Three runs: the frame as it is, with no pixels drawn (a scissor of one pixel: the cost of the draws without their fill), and with blending off. Asked for with a 1 in
-halo/gpu_test.txt (read at the start; run once). The picture of the frame is drawn 90 more times: no harm. */
+halo/gpu_test.txt (read at the start; run once), at the first frame of 250 draws or more after the 300th, or of the number after the 1 ("1 150"). The picture of the frame is drawn 90 more times: no harm. */
 static void gpu_test_run(void)
 {
 	static const struct { const char *name; int mode; } variants[3] = { { "the frame", 0 }, { "no pixels (scissor 1x1)", 4 }, { "no blending", 1 } };
@@ -3534,10 +3543,10 @@ static void present(const struct dk_command_present *command)
 		for (i = 1; i < 18; i++)
 			if (gx.counts[i])
 				wiiu_log("GX2:   command %u: %u", i, gx.counts[i]);
-		wiiu_log("GX2:   %u draws made; skipped: %u no target, %u no shader or format yet, %u shader not in the pack or not loaded, %u ring full; %u clears "
-			"made as rectangles; %u textures made (%u not 2D, %u short), ring overflows %u", gx.draws_made,
-			gx.skipped_target, gx.skipped_state, gx.skipped_shader, gx.skipped_ring, gx.rectangle_clears, gx.textures_made, gx.textures_unsupported,
-			gx.texture_short, gx.ring_overflows);
+		wiiu_log("GX2:   %u draws made; skipped: %u no target, %u no shader or format yet (%u of them a shader not in the pack), %u shader not loaded, %u ring "
+			"full; %u clears made as rectangles; %u textures made (%u not 2D, %u short), ring overflows %u", gx.draws_made,
+			gx.skipped_target, gx.skipped_state, gx.skipped_missing, gx.skipped_shader, gx.skipped_ring, gx.rectangle_clears, gx.textures_made,
+			gx.textures_unsupported, gx.texture_short, gx.ring_overflows);
 		wiiu_log("GX2:   per frame over %u frames: %.1f ms in the stream (of which %.1f in draws, %.1f in textures), %.1f ms presenting", gx.window_frames,
 			(double)OSTicksToMicroseconds(gx.submit_ticks - gx.present_ticks) / 1000.0 / (double)gx.window_frames,
 			(double)OSTicksToMicroseconds(gx.draw_ticks) / 1000.0 / (double)gx.window_frames,
@@ -3594,7 +3603,7 @@ static void present(const struct dk_command_present *command)
 		if (query.begun)
 			wiiu_log("GX2:   visibility tests: %u begun, %u ended, %u read back", query.begun, query.ended, query.read_back);
 		memset(gx.counts, 0, sizeof(gx.counts));
-		gx.draws_made = gx.skipped_target = gx.skipped_state = gx.skipped_shader = gx.skipped_ring = 0;
+		gx.draws_made = gx.skipped_target = gx.skipped_state = gx.skipped_missing = gx.skipped_shader = gx.skipped_ring = 0;
 		gx.rectangle_clears = 0;
 		gx.textures_made = gx.textures_unsupported = 0;
 	}
@@ -3603,7 +3612,7 @@ static void present(const struct dk_command_present *command)
 	context_resume();
 	if (gx.test_armed == 3)
 		gx.test_armed = 4; /* (done: once a run) */
-	if (!gx.test_armed && gx.gpu_test_wanted && gx.frames > 300 && gx.last_frame_draws >= 250)
+	if (!gx.test_armed && gx.gpu_test_wanted && gx.frames > 300 && gx.last_frame_draws >= (unsigned)gx.gpu_test_draws)
 	{
 		{
 			if (!gx.test_log)
