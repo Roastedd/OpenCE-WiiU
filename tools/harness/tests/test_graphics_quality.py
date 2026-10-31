@@ -176,12 +176,14 @@ int main(void)
 	config_write("display.split_screen_fps", "auto");
 	graphics_quality_apply();
 	if (!FULL() || !graphics_quality_split_screen_capped()) return 30;
-	/* a setting off stays off whatever the views */
+	/* a setting off stays off whatever the views, the others as the views have them */
 	config_write("display.split_screen_detail", "reduced");
 	config_write("display.object_shadows", "false");
-	views = 1;
-	graphics_quality_apply();
-	if (render_shadows || !rasterizer_debug_options.draw_lens_flares) return 31;
+	for (views = 1; views <= 4; views++)
+	{
+		graphics_quality_apply();
+		if (render_shadows || !rasterizer_debug_options.draw_lens_flares != (views >= 3)) return 31;
+	}
 	/* before a map's players: one view, and the engine's windows not asked */
 	config_write("display.object_shadows", "true");
 	players = 0;

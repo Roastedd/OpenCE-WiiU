@@ -187,7 +187,9 @@ What three and four take, from the code:
 - **Frame rate and detail**: `display.split_screen_detail` and `display.split_screen_fps` (`port/linux/game/graphics_quality.c`, `port/linux/README.md`).
   With three or four views the defaults leave out the object shadows, the lens flares and the level's specular shine and reflections, and hold the
   frames to 30 a second through `halo_interpolation_enabled` (`src/platform_wiiu.c`) while `display.interpolation` stays as the player set it. The
-  overlay (L + R + −) shows `30HZ` while they are held.
+  overlay (L + R + −) shows `30HZ` while they are held. In another machine's game the host's rules put the lens flares and the level's specular
+  parts back every tick (`cheats.c`'s `cheats_network_client_enforce`, as they do the performance mode's), so a client keeps only the shadows off;
+  the split screen lobby is a game this machine hosts, which has the whole set.
 
 ### The console test plan
 

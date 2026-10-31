@@ -38,7 +38,10 @@ four about 56, 18 frames a second), and the game thread, not the GPU, is what li
   two refreshes and three, an uneven step. Mario Kart 8 holds 60 for one or two players and 30 for three or four. Two
   views keep display.interpolation's; "30" holds two or more, "60" none.
 The views are those the frame draws (main_get_window_count): one in a cinematic or the postgame's single screen, which
-then has the full detail and display.interpolation's frame rate.
+then has the full detail and display.interpolation's frame rate. A client in another machine's game has its lens flares
+and the level's specular parts put back by the host's rules every tick (cheats.c's cheats_network_client_enforce, which
+does the same to the performance mode's), so there the reduced set is the shadows alone; a game this machine hosts, as
+the split screen lobby's is, has the whole set.
 */
 
 #include "cseries.h"
