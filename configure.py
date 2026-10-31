@@ -40,6 +40,12 @@ parser.add_argument(
     help="the Wii U compiler for `ninja linux_wiiu` (default: wiiu-clang)",
 )
 parser.add_argument(
+    "--wiiu-lto",
+    action="store_true",
+    help="the Wii U build's game sources optimised together as one module (llvm-link, then one object; "
+    "tools/wiiu_build.py): devkitPPC's linker cannot do it at the link",
+)
+parser.add_argument(
     "--compiler-launcher",
     metavar="BINARY",
     help="a program that runs each compile, such as ccache "
@@ -117,6 +123,7 @@ sln = SimpleNamespace(
     linux_cc=args.linux_cc,
     linux_target=args.linux_target,
     wiiu_cc=args.wiiu_cc,
+    wiiu_lto=args.wiiu_lto,
     compiler_launcher=args.compiler_launcher,
     port_release=args.release,
     port_profile=args.profile,
