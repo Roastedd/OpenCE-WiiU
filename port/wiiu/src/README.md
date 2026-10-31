@@ -22,5 +22,7 @@ what newlib and wut lack, and, as they are written, stand-ins for the platform l
 | `wiiu_atomic.[ch]` | 64-bit atomics (libatomic's names), for a core that has none. Tested on the desktop. |
 | `wiiu_libc.c` | `pause` and `sysconf`, which `xbox_kernel.c` calls and newlib lacks. |
 | `wiiu_tls.c` | Thread-local storage: the four `__syscall_tls_*` newlib's pthread keys need and wut lacks, for libgcc's emulated TLS. |
+| `wiiu_input.[ch]` | The GamePad (VPAD) and the Pro and Classic Controllers (KPAD): their reads, their connections (`KPADSetConnectCallback`), their lights and motors. |
+| `wiiu_pad_players.[ch]` | Which player each controller is: the map that keeps a controller's player while it goes and comes back, the layouts (`input.wiiu_controller_layout`, "auto" among them) and the number its lights show. No system call. Tested on the desktop (`tools/harness/tests/test_wiiu_pad_players.py`). |
 
 None of this has run on a console.

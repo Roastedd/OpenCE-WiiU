@@ -57,11 +57,21 @@ buttons sit where the Xbox's do, so jump is under your thumb; the on-screen prom
 - **Skip a cutscene**: hold B (the jump button), + or a finger on the touch screen for one second.
 - **Performance overlay**: L + R + − shows or hides frame rate and timing at the top of the screen.
 
-## Two players (split screen)
+## Split screen (two to four players)
 
-Connect a Pro Controller, then in Settings → your profile → Gamepad Setup → Wii U GamePad set **Controllers** to **Separate**: the GamePad is
-player 1 and the Pro Controller player 2. With **Merged** (the default) a Pro Controller plays as player 1 alongside the GamePad, for playing on
-the TV alone. Start split screen from the Multiplayer menu, or a campaign with two players.
+The GamePad is always player 1. Connect up to three more controllers: Pro Controllers, Classic Controllers on Wii Remotes, or other pads through
+Bloopair. While you play alone, any of them plays as player 1 with the GamePad, so you can play on the TV with a Pro Controller.
+
+- **Multiplayer**: create a game (LAN, or internet), pick a map, and in the lobby choose **ADD PLAYER**. The controllers then become players of their
+  own: each one's lights show its number (2 to 4, in the order they connected). Each new player presses START on their controller and picks a
+  profile; once a second player is in, the others can just press START. Then START NOW.
+- **Campaign**: **CO-OP CAMPAIGN** in the Multiplayer menu, for two players; player 2 picks a profile with their own controller.
+- A controller that turns off or loses its connection keeps its player: turn it on again and it plays on.
+- With three or four players the game holds 30 frames a second and leaves out shadows, lens flares and some shine, so that every view stays
+  smooth. Settings → Video → **Split screen detail** and **Split screen FPS** change that.
+
+In Settings → your profile → Gamepad Setup → Wii U GamePad, **Controllers** is **Auto** (as above); **Separate** makes each controller its own
+player even when you play alone; **Merged** is the old behaviour (the first controller joins the GamePad, the others are players 2 to 4).
 
 On the same screen, **GamePad Shows: Player 1** puts player 1's view alone on the GamePad while the screen is split, so that the GamePad's player
 can look at their own screen; the menus are still shown whole. **TV** (the default) shows the TV's picture.

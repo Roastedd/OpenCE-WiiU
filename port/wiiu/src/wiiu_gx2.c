@@ -3667,6 +3667,8 @@ static struct blit_vertex *blit_quad(void)
 
 	return quad ? quad : gx.quad;
 }
+/* (port/linux/game/graphics_quality.c's: whether the split screen's views hold the frames to 30 a second, for the overlay's 30HZ) */
+int graphics_quality_split_screen_capped(void);
 
 static void present(const struct dk_command_present *command)
 {
@@ -3770,7 +3772,9 @@ static void present(const struct dk_command_present *command)
 			/* (what the frame drew: dynamic resolution's step shows) */
 			gx.overlay.render_width = drawn[2];
 			gx.overlay.render_height = drawn[3];
-			gx.overlay.interpolation = config_boolean("display.interpolation");
+			/* (as the game draws: display.interpolation, unless the split screen's views hold the frames to 30 a second; asked here, on the GX2 thread,
+			without halo_interpolation_enabled's remembered reading, which is the game thread's) */
+			gx.overlay.interpolation = config_boolean("display.interpolation") && !graphics_quality_split_screen_capped();
 			overlay_push(&gx.overlay, (float)OSTicksToMicroseconds(end - gx.overlay_previous_end) / 1000.0f, (float)OSTicksToMicroseconds(cpu_ticks) / 1000.0f,
 				(float)OSTicksToMicroseconds(end - present_start) / 1000.0f, (float)OSTicksToMicroseconds(wait_ticks) / 1000.0f, gx.gpu_ms, (unsigned)draws,
 				(unsigned)(ring / 1024));

@@ -41,10 +41,22 @@ struct wiiu_pad
 
 #define WIIU_PAD_PORTS 4
 
-/* How the controllers take the ports: 0 (the default), the Pro and Classic Controllers merge with the GamePad (the first of them with port 0's, the others
-on ports 1 to 3 by their KPAD channel); 1, "separate": port 0 is the GamePad alone, and the controllers are the players after it, in the order their channels
-have (for split screen with the GamePad and a Pro Controller). */
-void wiiu_input_set_layout(int separate);
+/* How the controllers take the ports (input.wiiu_controller_layout), one of wiiu_pad_players.h's: WIIU_PAD_LAYOUT_AUTO (the default), every Pro and Classic
+Controller shares the GamePad's port while this machine has one player, and each has its own port, its player in the map, once a second player joins;
+WIIU_PAD_LAYOUT_SEPARATE, port 0 is the GamePad alone and each controller has its own; WIIU_PAD_LAYOUT_MERGED, as before the map, the controller of KPAD
+channel n is port n's (channel 0's sharing the GamePad's). */
+void wiiu_input_set_layout(int layout);
+
+/* Once a frame, before the ports are read: every channel read, the controllers that came and went given their players (wiiu_pad_players.c), the layout
+arranged (several_players: this machine has two or more players, or is adding one, as the menus' pc_menu_split_players says), each controller's lights set
+to its player's number. */
+void wiiu_input_poll(int several_players);
+
+/* Whether the port has a pad now (port 0, the GamePad's, always). */
+int wiiu_input_port_present(unsigned int port);
+
+/* How many controllers share the GamePad's player that would be players of their own once a second player joins ("auto" with one player); 0 otherwise. */
+int wiiu_input_controllers_merged(void);
 
 /* The GamePad's gyro as a mouse: how far it has turned since the last call, in rotations (turn: right positive; pitch: the top tilting away positive), worked
 out from each sample in the space chosen (wiiu_input_set_gyro_space), and cleared. */
@@ -63,15 +75,16 @@ enum
 
 void wiiu_input_set_gyro_space(int space);
 
-/* Reads the pad of a port (0: the GamePad, with the Pro Controller of channel 0 if one is there; 1 to 3: the Pro Controllers of channels 1 to 3). Returns 1
-if there is such a pad, with its state; 0 if not. */
+/* Reads the pad of a port (0: the GamePad, with the controllers that share its player; 1 to 3: the controllers the layout gives the port, as the last
+wiiu_input_poll arranged them). Returns 1 if there is such a pad, with its state; 0 if not. */
 int wiiu_input_read(unsigned int port, struct wiiu_pad *pad);
 
 /* The GamePad's touch screen, in pixels of the GamePad's picture (854x480), as read by the latest wiiu_input_read of port 0 (or held by the debug server's tap).
 Returns 1 while a finger is on it. */
 int wiiu_input_touch(float *x, float *y);
 
-/* Rumbles the pad of a port, 0 (still) to 1 (full): the GamePad's motor for port 0 and a Pro Controller's for its channel. Does nothing in the background. */
+/* Rumbles the pad of a port, 0 (still) to 1 (full): the GamePad's motor for port 0 and those of the Pro Controllers that drive the port. Does nothing in the
+background. */
 void wiiu_input_rumble(unsigned int port, float strength);
 
 #endif

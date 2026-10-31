@@ -44,8 +44,13 @@ int platform_window_sizes(long *widths, long *heights, int maximum)
 	return 0;
 }
 
+/* graphics_quality.c's: whether the split screen's views hold the frames to 30 a second (display.split_screen_fps) */
+int graphics_quality_split_screen_capped(void);
+
 /* the TV's refresh is 60 Hz and the game's ticks 30 Hz: with display.interpolation, two frames to a tick (the frames between ticks drawn from the blend of the last two); without,
-the game's own frame throttle holds it to 30 frames a second, a frame to a tick, each drawn as the tick left the world */
+the game's own frame throttle holds it to 30 frames a second, a frame to a tick, each drawn as the tick left the world. The game asks every frame (main.c's main_update_time,
+its frame's drawing and main_rasterizer_throttle; render_interpolation.c), so while three or four views are drawn the split screen's 30 frames a second
+(graphics_quality_split_screen_capped, set as the views' frame begins) are display.interpolation off for those frames, with the setting itself left as the player has it */
 int halo_interpolation_enabled(void)
 {
 	static int enabled = 1;
@@ -56,7 +61,7 @@ int halo_interpolation_enabled(void)
 		read_at = config_changes();
 		enabled = config_boolean("display.interpolation");
 	}
-	return enabled;
+	return enabled && !graphics_quality_split_screen_capped();
 }
 
 int platform_audio_devices(int recording, char (*names)[PLATFORM_AUDIO_DEVICE_NAME_SIZE], int maximum)

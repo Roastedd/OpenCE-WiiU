@@ -116,8 +116,13 @@ The decisions and the files (the queue, the watch, the records) are plain C with
 
 ## Controls
 
-The GamePad is the first controller (a Pro or Classic Controller on channel 0 joins it); Pro and Classic Controllers on channels 1 to 3 are the other
-three (split screen). `src/wiiu_input.c` reads VPAD and KPAD; `src/xinput_wiiu.c` turns them into the Xbox pad the game reads.
+The GamePad is the first controller, player 1. The Pro and Classic Controllers take the players' places as `input.wiiu_controller_layout` says:
+`"auto"` (the default) has every controller play as player 1 with the GamePad while one person plays, and gives each its own player, 2 to 4, once a
+second joins (ADD PLAYER in the lobby, or CO-OP CAMPAIGN); `"separate"` gives each its own player always; `"merged"` is the layout before these, the
+controller of the first KPAD channel joining the GamePad and those of the other three the other players. A controller keeps its player while it goes and comes back,
+known by its Bluetooth address on whatever channel the system gives it (`src/wiiu_pad_players.c`, tested on the desktop), and its lights show the number
+of the player it drives. `src/wiiu_input.c` reads VPAD and KPAD; `src/xinput_wiiu.c` turns them into the Xbox pad the game reads, and its comment says
+how the menus add players and why "auto" waits for a second one.
 
 | Game | Wii U | Menus |
 | --- | --- | --- |
@@ -145,11 +150,93 @@ Measured on the console with the debug server's `press` and `stick`: the d-pad a
 turns the view in the first level, and the face buttons change match as a menu opens (the log says "Input: the face buttons are now matched by ...").
 The GamePad's touch screen is the menus' pointer (`halo_ui_pointer_update` in `d3d8_gx2.c`, with `touch_menu.c` from the Android build): a tap on an item
 or on a screen's A and B prompts clicks it, a drag scrolls a list. Measured with the debug server's `tap`: tapping Multiplayer, then Split Screen, opened
-each. The menus are drawn at the left of the picture, not centered in its 852 columns (the renderer does not apply the offset the game asks for:
-`MENUS_DRAWN_CENTERED` in `d3d8_gx2.c`), and a touch follows what is drawn. Not measured: rumble (it cannot be seen), the Pro and Classic
+each. The menus are drawn centred in the picture's 852 columns, with the offset the game asks for (`halo_screen_ui_offset`), and a touch follows what
+is drawn (`MENUS_DRAWN_CENTERED` in `d3d8_gx2.c`; on 2026-10-22 the renderer still drew them at the left). Not measured: rumble (it cannot be seen), the Pro and Classic
 Controllers (none was connected), split screen play, a real finger (the calibration is the system's, to 854x480). Also written, not run on a
 console: the GamePad's gyro aiming (`input.wiiu_gyro_aim` "always" or "zoom"; off by default; the axes' signs and scale are unmeasured), a tap outside the
 menus that skips a cinematic, and Classic Controllers. Not done: Wii Remote and Nunchuk.
+
+## Split screen for three and four players
+
+Two players have played on the console (the GamePad and a PS4 pad through Bloopair, `"separate"`, 2026-10-30). Three and four are written and
+tested on the desktop only (branch `wiiu-split4`).
+
+What three and four take, from the code:
+
+- **Players.** Up to four local players in a network game this machine hosts or joins (split screen is the lobby of one: Multiplayer, Create
+  Game, LAN), the controller of port n being local player n. The campaign's co-op stays at two: its level select and its saved game take one or two
+  players (`ui_widget_event_handler_functions.c`'s `solo_level_set_next_map_name`, `game_state.c`), as on the Xbox.
+- **Joining and controllers**: `input.wiiu_controller_layout` (Controls, above; `src/xinput_wiiu.c`'s comment). With `"auto"` and one player the
+  lobby's line under its players says "Another controller: ADD PLAYER.", since a second person's START would be player 1's. The controllers stay
+  players of their own while a player of this machine in the lobby is on a controller other than the GamePad, so the second of two who stays when
+  the GamePad's player leaves keeps their controller (`menu_functions.c`'s `pc_menu_split_players`, which the desktop's lone gamepad follows too).
+- **Layout.** `compute_window_bounds` (`main.c`) splits the title-safe frame at the middle of the wide picture: two players top and bottom, three
+  with player 1 across the top, four in a 2x2 grid, in the local players' port order. The dividers are drawn at the wide picture's middle
+  (`interface.c`), the motion sensor keeps four players' blips apart (`motion_sensor.c`, fixed for three and four before), and the engine leaves
+  out the detail objects, the blur screen effects and the mirrors with more than one view.
+- **HUD and text.** Each window's HUD is drawn at the full size, anchored to its window's corners, as on the Xbox, so a quarter is crowded; HUD
+  messages use the HUD's multiplayer font, their button icons three quarters of their size (`hud_messaging.c`, followed by `hud_hires_tags.c`).
+  The high-res text is sized by the screen's pixels for each of its 480 lines (`halo_screen_pixel_scale`), the same in every window. The
+  scoreboard of a split view is the Xbox's, six rows, with its wide tab stops in any window whose title-safe frame is wider than 320 columns (a
+  quarter's is about 360 on the 852-wide picture, its score column at 315).
+- **Pause menus**: the 2p menu in a full-width window, the 4p one in a quarter (`ui_widget.c`). Found, not changed: the menus' centring offset is
+  the whole picture's (106 columns) in every window, so a 4p pause menu, 320 wide, sits against the right edge of its 426-wide quarter, 53
+  columns from its centre, and in the right-hand quarters against the picture's right edge, where a TV's overscan may cut it. The offset is set
+  for a frame by the platform layer (`halo_screen_ui_offset`) and the GamePad's touch mapping assumes it, in every build; centring each window's
+  widgets in its own share, as `hud_zoomed_layout_begin` does for the HUD, would take both.
+- **Frame rate and detail**: `display.split_screen_detail` and `display.split_screen_fps` (`port/linux/game/graphics_quality.c`, `port/linux/README.md`).
+  With three or four views the defaults leave out the object shadows, the lens flares and the level's specular shine and reflections, and hold the
+  frames to 30 a second through `halo_interpolation_enabled` (`src/platform_wiiu.c`) while `display.interpolation` stays as the player set it. The
+  overlay (L + R + −) shows `30HZ` while they are held. In another machine's game the host's rules put the lens flares and the level's specular
+  parts back every tick (`cheats.c`'s `cheats_network_client_enforce`, as they do the performance mode's), so a client keeps only the shadows off;
+  the split screen lobby is a game this machine hosts, which has the whole set.
+
+### The console test plan
+
+For the session that holds the console (one driver at a time). Build `wiiu-split4`, install it, and keep the card's `config.toml`: it has
+`input.wiiu_controller_layout = "separate"` from the two-player tests, so set each row's layout by hand and put the owner's values back at the end, read back.
+Controllers: the GamePad, a Pro Controller, a PS4 pad through Bloopair and a Wii Remote with a Classic Controller, each synced; mark a row not run
+if one is missing. The log's lines: `Input: a Pro Controller on channel N (address) is player P's`, `Input: channel N connected` / `disconnected`,
+`Input: channel N's lights show player P`, `Input: the controllers of channels 1 to 4 drive players a b c d (0: none)`, and at the start
+`Input: KPAD channels 1 to 4 read (the system allows M)`. The log and this plan number the channels 1 to 4, as the system's lights do (KPAD's 0 to 3).
+
+Controllers, on a small map (Chill Out) in a LAN game this console hosts:
+
+1. `"auto"`, one player: with the four connected, every controller moves the main menu's cursor and every controller's lights show 1; a campaign level
+   started with the Pro Controller plays as player 1 with it and with the GamePad.
+2. `"auto"`, joining: Create Game, LAN, a map. The line under the players says "Another controller: ADD PLAYER." ADD PLAYER with the GamePad: the line
+   says "New player: press START." and, once no controller is held, the controllers' lights show 2, 3 and 4 in the order they connected (the log's
+   `drive players` line agrees). START on each, a profile each, START NOW. In the game each controller moves only its own player and only its own
+   window answers it (one at a time, the others still); each pause menu (+) opens in its own window.
+3. Reconnecting, in that four-player game: turn the PS4 pad off and on (or let it sleep): its window says the controller is unplugged, then its
+   player plays on with it, with the same number in the log and on its lights. Take the Classic Controller out of the Wii Remote and put it back: the
+   same. Turn two controllers off and on in the other order: each has its own player again, whatever channel the log gives it.
+4. Back to one player: in a two-player lobby the GamePad's player leaves first (B): the Pro Controller's player stays in the lobby with their own
+   controller (its lights still 2). Then they leave too, to the main menu. Once no controller is held the lights show 1 again and all drive the menus,
+   and no "controller unplugged" message comes up for the ports they leave (`input_abstraction.c` shows one for a port that still has a player).
+5. Co-op: CO-OP CAMPAIGN with the GamePad; the controllers' lights change to 2 to 4; player 2's profile chosen with the Pro Controller; the level plays
+   with the GamePad as player 1 and the Pro Controller as player 2.
+6. `"separate"`: the GamePad alone is player 1; START on a controller in the lobby joins without ADD PLAYER; rows 2 and 3 again.
+7. `"merged"`: the controller of channel 1 shares the GamePad's player, those of channels 2 to 4 have their own ports, the lights show the channel numbers.
+8. HOME during the four-player game and back: within a second every controller's lights show its player again.
+9. (A fifth controller, if one is at hand: with `"auto"` and four players it shares player 1; with `"separate"` its lights are off and it drives nobody.)
+
+Frame rate and detail, each on Blood Gulch and on Chill Out, Slayer, one to four players. For each count, three runs: before (`display.split_screen_detail
+= "same"`, `display.split_screen_fps = "60"`), the reduced set alone (`"reduced"`, `"60"`), and the defaults (`"reduced"`, `"auto"`). Each run: 30 s with
+every player standing still, then 30 s with every player firing; the median of the log's `frame time` lines over each 30 s, the frames over 34 ms, the
+game thread's ticks and rendering (`frame parts`), the GPU's time, the overlay's `30HZ` or `60HZ`, and the hitch notes' waits (the dynamic index
+buffer has four stores, renewed at each view's start, so at four views a store comes round again a frame later: waits there point at
+`RENEWED_STORES` in `src/d3d8_gx2.c`). Also: the 2x2 and three-view layouts, each HUD in its window, a held BACK's scoreboard in each window, the
+postgame's single screen (full detail, `60HZ`).
+
+It passes when four players hold a median of 30 frames a second (33.3 ms) on Blood Gulch with the defaults, steadily (frames over 34 ms rare), and
+one and two players are as before (two not slower than before). End with the owner's `config.toml` values back and the card left on the safe path.
+
+What only the console can say: whether Bloopair takes three pads at once, alongside a Pro Controller and a Wii Remote; whether `WPADGetAddress` gives
+each controller (Bloopair's included) its own address, not zeros; whether `WPADControlLed` lights a Bloopair pad and a Wii Remote with a Classic
+Controller; on which thread the connect callback runs, and what `KPADReadEx` reports for a channel whose controller has gone; which channel the
+system gives a controller that comes back; and whether the reduced set is enough for 30 frames a second with four views, or the particles (and with
+them the contrails) are needed too.
 
 ## The network
 

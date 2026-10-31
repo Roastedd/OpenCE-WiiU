@@ -161,6 +161,16 @@ static const struct config_setting config_settings[] =
 	{ "display.bump_mapping", _config_boolean, "true", "HALO_BUMP_MAPPING", _environment_value, _platform_all,
 		"Light the level's surfaces with their bump maps (the relief of rock and\n"
 		"metal); false lights them flat." },
+	{ "display.split_screen_detail", _config_string, "\"reduced\"", "HALO_SPLIT_SCREEN_DETAIL", _environment_value, _platform_wiiu,
+		"With three or four players in split screen (port/linux/game/graphics_quality.c):\n"
+		"\"reduced\" leaves out object shadows, lens flares and the level's specular\n"
+		"shine and reflections, which the game draws again for every view; \"same\"\n"
+		"draws what one view does. One view, or two, always draws what one does." },
+	{ "display.split_screen_fps", _config_string, "\"auto\"", "HALO_SPLIT_SCREEN_FPS", _environment_value, _platform_wiiu,
+		"The frame rate of split screen: \"auto\" holds three or four views to 30 frames\n"
+		"a second, evenly paced, and leaves two as display.interpolation has them;\n"
+		"\"30\" holds two or more to 30; \"60\" holds none (as display.interpolation).\n"
+		"display.interpolation itself is not changed." },
 	{ "display.direct_camera", _config_boolean, "true", "HALO_DIRECT_CAMERA", _environment_value, _platform_desktop,
 		"In first person, point the view where the player aims now instead of\n"
 		"where the last tick left it: the view turns the frame the mouse moves,\n"
@@ -292,11 +302,14 @@ static const struct config_setting config_settings[] =
 		"2 twice as far." },
 	{ "input.wiiu_gyro_invert_y", _config_boolean, "false", "HALO_WIIU_GYRO_INVERT_Y", _environment_value, _platform_wiiu,
 		"Tilting the top of the GamePad away looks up (as a flight stick), not down." },
-	{ "input.wiiu_controller_layout", _config_string, "\"merged\"", "HALO_WIIU_CONTROLLER_LAYOUT", _environment_value, _platform_wiiu,
-		"How the Pro and Classic Controllers take the players' places. \"merged\": the first\n"
-		"joins the GamePad as player 1 (so a Pro Controller can play alone). \"separate\": the\n"
-		"GamePad is player 1 alone and the controllers are players 2 to 4, in the order the\n"
-		"system numbered them: for split screen with the GamePad and a Pro Controller." },
+	{ "input.wiiu_controller_layout", _config_string, "\"auto\"", "HALO_WIIU_CONTROLLER_LAYOUT", _environment_value, _platform_wiiu,
+		"How the Pro and Classic Controllers take the players' places. \"auto\": while one\n"
+		"person plays, every controller plays as player 1 with the GamePad; once a second\n"
+		"joins (ADD PLAYER in the lobby, or co-op), each controller is a player of its own,\n"
+		"2 to 4 as its lights show. \"separate\": the GamePad is player 1 alone and each\n"
+		"controller a player of its own. A controller keeps its player while it goes and\n"
+		"comes back. \"merged\": the first controller joins the GamePad as player 1 and the\n"
+		"others are players 2 to 4 in the order the system numbered them." },
 	{ "input.wiiu_rumble", _config_boolean, "true", "HALO_WIIU_RUMBLE", _environment_value, _platform_wiiu,
 		"The GamePad and the Pro Controllers rumble as the game asks." },
 	{ "input.wiiu_gamepad_view", _config_string, "\"tv\"", "HALO_WIIU_GAMEPAD_VIEW", _environment_value, _platform_wiiu,

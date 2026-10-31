@@ -121,6 +121,11 @@ short main_get_solo_level_from_name(char const *name);
 boolean player_name_clean(wchar_t *name, long count);
 short players_port_local_player_count(void);
 
+#ifdef HALO_WIIU
+/* port/wiiu/src/wiiu_input.c: how many controllers share player 1's that ADD PLAYER would make players of their own */
+int wiiu_input_controllers_merged(void);
+#endif
+
 boolean pc_menu_event_function_invoke(struct widget_instance *widget, struct event_record *event,
 	long function_index, boolean *widget_deleted);
 void pc_menu_game_data_function_invoke(struct widget_instance *widget, long function);
@@ -4160,14 +4165,32 @@ static short lobby_local_player_count(void)
 	return count;
 }
 
+/* whether one of this machine's players in the lobby (joined or to be) is on
+a controller other than the first: the second of two who stays when the first
+leaves. (In a game the players stay until it ends, and are counted.) */
+static boolean lobby_player_past_first_controller(void)
+{
+	short controller;
+
+	for (controller = 1; global_network_game_client_get() && controller < MAXIMUM_LOCAL_PLAYERS; controller++)
+	{
+		if (lobby_controller_playing(controller))
+			return TRUE;
+	}
+	return FALSE;
+}
+
 /* (xinput_sdl.c) whether this machine has, or is adding, a second player: co-op,
 or split screen in a network game (a player who quit keeps their part of the
-screen until the game ends). Then one gamepad is its own controller, not
-sharing player 1's with the keyboard */
+screen until the game ends), or has one in the lobby on a controller other than
+the first. Then one gamepad is its own controller, not sharing player 1's with
+the keyboard (and the Wii U's controllers their own, port/wiiu/src/xinput_wiiu.c's
+"auto"): a second player left alone in the lobby when the first leaves keeps it */
 unsigned char pc_menu_split_players(void)
 {
 	return player_spawn_count >= 2 || lobby_join.adding || lobby_join.controller != NONE ||
-		lobby_local_player_count() >= 2 || players_port_local_player_count() >= 2;
+		lobby_local_player_count() >= 2 || players_port_local_player_count() >= 2 ||
+		lobby_player_past_first_controller();
 }
 
 /* the lobby's widget that has the focus (the one a press goes to) */
@@ -4301,6 +4324,12 @@ static void lobby_join_help(struct widget_instance *list)
 			if (input_has_gamepad(controller) && !lobby_controller_playing(controller))
 				text = L"Another controller: START joins.";
 		}
+#ifdef HALO_WIIU
+		/* (the Wii U's controllers share player 1's while it is the only one, as "auto" has them: another's START is player 1's,
+		and ADD PLAYER gives them players of their own, port/wiiu/src/xinput_wiiu.c) */
+		if (!text[0] && wiiu_input_controllers_merged())
+			text = L"Another controller: ADD PLAYER.";
+#endif
 	}
 	text_set(help, text);
 }
