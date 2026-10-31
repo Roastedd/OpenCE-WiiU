@@ -26,6 +26,7 @@ vote.
 #include "networking/network_game_globals.h"
 #include "network_distributed.h"
 #include "network_map_vote.h"
+#include "network_wire_order.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -142,6 +143,9 @@ static void map_vote_fill_header(
 	header->type = type;
 	header->count = 1;
 	header->game_time = game_in_progress() ? game_time_get() : 0;
+	/* port: in the wire's order (network_wire_order.c): the message is sent
+	as it is (its entries are bytes) */
+	NETWORK_WIRE(header->game_time);
 }
 
 /* a text copied into a field, ended within it, printable ASCII */

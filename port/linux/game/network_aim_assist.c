@@ -7,6 +7,7 @@
 #include "networking/network_game_globals.h"
 #include "network_distributed.h"
 #include "network_aim_assist.h"
+#include "network_wire_order.h"
 #include <string.h>
 
 int config_boolean(char const *name);
@@ -18,6 +19,15 @@ struct aim_assist_policy_message
     word block_mouse;
     word reserved;
 };
+
+/* port: the message's words in the wire's order, little-endian, or back
+(network_wire_order.c): the message is handled before the distributed
+netcode turns a message's entries, and sent as it is */
+static void aim_assist_policy_message_wire_order(struct aim_assist_policy_message *message)
+{
+    NETWORK_WIRE(message->block_mouse);
+    NETWORK_WIRE(message->reserved);
+}
 
 void network_aim_assist_reset(void)
 {
@@ -40,6 +50,7 @@ void network_aim_assist_send_policy(long machine_index)
     if (game_connection() != _game_connection_network_server) return;
     memset(&message, 0, sizeof(message));
     message.block_mouse = config_boolean("network.block_mouse_aim_assist") != 0;
+    aim_assist_policy_message_wire_order(&message);
     distributed_send_to_machine_reliably(machine_index, &message,
         _distributed_message_aim_assist_policy, 1, sizeof(message));
 }
@@ -55,6 +66,7 @@ void network_aim_assist_update(void)
     sent_policy = policy;
     memset(&message, 0, sizeof(message));
     message.block_mouse = policy;
+    aim_assist_policy_message_wire_order(&message);
     distributed_send(&message, _distributed_message_aim_assist_policy, 1,
         sizeof(message), _distributed_to_clients_reliably);
 }
@@ -73,6 +85,7 @@ void network_aim_assist_handle_message(long machine_index, word const *data, wor
     if (machine_index != NONE || game_connection() != _game_connection_network_client ||
         !game_in_progress() || main_menu_is_active() || network_connection_last_read_was_unreliable() || size != sizeof(message)) return;
     memcpy(&message, data, sizeof(message));
+    aim_assist_policy_message_wire_order(&message);
     if (GET_MESSAGE_TYPE(message.header.header) != 2 ||
         message.header.type != _distributed_message_aim_assist_policy ||
         message.header.count != 1 || message.block_mouse > 1 || message.reserved != 0) return;

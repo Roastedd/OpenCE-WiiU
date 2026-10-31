@@ -40,6 +40,7 @@ request #420 by arisson2001rojas-design.
 #include "game_modes.h"
 #include "infection.h"
 #include "network_infection.h"
+#include "network_wire_order.h"
 
 void platform_log(char const *format, ...);
 
@@ -941,13 +942,37 @@ static boolean infection_state_valid(
 	return TRUE;
 }
 
+/* port: the state's values in the wire's order, little-endian, or back
+(network_wire_order.c): each of 4 bytes */
+static void infection_state_wire_order(
+	struct distributed_infection_state *state)
+{
+	short index;
+
+	NETWORK_WIRE(state->game_number);
+	NETWORK_WIRE(state->revision);
+	NETWORK_WIRE(state->phase);
+	NETWORK_WIRE(state->phase_tick);
+	NETWORK_WIRE(state->winner);
+	for (index = 0; index < HALO_PORT_MAXIMUM_NETWORK_PLAYERS; index++)
+	{
+		NETWORK_WIRE(state->players[index].identity);
+		NETWORK_WIRE(state->players[index].score);
+	}
+	return;
+}
+
 long infection_write_network_state(
 	byte *buffer,
 	long size)
 {
+	/* port: (a copy, in the wire's order) */
+	struct distributed_infection_state state = infection.state;
+
 	if (size < (long)sizeof(infection.state))
 		return 0;
-	csmemcpy(buffer, &infection.state, sizeof(infection.state));
+	infection_state_wire_order(&state);
+	csmemcpy(buffer, &state, sizeof(state));
 	return sizeof(infection.state);
 }
 
@@ -962,6 +987,8 @@ boolean infection_read_network_state(
 	if (!network_game_distributed_client() || size != (long)sizeof(state))
 		return FALSE;
 	csmemcpy(&state, buffer, sizeof(state));
+	/* port: (in the wire's order) */
+	infection_state_wire_order(&state);
 	if (!infection_state_valid(&state, network_game_get_number_of_games_played(), first ? 0 : infection.state.revision))
 		return FALSE;
 	infection.state = state;

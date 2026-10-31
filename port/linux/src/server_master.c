@@ -391,8 +391,11 @@ static int publish_body(struct server_json *json, int closed, int *has_listing)
 	network.tunnel_port 0; it is in network byte order) */
 	{
 		unsigned short port = p2p_tunnel_local_port();
+		unsigned char bytes[2];
 
-		server_json_integer(json, "tunnel_port", (long long)(unsigned short)(port << 8 | port >> 8));
+		/* (its bytes by value, whatever this machine's byte order) */
+		memcpy(bytes, &port, sizeof(bytes));
+		server_json_integer(json, "tunnel_port", (long long)(bytes[0] << 8 | bytes[1]));
 	}
 	server_json_boolean(json, "dedicated", halo_server_mode() != 0);
 	server_json_string(json, "build", server_mode_build());

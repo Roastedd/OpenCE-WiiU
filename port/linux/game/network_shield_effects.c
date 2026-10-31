@@ -15,6 +15,7 @@ when it changes; until it arrives, a client draws the stock game's. */
 #include "network_distributed.h"
 #include "network_shield_effects.h"
 #include "network_coop.h"
+#include "network_wire_order.h"
 #include <string.h>
 
 char const *config_string(char const *name);
@@ -79,10 +80,20 @@ short network_shield_effects(void)
 	return effects == _shield_effects_players ? NONE : effects;
 }
 
+/* port: the message's words in the wire's order, little-endian, or back
+(network_wire_order.c): the message is handled before the distributed
+netcode turns a message's entries, and sent as it is */
+static void shield_effects_message_wire_order(struct shield_effects_message *message)
+{
+	NETWORK_WIRE(message->effects);
+	NETWORK_WIRE(message->reserved);
+}
+
 static void shield_effects_message_make(struct shield_effects_message *message, short effects)
 {
 	memset(message, 0, sizeof(*message));
 	message->effects = (word)effects;
+	shield_effects_message_wire_order(message);
 }
 
 void network_shield_effects_send(long machine_index)
@@ -131,6 +142,7 @@ void network_shield_effects_handle_message(long machine_index, word const *data,
 		network_connection_last_read_was_unreliable() || size != sizeof(message))
 		return;
 	memcpy(&message, data, sizeof(message));
+	shield_effects_message_wire_order(&message);
 	if (GET_MESSAGE_TYPE(message.header.header) != 2 || message.header.type != _distributed_message_shield_effects ||
 		message.header.count != 1 || message.effects >= NUMBER_OF_SHIELD_EFFECTS || message.reserved != 0)
 		return;

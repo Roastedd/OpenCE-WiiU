@@ -327,7 +327,16 @@ struct message_server_postgame_keep_alive
 
 struct message_server_begin_game
 {
+	/* port: 16 bits on the wire (the host's time: network_messages.c), which
+	the encoder takes from this field's first two bytes and the decoder
+	writes there: the long's low-order half on the Xbox, its high-order half
+	on a big-endian host, where it is declared as the word it is */
+#ifdef __BIG_ENDIAN__
+	word unused;
+	word unused_pad;
+#else
 	long unused;
+#endif
 };
 
 struct message_server_graceful_game_exit_pregame

@@ -3049,6 +3049,14 @@ void network_damage_wire_order(
 			NETWORK_WIRE(report->host_time);
 		}
 		break;
+	case _distributed_message_fire_origins:
+		for (index = 0; index < count && (index + 1) * (long)sizeof(struct distributed_fire_origin) <= size; index++)
+		{
+			struct distributed_fire_origin *origin = (struct distributed_fire_origin *)entries + index;
+
+			NETWORK_WIRE_PARTS(origin->offset, short);
+		}
+		break;
 	}
 
 	return;

@@ -132,6 +132,17 @@ static int p2p_lobby_host_listing(unsigned char *bytes, int size)
 
 static unsigned short p2p_tunnel_local_port(void) { return tunnel_port; }
 
+/* the tunnel's port as a socket has it: its two bytes in network order,
+whatever this machine's */
+static void tunnel_port_set(unsigned char high, unsigned char low)
+{
+	unsigned char bytes[2];
+
+	bytes[0] = high;
+	bytes[1] = low;
+	memcpy(&tunnel_port, bytes, sizeof(tunnel_port));
+}
+
 static int p2p_public_address(char *text, int size)
 {
 	snprintf(text, (size_t)size, "203.0.113.5:2302");
@@ -1061,9 +1072,9 @@ int main(int argc, char **argv)
 	{
 		static const struct
 		{
-			unsigned short network_order;
+			unsigned char high, low;
 			const char *port;
-		} ports[] = { { 0xFE08, "2302" }, { 0x0100, "1" }, { 0xFFFF, "65535" }, { 0x0001, "256" } };
+		} ports[] = { { 0x08, 0xFE, "2302" }, { 0x00, 0x01, "1" }, { 0xFF, 0xFF, "65535" }, { 0x01, 0x00, "256" } };
 		char base64[400];
 		int index;
 
@@ -1072,7 +1083,7 @@ int main(int argc, char **argv)
 		host_vector_listing();
 		server_base64_encode(host_listing, host_listing_size, base64);
 		snprintf(master.masters[0].url, sizeof(master.masters[0].url), "https://m.example.org/opence");
-		tunnel_port = 0xFE08;
+		tunnel_port_set(0x08, 0xFE);
 		setting_region = "eu";
 		memset(&requested, 0, sizeof(requested));
 		publish_to(&master.masters[0], 0);
@@ -1101,10 +1112,10 @@ int main(int argc, char **argv)
 		/* (the port as the socket has it, in network byte order) */
 		for (index = 0; index < (int)(sizeof(ports) / sizeof(ports[0])); index++)
 		{
-			tunnel_port = ports[index].network_order;
+			tunnel_port_set(ports[index].high, ports[index].low);
 			publish_to(&master.masters[0], 0);
-			CHECK(!strcmp(body_member(requested.body, "tunnel_port"), ports[index].port), "port %04x was sent as %s",
-				ports[index].network_order, body_member(requested.body, "tunnel_port"));
+			CHECK(!strcmp(body_member(requested.body, "tunnel_port"), ports[index].port), "port %02x%02x was sent as %s",
+				ports[index].high, ports[index].low, body_member(requested.body, "tunnel_port"));
 		}
 		/* (a player's host's, and its public address when asked) */
 		server_mode = 0;
@@ -1141,7 +1152,7 @@ int main(int argc, char **argv)
 		start_publisher();
 		now = 1760900000;
 		host_vector_listing();
-		tunnel_port = 0xFE08;
+		tunnel_port_set(0x08, 0xFE);
 		answer_status = 429;
 		answer_headers = "Content-Type: application/json\r\nretry-after: 120\r\n";
 		answer_body = "{\"ok\":false,\"error\":{\"code\":\"rate_limited\",\"message\":\"slow down\"}}";

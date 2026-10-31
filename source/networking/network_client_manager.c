@@ -381,6 +381,7 @@ symbols in this file:
 #include "saved games/player_profile.h"
 #include "interface/ui_widget.h"
 #include "main/main.h"
+#include "memory/byte_swapping.h" /* port: SWAP4 */
 #include "memory/data.h"
 #include "networking/network_client_manager.h"
 #include "networking/network_client_message_handler.h"
@@ -2959,8 +2960,9 @@ static boolean network_game_client_idle_joining(
 					csmemset(&host_address, 0, sizeof(host_address));
 					network_connection_get_address(client->connection, &host_address, NULL);
 					host = host_address.address.long_words[0];
-					player_link_join_fill((host & 0xFFC00000) == 0x64400000 ?
-						(host >> 24) | ((host >> 8) & 0xFF00) | ((host << 8) & 0xFF0000) | (host << 24) : 0,
+					/* (SWAP4: host to network byte order, which on a
+					big-endian host is the same, as p2p.c's network_long) */
+					player_link_join_fill((host & 0xFFC00000) == 0x64400000 ? SWAP4(host) : 0,
 						join_game_request.link_pass, join_game_request.link_proof);
 				}
 

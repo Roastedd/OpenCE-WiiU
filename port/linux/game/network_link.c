@@ -21,6 +21,7 @@ come from the wire.
 */
 
 #include "cseries.h"
+#include "memory/byte_swapping.h"
 #include "networking/network_game_manager.h"
 #include "networking/network_game_protocol.h"
 #include "networking/network_messages.h"
@@ -174,9 +175,9 @@ void network_link_check_pass(
 	if (!player_link_pass_shown(network_link_machines[machine_index].pass))
 		return;
 	/* (its tunnel's binding: an internet play peer's stand-in, in
-	100.64.0.0/10, in network byte order) */
-	virtual_address = (address & 0xFFC00000) == 0x64400000 ?
-		(address >> 24) | ((address >> 8) & 0xFF00) | ((address << 8) & 0xFF0000) | (address << 24) : 0;
+	100.64.0.0/10, in network byte order: SWAP4, which leaves a big-endian
+	host's as it is, as p2p.c's network_long) */
+	virtual_address = (address & 0xFFC00000) == 0x64400000 ? SWAP4(address) : 0;
 	network_link_machines[machine_index].verified = player_link_server_check(network_link_machines[machine_index].pass,
 		network_link_machines[machine_index].proof, virtual_address,
 		network_link_machines[machine_index].discord_id, sizeof(network_link_machines[machine_index].discord_id),

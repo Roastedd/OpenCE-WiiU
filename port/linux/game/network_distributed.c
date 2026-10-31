@@ -5342,6 +5342,7 @@ static void distributed_wire_entries(
 		break;
 	case _distributed_message_damage_events:
 	case _distributed_message_hit_reports:
+	case _distributed_message_fire_origins:
 		network_damage_wire_order(type, entries, count, size);
 		break;
 	case _distributed_message_actor_states:
