@@ -808,3 +808,57 @@ collection errors. `tools/wiiu/test_missing_keys.py` tests that host workflow
 offline. Manual collection must follow the same final-file-only rule; fetch
 complete batches after the game has closed, inspect capture status, and retain
 incomplete parts separately for diagnosis.
+
+### GPU mip filtering qualification
+
+The fallback for a composite mip level the game did not render has a staged
+GPU implementation (`src/wiiu_gx2_mip.c`). It copies the exact preceding
+level into a single-level scratch texture, filters into a separate colour
+scratch image, then copies to the destination level. The shader reconstructs
+byte values before computing `(sum + 2) / 4`, preserving the CPU reference's
+per-channel half-up rounding, one-dimensional images and discarded odd edges.
+Scratch images are reused in GPU command order; replaced allocations use the
+renderer's existing deferred retirement. The quad is immutable. The helper
+does no CPU readback or explicit completion wait. A failed shader or scratch
+allocation leaves the existing CPU filter available.
+Growing scratch uses the renderer's normal retirement policy, which can
+drain the GPU if its global deferred-allocation queue is full. Steady-state
+filtering does not grow or retire scratch storage.
+
+This implementation is not enabled by default until native qualification:
+
+- `halo/gpu_test.txt` `0`: the CPU reference, with mip calls/pixels and wait
+  time recorded in the ordinary five-second GX2 log.
+- `2`: run the asset-free native qualification at startup. Its 40 byte-exact
+  readback checks queue 20 derives before one completion wait. They cover
+  independent RGBA calibration, all 1021 possible four-byte sums in every
+  channel, half ties, alpha, odd/one-dimensional sizes, nonzero source and
+  destination levels, queued resizes, chains, later updates and explicit
+  intermediate levels. GPU derivation is enabled for this run only if all
+  checks pass. The game context is restored after the qualification.
+- `3`: enable the staged GPU path for same-save comparisons after a successful
+  qualification of the same binary. No qualification readbacks run in this
+  timing mode. The existing `1 [draws]` frame-replay test is unchanged.
+
+`GPU submit` in the mip log is CPU time issuing the helper's commands, not
+GPU execution time. Actual GPU-frame timing starts before this helper when
+it is the frame's first GPU draw. The existing source-update stamps and
+context restoration still govern normal scenes; a passing helper test does
+not establish a game speedup or prove that an affected scene derives mips.
+Compare CPU/GPU call counts, reused levels, failures, pixels, waits, image
+output and whole-frame timing from the same camera/save before promotion.
+
+An explicit image must replace a generated level even when their numeric
+stamps coincide. After a copy or derivation, only the following contiguous
+generated chain is invalidated; an explicit intermediate remains independent.
+`python3 tools/test_wiiu_composite_mips.py` executes the actual refresh policy
+with recorded graphics calls and covers those transitions, unchanged reuse,
+failed derivation and context restoration. It also runs on big-endian PowerPC.
+
+`python3 tools/test_wiiu_gx2_mip.py` includes the production helper in a
+call-recording host fixture under ASAN/UBSAN. It exercises shader/allocation
+failure ordering, invalid and zero-sized inputs, scratch alignment/retirement
+and immutable vertices. Two deliberate faults must fail. It does not emulate
+GPU pixels. The fixed shader's sources and byte identity live in
+`shaders/mip.*`; regenerate the embedded GFD with
+`python3 port/wiiu/tools/embed_mip_shader.py --compiler <existing-glslcompiler>`.

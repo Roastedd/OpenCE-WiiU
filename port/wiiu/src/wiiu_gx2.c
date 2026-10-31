@@ -24,6 +24,7 @@ Not run on a console.
 #include "wiiu_indices.h"
 #include "wiiu_mip.h"
 #include "wiiu_font.h"
+#include "wiiu_gx2_mip.h"
 #include "wiiu_overlay.h"
 #include "wiiu_stream_queue.h"
 #include "wiiu_update.h"
@@ -170,6 +171,10 @@ static struct
 	unsigned draws_made, skipped_target, skipped_state, skipped_shader, skipped_ring, ring_overflows;
 	unsigned skipped_missing; /* of skipped_state, the draws whose shader (vertex or pixel) the pack has not: a key in the shader-misses files */
 	unsigned textures_made, textures_unsupported, texture_short, layouts_logged;
+	int mip_gpu_enabled;
+	unsigned mip_gpu_calls, mip_cpu_calls, mip_gpu_fallbacks, mip_reuses, mip_failed;
+	unsigned long long mip_gpu_pixels, mip_cpu_pixels, mip_failed_pixels;
+	OSTime mip_gpu_ticks, mip_cpu_ticks, mip_cpu_wait_ticks;
 	unsigned texture_log;
 	unsigned sampler_levels[4];
 	struct { const void *buffer; uint32_t size, stride; } attrib[16]; /* what the attribute buffer registers hold now */
@@ -1749,8 +1754,10 @@ static struct target *target_latest(uint32_t data)
 	return found;
 }
 
-/* a level the game did not render, made from the level before it (the Switch's renderer does the same): copied by the GPU to a linear surface, averaged by the CPU and copied back.
-It waits for the GPU (once, and again only when the level before it changes), which a texture that is mostly rendered at every level never has to. */
+/* A level the game did not render, made from the level before it. The GPU
+filter is staged behind gpu_test.txt qualification; the existing CPU filter
+remains its reference and allocation/shader failure fallback. Unchanged
+derived levels do no work in either path. */
 static void *mip_scratch[2];
 static uint32_t mip_scratch_bytes;
 
@@ -1760,6 +1767,24 @@ static int composite_derive(struct composite *composite, unsigned level)
 	const uint32_t width = level_size(composite->width, level), height = level_size(composite->height, level);
 	GX2Surface linear[2];
 	unsigned i;
+	OSTime started = OSGetSystemTime();
+
+	if (gx.mip_gpu_enabled)
+	{
+		/* This offscreen filter can precede the frame's first ordinary draw.
+		Include its commands in the GPU clock span rather than starting the
+		span only after the filter has already finished on the GPU. */
+		if (!gx.gpu_frame_open && !gx.replaying)
+			gpu_frame_begin();
+		if (wiiu_gx2_mip_derive(&composite->texture.surface, level - 1, &composite->texture.surface, level, free_later))
+		{
+			gx.mip_gpu_calls++;
+			gx.mip_gpu_pixels += (unsigned long long)width * height;
+			gx.mip_gpu_ticks += OSGetSystemTime() - started;
+			return 1;
+		}
+		gx.mip_gpu_fallbacks++;
+	}
 
 	for (i = 0; i < 2; i++)
 	{
@@ -1807,17 +1832,37 @@ static int composite_derive(struct composite *composite, unsigned level)
 	GX2Invalidate((GX2InvalidateMode)(GX2_INVALIDATE_MODE_COLOR_BUFFER | GX2_INVALIDATE_MODE_TEXTURE), composite->base,
 		composite->texture.surface.imageSize + composite->texture.surface.mipmapSize);
 	GX2CopySurface(&composite->texture.surface, level - 1, 0, &linear[0], 0, 0);
-	GX2DrawDone();
+	{
+		const OSTime wait_started = OSGetSystemTime();
+
+		GX2DrawDone();
+		gx.mip_cpu_wait_ticks += OSGetSystemTime() - wait_started;
+	}
 	GX2Invalidate(GX2_INVALIDATE_MODE_CPU, linear[0].image, linear[0].imageSize);
 	wiiu_mip_next((const uint8_t *)linear[0].image, source_width, source_height, linear[0].pitch, (uint8_t *)linear[1].image, linear[1].pitch);
 	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, linear[1].image, linear[1].imageSize);
 	GX2CopySurface(&linear[1], 0, 0, &composite->texture.surface, level, 0);
+	gx.mip_cpu_calls++;
+	gx.mip_cpu_pixels += (unsigned long long)width * height;
+	gx.mip_cpu_ticks += OSGetSystemTime() - started;
 	return 1;
 }
 
 /* brings the composite up to date: its levels the game rendered copied again from the targets drawn into since, the others made from the level before (a level that was never
 made from anything stays empty). Returns whether it waited for the GPU (and so left the context for the caller to set up again). */
 static void context_resume(void);
+
+/* An updated image invalidates its generated descendants. An explicit
+level is an independent source, so the invalidation stops there. Clear both
+markers: a later explicit target can otherwise match a synthetic stamp. */
+static void composite_invalidate_derived(struct composite *composite, unsigned level)
+{
+	while (++level < composite->levels && composite->level_derived[level])
+	{
+		composite->level_derived[level] = 0;
+		composite->level_written[level] = 0;
+	}
+}
 
 /* the composite's levels brought up to date with what was rendered into them; returns whether the GPU's context was changed on the way: GX2CopySurface draws
 with a context of its own and leaves it set (as composite_derive and the screenshot's copy do), so the caller resumes the frame's */
@@ -1832,21 +1877,35 @@ static int composite_refresh(struct composite *composite, int may_derive)
 
 		if (!target || target->color.surface.width != level_size(composite->width, level) || target->color.surface.height != level_size(composite->height, level))
 		{
-			if (level && composite->level_written[level - 1] && may_derive && composite->level_derived[level] != composite->level_written[level - 1] && !(gx.features_off & 64) &&
-				composite_derive(composite, level))
+			if (level && composite->level_written[level - 1] && may_derive && !(gx.features_off & 64))
 			{
-				composite->level_derived[level] = composite->level_written[level - 1];
-				composite->level_written[level] = composite->level_written[level - 1] + 1; /* (so that a level after it follows) */
-				changed = 1;
+				if (composite->level_derived[level] == composite->level_written[level - 1])
+					gx.mip_reuses++;
+				else if (composite_derive(composite, level))
+				{
+					composite->level_derived[level] = composite->level_written[level - 1];
+					composite->level_written[level] = composite->level_written[level - 1] + 1; /* (so that a level after it follows) */
+					composite_invalidate_derived(composite, level);
+					changed = 1;
+				}
+				else
+				{
+					gx.mip_failed++;
+					gx.mip_failed_pixels += (unsigned long long)level_size(composite->width, level) * level_size(composite->height, level);
+				}
 			}
 			continue;
 		}
-		if (target->last_used == composite->level_written[level] && composite->level_written[level])
+		/* A derived level's synthetic stamp can equal a later target's stamp;
+		that first explicit image must still replace the derived bytes. */
+		if (!composite->level_derived[level] && target->last_used == composite->level_written[level] && composite->level_written[level])
 			continue;
 		GX2Invalidate((GX2InvalidateMode)(GX2_INVALIDATE_MODE_COLOR_BUFFER | GX2_INVALIDATE_MODE_TEXTURE), target->color.surface.image,
 			target->color.surface.imageSize);
 		GX2CopySurface(&target->color.surface, 0, 0, &composite->texture.surface, level, 0);
 		composite->level_written[level] = target->last_used ? target->last_used : 1;
+		composite->level_derived[level] = 0;
+		composite_invalidate_derived(composite, level);
 		changed = 1;
 	}
 	return changed;
@@ -2506,12 +2565,19 @@ static int initialize(void)
 
 			gx.gpu_test_draws = 0;
 			gx.gpu_test_wanted = fscanf(file, "%d %d", &asked, &gx.gpu_test_draws) >= 1 && asked == 1;
+			gx.mip_gpu_enabled = asked == 3;
 			if (gx.gpu_test_draws <= 0)
 				gx.gpu_test_draws = 250;
 			fclose(file);
 			if (gx.gpu_test_wanted)
 				wiiu_log("GX2: the GPU test runs at the first frame of %d draws or more after the 300th (gpu_test.txt)", gx.gpu_test_draws);
+			if (asked == 2)
+			{
+				gx.mip_gpu_enabled = wiiu_gx2_mip_test();
+				context_resume();
+			}
 		}
+		wiiu_log("GX2: derived composite mips use %s (gpu_test.txt: 0 CPU, 2 qualify then GPU, 3 GPU)", gx.mip_gpu_enabled ? "GPU" : "CPU");
 	}
 	if (overlay_make())
 	{
@@ -4018,6 +4084,13 @@ static void present(const struct dk_command_present *command)
 			(double)OSTicksToMicroseconds(gx.present_ticks) / 1000.0 / (double)gx.window_frames);
 		wiiu_log("GX2:   copied into the ring: %lu KB a frame in %lu copies (largest %lu KB); index data read %lu KB a frame", gx.ring_bytes / 1024 / (gx.window_frames ? gx.window_frames : 1),
 			gx.ring_calls / (gx.window_frames ? gx.window_frames : 1), gx.ring_largest / 1024, gx.index_bytes / 1024 / (gx.window_frames ? gx.window_frames : 1));
+		wiiu_log("GX2:   derived mips: GPU %u (%llu pixels), CPU %u (%llu pixels), reused %u, GPU fallbacks %u, failed %u (%llu pixels); GPU submit %.3f ms, CPU %.3f ms (wait %.3f)",
+			gx.mip_gpu_calls, gx.mip_gpu_pixels, gx.mip_cpu_calls, gx.mip_cpu_pixels, gx.mip_reuses, gx.mip_gpu_fallbacks, gx.mip_failed, gx.mip_failed_pixels,
+			(double)OSTicksToMicroseconds(gx.mip_gpu_ticks) / 1000.0, (double)OSTicksToMicroseconds(gx.mip_cpu_ticks) / 1000.0,
+			(double)OSTicksToMicroseconds(gx.mip_cpu_wait_ticks) / 1000.0);
+		gx.mip_gpu_calls = gx.mip_cpu_calls = gx.mip_reuses = gx.mip_gpu_fallbacks = gx.mip_failed = 0;
+		gx.mip_gpu_pixels = gx.mip_cpu_pixels = gx.mip_failed_pixels = 0;
+		gx.mip_gpu_ticks = gx.mip_cpu_ticks = gx.mip_cpu_wait_ticks = 0;
 		if (gx.window_frames)
 			gt_log(gx.window_frames);
 		if (gx.overlay_on)
