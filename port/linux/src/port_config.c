@@ -125,6 +125,33 @@ static const struct config_setting config_settings[] =
 	{ "display.interpolation", _config_boolean, "true", "HALO_INTERPOLATION", _environment_value, _platform_all,
 		"Draw a frame for every display refresh, blending between the game's 30\n"
 		"ticks a second; false keeps the original 30 frames a second." },
+	{ "display.graphics_mode", _config_string, "\"balanced\"", "HALO_GRAPHICS_MODE", _environment_value, _platform_wiiu,
+		"A set of the settings below and of display.render_lines and\n"
+		"display.interpolation (port/linux/game/graphics_quality.c): \"performance\"\n"
+		"(60 frames a second where the game allows it, with less detail),\n"
+		"\"balanced\" (720 lines at 60, everything the Xbox drew), \"quality\" (1080\n"
+		"lines at 30) or \"custom\" (the settings as they are). The menus write a\n"
+		"mode's values when it is chosen; changing one of them there makes it\n"
+		"custom." },
+	{ "display.grass", _config_boolean, "true", "HALO_GRASS", _environment_value, _platform_all,
+		"Draw the detail objects: the grass, pebbles and plants near the camera." },
+	{ "display.decals", _config_boolean, "true", "HALO_DECALS", _environment_value, _platform_all,
+		"Leave decals: bullet holes, scorch marks and blood on the walls and the\n"
+		"ground." },
+	{ "display.particles", _config_boolean, "true", "HALO_PARTICLES", _environment_value, _platform_all,
+		"Draw particles, particle systems and contrails: sparks, smoke, dust,\n"
+		"debris and the trails of projectiles." },
+	{ "display.object_shadows", _config_boolean, "true", "HALO_OBJECT_SHADOWS", _environment_value, _platform_all,
+		"Draw the shadows that characters, vehicles and weapons cast on the\n"
+		"ground." },
+	{ "display.lens_flares", _config_boolean, "true", "HALO_LENS_FLARES", _environment_value, _platform_all,
+		"Draw the flares and glows of lights and the sun." },
+	{ "display.specular", _config_boolean, "true", "HALO_SPECULAR", _environment_value, _platform_all,
+		"Draw the shine of lights on the level's surfaces, and its reflections and\n"
+		"mirrors." },
+	{ "display.bump_mapping", _config_boolean, "true", "HALO_BUMP_MAPPING", _environment_value, _platform_all,
+		"Light the level's surfaces with their bump maps (the relief of rock and\n"
+		"metal); false lights them flat." },
 	{ "display.direct_camera", _config_boolean, "true", "HALO_DIRECT_CAMERA", _environment_value, _platform_desktop,
 		"In first person, point the view where the player aims now instead of\n"
 		"where the last tick left it: the view turns the frame the mouse moves,\n"

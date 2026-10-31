@@ -81,6 +81,7 @@ their handlers open opens.
 #include "halo_menus.h"
 #include "custom_edition_cache.h"
 #include "custom_edition_maps.h"
+#include "graphics_quality.h"
 #include "network_voice.h"
 #include "text/draw_string.h"
 /* (internet play's server browser: the platform layer's) */
@@ -1446,6 +1447,10 @@ static struct widget_instance *screen_of(struct widget_instance *widget)
 	return widget;
 }
 
+/* this save's writes of the graphics mode and of the settings a mode sets (graphics_mode_settle) */
+static boolean graphics_mode_written;
+static boolean graphics_setting_written;
+
 /* "port settings save" (OK): those changed written, and applied */
 static boolean setting_changed_save(struct widget_instance *spinner, struct pc_menu_setting *setting)
 {
@@ -1460,7 +1465,33 @@ static boolean setting_changed_save(struct widget_instance *spinner, struct pc_m
 	}
 	platform_log("menus: %s = %s", setting->setting, setting->values[index]);
 	setting->loaded_index = index;
+	if (!strcmp(setting->setting, "display.graphics_mode"))
+		graphics_mode_written = TRUE;
+	else if (graphics_quality_mode_setting(setting->setting))
+		graphics_setting_written = TRUE;
 	return TRUE;
+}
+
+/* after a save (port/linux/game/graphics_quality.c): a graphics mode chosen writes its values, and one of those changed
+by hand makes the mode custom, so that the settings hold what is drawn and Video Setup shows it */
+static void graphics_mode_settle(void)
+{
+	char const *mode = config_string("display.graphics_mode");
+
+	if (graphics_mode_written)
+	{
+		if (!graphics_quality_mode_write(mode))
+			platform_log("menus: graphics mode %s: not all of its settings could be written", mode ? mode : "(none)");
+		else
+			platform_log("menus: graphics mode %s", mode ? mode : "(none)");
+	}
+	else if (graphics_setting_written && mode && strcmp(mode, "custom") && !graphics_quality_mode_matches(mode))
+	{
+		if (config_write("display.graphics_mode", "custom"))
+			platform_log("menus: graphics mode custom (a setting it sets was changed)");
+	}
+	graphics_mode_written = FALSE;
+	graphics_setting_written = FALSE;
 }
 
 /* "port settings defaults" */
@@ -5629,6 +5660,7 @@ boolean pc_menu_event_function_invoke(
 		else if (!strcmp(name, "port settings save"))
 		{
 			settings_each(screen_of(widget), setting_changed_save);
+			graphics_mode_settle();
 			platform_display_apply();
 		}
 		else if (!strcmp(name, "port settings defaults"))

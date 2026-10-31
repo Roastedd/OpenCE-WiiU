@@ -1350,10 +1350,10 @@
 		<string text="Set this profile's controller\nsensitivity and layouts.\n\nProfile:"/>
 		<string text="Adjust the mouse's sensitivity\nand aiming.\n\nProfile:"/>
 		<string text="Adjust the volume of the music\nand of everything else.\n\nProfile:"/>
-		<string text="Choose a window or the full\nscreen, the frame rate and more.\n\nProfile:"/>
+		<string text="The picture: its resolution,\nframe rate and detail.\n\nProfile:"/>
 		<string text="Internet play, updates and the\nmultiplayer HUD.\n\nProfile:"/>
 		<string text="Change the current profile's\nfree-for-all multiplayer color.\n\nProfile:"/>
-		<string text="Halo: Combat Evolved, the Xbox\ngame, on this computer.\n\nProfile:"/>
+		<string text="Halo: Combat Evolved, the Xbox\ngame, rebuilt by OpenCE.\n\nProfile:"/>
 	</strings>
 	<strings name="main_menu/settings_select/player_setup/player_profile_edit/profile_edit_options">
 		<string text="CHANGE NAME"/>

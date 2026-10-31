@@ -666,6 +666,8 @@ static void dim_if_no_system_link_cable(
 /* port: ui_widget.c's and port/linux/game/menu_tags.c's */
 short ui_widget_port_list_index(
 	struct widget_instance *list_widget);
+/* port/linux/game/menu_tags.c: a widget definition's string index */
+short pc_menu_string_index(long definition_index);
 boolean pc_menu_tag(
 	long tag_index);
 
@@ -2252,6 +2254,19 @@ static void player_profile_edit_select_menu_update_extended_description(
 	leave the last item's description shown, as they have none */
 	if (pc_menu_tag(list_widget->definition_tag_index) && list_widget->focused_child->type == _ui_widget_type_column_list)
 		index = NONE;
+	/* port: a PC menu's item by its own label (profile_edit_options), not by
+	its place, which is another where a machine's menus leave items out (the
+	Wii U's profile menu has no keyboard or mouse rows: tools/port_settings.py):
+	each label's description and picture are those of its place in the PC
+	version's list (7, SAVE CHANGES, is not in it) */
+	else if (pc_menu_tag(list_widget->definition_tag_index))
+	{
+		static short const description_of_label[] = { 0, 1, 2, 3, 4, 5, 7, NONE, 6, 8 };
+		short label = pc_menu_string_index(list_widget->focused_child->definition_tag_index);
+
+		if (label >= 0 && label < NUMBEROF(description_of_label) && description_of_label[label] != NONE)
+			index = description_of_label[label];
+	}
 
 	if (index != NONE)
 	{

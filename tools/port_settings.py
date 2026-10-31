@@ -61,6 +61,12 @@ SCREENS = {
              "Native draws at the resolution; Original draws\nthe Xbox's 640x480 and scales it up.", "desktop web"),
             ("V-SYNC:", "display.vsync", ON_OFF,
              "Wait for the display between frames, so that the\npicture never tears.", "desktop android web"),
+            # (the Wii U's graphics modes: port/linux/game/graphics_quality.c, which
+            # menu_functions.c's graphics_mode_settle writes the settings of)
+            ("GRAPHICS MODE:", "display.graphics_mode",
+             [("PERFORMANCE", "performance"), ("BALANCED", "balanced"), ("QUALITY", "quality"), ("CUSTOM", "custom")],
+             "Performance: 60 frames, less detail. Balanced: 720\nlines at 60. Quality: 1080 lines at 30. Custom:\nthe rows as set. Lines from the next start.",
+             "wiiu"),
             # (the Wii U: port/wiiu/src/wiiu_gx2.c reads it when the game starts)
             ("RENDER RESOLUTION:", "display.render_lines",
              [("480", "480"), ("540", "540"), ("720", "720"), ("900", "900"), ("1080", "1080")],
@@ -216,6 +222,7 @@ SCREENS["video_settings/graphics"] = {
 }
 _video["rows"] = [row for row in _video["rows"] if row[1] not in _graphics]
 _video["categories"] = [
+    ("DETAIL:", "video_settings/detail", "What is drawn: grass, decals, particles,\nshadows, flares and the level's shine.", "wiiu"),
     ("GRAPHICS:", "video_settings/graphics", "The HUD, text, anti-aliasing, shadows and\nlighting."),
     ("FOV AND VIEWMODELS:", "video_settings/fov_viewmodels",
      "The field of view and the first-person\nweapon. Their defaults keep the stock view."),
@@ -235,6 +242,28 @@ SCREENS["video_settings/fov_viewmodels"] = {
          "Your legs in first person, seen looking down,\nmoving as you run. Your body as others see it.", None),
         ("SHIELD COLOR:", "display.shield_color", [("DEFAULT", "default")] + [(c.upper(), c) for c in SHIELD_COLORS],
          "Your shield's flare in an armor color, whatever\nyour armor. Only you see it. Default: its own.", None),
+    ],
+}
+
+# the Wii U's Detail screen, from Video Setup: what the graphics modes set besides the lines and the frame rate
+# (port/linux/game/graphics_quality.c; changing a row makes the mode custom: menu_functions.c's graphics_mode_settle)
+SCREENS["video_settings/detail"] = {
+    "screen": "detail_settings_screen", "header": _video["header"], "spacing": 30,
+    "rows": [
+            ("GRASS:", "display.grass", ON_OFF,
+             "The grass, pebbles and plants near you. Off\nsaves the game's time in fields of grass.", None),
+            ("DECALS:", "display.decals", ON_OFF,
+             "Bullet holes, scorch marks and blood left on\nwalls and the ground.", None),
+            ("PARTICLES:", "display.particles", ON_OFF,
+             "Sparks, smoke, dust, debris and the trails of\nshots. Off leaves the shots and blasts bare.", None),
+            ("OBJECT SHADOWS:", "display.object_shadows", ON_OFF,
+             "The shadows characters, vehicles and weapons\ncast on the ground.", None),
+            ("LENS FLARES:", "display.lens_flares", ON_OFF,
+             "The flares and glows of lights and the sun.", None),
+            ("SPECULAR:", "display.specular", ON_OFF,
+             "The shine of lights on the level's surfaces,\nand its reflections and mirrors.", None),
+            ("BUMP MAPPING:", "display.bump_mapping", ON_OFF,
+             "The relief of rock and metal in the level's\nlighting; off lights its surfaces flat.", None),
     ],
 }
 
@@ -331,10 +360,10 @@ STRING_OVERRIDES = {
         "Set this profile's controller\\nsensitivity and layouts.\\n\\nProfile:",
         "Adjust the mouse's sensitivity\\nand aiming.\\n\\nProfile:",
         "Adjust the volume of the music\\nand of everything else.\\n\\nProfile:",
-        "Choose a window or the full\\nscreen, the frame rate and more.\\n\\nProfile:",
+        "The picture: its resolution,\\nframe rate and detail.\\n\\nProfile:",
         "Internet play, updates and the\\nmultiplayer HUD.\\n\\nProfile:",
         "Change the current profile's\\nfree-for-all multiplayer color.\\n\\nProfile:",
-        "Halo: Combat Evolved, the Xbox\\ngame, on this computer.\\n\\nProfile:",
+        "Halo: Combat Evolved, the Xbox\\ngame, rebuilt by OpenCE.\\n\\nProfile:",
     ],
 }
 
@@ -654,7 +683,19 @@ MAP_KIND_CHOOSER = "main_menu/new_select/list_item_0_map_kind"
 
 # changes to the PC version's widgets (by our names): attributes set, all
 # their handlers replaced, children added, game data inputs added
+# the Wii U's profile menu: no keyboard or mouse rows (Controls Setup binds keys, Mouse Setup the mouse's), and the rows
+# below them in their places, one or two rows' step (33) up (each row's description is its label's, not its place's:
+# ui_widget_game_data_input_functions.c)
+WIIU_PROFILE_ROWS = [("gamepads_profile_item", -33), ("audio_settings_profile_item", -66), ("video_settings_profile_item", -66),
+                     ("network_settings_profile_item", -66), ("color_profile_item", -34), ("about_item", -34)]
+
 WIDGET_PATCHES = {
+    f"{PE}/profile_edit_select_list": {
+        "child_platforms": {f"{PE}/{item}": "desktop android web" for item in
+                            ["controller_setup_profile_item", "mouse_settings_profile_item"] + [item for item, _ in WIIU_PROFILE_ROWS]},
+        "insert_before": {f"{PE}/profile_edit_button_bar": [f'<child widget="{PE}/{item}" y="{y}" platform="wiiu"/>'
+                                                            for item, y in WIIU_PROFILE_ROWS]},
+    },
     # The host returns here after a round with no menu history. Back must
     # reopen the main menu when it closes the last screen, as the lobby does.
     f"{MT}/connected/connected_map_select_wrapper": {"set": {
