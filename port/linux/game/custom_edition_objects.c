@@ -114,7 +114,13 @@ boolean custom_edition_vehicle_placement_allowed(
 	struct scenario_object_datum const *placement)
 {
 	struct custom_edition_vehicle_placement const *vehicle = (struct custom_edition_vehicle_placement const *)placement;
+	/* (little-endian on every host, as the map has it: this build's
+	declaration of a vehicle placement leaves these bytes unnamed, so a
+	big-endian host's swap of the map's tags leaves them as they are,
+	tag_swap.c) */
+	byte const *flags = (byte const *)&vehicle->multiplayer_spawn_flags;
+	word spawn_flags = (word)(flags[0] | flags[1] << 8);
 
 	return !custom_edition_vehicles_by_placement() ||
-		TEST_FLAG(vehicle->multiplayer_spawn_flags, default_spawn_flag_bit());
+		TEST_FLAG(spawn_flags, default_spawn_flag_bit());
 }
