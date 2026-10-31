@@ -199,7 +199,7 @@ int posix_socket_last_error(void)
 	return last_error;
 }
 
-/* halo/socket_probe.txt (its contents unread), at the first socket the game makes: how many sockets nsysnet gives the app, the numbers it gives them and
+/* halo/socket_probe.txt "1" (the FTP helper cannot delete a file, so "0" or an empty file is none), at the first socket the game makes: how many sockets nsysnet gives the app, the numbers it gives them and
 what poll does with them, said in the log; then the probe's sockets are closed. wut's poll is nsysnet's select underneath, whose sets hold the sockets numbered
 0 to 31 (NSYSNET_FD_SETSIZE): a socket numbered 32 or more would fail every poll it is in with EINVAL. A host's sockets grow with its machines (internet play's
 tunnel holds four or five for each peer), so this measures how many machines a Wii U can host. */
@@ -227,10 +227,14 @@ static void socket_probe(void)
 	int sockets[SOCKET_PROBE_MOST];
 	int count = 0, refused = 0, lowest = -1, highest = -1, lowest_index = 0, highest_index = 0, index;
 	FILE *file = fopen(WIIU_DATA_DIRECTORY "/socket_probe.txt", "r");
+	int wanted;
 
 	if (!file)
 		return;
+	wanted = fgetc(file) == '1';
 	fclose(file);
+	if (!wanted)
+		return;
 	while (count < SOCKET_PROBE_MOST)
 	{
 		const int made = socket(AF_INET, count % 2 ? SOCK_STREAM : SOCK_DGRAM, 0);
