@@ -86,8 +86,9 @@ one of the WIIU_HTTP_* above. */
 int wiiu_http_download(wiiu_http *http, const char *url, const char *part_path, const char *new_path, uint32_t size,
 	const uint8_t sha256[32], const wiiu_http_download_hooks *hooks, wiiu_http_result *result);
 
-/* 1 if the file at path is size bytes with that SHA-256 */
-int wiiu_http_file_matches(const char *path, uint32_t size, const uint8_t sha256[32]);
+/* 1 if the file at path is size bytes with that SHA-256, 0 if not; -1 if the stop hook (asked between pieces of 64 KB: a 15 MB bundle is
+read for a second or more) ended it first */
+int wiiu_http_file_matches(const char *path, uint32_t size, const uint8_t sha256[32], int (*stop)(void *context), void *context);
 
 /* the SHA-256 of bytes in memory */
 void wiiu_http_sha256(const void *data, size_t size, uint8_t out[32]);

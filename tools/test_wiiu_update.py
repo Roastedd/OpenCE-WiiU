@@ -485,6 +485,9 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(run([str(self.driver), "matches", str(path), str(len(FILE)), digest]).stdout.strip(), "1")
         self.assertEqual(run([str(self.driver), "matches", str(path), str(len(FILE) - 1), digest]).stdout.strip(), "0")
         self.assertEqual(run([str(self.driver), "matches", str(path), str(len(FILE)), "0" * 64]).stdout.strip(), "0")
+        # (the stop hook is asked between the pieces of 64 KB: a 200 KB file stopped after two is not read to its end)
+        self.assertEqual(run([str(self.driver), "matches", str(path), str(len(FILE)), digest, "2"]).stdout.strip(), "-1")
+        self.assertEqual(run([str(self.driver), "matches", str(path), str(len(FILE)), digest, "4"]).stdout.strip(), "1")
 
     @unittest.skipUnless(os.environ.get("OPENCE_GITHUB_TEST") == "1", "GitHub is asked only with OPENCE_GITHUB_TEST=1")
     def test_github_with_the_consoles_roots(self):

@@ -5,7 +5,7 @@ TLS servers (openssl s_server, and Python's for redirects, ranges and broken ans
     test_update_http get ROOTS URL FROM MOST OUT [STOP_AFTER_MS]
     test_update_http fetch ROOTS URL CAPACITY OUT
     test_update_http download ROOTS URL PART NEW SIZE SHA256 [PAUSE_AT_BYTES PAUSE_MS [CANCEL_AT_BYTES]]
-    test_update_http matches PATH SIZE SHA256
+    test_update_http matches PATH SIZE SHA256 [STOP_AFTER_PIECES]
 
 ROOTS is a comma-separated list of DER files, or "embedded" for the console's own (wiiu_update_roots.h). Each prints one line of
 key=value results.
@@ -290,6 +290,17 @@ static int download(int argc, char **argv)
 	return 0;
 }
 
+/* a stop hook that says stop once it has been asked so many times (the pieces of a file being hashed) */
+static int counting_stop(void *context)
+{
+	unsigned *left = context;
+
+	if (!*left)
+		return 1;
+	(*left)--;
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	/* (a server that closes while the client writes must not end the test with SIGPIPE) */
@@ -300,13 +311,14 @@ int main(int argc, char **argv)
 		return fetch(argv);
 	if (argc >= 8 && !strcmp(argv[1], "download"))
 		return download(argc, argv);
-	if (argc == 5 && !strcmp(argv[1], "matches"))
+	if ((argc == 5 || argc == 6) && !strcmp(argv[1], "matches"))
 	{
 		unsigned char hash[32];
+		unsigned stop_after = argc == 6 ? (unsigned)strtoul(argv[5], NULL, 10) : 0;
 
 		if (parse_hash(argv[4], hash) != 0)
 			return 1;
-		printf("%d\n", wiiu_http_file_matches(argv[2], (uint32_t)strtoul(argv[3], NULL, 10), hash));
+		printf("%d\n", wiiu_http_file_matches(argv[2], (uint32_t)strtoul(argv[3], NULL, 10), hash, argc == 6 ? counting_stop : NULL, &stop_after));
 		return 0;
 	}
 	fprintf(stderr, "usage: see the comment at the top of %s\n", __FILE__);

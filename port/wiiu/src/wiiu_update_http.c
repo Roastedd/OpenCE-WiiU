@@ -1105,8 +1105,9 @@ void wiiu_http_sha256(const void *data, size_t size, uint8_t out[32])
 	mbedtls_sha256_free(&sha);
 }
 
-/* the SHA-256 of a file's first `bytes` bytes, into sha (started by the caller); 0, or -1 if they cannot be read */
-static int hash_file(const char *path, uint64_t bytes, mbedtls_sha256_context *sha)
+/* the SHA-256 of a file's first `bytes` bytes, into sha (started by the caller); 0, -1 if they cannot be read, -2 if the stop hook
+(asked between pieces) ends it */
+static int hash_file(const char *path, uint64_t bytes, mbedtls_sha256_context *sha, int (*stop)(void *context), void *context)
 {
 	static unsigned char piece[WRITE_PIECE];
 	FILE *file = fopen(path, "rb");
@@ -1118,6 +1119,11 @@ static int hash_file(const char *path, uint64_t bytes, mbedtls_sha256_context *s
 	{
 		const size_t wanted = left < sizeof(piece) ? (size_t)left : sizeof(piece);
 
+		if (stop && stop(context))
+		{
+			fclose(file);
+			return -2;
+		}
 		if (fread(piece, 1, wanted, file) != wanted)
 		{
 			fclose(file);
@@ -1137,20 +1143,22 @@ static long long file_size(const char *path)
 	return stat(path, &information) == 0 && S_ISREG(information.st_mode) ? (long long)information.st_size : -1;
 }
 
-int wiiu_http_file_matches(const char *path, uint32_t size, const uint8_t sha256[32])
+int wiiu_http_file_matches(const char *path, uint32_t size, const uint8_t sha256[32], int (*stop)(void *context), void *context)
 {
 	mbedtls_sha256_context sha;
 	uint8_t digest[32];
-	int same;
+	int read;
 
 	if (file_size(path) != (long long)size)
 		return 0;
 	mbedtls_sha256_init(&sha);
 	mbedtls_sha256_starts(&sha, 0);
-	same = hash_file(path, size, &sha) == 0;
+	read = hash_file(path, size, &sha, stop, context);
 	mbedtls_sha256_finish(&sha, digest);
 	mbedtls_sha256_free(&sha);
-	return same && !memcmp(digest, sha256, sizeof(digest));
+	if (read == -2)
+		return -1;
+	return read == 0 && !memcmp(digest, sha256, sizeof(digest));
 }
 
 typedef struct download
@@ -1306,13 +1314,26 @@ int wiiu_http_download(wiiu_http *http, const char *url, const char *part_path, 
 		remove(part_path);
 		have = -1;
 	}
-	if (have > 0 && hash_file(part_path, (uint64_t)have, &d.sha) != 0)
+	if (have > 0)
 	{
-		mbedtls_sha256_free(&d.sha);
-		mbedtls_sha256_init(&d.sha);
-		mbedtls_sha256_starts(&d.sha, 0);
-		remove(part_path);
-		have = -1;
+		const int read = hash_file(part_path, (uint64_t)have, &d.sha, hooks->stop, hooks->context);
+
+		if (read == -2)
+		{
+			/* (the app closing, or the player stopping it, while the part was read again: it is kept as it is) */
+			mbedtls_sha256_free(&d.sha);
+			result->stopped = 1;
+			fail(result, "stopped");
+			return WIIU_HTTP_INCOMPLETE;
+		}
+		if (read != 0)
+		{
+			mbedtls_sha256_free(&d.sha);
+			mbedtls_sha256_init(&d.sha);
+			mbedtls_sha256_starts(&d.sha, 0);
+			remove(part_path);
+			have = -1;
+		}
 	}
 	d.written = have > 0 ? (uint32_t)have : 0;
 	d.pending = pending;

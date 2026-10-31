@@ -528,7 +528,7 @@ static int check_for_update(void)
 
 		offer_unchanged[i] = strcmp(offer.files[i].name, WIIU_UPDATE_BUNDLE) &&
 			wiiu_update_path(&card, offer.files[i].name, WIIU_UPDATE_CURRENT, path, sizeof(path)) == 0 &&
-			wiiu_http_file_matches(path, offer.files[i].size, offer.files[i].sha256);
+			wiiu_http_file_matches(path, offer.files[i].size, offer.files[i].sha256, fetch_stop, NULL) == 1;
 	}
 	return 1;
 }
@@ -680,7 +680,7 @@ static void update_now(const char *answer)
 			if (wiiu_update_path(&card, entry->name, WIIU_UPDATE_PART, part, sizeof(part)) != 0 ||
 				wiiu_update_path(&card, entry->name, WIIU_UPDATE_NEW, staged, sizeof(staged)) != 0)
 				return;
-			if (wiiu_http_file_matches(staged, entry->size, entry->sha256))
+			if (wiiu_http_file_matches(staged, entry->size, entry->sha256, download_stop, NULL) == 1)
 				continue;
 			snprintf(url, sizeof(url), "https://github.com/" REPOSITORY "/releases/download/wiiu-%u/%s", (unsigned)journal.to_build, entry->name);
 			memset(&download_progress, 0, sizeof(download_progress));
@@ -733,9 +733,21 @@ static void update_now(const char *answer)
 	for (i = 0; i < journal.entry_count; i++)
 	{
 		char staged[WIIU_UPDATE_PATH_BYTES];
+		int matches;
 
-		if (wiiu_update_path(&card, journal.entries[i].name, WIIU_UPDATE_NEW, staged, sizeof(staged)) != 0 ||
-			!wiiu_http_file_matches(staged, journal.entries[i].size, journal.entries[i].sha256))
+		if (wiiu_update_path(&card, journal.entries[i].name, WIIU_UPDATE_NEW, staged, sizeof(staged)) != 0)
+		{
+			panel_hide();
+			return;
+		}
+		matches = wiiu_http_file_matches(staged, journal.entries[i].size, journal.entries[i].sha256, download_stop, NULL);
+		/* (stopped while it was read: the release stays staged, for the next time) */
+		if (matches < 0)
+		{
+			panel_hide();
+			return;
+		}
+		if (!matches)
 		{
 			if (!foreground_or_closing())
 				return;
