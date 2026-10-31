@@ -54,7 +54,7 @@ void wiiu_pad_players_reset(struct wiiu_pad_players *players)
 int wiiu_pad_players_connect(struct wiiu_pad_players *players, int channel, const unsigned char address[WIIU_PAD_ADDRESS_SIZE])
 {
 	const int known = address_known(address);
-	int player, chosen = 0;
+	int player, other, chosen = 0;
 
 	if (channel < 0 || channel >= WIIU_PAD_CHANNELS)
 		return -1;
@@ -65,6 +65,16 @@ int wiiu_pad_players_connect(struct wiiu_pad_players *players, int channel, cons
 			return players->channels[channel].player;
 		/* (another on the channel: the one before has gone) */
 		wiiu_pad_players_disconnect(players, channel);
+	}
+	/* (and a controller is on one channel only: one with this address on another has left it, though nobody has said so yet, as when two
+	controllers come back on each other's channels between two polls; left there, it would hold this controller's own player) */
+	for (other = 0; known && other < WIIU_PAD_CHANNELS; other++)
+	{
+		if (other != channel && players->channels[other].present &&
+			!memcmp(players->channels[other].address, address, WIIU_PAD_ADDRESS_SIZE))
+		{
+			wiiu_pad_players_disconnect(players, other);
+		}
 	}
 	/* one that comes back: its own player, unless another controller took it while it was away */
 	for (player = 1; known && !chosen && player < WIIU_PAD_PLAYER_COUNT; player++)

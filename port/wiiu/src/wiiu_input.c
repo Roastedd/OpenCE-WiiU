@@ -32,7 +32,6 @@ controller with its channel's number when it connects). */
 static volatile unsigned int connections[WIIU_PAD_CHANNELS];
 static volatile int connection_status[WIIU_PAD_CHANNELS];
 static unsigned int connections_seen[WIIU_PAD_CHANNELS];
-static int probe_pending[WIIU_PAD_CHANNELS];
 static KPADConnectCallback connect_chained[WIIU_PAD_CHANNELS];
 
 static void connect_callback(WPADChan channel, WPADError status)
@@ -152,11 +151,12 @@ static unsigned int pro_present;
 /* What each controller last said. A read with no new sample (the game asks faster than the pads sample, about 200 times a second; the menus and the
 loops that wait for a frame do) leaves the pad as it was, as the system's own examples keep it: reporting it released made the sticks fall to the centre and
 the buttons let go between samples, a stutter in every look and a flicker in every held button. Only an error says the pad is gone. connected: something
-answers on the channel, read or not (a Wii Remote alone is connected, not present). */
+answers on the channel, read or not (a Wii Remote alone is connected, not present); sampled: the last read had a new sample. */
 static struct
 {
 	int present;
 	int connected;
+	int sampled;
 	struct wiiu_pad pad;
 } last_pro[WIIU_PAD_CHANNELS];
 static struct wiiu_pad last_vpad;
@@ -374,7 +374,8 @@ static int pad_sample(unsigned int channel)
 
 	memset(&status, 0, sizeof(status));
 	got = KPADReadEx((KPADChan)channel, &status, 1, &error);
-	if (got >= 1 && error == KPAD_ERROR_OK)
+	last_pro[channel].sampled = got >= 1 && error == KPAD_ERROR_OK;
+	if (last_pro[channel].sampled)
 	{
 		struct wiiu_pad now;
 
@@ -445,12 +446,16 @@ static void lights_update(unsigned int channel, OSTime now)
 
 void wiiu_input_poll(int several_players)
 {
+	static OSTime probed_at;
 	const OSTime now = OSGetSystemTime();
 	const int foreground = wiiu_in_foreground();
+	const int probe_due = now - probed_at >= (OSTime)OSSecondsToTicks(1);
 	unsigned int channel;
 	int at_rest = 1;
 
 	start();
+	if (probe_due)
+		probed_at = now;
 	/* (in the background the HOME Menu has the controllers and may light them its way: lit again on coming back) */
 	if (foreground != lights_foreground)
 	{
@@ -467,23 +472,24 @@ void wiiu_input_poll(int several_players)
 		if (changed)
 		{
 			connections_seen[channel] = count;
-			lights_forget(channel, now);
-			probe_pending[channel] = 1;
 			wiiu_log("Input: channel %u %s", channel + 1, connection_status[channel] == WPAD_ERROR_NONE ? "connected" : "disconnected");
+			/* (what was on the channel has gone, or may have: only a sample from now on says what is there, so that a controller that went and
+			another that came between two polls, a Wii Remote alone say, are not taken for one another, nor the old one's state for the new one's) */
+			pad_gone(channel);
 		}
-		/* (a disconnection a read has not seen: the system says what is on the channel now, asked again while it is busy) */
-		if (probe_pending[channel])
+		/* (the system asked now and then whether anything is on the channel at all: the reads keep a controller's last state between samples, and
+		would keep one that went if neither a read's error nor the callback said so) */
+		if (probe_due && last_pro[channel].connected)
 		{
 			WPADExtensionType extension;
-			const WPADError probed = WPADProbe((WPADChan)channel, &extension);
 
-			if (probed == WPAD_ERROR_NO_CONTROLLER)
+			if (WPADProbe((WPADChan)channel, &extension) == WPAD_ERROR_NO_CONTROLLER)
 				pad_gone(channel);
-			if (probed != WPAD_ERROR_NOT_READY)
-				probe_pending[channel] = 0;
 		}
 		present = pad_sample(channel);
-		if (present && (changed || !pad_players.channels[channel].present))
+		/* (named from a sample of its own, not from a state the reads kept: a channel the system has not yet said is empty keeps the last
+		controller's, whose address the system may still give) */
+		if (present && last_pro[channel].sampled && (changed || !pad_players.channels[channel].present))
 		{
 			WPADAddress address;
 			int player;

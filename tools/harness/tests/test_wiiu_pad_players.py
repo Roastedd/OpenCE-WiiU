@@ -1,6 +1,7 @@
 """The Wii U's controllers and players (port/wiiu/src/wiiu_pad_players.c), the unit itself compiled with cc against synthetic
 connections, disconnections and presses: controllers take the lowest free player in the order they connect, whatever their
-channels; one that goes and comes back, on any channel, has its own player again unless another took it; a new one takes the
+channels; one that goes and comes back, on any channel, has its own player again unless another took it, also when two come
+back on each other's channels before either was told gone; one told again on its channel keeps its player; a new one takes the
 lowest free player even if it was remembered for one that is away (the replacement of a controller whose battery ran out);
 a controller without an address is never taken for another without one; "auto" shares the GamePad's player while there is
 one player and gives each its own once a second joins, only at rest; "separate" leaves a fourth controller without a player
@@ -36,6 +37,13 @@ FAULTS = {
     "merged_by_map": ("\t\treturn channel;\n", "\t\treturn players->separate ? player : 0;\n"),
     # (two controllers without an address are taken for one another)
     "unknown_matches": ("const int known = address_known(address);", "const int known = 1;"),
+    # (a controller's entry on the channel it left holds its player when it is told on another first)
+    "keeps_stale": ("for (other = 0; known && other < WIIU_PAD_CHANNELS; other++)",
+                    "for (other = 0; 0 && known && other < WIIU_PAD_CHANNELS; other++)"),
+    # (the same controller told again on its channel is given a player anew)
+    "no_same_controller": ("if (!memcmp(players->channels[channel].address, address, WIIU_PAD_ADDRESS_SIZE))\n"
+                           "\t\t\treturn players->channels[channel].player;",
+                           "if (0)\n\t\t\treturn players->channels[channel].player;"),
 }
 
 CHECKS = r'''
@@ -123,8 +131,27 @@ int main(void)
 	wiiu_pad_players_disconnect(&p, 1);
 	wiiu_pad_players_disconnect(&p, 0);
 	CHECK(wiiu_pad_players_connect(&p, 3, UNKNOWN) == 1, 62);
-	/* (one without an address told again on its channel keeps its player) */
-	CHECK(wiiu_pad_players_connect(&p, 3, UNKNOWN) == 1, 63);
+	/* (one without an address told again on its channel keeps its player, here not the lowest free) */
+	CHECK(wiiu_pad_players_connect(&p, 0, B) == 2 && wiiu_pad_players_connect(&p, 3, UNKNOWN) == 1, 63);
+	wiiu_pad_players_reset(&p);
+	wiiu_pad_players_arrange(&p, WIIU_PAD_LAYOUT_SEPARATE, 1, 1);
+	CHECK(wiiu_pad_players_connect(&p, 0, A) == 1 && wiiu_pad_players_connect(&p, 1, UNKNOWN) == 2, 64);
+	wiiu_pad_players_disconnect(&p, 0);
+	CHECK(wiiu_pad_players_connect(&p, 1, UNKNOWN) == 2, 65);
+
+	/* two controllers back on each other's channels before a poll has said either went: told channel by channel, each has its own
+	player again (the one on the other channel, which has not been told yet, has left it) */
+	wiiu_pad_players_reset(&p);
+	wiiu_pad_players_arrange(&p, WIIU_PAD_LAYOUT_SEPARATE, 1, 1);
+	CHECK(wiiu_pad_players_connect(&p, 0, A) == 1 && wiiu_pad_players_connect(&p, 1, B) == 2, 66);
+	CHECK(wiiu_pad_players_connect(&p, 0, B) == 2 && wiiu_pad_players_port(&p, 0) == 2 && wiiu_pad_players_port(&p, 1) == -1, 67);
+	CHECK(wiiu_pad_players_connect(&p, 1, A) == 1 && wiiu_pad_players_port(&p, 1) == 1, 68);
+	/* one controller that moves to a lower channel keeps its player, though a remembered one is free below it */
+	wiiu_pad_players_reset(&p);
+	wiiu_pad_players_arrange(&p, WIIU_PAD_LAYOUT_SEPARATE, 1, 1);
+	CHECK(wiiu_pad_players_connect(&p, 0, A) == 1 && wiiu_pad_players_connect(&p, 1, B) == 2, 69);
+	wiiu_pad_players_disconnect(&p, 0);
+	CHECK(wiiu_pad_players_connect(&p, 0, B) == 2 && wiiu_pad_players_port(&p, 1) == -1, 75);
 
 	/* at rest: no button, both sticks inside the game's dead range */
 	memset(&pad, 0, sizeof(pad));

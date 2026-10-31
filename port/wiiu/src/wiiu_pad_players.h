@@ -63,7 +63,8 @@ void wiiu_pad_players_reset(struct wiiu_pad_players *players);
 
 /* A controller the game reads is on the channel, with its address (all zero if the system gave none). It has the player it last had if no
 other controller has taken it since, else the lowest player no controller has (taking it over from one that is away), else 0: the three
-are taken and it shares the GamePad's. The same controller again on its channel keeps its player. Returns its player. */
+are taken and it shares the GamePad's, until it connects again. The same controller again on its channel keeps its player; one with its
+address on another channel has left that one. Returns its player. */
 int wiiu_pad_players_connect(struct wiiu_pad_players *players, int channel, const unsigned char address[WIIU_PAD_ADDRESS_SIZE]);
 
 /* The channel's controller has gone (or is one the game does not read, as a Wii Remote whose Classic Controller was taken out); its
