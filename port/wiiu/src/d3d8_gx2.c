@@ -3200,16 +3200,15 @@ and announces it): a draw of those leaves its indices' range to the host's threa
 static BOOL streams_in_tag_cache(unsigned long first)
 {
 	const unsigned char *base = (const unsigned char *)physical_memory_get_tag_cache_base_address();
-	unsigned long stream;
+	uint32_t mask;
 
 	if (!base)
 		return FALSE;
-	for (stream = 0; stream < DK_STREAM_COUNT; stream++)
+	for (mask = format_told.stream_mask; mask; mask &= mask - 1)
 	{
+		const unsigned stream = (unsigned)__builtin_ctz(mask);
 		const unsigned char *at;
 
-		if (!((format_told.stream_mask >> stream) & 1))
-			continue;
 		if (!device.streams[stream].data || !device.streams[stream].stride)
 			return FALSE;
 		at = (const unsigned char *)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data) + first * device.streams[stream].stride;
@@ -3223,22 +3222,25 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 	const WORD *indices, long vertex_offset)
 {
 	struct dk_command_draw *command;
-	unsigned long stream, streams = 0, slot = 0;
+	unsigned long slot = 0;
+	uint32_t mask;
 	WORD *long_copy = NULL;
+	/* (the streams the format reads, a slot each in the command) */
+	const unsigned long streams = (unsigned long)__builtin_popcount(format_told.stream_mask);
 	/* (a list in the renewed dynamic buffer is read where it is: the buffer is not written again until its stream is retired) */
 	const BOOL renewed_list = indices && indices_renewed(indices, count);
 	const unsigned long renewed_reach = renewed_list ? (unsigned long)((const unsigned char *)(indices + count) - renewed.stores[renewed.current]) : 0;
-	unsigned long index_bytes = indices && !renewed_list && count * sizeof(WORD) <= INLINE_INDEX_LIMIT && !indices_fixed(indices, count) ?
-		(count * sizeof(WORD) + 3) & ~3UL : 0;
+	/* (a list that stays as it is until the GPU reads it: asked once, the three places below having asked it each) */
+	const BOOL fixed = indices && !renewed_list && indices_fixed(indices, count);
+	unsigned long index_bytes = indices && !renewed_list && count * sizeof(WORD) <= INLINE_INDEX_LIMIT && !fixed ? (count * sizeof(WORD) + 3) & ~3UL : 0;
 
 	/* (a list the game made this frame, of the map's vertices: copied here, its range found by the host's thread, the copy and range together having cost the game
-	thread 6-9% of its time in a10) */
-	const BOOL range_later = indices && (index_bytes || renewed_list || indices_fixed(indices, count)) && streams_in_tag_cache(first);
+	thread 6-9% of its time in a10. Not for streams outside the tag cache, whose read ranges the indices give: noted as any vertex the indices could name, each
+	lock of a dynamic buffer's next vertices would wait for the GX2 thread to run the draws before it, as the Direct3D replay of the layer showed) */
+	const BOOL range_later = indices && (index_bytes || renewed_list || fixed) && streams_in_tag_cache(first);
 
 	if (renewed_reach > renewed.used)
 		renewed.used = renewed_reach;
-	for (stream = 0; stream < DK_STREAM_COUNT; stream++)
-		streams += (format_told.stream_mask >> stream) & 1;
 	command = stream_command(DK_COMMAND_DRAW, sizeof(*command) + streams * 2 * sizeof(uint32_t) + index_bytes);
 	command->primitive = primitive_of(type) | (range_later ? DK_DRAW_RANGE_LATER : 0u);
 	command->count = (uint32_t)count;
@@ -3258,7 +3260,7 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 		}
 		else if (index_bytes)
 			wiiu_index_copy_range((uint16_t *)(void *)&command->streams[streams], indices, count, &lowest, &highest);
-		else if (!renewed_list && !indices_fixed(indices, count) && (long_copy = malloc(count * sizeof(WORD))) != NULL)
+		else if (!renewed_list && !fixed && (long_copy = malloc(count * sizeof(WORD))) != NULL)
 		{
 			/* a list the game remakes as it draws, too long to go in the command: copied now into a buffer of its own, freed once the stream that reads it is
 			retired (read where it is, the game could rewrite it before the host reads it: the host reads the stream later, and with the GX2 thread much later) */
@@ -3279,26 +3281,24 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 	command->vertex_offset = (int32_t)vertex_offset;
 	command->inline_bytes = 0;
 	command->stream_count = (uint32_t)streams;
-	for (stream = 0; stream < DK_STREAM_COUNT; stream++)
+	for (mask = format_told.stream_mask; mask; mask &= mask - 1, slot++)
 	{
-		unsigned long stride = device.streams[stream].stride;
+		const unsigned stream = (unsigned)__builtin_ctz(mask);
+		const unsigned long stride = device.streams[stream].stride;
 
-		if (!((format_told.stream_mask >> stream) & 1))
-			continue;
 		command->streams[slot][0] = (uint32_t)(uintptr_t)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data) +
 			(uint32_t)(first * stride);
 		command->streams[slot][1] = range_later ? (uint32_t)stride : (uint32_t)(stride ? stride * vertex_count : STRIDELESS_STREAM_BYTES);
-		slot++;
 	}
 	/* (the memory the command reads when the stream is handed over is noted once the command is written: noting can hand the stream over when it has no room, and then the
 	command has gone with it, safely) */
-	for (stream = 0; stream < DK_STREAM_COUNT; stream++)
+	for (mask = format_told.stream_mask; mask; mask &= mask - 1)
 	{
-		unsigned long stride = device.streams[stream].stride;
+		const unsigned stream = (unsigned)__builtin_ctz(mask);
+		const unsigned long stride = device.streams[stream].stride;
 
-		if ((format_told.stream_mask >> stream) & 1)
-			dk_stream_note_read((const char *)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data) + first * stride,
-				stride ? stride * vertex_count : STRIDELESS_STREAM_BYTES);
+		dk_stream_note_read((const char *)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data) + first * stride,
+			stride ? stride * vertex_count : STRIDELESS_STREAM_BYTES);
 	}
 	/* (after the command: writing it may have handed the stream over, and the
 	draw is in the submission it is written to) */
