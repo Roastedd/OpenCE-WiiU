@@ -1061,6 +1061,34 @@ started first), to test that nothing another machine sends can crash the
 game: a host and a client with a third of their datagrams damaged must play
 on, their logs noting what they refused.
 
+`debug.network_statistics` (on by default on the Wii U) logs what a network
+game's machine did in each second, on lines of 199 characters at most (the
+Wii U's log keeps no more of a line):
+
+```
+net: <host|client>, <machines> machines, <players> players | datagrams out <n> (<KB> KB) in <n> (<KB> KB)
+  | streams out <KB> KB in <KB> KB | sends refused <n>[ (Winsock error <code>)]
+net: tunnel <peers> peers, out <n> (<KB> KB) in <n> (<KB> KB), refused <n> | in the process <n>, lost <n>,
+  <n> connections | sockets <n> open, highest <n>
+net: netcode <ms> ms a tick (<ticks> ticks, the longest <ms> ms) | corrections <n>
+  | longest round trip <ms> ms (m<machine>)   (a client: round trip <ms> ms)
+net: input gaps (ticks): m<machine> <ticks> ...   (the host's; more lines as the machines take)
+```
+
+(each on one line). The datagrams and streams are the game's with other
+machines (`xnet.c` counts them at its Winsock calls; its own client's over
+the loopback is left out), and its sends the system refused (a datagram
+lost); the tunnel's are its packets, sealed, to and from every peer, and
+those the system refused, then what `network.tunnel_in_process` handed the
+game, what it lost (a full inbox, or no socket of the game's with the port)
+and the connections the game holds; the sockets are the program's own, the
+highest number of them on the Wii U nsysnet's (its poll takes those up to
+31). The netcode's time is the main thread's in the network's frame work
+(`network_game_*_start_frame`, `network_game_client_end_frame`) and in
+`network_distributed_tick`, over the ticks run; an input gap is a host's
+tick that ran a client machine's player with the input the tick before ran
+it with (none newer had come); the round trip is the latency meter's.
+
 With `log`, `debug.network_test` hosts and joins nothing: it logs the game
 one machine plays (a `map_name` in `init.txt` plays one without the menus),
 as above. `debug.network_test_cues` has the host, or that machine, run

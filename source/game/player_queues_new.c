@@ -267,6 +267,12 @@ static struct
 	boolean valid;
 	long tick;
 	long received_time;
+	/* port: (the netcode's net: lines) the tick of the input the host's
+	last tick ran the player with, and the ticks since they were last read
+	that ran it with that of the tick before, no newer having come
+	(update_server_distributed_input_gaps) */
+	long ran_tick;
+	long gaps;
 } update_server_distributed_inputs[MAXIMUM_NUMBER_OF_PLAYERS];
 
 /* ... a client: each local player's last tick, its action, and the buttons
@@ -450,6 +456,14 @@ void update_server_next_update(
 		buttons and trigger let go, where it faces: its last input held
 		would walk it off a ledge, or empty its weapon. (A datagram or two
 		lost is not that: the last input is held a third of a second.) */
+		/* port: a tick that runs a client machine's player with the input the
+		last one ran it with is a gap in what came from it (the net: lines) */
+		if (update_server_distributed_inputs[queue_index].valid)
+		{
+			if (update_server_distributed_inputs[queue_index].tick == update_server_distributed_inputs[queue_index].ran_tick)
+				update_server_distributed_inputs[queue_index].gaps++;
+			update_server_distributed_inputs[queue_index].ran_tick = update_server_distributed_inputs[queue_index].tick;
+		}
 		if (update_server_distributed_inputs[queue_index].valid &&
 			game_time_initialized() &&
 			game_time_get() - update_server_distributed_inputs[queue_index].received_time >
@@ -1142,6 +1156,20 @@ void update_server_handle_distributed_input(
 	update_server_distributed_inputs[absolute_index].received_time =
 		game_time_initialized() ? game_time_get() : 0;
 	queue->current_action = *action;
+}
+
+/* port: the netcode's net: lines (network_distributed.c) */
+void update_server_distributed_input_gaps(
+	long *gaps,
+	long count)
+{
+	long player_index;
+
+	for (player_index = 0; player_index < count && player_index < MAXIMUM_NUMBER_OF_PLAYERS; player_index++)
+	{
+		gaps[player_index] = update_server_distributed_inputs[player_index].gaps;
+		update_server_distributed_inputs[player_index].gaps = 0;
+	}
 }
 
 long update_server_ticked_update_number(

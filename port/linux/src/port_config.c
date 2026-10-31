@@ -98,6 +98,14 @@ each peer of a host */
 #define TUNNEL_IN_PROCESS "false"
 #endif
 
+/* debug.network_statistics's default: on the Wii U, whose network is the
+one still being measured */
+#ifdef HALO_WIIU
+#define NETWORK_STATISTICS "true"
+#else
+#define NETWORK_STATISTICS "false"
+#endif
+
 /* display.resolution_scaling's default: on Android the Xbox's 480 lines, which
 a phone's GPU draws with time to spare, elsewhere the window's resolution */
 #ifdef HALO_ANDROID
@@ -1280,6 +1288,13 @@ static const struct config_setting config_settings[] =
 		"address as a tag (addr#3f2a9c) that only matches up within one run;\n"
 		"local network addresses are always whole. Do not post a debug.txt\n"
 		"written with this on: it has the address of everyone you played with." },
+	{ "debug.network_statistics", _config_boolean, NETWORK_STATISTICS, "HALO_NETWORK_STATISTICS", _environment_value,
+		_platform_all,
+		"Log a network game's traffic each second (net: lines): machines and\n"
+		"players, datagrams and bytes each way, refused sends, the tunnel's\n"
+		"packets, the sockets open, the netcode's time a tick, each machine's\n"
+		"input gaps, corrections and the longest round trip. On by default on\n"
+		"the Wii U." },
 	{ "debug.network_latency", _config_real, "0.0", "HALO_NETWORK_LATENCY", _environment_value, _platform_all,
 		"Milliseconds everything received is held back (a round trip between two\n"
 		"machines of twice it), to test the netcode as over the internet; 0 none." },

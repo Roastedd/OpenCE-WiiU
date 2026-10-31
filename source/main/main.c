@@ -684,6 +684,9 @@ typedef char screenshot_and_framerate_globals_size_assert[
 	sizeof(struct _screenshot_and_framerate_globals) == 0x38B ? 1 : -1];
 
 void network_test_update(boolean main_menu_loaded, real seconds);
+/* port: the netcode's time in a frame, for the net: lines (port/linux/game/network_distributed.c) */
+void network_distributed_time_begin(void);
+void network_distributed_time_end(void);
 #include "server_director.h" /* port: port/linux/game/server_director.c */
 /* port: debug.fixed_step in a network game too (a game of this machine
 alone takes it below, main_update_time): each frame one tick of game time,
@@ -3636,6 +3639,8 @@ static boolean main_loop_iteration(
 			network_chat_update();
 			profile_scope_enter(main_network_start_frame_section)
 			connection = main_globals.connection;
+			/* port: timed for the net: lines (to the end of the frame's start below) */
+			network_distributed_time_begin();
 			if (connection==_game_connection_network_client)
 			{
 				if (!network_game_client_start_frame())
@@ -3665,6 +3670,7 @@ static boolean main_loop_iteration(
 				profile_scope_exit(main_network_start_frame_section)
 				break;
 			}
+			network_distributed_time_end();
 			profile_scope_exit(main_network_start_frame_section)
 
 			/* port: a dedicated server's frames paced by its clock, with no
@@ -3711,11 +3717,14 @@ static boolean main_loop_iteration(
 
 					connection = main_globals.connection;
 					profile_scope_enter(main_network_end_frame_section)
+					/* port: timed for the net: lines */
+					network_distributed_time_begin();
 					if (connection>_game_connection_local && connection<=_game_connection_network_server && !network_game_client_end_frame())
 					{
 						display_error_when_main_menu_loaded(1);
 						network_game_abort();
 					}
+					network_distributed_time_end();
 					profile_scope_exit(main_network_end_frame_section)
 
 #ifdef HALO_WIIU

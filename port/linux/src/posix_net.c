@@ -15,6 +15,7 @@ with the host ABI.
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
+#include <pthread.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -132,13 +133,60 @@ int posix_socket_last_error(void)
 	return last_error;
 }
 
+/* the sockets open (posix_socket_census), by descriptor: one numbered past
+the map is counted, not placed */
+#define CENSUS_DESCRIPTORS 4096
+static unsigned char census_open[CENSUS_DESCRIPTORS];
+static int census_count;
+static pthread_mutex_t census_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void census_note(int socket, int open)
+{
+	if (socket < 0)
+		return;
+	pthread_mutex_lock(&census_lock);
+	if (socket >= CENSUS_DESCRIPTORS)
+	{
+		census_count += open ? 1 : -1;
+	}
+	else if (census_open[socket] != (unsigned char)open)
+	{
+		census_open[socket] = (unsigned char)open;
+		census_count += open ? 1 : -1;
+	}
+	pthread_mutex_unlock(&census_lock);
+}
+
+int posix_socket_census(int *highest)
+{
+	int count;
+	int index;
+
+	pthread_mutex_lock(&census_lock);
+	count = census_count;
+	*highest = -1;
+	for (index = CENSUS_DESCRIPTORS - 1; index >= 0 && *highest < 0; index--)
+	{
+		if (census_open[index])
+			*highest = index;
+	}
+	pthread_mutex_unlock(&census_lock);
+	return count;
+}
+
 int posix_socket(int family, int type, int protocol)
 {
-	return succeed(socket(family, type | SOCK_CLOEXEC, protocol));
+	int result = socket(family, type | SOCK_CLOEXEC, protocol);
+
+	census_note(result, 1);
+	return succeed(result);
 }
 
 int posix_socket_close(int socket)
 {
+	/* (noted first: once closed, another thread's socket may have the
+	number) */
+	census_note(socket, 0);
 	return succeed(close(socket));
 }
 
@@ -177,6 +225,7 @@ int posix_socket_accept(int socket, void *address, int *address_length)
 
 	if (address_length)
 		*address_length = (int)length;
+	census_note(result, 1);
 	return succeed(result);
 }
 

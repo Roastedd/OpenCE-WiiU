@@ -306,6 +306,27 @@ int posix_socket_close(int socket)
 	return succeed(close(socket));
 }
 
+/* the sockets open, and the highest of nsysnet's numbers among them (wut's descriptors are newlib's, which files share; the limit is
+nsysnet's: 27 sockets, numbered 3 to 31, measured 2026-10-31) */
+int posix_socket_census(int *highest)
+{
+	int socket, count = 0;
+
+	*highest = -1;
+	for (socket = 0; socket < LISTENERS; socket++)
+	{
+		if (open_sockets[socket])
+		{
+			const int number = __wut_get_nsysnet_fd(socket);
+
+			count++;
+			if (number > *highest)
+				*highest = number;
+		}
+	}
+	return count;
+}
+
 int wiiu_posix_net_close_all(void);
 
 int wiiu_posix_net_close_all(void)
