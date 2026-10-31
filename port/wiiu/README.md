@@ -21,7 +21,7 @@ game build.
 | `probe/` | A Wii U application that measures the console (memory mapping, FPU, unaligned access, speed). See its README. |
 | `probe_gx2/` | A Wii U application that asks the GPU's questions: CafeGLSL on the console, BC1/BC2/BC3 byte order, little-endian vertex streams, index types. See its README. |
 | `src/` | The Wii U's own units: the shell (lifecycle, log, black box, watchdog), thread-local storage, 64-bit atomics, the C library's gaps. See its README. |
-| `tests/` | Desktop tests of the shell's portable parts (`tools/wiiu/shell_tests.sh`: ARM64, x86, big-endian PowerPC), and of voice chat over stand-ins for Cafe OS (`test_voice_audio.c`, `voice_mock/`; run by `tools/harness/tests/test_wiiu_voice_audio.py`). |
+| `tests/` | Desktop tests of the shell's portable parts (`tools/wiiu/shell_tests.sh`: ARM64, x86, big-endian PowerPC), and of voice chat over stand-ins for Cafe OS (`test_voice_audio.c`, `voice_mock/`; run by `tools/harness/tests/test_wiiu_voice_audio.py`), and internet play with many machines on one computer (`internet_swarm.sh`, with a test broker, `mqtt_test_broker.py`: "The network"). |
 | `stubbed_symbols.txt` | The symbols the link still lacks, as the build last found them. |
 
 ## Building
@@ -249,6 +249,64 @@ is down" while the app is in the background, closing, or told by the system to s
 end to end over the loopback (the host's own client connects to its listening socket): System Link, Create Game, Battle Creek, Slayer, the lobby and a
 match that starts, with the HUD and the controls answering (ZR fires, the stick moves and turns). Not measured: a game found or joined from a second
 machine. `network.wiiu_sockets` turns the sockets off.
+
+### Sockets, and internet play's peers in the process
+
+The app has 27 sockets: nsysnet numbers them 3 to 31, the 28th `socket()` fails with EMFILE, and `poll` takes all of them (wut's poll is nsysnet's select,
+whose sets end at 31; measured with the socket probe, 2026-10-31). A host's own sockets, as a Linux host counts them (`posix_socket_census`, the `net:`
+lines below): 8 with one signalling broker, that is the game's five (its listening socket and datagram socket, its own client's connection, both ends,
+and datagram socket), the tunnel, the hand-off socket and the broker. The card's `brokers.txt` lists four brokers (three more), and the debug server
+takes two while it is on. A LAN machine takes one more (its connection).
+
+Internet play's stand-ins took a host three sockets for each peer (a UDP stand-in for the peer's port, and the two ends of a local connection carrying
+its stream), four while one joins (its search's stand-in): measured on a Linux host, 20 sockets with 4 peers and 56 with 16. On the Wii U that is about
+four peers. `network.tunnel_in_process`, on by default here, hands the game what peers send without them (`port/linux/src/p2p.c`'s header): a peer's
+datagram goes into an inbox of the game's socket that has its port, which `xnet.c` reads before the socket, and a peer's connection waits on the game's
+listening socket for its `accept`, which gives it a number that no socket has (`p2p_stream_socket`), read and written in the process on its KCP stream.
+Measured on a big-endian Linux host (`tests/internet_swarm.sh`, 16 official upstream x86 builds of network version 41 joining by invite): 8 sockets with 16
+peers, all 16 connections in the process, about 480 datagrams a second handed over and none lost. What the game reaches out to still uses stand-ins: a
+Wii U joining an internet game has a listener and its accepted connection for its host, and a UDP stand-in for its connected datagram socket (three
+sockets). Nothing the tunnel sends changes, so official builds play with it.
+
+A stream socket's buffers are set to 32 KB (`transport_endpoint_winsock.c`; nsysnet refuses 64 KB): Linux grows them as a connection needs, nsysnet keeps
+its own sizes, which no console has reported yet. They carry the game's real connections: LAN machines', the host's own client's, and a joiner's
+connection through its stand-in. A host sends a machine that joins a game in progress what fits there each frame (the rest waits in the connection's
+256 KB queue), and a joiner reads at most that between frames. The log's first `Net: stream socket N: SO_SNDBUF was X, 32768 asked, now Y` lines say what
+nsysnet gave. Connections taken in the process have no socket and are not limited by it: the tunnel's window holds 128 KB of each one's.
+
+`debug.network_statistics`, on by default here, logs `net:` lines each second of a network game (`port/linux/NETCODE.md`, Testing): the machines and
+players, datagrams and bytes each way, refused sends, the tunnel's packets, what was handed over in the process and lost, the sockets open and the
+highest nsysnet number, the netcode's time a tick, each client machine's input gaps, the corrections, and the longest round trip.
+
+### The console test plan for internet hosting
+
+For the session that holds the console (one driver at a time; check `ps` for another session's scripts first). Build `wiiu-net` (`OPENCE=<its worktree>
+tools/wiiu/build_game.sh`), keep the card's `config.toml` and put it back at the end, read back, and leave the card on the safe path. Put
+`port/assets/network/brokers.txt` on the card as `halo/brokers.txt`. On the Mac, the joiners are copies of the official upstream x86 build (protocol 41,
+`scratch/opence-upstream-x86`) in the default Colima machine, behind the Mac's NAT as players behind a router are: `port/wiiu/tests/internet_swarm.sh join
+<output> <invite> <joiners> upstream-x86 <seconds>` from the tools repository's folder, with the public brokers and STUN.
+
+1. Hosting with nobody: `debug.network_test = "host:bloodgulch"`, `debug.test_input = "bot:7"`. The log says `Internet play: the peers' datagrams and
+   connections are handed to the game in the process`, then `network test: invite halo://join/...` (whole). Note the `net:` lines' `sockets N open,
+   highest H` before anyone joins: the Wii U's own count.
+2. Peers in steps: 4, 8, then 15 joiners from the Mac by that invite (a run each, 300 s), keeping the Mac's copies to what its cores carry (each takes
+   about a third of a core at 30 frames a second; past that they lag, and their round trips with them). For each, from the Wii U's `net:` lines: the
+   sockets and the highest number stay as in step 1, whatever the peers; `in the process` about 30 datagrams a second for each peer and `lost` 0;
+   `refused` 0 on both lines (a refused send is a datagram lost: nsysnet's send buffer full); the netcode's milliseconds a tick, and the frame times
+   (`frame time` lines), against step 1; the input gaps of each machine and the longest round trip. On the Mac: every joiner's log has the host's
+   player, and `tools/net_compare.py --compare <the Wii U's log> <a joiner's log>` (OpenCE) for two or three of them.
+3. The same with `network.tunnel_in_process = false` and 4 joiners, then 6: the sockets should rise by three for each peer, to the ceiling at about
+   four. Note what fails at the 28th (EMFILE in the `Net:` trace) and whether the game recovers when the peers leave. Optional: it runs the console
+   out of sockets.
+4. Another network, if the owner can arrange one (a phone's hotspot, a friend's PC): an official OpenCE PC build joins the Wii U's game by its invite
+   over the internet, with Mac joiners as in step 2; the same readings, and that its player plays.
+5. From the menus: Multiplayer, Create Game, Internet; the invite on the screen; a Mac joiner by it.
+6. Joining in progress (the 32 KB buffers): a LAN machine (the Colima `lan` profile's x86 build) joins the Wii U's game a minute into a match; the
+   log's `Net: stream socket` lines, how long the joiner takes from the join to its first `network test: tick` line, and `streams out` on the host's
+   `net:` line meanwhile. Then the Wii U joins a Mac host's game in progress.
+
+It passes when 15 peers play a Wii U-hosted game for five minutes with the sockets as with none, no datagram lost in the process, and the joiners'
+views agreeing with the host's as `net_compare.py` judges two machines.
 
 ## Voice chat
 
