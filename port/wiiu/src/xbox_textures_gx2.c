@@ -844,18 +844,20 @@ static uint32_t hud_image(long asset, unsigned long *levels)
 
 /* an entry's image and description: its replacement's, if it has one (as
 texture_entry_result in xbox_textures.c), with the bitmap's own size, which
-its coordinates are in */
-static uint32_t texture_entry_result(struct texture_entry *entry, int *kind, struct xgpu_texture_description *description)
+its coordinates are in; *atlas: whether it is the text's atlas */
+static uint32_t texture_entry_result(struct texture_entry *entry, int *kind, struct xgpu_texture_description *description, int *atlas)
 {
 	unsigned long levels = 1;
 	uint32_t id;
 
 	*kind = (int)entry->kind;
 	*description = entry->description;
+	*atlas = 0;
 	if ((id = atlas_image(entry->data)) != 0)
 	{
 		*kind = DK_TEXTURE_2D;
 		description->levels = 1;
+		*atlas = 1;
 		return id;
 	}
 	/* (looked up again only when the art registered has changed: the search
@@ -898,8 +900,13 @@ static uint32_t texture_entry_result(struct texture_entry *entry, int *kind, str
 	return entry->id;
 }
 
+unsigned long dk_texture_serial(void)
+{
+	return texture_drop_serial;
+}
+
 uint32_t dk_texture_get(const DWORD *resource, const D3DCOLOR *palette, int *kind,
-	struct xgpu_texture_description *description)
+	struct xgpu_texture_description *description, int *lasting)
 {
 	DWORD data = resource[1], format_word = resource[3], size_word = resource[4];
 	struct texture_entry **bucket = &texture_buckets[bucket_index(data, format_word, size_word)];
@@ -913,7 +920,11 @@ uint32_t dk_texture_get(const DWORD *resource, const D3DCOLOR *palette, int *kin
 	static int no_cache = -1;
 	unsigned long recent = bucket_index(data, format_word, size_word) % RECENT_TEXTURE_COUNT;
 	unsigned long watch_serial = memory_watch_serial();
+	uint32_t id;
+	int atlas;
 
+	if (lasting)
+		*lasting = 0;
 	if (!palettized && recent_textures[recent].entry && recent_textures[recent].data == data &&
 		recent_textures[recent].format_word == format_word && recent_textures[recent].size_word == size_word &&
 		recent_textures[recent].watch_serial == watch_serial &&
@@ -921,7 +932,10 @@ uint32_t dk_texture_get(const DWORD *resource, const D3DCOLOR *palette, int *kin
 	{
 		entry = recent_textures[recent].entry;
 		entry->last_used_frame = texture_frame;
-		return texture_entry_result(entry, kind, description);
+		id = texture_entry_result(entry, kind, description, &atlas);
+		if (lasting)
+			*lasting = !atlas;
+		return id;
 	}
 
 	for (entry = *bucket; entry; entry = entry->next)
@@ -1007,7 +1021,10 @@ uint32_t dk_texture_get(const DWORD *resource, const D3DCOLOR *palette, int *kin
 		recent_textures[recent].watch_serial = watch_serial;
 		recent_textures[recent].drop_serial = texture_drop_serial;
 	}
-	return texture_entry_result(entry, kind, description);
+	id = texture_entry_result(entry, kind, description, &atlas);
+	if (lasting)
+		*lasting = !palettized && !no_cache && !atlas;
+	return id;
 }
 
 void xgpu_texture_cache_begin_frame(void)

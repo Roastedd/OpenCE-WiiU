@@ -34,6 +34,8 @@ and presenting go there; a draw and a visibility test do nothing yet.
 #include <coreinit/time.h>
 #include <coreinit/systeminfo.h>
 #include "dk_textures.h"
+#include "hud_hires.h"
+#include "menu_files.h"
 #include "shader_key_wire.h"
 
 /* gx2_shaders.c: the programs the game makes, kept by hash for the pack generator */
@@ -97,6 +99,10 @@ static long screen_width;
 static float screen_scale[2] = { 1.0f, 1.0f };
 static long ui_offset;
 #define UI_OFFSET ((GLint)ui_offset)
+
+/* changed when what a draw's facts but its stages' come from may have (facts_make): the targets' scale, the viewport, the menus' offset, the
+texture clip, the zoom's blend */
+static unsigned long facts_serial = 1;
 
 #ifdef HALO_SWITCH
 /* the host's (host_dk.c): the height it presents at, 1080 docked and 720 in
@@ -184,6 +190,7 @@ float halo_screen_scale(void)
 void halo_screen_ui_offset(unsigned char centered)
 {
 	ui_offset = centered ? (halo_screen_width() - 640) / 2 : 0;
+	facts_serial++;
 }
 
 /* display.shadow_resolution, display.per_pixel_lighting and
@@ -253,6 +260,7 @@ void halo_texture_clip(unsigned char clip, float low, float high)
 	texture_clip[0] = clip ? low : 0.0f;
 	texture_clip[1] = clip ? high : 0.0f;
 	texture_clip[2] = clip ? 1.0f : 0.0f;
+	facts_serial++;
 }
 
 /* the zoom's blend of its blur over the screen, for the draws that follow
@@ -279,6 +287,7 @@ unsigned char halo_screen_fast_warp(void)
 void halo_screen_warp_blend(unsigned char on)
 {
 	warp_blend = on;
+	facts_serial++;
 }
 
 /* the part of a frame the game is about to draw, for the host's record of
@@ -924,6 +933,8 @@ static struct rendered
 	unsigned long width, height;
 } rendered[RENDERED_LIMIT];
 static unsigned long rendered_count;
+/* changed when a surface is noted or drawn at another size: a texture's facts depend on it (stage_facts_make) */
+static unsigned long rendered_serial = 1;
 
 /* whether two copies of a state are the same, compared a word at a time:
 musl's memcmp goes a byte at a time, and every draw compares several
@@ -961,7 +972,10 @@ static void rendered_note(const struct dk_surface *surface)
 		if (rendered_count == RENDERED_LIMIT)
 			return;
 		rendered_count++;
+		rendered_serial++;
 	}
+	else if (rendered[index].width != surface->width || rendered[index].height != surface->height)
+		rendered_serial++;
 	rendered[index].data = surface->data;
 	rendered[index].width = surface->width;
 	rendered[index].height = surface->height;
@@ -1083,6 +1097,7 @@ static BOOL targets_bind_again(void)
 		return FALSE;
 	target_scale[0] = targets_memo.scale[0];
 	target_scale[1] = targets_memo.scale[1];
+	facts_serial++;
 	if (!targets_known || !words_equal(&targets.color, &targets_told.color, sizeof(targets.color)) ||
 		!words_equal(&targets.depth, &targets_told.depth, sizeof(targets.depth)))
 	{
@@ -1232,6 +1247,7 @@ static void viewport_update_constants(void)
 	drawn after the objects and is the world itself, from keeping the other
 	window's view when the two cameras do not agree. */
 	constants_known = FALSE;
+	facts_serial++;
 }
 HRESULT WINAPI Direct3D_CreateDevice(UINT adapter, D3DDEVTYPE device_type, void *unused, DWORD behavior_flags,
 	D3DPRESENT_PARAMETERS *presentation_parameters, D3DDevice **returned_device)
@@ -2562,101 +2578,177 @@ static void states_resync(void)
 	facts_known = FALSE;
 }
 
-/* what the draw's textures are, found as pixel_key_make found them (finding one may send its texels to the host), and the rest of its facts */
-static void facts_make(struct dk_draw_facts *facts, BOOL has_depth, const struct vertex_shader_object *program, BOOL immediate)
+/* The draw's facts as last made, kept from draw to draw so that a draw makes again only what has changed since (each draw made all of them, a
+lookup in the texture cache and the render targets for each stage, cleared them first and compared the whole with what the GX2 thread holds): what
+is sent when it differs from facts_told. facts_made: what the draw's own facts were made from (facts_serial counts the rest of it); each stage keeps
+what its facts were made from in its memo. */
+static struct dk_draw_facts facts_now;
+static struct
 {
-	int stage;
+	unsigned long serial;
+	const struct vertex_shader_object *program, *declaration;
+	BOOL has_depth, immediate;
+} facts_made;
 
-	memset(facts, 0, sizeof(*facts));
-	facts->has_depth = has_depth != FALSE;
-	facts->target_scale[0] = target_scale[0];
-	facts->target_scale[1] = target_scale[1];
-	facts->viewport_x = device.viewport.X;
-	facts->viewport_y = device.viewport.Y;
-	facts->viewport_width = device.viewport.Width;
-	facts->viewport_height = device.viewport.Height;
-	facts->viewport_min_z = device.viewport.MinZ;
-	facts->viewport_max_z = device.viewport.MaxZ;
-	memcpy(facts->viewport_scale, device.viewport_scale, sizeof(facts->viewport_scale));
-	memcpy(facts->viewport_offset, device.viewport_offset, sizeof(facts->viewport_offset));
-	facts->ui_offset = (int32_t)UI_OFFSET;
-	memcpy(facts->texture_clip, texture_clip, sizeof(facts->texture_clip));
-	facts->warp_blend = warp_blend != 0;
-	facts->program_hash[0] = (uint32_t)(program->program_hash >> 32);
-	facts->program_hash[1] = (uint32_t)program->program_hash;
-	facts->packed_mask = immediate ? 0 : (uint32_t)device.vertex_shader->packed_mask;
-	for (stage = 0; stage < D3DTSS_MAXSTAGES; stage++)
+/* A stage's facts hold while its texture, the texture's header words and the serials of what dk_texture_get's answer comes from are the same - the
+memory watch's (a write to its texels), the cache's drops, the menus' art, the HUD placeholders, the render targets noted - and the frame, in which the
+cache counts a texture's use; unless the answer was not a lasting one (dk_texture_get), or the texture is a render target (whose composite is told
+the host at a draw that samples it). */
+#define STAGE_SERIALS 6
+
+static struct
+{
+	BOOL lasting;
+	const D3DBaseTexture *texture;
+	DWORD words[3];
+	unsigned long serials[STAGE_SERIALS];
+} stage_memos[D3DTSS_MAXSTAGES];
+
+static void stage_serials_make(unsigned long serials[STAGE_SERIALS])
+{
+	serials[0] = memory_watch_serial();
+	serials[1] = dk_texture_serial();
+	serials[2] = menu_art_serial();
+	serials[3] = hud_hires_placeholder_serial();
+	serials[4] = rendered_serial;
+	serials[5] = device.frame;
+}
+
+/* a stage's facts (facts_now's): what its texture is, found as pixel_key_make found it (finding it may send its texels to the host); whether they
+changed */
+static BOOL stage_facts_make(int stage, const unsigned long serials[STAGE_SERIALS])
+{
+	struct dk_stage_facts made, *found = &facts_now.stages[stage];
+	D3DBaseTexture *texture = device.textures[stage];
+	const unsigned long mode = stage_texture_mode(stage);
+
+	if (texture && texture->Data && mode != 0 && mode != 0x04 && mode != 0x05 && mode != 0x11 && stage_memos[stage].lasting &&
+		stage_memos[stage].texture == texture && stage_memos[stage].words[0] == texture->Data && stage_memos[stage].words[1] == texture->Format &&
+		stage_memos[stage].words[2] == texture->Size && words_equal(stage_memos[stage].serials, serials, sizeof(stage_memos[stage].serials)))
+		return FALSE;
+	memset(&made, 0, sizeof(made));
+	made.scale[0] = made.scale[1] = 1.0f;
+	if (!texture || !texture->Data || mode == 0 || mode == 0x04 || mode == 0x05 || mode == 0x11)
+		stage_memos[stage].lasting = FALSE;
+	else
 	{
-		struct dk_stage_facts *found = &facts->stages[stage];
-		D3DBaseTexture *texture = device.textures[stage];
-		unsigned long mode = stage_texture_mode(stage);
+		const D3DCOLOR *palette = device.palettes[stage] && device.palettes[stage]->Data ?
+			(const D3DCOLOR *)PLATFORM_PHYSICAL_TO_VIRTUAL(device.palettes[stage]->Data) : NULL;
+		struct xgpu_texture_description description;
+		int kind = DK_TEXTURE_2D, lasting = 0;
 
-		found->scale[0] = found->scale[1] = 1.0f;
-		if (!texture || !texture->Data || mode == 0 || mode == 0x04 || mode == 0x05 || mode == 0x11)
-			continue;
+		const struct rendered *target = rendered_find(texture->Data);
+
+		memset(&description, 0, sizeof(description));
+		if (target)
 		{
-			const D3DCOLOR *palette = device.palettes[stage] && device.palettes[stage]->Data ?
-				(const D3DCOLOR *)PLATFORM_PHYSICAL_TO_VIRTUAL(device.palettes[stage]->Data) : NULL;
-			struct xgpu_texture_description description;
-			int kind = DK_TEXTURE_2D;
-
-			const struct rendered *target = rendered_find(texture->Data);
-
-			memset(&description, 0, sizeof(description));
-			if (target)
+			/* a render target: the host's image of it */
+			xgpu_texture_describe(texture->Format, texture->Size, &description);
+			made.target = texture->Data;
+			/* (rendered a level at a time: the levels as one image, as
+			bind_textures in d3d8_gl.c makes them) */
+			if (!description.linear && !description.cube_map && description.levels > 1 &&
+				description.levels <= DK_COMPOSITE_LEVELS && target->width == description.width &&
+				target->height == description.height)
 			{
-				/* a render target: the host's image of it */
-				xgpu_texture_describe(texture->Format, texture->Size, &description);
-				found->target = texture->Data;
-				/* (rendered a level at a time: the levels as one image, as
-				bind_textures in d3d8_gl.c makes them) */
-				if (!description.linear && !description.cube_map && description.levels > 1 &&
-					description.levels <= DK_COMPOSITE_LEVELS && target->width == description.width &&
-					target->height == description.height)
-				{
-					composite_tell(&description, texture->Data);
-					found->composite = (uint32_t)description.levels;
-				}
-				else
-					description.levels = 1;
-				if (description.linear)
-				{
-					found->scale[0] = 1.0f / (float)target->width;
-					found->scale[1] = 1.0f / (float)target->height;
-				}
+				composite_tell(&description, texture->Data);
+				made.composite = (uint32_t)description.levels;
 			}
 			else
+				description.levels = 1;
+			if (description.linear)
 			{
-				found->id = dk_texture_get((const DWORD *)texture, palette, &kind, &description);
-				{
-					static unsigned long logged;
-					static unsigned long seen[64];
-					unsigned long i;
+				made.scale[0] = 1.0f / (float)target->width;
+				made.scale[1] = 1.0f / (float)target->height;
+			}
+		}
+		else
+		{
+			made.id = dk_texture_get((const DWORD *)texture, palette, &kind, &description, &lasting);
+			{
+				/* (the first 64 textures, once each) */
+				static unsigned long logged;
+				static unsigned long seen[64];
+				unsigned long i;
 
-					for (i = 0; i < logged && i < 64 && seen[i] != found->id; i++)
+				if (logged < 64)
+				{
+					for (i = 0; i < logged && seen[i] != made.id; i++)
 						;
-					if (i == logged && logged < 64)
+					if (i == logged)
 					{
-						seen[logged++] = found->id;
+						seen[logged++] = made.id;
 						platform_log("texture %lu: format word %08lx size word %08lx: %lux%lux%lu, %lu levels, linear %d cube %d, kind %d, palette %d",
-							(unsigned long)found->id, (unsigned long)((const DWORD *)texture)[3], (unsigned long)((const DWORD *)texture)[4],
+							(unsigned long)made.id, (unsigned long)((const DWORD *)texture)[3], (unsigned long)((const DWORD *)texture)[4],
 							(unsigned long)description.width, (unsigned long)description.height, (unsigned long)description.depth, (unsigned long)description.levels,
 							(int)description.linear, (int)description.cube_map, kind, palette != NULL);
 					}
 				}
-				if (description.linear)
-				{
-					found->scale[0] = 1.0f / (float)description.width;
-					found->scale[1] = 1.0f / (float)description.height;
-				}
 			}
-			found->present = 1;
-			found->kind = (uint32_t)kind;
-			found->mipmapped = description.levels > 1;
-			found->hires = description.hires != FALSE;
-			found->hires_coverage = description.hires_coverage != FALSE;
+			if (description.linear)
+			{
+				made.scale[0] = 1.0f / (float)description.width;
+				made.scale[1] = 1.0f / (float)description.height;
+			}
 		}
+		made.present = 1;
+		made.kind = (uint32_t)kind;
+		made.mipmapped = description.levels > 1;
+		made.hires = description.hires != FALSE;
+		made.hires_coverage = description.hires_coverage != FALSE;
+		stage_memos[stage].lasting = !target && lasting;
+		stage_memos[stage].texture = texture;
+		stage_memos[stage].words[0] = texture->Data;
+		stage_memos[stage].words[1] = texture->Format;
+		stage_memos[stage].words[2] = texture->Size;
+		memcpy(stage_memos[stage].serials, serials, sizeof(stage_memos[stage].serials));
 	}
+	if (words_equal(&made, found, sizeof(made)))
+		return FALSE;
+	*found = made;
+	return TRUE;
+}
+
+/* the draw's facts (facts_now), made again where what they come from has changed; whether they may differ from what they were */
+static BOOL facts_make(BOOL has_depth, const struct vertex_shader_object *program, BOOL immediate)
+{
+	unsigned long serials[STAGE_SERIALS];
+	BOOL changed = FALSE;
+	int stage;
+
+	if (facts_made.serial != facts_serial || facts_made.program != program || facts_made.declaration != device.vertex_shader ||
+		facts_made.has_depth != has_depth || facts_made.immediate != immediate)
+	{
+		struct dk_draw_facts *facts = &facts_now;
+
+		facts->has_depth = has_depth != FALSE;
+		facts->target_scale[0] = target_scale[0];
+		facts->target_scale[1] = target_scale[1];
+		facts->viewport_x = device.viewport.X;
+		facts->viewport_y = device.viewport.Y;
+		facts->viewport_width = device.viewport.Width;
+		facts->viewport_height = device.viewport.Height;
+		facts->viewport_min_z = device.viewport.MinZ;
+		facts->viewport_max_z = device.viewport.MaxZ;
+		memcpy(facts->viewport_scale, device.viewport_scale, sizeof(facts->viewport_scale));
+		memcpy(facts->viewport_offset, device.viewport_offset, sizeof(facts->viewport_offset));
+		facts->ui_offset = (int32_t)UI_OFFSET;
+		memcpy(facts->texture_clip, texture_clip, sizeof(facts->texture_clip));
+		facts->warp_blend = warp_blend != 0;
+		facts->program_hash[0] = (uint32_t)(program->program_hash >> 32);
+		facts->program_hash[1] = (uint32_t)program->program_hash;
+		facts->packed_mask = immediate ? 0 : (uint32_t)device.vertex_shader->packed_mask;
+		facts_made.serial = facts_serial;
+		facts_made.program = program;
+		facts_made.declaration = device.vertex_shader;
+		facts_made.has_depth = has_depth;
+		facts_made.immediate = immediate;
+		changed = TRUE;
+	}
+	stage_serials_make(serials);
+	for (stage = 0; stage < D3DTSS_MAXSTAGES; stage++)
+		changed |= stage_facts_make(stage, serials);
+	return changed;
 }
 
 /* the vertex constants the host does not have yet: the registers changed since
@@ -2728,7 +2820,6 @@ needs is not ready (skipped, as decided: DEKO3D.md, "Decisions"). */
 static BOOL draw_prepare(BOOL immediate)
 {
 	struct vertex_shader_object *program = current_program();
-	struct dk_draw_facts facts;
 	BOOL has_depth = FALSE;
 
 	if (!program || !device.vertex_shader || !program->instructions)
@@ -2746,13 +2837,13 @@ static BOOL draw_prepare(BOOL immediate)
 	else
 		stats.draws++;
 	state_writes_send();
-	facts_make(&facts, has_depth, program, immediate);
-	if (!facts_known || !words_equal(&facts, &facts_told, sizeof(facts)))
+	/* (facts_now and facts_told are the same after this: they are compared only when facts_now may have changed since, or after a present) */
+	if ((facts_make(has_depth, program, immediate) || !facts_known) && (!facts_known || !words_equal(&facts_now, &facts_told, sizeof(facts_now))))
 	{
 		struct dk_command_draw_facts *command = stream_command(DK_COMMAND_DRAW_FACTS, sizeof(*command));
 
-		command->facts = facts;
-		facts_told = facts;
+		command->facts = facts_now;
+		facts_told = facts_now;
 		facts_known = TRUE;
 	}
 	draw_constants_send();

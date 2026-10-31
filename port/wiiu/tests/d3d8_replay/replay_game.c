@@ -216,7 +216,7 @@ static WORD *triangles_write(unsigned long count, unsigned long vertices)
 enum
 {
 	T_DXT1, T_DXT5, T_SWIZZLED, T_LINEAR, T_PALETTED, T_CUBE, T_VOLUME, T_REWRITTEN, T_REWRITTEN_DXT, T_ATLAS, T_PLACEHOLDER, T_OVERRIDE, T_MENU,
-	T_TARGET, T_RIPPLE, T_DEPTH16, T_COUNT
+	T_TARGET, T_RIPPLE, T_DEPTH16, T_PLACEHOLDER_LATER, T_COUNT
 };
 
 static D3DBaseTexture *textures[T_COUNT];
@@ -265,6 +265,7 @@ static void textures_make(void)
 	textures[T_PLACEHOLDER] = texture_make(32, 32, 1, D3DFMT_A8R8G8B8);
 	textures[T_OVERRIDE] = texture_make(32, 32, 1, D3DFMT_A8R8G8B8);
 	textures[T_MENU] = texture_make(64, 32, 1, D3DFMT_A8R8G8B8);
+	textures[T_PLACEHOLDER_LATER] = texture_make(32, 16, 1, D3DFMT_A8R8G8B8);
 	textures[T_TARGET] = texture_make(128, 128, 1, D3DFMT_A8R8G8B8);
 	textures[T_RIPPLE] = texture_make(64, 64, 4, D3DFMT_A8R8G8B8);
 	textures[T_DEPTH16] = texture_make(128, 128, 1, D3DFMT_LIN_D16);
@@ -594,7 +595,9 @@ static void dynamic_pass(unsigned batches)
 		D3DPalette_Lock(palette, &colors, 0);
 		bytes_fill(colors, 256 * sizeof(D3DCOLOR));
 	}
+	/* (rewritten while bound, and drawn with again) */
 	texture_rewrite(textures[T_REWRITTEN]);
+	D3DDevice_DrawVertices(D3DPT_TRIANGLELIST, (UINT)dynamic_write(12), 12);
 	D3DDevice_SetPalette(1, NULL);
 }
 
@@ -640,7 +643,15 @@ static void target_pass(void)
 {
 	unsigned level;
 
-	/* into a texture, then drawn with it */
+	/* into a texture, then drawn with it (in the first frame drawn with as a texture before it is first drawn into, and kept bound as it is) */
+	D3DDevice_SetVertexShader(vs_bsp);
+	D3DDevice_SetStreamSource(0, &vb_bsp, BSP_STRIDE);
+	pixel_shader_set(0, PS_TEXTUREMODES(1, 1, 0, 0));
+	if (frame_number == 0)
+	{
+		D3DDevice_SetTexture(1, textures[T_TARGET]);
+		D3DDevice_DrawVertices(D3DPT_TRIANGLELIST, (UINT)choose(4000), 21);
+	}
 	D3DDevice_SetRenderTarget(target_surface, depth16_surface);
 	D3DDevice_Clear(0, NULL, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, 0xff203040, 1.0f, 0);
 	D3DDevice_SetVertexShader(vs_bsp);
@@ -719,27 +730,38 @@ static void immediate_pass(void)
 
 static void interface_pass(void)
 {
+	static const unsigned which[] = { T_ATLAS, T_PLACEHOLDER, T_OVERRIDE, T_MENU, T_ATLAS, T_ATLAS, T_REWRITTEN_DXT };
+	/* (the HUD's vertices written at once, as the game writes its interface's: nothing is announced written between these draws, so what each texture
+	comes from is all that changes) */
+	const unsigned long first = dynamic_write(8 * 7 + 8);
 	unsigned draw;
 
 	halo_screen_ui_offset(TRUE);
 	D3DDevice_SetVertexShader(vs_dynamic);
 	D3DDevice_SetStreamSource(0, vb_dynamic, DYNAMIC_STRIDE);
 	pixel_shader_set(2, PS_TEXTUREMODES(1, 0, 0, 0));
-	for (draw = 0; draw < 6; draw++)
+	for (draw = 0; draw < 7; draw++)
 	{
-		static const unsigned which[] = { T_ATLAS, T_PLACEHOLDER, T_OVERRIDE, T_MENU, T_ATLAS, T_REWRITTEN_DXT };
-		const unsigned long first = dynamic_write(8);
-
 		/* (the text draws its glyphs into the atlas as it goes) */
 		if (which[draw] == T_ATLAS)
 			replay_atlas_draw(&game_seed);
 		D3DDevice_SetTexture(0, textures[which[draw]]);
-		D3DDevice_DrawVertices(D3DPT_QUADLIST, (UINT)first, 8);
+		D3DDevice_DrawVertices(D3DPT_QUADLIST, (UINT)(first + draw * 8), 8);
 	}
-	halo_screen_ui_offset(FALSE);
-	/* the menus' art comes and goes */
+	/* the menus' art comes and goes, and a placeholder is registered for another texture, between two draws of the same textures */
+	D3DDevice_SetTexture(0, textures[T_MENU]);
+	D3DDevice_SetTexture(1, textures[T_PLACEHOLDER_LATER]);
+	pixel_shader_set(3, PS_TEXTUREMODES(1, 1, 0, 0));
+	D3DDevice_DrawVertices(D3DPT_QUADLIST, (UINT)(first + 56), 4);
 	if (frame_number == 5 || frame_number == 20 || frame_number == 2462)
 		replay_menu_serial++;
+	if (frame_number == 10)
+		replay_hud_placeholder_move(textures[T_PLACEHOLDER_LATER]->Data);
+	if (frame_number == 25)
+		replay_hud_placeholder_move(textures[T_PLACEHOLDER]->Data);
+	D3DDevice_DrawVertices(D3DPT_QUADLIST, (UINT)(first + 60), 4);
+	D3DDevice_SetTexture(1, NULL);
+	halo_screen_ui_offset(FALSE);
 }
 
 static void effects_pass(void)
@@ -761,10 +783,11 @@ static void effects_pass(void)
 	}
 	if (frame_number % 4 == 2)
 	{
-		/* (compressed texels read where the game keeps them, rewritten after a draw read them) */
+		/* (compressed texels read where the game keeps them, rewritten after a draw read them, and drawn with again while bound) */
 		D3DDevice_SetTexture(0, textures[T_REWRITTEN_DXT]);
 		D3DDevice_DrawVertices(D3DPT_TRIANGLELIST, (UINT)choose(4000), 30);
 		texture_rewrite(textures[T_REWRITTEN_DXT]);
+		D3DDevice_DrawVertices(D3DPT_TRIANGLELIST, (UINT)choose(4000), 30);
 	}
 }
 

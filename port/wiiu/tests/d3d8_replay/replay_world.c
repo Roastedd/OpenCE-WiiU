@@ -315,6 +315,19 @@ const struct hud_hires_embedded hud_hires_embedded[1] = { { "replay\\hud", 0, 16
 const unsigned int hud_hires_embedded_count = 1;
 
 unsigned long replay_hud_placeholder_data, replay_hud_override_address;
+static unsigned long hud_placeholder_serial = 1;
+
+/* the placeholder registered for another texture (hud_hires_register_placeholder) */
+void replay_hud_placeholder_move(unsigned long data)
+{
+	replay_hud_placeholder_data = data;
+	hud_placeholder_serial++;
+}
+
+unsigned long hud_hires_placeholder_serial(void)
+{
+	return hud_placeholder_serial;
+}
 
 /* (a PNG is decoded to its size's texels, made from its first word: the replay's PNGs are only told apart) */
 unsigned char *hud_hires_png_pixels(const void *png, unsigned long size, unsigned long *width, unsigned long *height)

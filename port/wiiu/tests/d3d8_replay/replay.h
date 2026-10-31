@@ -34,6 +34,9 @@ int replay_window_make(void);
 extern unsigned long replay_log_lines, replay_states_missed_lines, replay_targets_missed_lines;
 extern int replay_verbose_log;
 extern unsigned long replay_hud_placeholder_data, replay_hud_override_address;
+void replay_hud_placeholder_move(unsigned long data);
+/* (hud_hires.h has it from the change that made the texture cache remember a draw's textures; the replay of the layer before it has it from here) */
+unsigned long hud_hires_placeholder_serial(void);
 extern unsigned long replay_menu_data, replay_menu_serial;
 extern unsigned long replay_atlas_data;
 extern long replay_screen_height;

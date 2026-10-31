@@ -152,6 +152,8 @@ static struct
 	long asset;
 } placeholders[MAXIMUM_PLACEHOLDERS];
 static long placeholder_count = 0;
+/* counts the registrations (hud_hires_placeholder_serial) */
+static unsigned long placeholder_serial = 1;
 
 /* the sequences whose sprites the texture is drawn for (hud_hires.h), or 0 */
 unsigned long hud_hires_asset_sprites(long asset)
@@ -206,6 +208,7 @@ void hud_hires_register_placeholder(long asset, const unsigned long *texture)
 {
 	long index;
 
+	placeholder_serial++;
 	for (index = 0; index < placeholder_count && placeholders[index].asset != asset; index++)
 		;
 	if (texture && index == placeholder_count && placeholder_count < MAXIMUM_PLACEHOLDERS)
@@ -215,6 +218,11 @@ void hud_hires_register_placeholder(long asset, const unsigned long *texture)
 		placeholders[index].data = texture ? texture[1] : 0;
 		placeholders[index].asset = asset;
 	}
+}
+
+unsigned long hud_hires_placeholder_serial(void)
+{
+	return placeholder_serial;
 }
 
 long hud_hires_placeholder_asset(unsigned long data)

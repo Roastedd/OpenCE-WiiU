@@ -33,8 +33,8 @@ HOST_FLAGS = "-std=gnu11 -D_GNU_SOURCE -O2 -g -Wall -Werror -ffp-contract=off".s
 
 FRAMES = 2470
 # what the GPU is given (every schedule's), and the Lock fields for the streams run as they are handed over and posted to the queue
-DIGEST = "76606a81bb6e4303"
-LOCKS = {"sync": "67788f554bd8c586", "async": "15b6dca9121a0ea7"}
+DIGEST = "2e63215d0e9d18a5"
+LOCKS = {"sync": "ec90e29cf5d40ffb", "async": "4f0177eef06689d2"}
 SCHEDULES = [("sync", "lag", 1), ("async", "lag", 1), ("async", "eager", 7), ("async", "eager", 99)]
 
 
@@ -123,19 +123,22 @@ class D3D8ReplayTest(unittest.TestCase):
             executable = self.build_in(folder, mutations)
             return [replay(executable, mode, schedule, seed, frames=60)["digest"] for mode, schedule, seed in runs]
 
-    def test_a_missed_stream_read_is_seen_by_a_late_gx2_thread(self):
-        # (the draws' vertex streams not noted as read: the dynamic vertices written after a draw reach the GX2 thread when it is behind)
-        mutation = ("port/wiiu/src/d3d8_gx2.c", "dk_stream_note_read((const char *)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data) + first * stride,",
-                    "if (0) dk_stream_note_read((const char *)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data) + first * stride,")
-        sync, late = self.mutated_digests([mutation], [("sync", "lag", 1), ("async", "lag", 1)])
-        self.assertNotEqual(sync, late)
+    def hazard_seen(self, mutation):
+        """a read not noted, as each way of running the streams sees it: what was written after a draw reaches the stream that reads it, unless it was
+        run before the write (handed over at once, or the GX2 thread caught up)"""
+        runs = [("sync", "lag", 1), ("async", "lag", 1)]
+        for reference, mutated in zip(self.mutated_digests([], runs), self.mutated_digests([mutation], runs)):
+            self.assertNotEqual(reference, mutated)
 
-    def test_a_missed_texel_read_is_seen_by_a_late_gx2_thread(self):
+    def test_a_missed_stream_read_is_seen(self):
+        # (the draws' vertex streams not noted as read: the dynamic vertices written after a draw reach it)
+        self.hazard_seen(("port/wiiu/src/d3d8_gx2.c", "dk_stream_note_read((const char *)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data) + first * stride,",
+                          "if (0) dk_stream_note_read((const char *)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data) + first * stride,"))
+
+    def test_a_missed_texel_read_is_seen(self):
         # (a compressed texture's texels, read where the game keeps them, not noted: rewritten before the GX2 thread makes the image)
-        mutation = ("port/wiiu/src/xbox_textures_gx2.c", "\t\tdk_stream_note_read(base, face_size * (face_count - 1) + xgpu_texture_level_offset(description, description->levels));",
-                    "\t\t(void)0;")
-        sync, late = self.mutated_digests([mutation], [("sync", "lag", 1), ("async", "lag", 1)])
-        self.assertNotEqual(sync, late)
+        self.hazard_seen(("port/wiiu/src/xbox_textures_gx2.c",
+                          "\t\tdk_stream_note_read(base, face_size * (face_count - 1) + xgpu_texture_level_offset(description, description->levels));", "\t\t(void)0;"))
 
     def test_a_texture_stage_state_not_sent_changes_the_pictures(self):
         mutation = ("port/wiiu/src/d3d8_gx2.c", "\t\tuint32_t marked = texture_states_dirty[stage];",
@@ -157,9 +160,30 @@ class D3D8ReplayTest(unittest.TestCase):
         self.assertNotEqual(reference, mutated)
 
     def test_facts_not_sent_when_they_change_change_the_pictures(self):
-        mutation = ("port/wiiu/src/d3d8_gx2.c", "if (!facts_known || !words_equal(&facts, &facts_told, sizeof(facts)))", "if (!facts_known)")
+        mutation = ("port/wiiu/src/d3d8_gx2.c", "|| !facts_known) && (!facts_known || !words_equal(&facts_now, &facts_told, sizeof(facts_now))))",
+                    "|| !facts_known) && !facts_known)")
         reference, mutated = self.mutated_digests([], [("sync", "lag", 1)]) + self.mutated_digests([mutation], [("sync", "lag", 1)])
         self.assertNotEqual(reference, mutated)
+
+    def test_a_stage_remembered_past_what_its_texture_comes_from_changes_the_pictures(self):
+        # (each serial a stage's facts are remembered under, left out: a write to the texels, the menus' art, a HUD placeholder, a render target noted,
+        # the frame; and the text's atlas remembered, whose rows drawn since are sent at each lookup)
+        faults = [("port/wiiu/src/d3d8_gx2.c", "serials[0] = memory_watch_serial();", "serials[0] = 0;"),
+                  ("port/wiiu/src/d3d8_gx2.c", "serials[2] = menu_art_serial();", "serials[2] = 0;"),
+                  ("port/wiiu/src/d3d8_gx2.c", "serials[3] = hud_hires_placeholder_serial();", "serials[3] = 0;"),
+                  ("port/wiiu/src/d3d8_gx2.c", "serials[4] = rendered_serial;", "serials[4] = 0;"),
+                  ("port/wiiu/src/xbox_textures_gx2.c", "*lasting = !palettized && !no_cache && !atlas;", "*lasting = !palettized && !no_cache;")]
+        reference = self.mutated_digests([], [("sync", "lag", 1)])[0]
+        for fault in faults:
+            with self.subTest(fault=fault[1]):
+                self.assertNotEqual(self.mutated_digests([fault], [("sync", "lag", 1)])[0], reference)
+
+    def test_a_stage_remembered_across_frames_keeps_a_texture_from_counting_as_used(self):
+        # (the texture cache drops a texture no draw has looked up for 1800 frames: the one draw of the light frames must look its texture up each frame)
+        fault = ("port/wiiu/src/d3d8_gx2.c", "serials[5] = device.frame;", "serials[5] = 0;")
+        with tempfile.TemporaryDirectory(prefix="opence-d3d8-replay-") as folder:
+            values = replay(self.build_in(folder, [fault]), "sync", "lag", 1)
+        self.assertNotEqual(values["digest"], DIGEST)
 
 
 if __name__ == "__main__":
