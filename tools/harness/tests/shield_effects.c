@@ -18,6 +18,18 @@ static char const *config_string(char const *name){(void)name;return setting;}
 static unsigned long config_changes(void){return changes;}
 static short game_connection(void){return connection;}
 static boolean network_connection_last_read_was_unreliable(void){return unreliable;}
+/* the wire's byte order (network_wire_order.h): little-endian, turned on a
+big-endian host */
+#ifdef __BIG_ENDIAN__
+static void wire_turn(void *value, int size)
+{
+ byte *bytes=value;int index;
+ for(index=0;index<size/2;index++){byte low=bytes[index];bytes[index]=bytes[size-1-index];bytes[size-1-index]=low;}
+}
+#define NETWORK_WIRE(value) wire_turn(&(value),(int)sizeof(value))
+#else
+#define NETWORK_WIRE(value) ((void)(value))
+#endif
 #include "under_test.inc"
 
 /* the host's message, as shield_effects_message_make makes it, from the host's stream */
@@ -27,6 +39,8 @@ static struct shield_effects_message message_of(word effects)
  memset(&message,0,sizeof(message));
  message.header.header=2<<2;message.header.type=_distributed_message_shield_effects;message.header.count=1;
  message.effects=effects;
+ /* (as it comes off the wire) */
+ NETWORK_WIRE(message.effects);
  return message;
 }
 
@@ -66,7 +80,7 @@ int main(int argc,char **argv)
   take(message_of(_shield_effects_glow));
   take(message_of(NUMBER_OF_SHIELD_EFFECTS));
   CHECK(network_shield_effects()==_shield_effects_glow,"a value past the last refused");
-  message=message_of(_shield_effects_players);message.reserved=1;take(message);
+  message=message_of(_shield_effects_players);message.reserved=1;NETWORK_WIRE(message.reserved);take(message);
   CHECK(network_shield_effects()==_shield_effects_glow,"reserved bytes set refused");
   unreliable=TRUE;take(message_of(_shield_effects_players));unreliable=FALSE;
   CHECK(network_shield_effects()==_shield_effects_glow,"an unreliable read refused");

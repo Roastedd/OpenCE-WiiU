@@ -11,6 +11,18 @@ static int connection=2,playing=1,menu=0,block=0,preference=1;
 static unsigned long changes,mouse_aimed_ms,stick_aimed_ms,touch_aimed_ms;
 static int mouse_lock,sends,unreliable;
 static boolean network_connection_last_read_was_unreliable(void){return unreliable;}
+/* the wire's byte order (network_wire_order.h): little-endian, turned on a
+big-endian host */
+#ifdef __BIG_ENDIAN__
+static void wire_turn(void *value, int size)
+{
+ byte *bytes=value;int index;
+ for(index=0;index<size/2;index++){byte low=bytes[index];bytes[index]=bytes[size-1-index];bytes[size-1-index]=low;}
+}
+#define NETWORK_WIRE(value) wire_turn(&(value),(int)sizeof(value))
+#else
+#define NETWORK_WIRE(value) ((void)(value))
+#endif
 static byte wire[32];static word wire_size;
 static int game_connection(void){return connection;}
 static int game_in_progress(void){return playing;}
@@ -27,6 +39,8 @@ static void distributed_send_to_machine_reliably(long machine,void *data,byte ty
 #include "input.inc"
 static void receive(int from,int value,int count,int size){
  struct aim_assist_policy_message m={{8,_distributed_message_aim_assist_policy,count,0},value};
+ /* (as it comes off the wire) */
+ NETWORK_WIRE(m.block_mouse);
  network_aim_assist_handle_message(from,(word*)&m,size);
 }
 int main(int argc,char **argv){CHECK(argc==2,"case");char const *case_name=argv[1];network_aim_assist_reset();

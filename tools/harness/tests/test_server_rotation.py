@@ -44,8 +44,9 @@ NEGATIVE_CONTROLS = {
                                  "rotation->truncated = 1;", "rotation->truncated = 1;"), "rotation-limits"),
     "entries-run-together": (('index ? ", " : ""', 'index ? " " : ""'), "round-trip"),
     "campaign-as-multiplayer": (("else if (type == 0 && !coop)", "else if (0)"), "check-kind"),
-    "foot-unchecked": (('|| memcmp(header + 0x7FC, "toof", 4)', ""), "map-header"),
-    "type-unsigned": (("(long)(short)(header[0x60]", "(long)(unsigned short)(header[0x60]"), "map-header"),
+    "foot-unchecked": (('&& !memcmp(header + 0x7FC, "toof", 4)', ""), "map-header"),
+    "type-unsigned": (("(long)(short)(header[0x60] | header[0x61] << 8)", "(long)(unsigned short)(header[0x60] | header[0x61] << 8)"),
+                      "map-header"),
     "custom-level-kept": (('entry->map_kind = _server_map_custom;\n\t\t\tsnprintf(entry->level, sizeof(entry->level), '
                            '"custom_maps\\\\%s", entry->map_name);', "entry->map_kind = _server_map_custom;"),
                           "resolve"),
