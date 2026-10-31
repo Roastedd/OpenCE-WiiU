@@ -27,8 +27,9 @@
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/op_enabled" x="54" y="193" platform="android web wiiu"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/op_voice_chat" x="54" y="283" platform="desktop"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/op_voice_chat" x="54" y="223" platform="android web"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/op_voice_chat_wiiu" x="54" y="223" platform="wiiu"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/op_voice_volume" x="54" y="313" platform="desktop"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/op_voice_volume" x="54" y="253" platform="android web"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/op_voice_volume" x="54" y="253" platform="android web wiiu"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/button_bar" y="414"/>
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/button_bar" type="column_list" width="640" height="28" flags="pass_unhandled_to_focused_child left_right_tabs_items">
@@ -108,11 +109,20 @@
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/voice_chat_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="PUSH TO TALK|OPEN MIC|OFF" setting="audio.voice_chat" values="push_to_talk|open_mic|off" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
 		<on event="created" run="port setting load"/>
 	</widget>
-	<widget name="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/op_voice_volume" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF" platform="desktop android web">
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/op_voice_chat_wiiu" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF" platform="wiiu">
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/voice_chat_wiiu_label"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/voice_chat_wiiu_spinner" x="320" y="1"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/voice_chat_wiiu_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/labels" string_index="8" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/voice_chat_wiiu_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="PUSH TO TALK|OPEN MIC|OFF" setting="audio.voice_chat" values="push_to_talk|open_mic|off" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
+		<on event="created" run="port setting load"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/op_voice_volume" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF" platform="desktop android web wiiu">
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/voice_volume_label"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/voice_volume_spinner" x="320" y="1"/>
 	</widget>
-	<widget name="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/voice_volume_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/labels" string_index="8" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/voice_volume_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/labels" string_index="9" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/voice_volume_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="0|1|2|3|4|5|6|7|8|9|10" setting="audio.voice_volume" values="0|0.1|0.2|0.3|0.4|0.5|0.6|0.7|0.8|0.9|1" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
 		<on event="created" run="port setting load"/>
@@ -136,6 +146,7 @@
 		<string text="REVERB:"/>
 		<string text="SOUND:"/>
 		<string text="VOICE CHAT:"/>
+		<string text="VOICE CHAT:"/>
 		<string text="VOICE VOLUME:"/>
 	</strings>
 	<strings name="main_menu/settings_select/player_setup/player_profile_edit/audio_settings/help_strings">
@@ -148,6 +159,7 @@
 		<string text="Echo sounds as the place you are in does, and\nmuffle those behind walls, as the Xbox did."/>
 		<string text="Play sound at all; from the next time the game\nstarts."/>
 		<string text="Talk in network games: while PUSH TO TALK is held\n(Controls), whenever you speak, or never."/>
+		<string text="Talk in network games: while the GamePad's TV\nbutton is held, whenever you speak (best with a\nheadset in the GamePad), or never."/>
 		<string text="The other players' voices."/>
 	</strings>
 </menus>

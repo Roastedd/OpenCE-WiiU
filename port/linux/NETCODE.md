@@ -290,7 +290,8 @@ sends its 20 ms Opus frames to the host unreliably
 its stream (`_distributed_message_voice_config`, with the host's settings,
 again every ten seconds and when they change), so a datagram sent as from
 another machine is dropped; an empty one every two seconds says it hears
-voices. The host checks the key, the frame's size against its quality, a
+voices, sent only while it can play them (`voice_audio_hears`: the Wii U's
+voice thread running, in the foreground, its sound mixing). The host checks the key, the frame's size against its quality, a
 rate of 50 frames a second (a burst of 10), and at most 8 machines talking,
 then sends the frame to each machine that may hear it
 (`_distributed_message_voice_down`, with that machine's key) by its

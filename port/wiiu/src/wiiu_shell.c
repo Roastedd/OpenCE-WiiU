@@ -82,6 +82,12 @@ static volatile uint32_t started_game;
 /* (wiiu_audio.c's: the AX voices given up in the background and made again) */
 void wiiu_audio_suspend(void);
 void wiiu_audio_resume(void);
+/* (wiiu_voice_audio.c's: the microphone probe at the start; the microphone closed and the voice thread asleep in the background, at most
+100 ms waited for; woken again; and the thread ended at the close: 1 if it ended in the time given, 0 if not, 2 if there was none) */
+void wiiu_voice_boot(void);
+void wiiu_voice_suspend(void);
+void wiiu_voice_resume(void);
+int wiiu_voice_stop(uint32_t timeout_ms);
 static volatile uint32_t foreground = 1;
 static volatile uint32_t network_stopped;
 static volatile uint32_t game_done;
@@ -420,6 +426,8 @@ static uint32_t on_release(void *unused)
 		}
 		wiiu_log("HOME: the game thread is %s after %u ms", game_gate_held ? "held" : "NOT held", (unsigned)waited);
 	}
+	/* (voice chat first: its thread closes the microphone, which HOME is not documented to do, before the sound goes) */
+	wiiu_voice_suspend();
 	wiiu_audio_suspend();
 	/* (the GPU is drained by the thread that makes the GX2 calls, wiiu_gx2.c: the system waits for the work of the core that made it) */
 	if (!wiiu_gx2_release_drain())
@@ -434,6 +442,7 @@ static uint32_t on_acquire(void *unused)
 {
 	(void)unused;
 	wiiu_audio_resume();
+	wiiu_voice_resume();
 	foreground = 1;
 	wiiu_missing_keys_resume();
 	wiiu_shell_watch_background(&shell_watch, 0, shell_ms());
@@ -893,6 +902,10 @@ int wiiu_shell_run(int (*game_main)(void))
 	the game starts: then the files on the card are another build's, which is being started in place of this one, and the game is not */
 	wiiu_phase("the updater's start");
 	relaunching = wiiu_update_startup(crash_note);
+	/* (halo/mic_probe.txt 1: the microphone probe; voice chat's thread is otherwise started by the first network game's voice; not when the
+	updater is starting the other build in this one's place) */
+	if (!relaunching)
+		wiiu_voice_boot();
 	error = relaunching ? 0 : start_game();
 	if (error)
 		game_done = 1;
@@ -942,6 +955,14 @@ int wiiu_shell_run(int (*game_main)(void))
 			waited += 5u;
 		}
 		wiiu_log("Closing: the game thread is %s after %u ms", game_gate_held ? "held" : "NOT held", (unsigned)waited);
+		/* (voice chat's thread closes the microphone and ends; one that does not within 300 ms is left, as the log writers are, and the
+		trail says so) */
+		{
+			const int voice = wiiu_voice_stop(300);
+
+			if (voice != 2)
+				exit_note(voice ? "the voice thread ended" : "the voice thread still running after 300 ms");
+		}
 		wiiu_audio_suspend();
 		/* (in the background the GPU is the system's: waiting for it there never ends, and it was drained when it was given up; and a run
 		whose game never started has not used it) */

@@ -933,8 +933,9 @@ void network_voice_update(
 		voice_microphone_wanted = FALSE;
 		return;
 	}
-	/* (a client says it hears voices) */
-	if (!voice_host() && now - voice_hello_at >= VOICE_HELLO_MS)
+	/* (a client says it hears voices, while it can play them: a machine
+	that cannot is sent none) */
+	if (!voice_host() && now - voice_hello_at >= VOICE_HELLO_MS && voice_audio_hears())
 	{
 		voice_hello_at = now;
 		voice_send(NULL, 0);

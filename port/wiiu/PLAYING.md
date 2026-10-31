@@ -81,6 +81,14 @@ can look at their own screen; the menus are still shown whole. **TV** (the defau
 System Link in the Multiplayer menu finds and hosts games on your local network, with other Wii Us and with OpenCE on PC built from the same
 version.
 
+## Voice chat
+
+In network games you can talk to the other players, into the GamePad's microphone or into a headset plugged into the GamePad's headphone jack.
+Hold the GamePad's **TV** button to talk (Settings → your profile → Audio Setup → **Voice chat**: Push to talk, the default), or choose **Open mic** to
+talk whenever you speak. Use a headset with Open mic: without one, the GamePad's microphone also picks up the game from the GamePad's speaker.
+**Voice volume** sets how loud the other players are. The Pro Controller has no microphone or jack, and USB headsets do not work. Voice chat has
+not been tried on a console yet.
+
 ## Settings worth knowing
 
 - **Render resolution** (Settings → Video): 720 lines is the default and the best balance; 900 and 1080 are sharper but slower.

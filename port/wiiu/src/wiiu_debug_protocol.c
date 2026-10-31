@@ -16,7 +16,7 @@ static const struct
 	{ "A", WIIU_PAD_A }, { "B", WIIU_PAD_B }, { "X", WIIU_PAD_X }, { "Y", WIIU_PAD_Y }, { "L", WIIU_PAD_L }, { "R", WIIU_PAD_R },
 	{ "ZL", WIIU_PAD_ZL }, { "ZR", WIIU_PAD_ZR }, { "PLUS", WIIU_PAD_PLUS }, { "MINUS", WIIU_PAD_MINUS }, { "UP", WIIU_PAD_UP },
 	{ "DOWN", WIIU_PAD_DOWN }, { "LEFT", WIIU_PAD_LEFT }, { "RIGHT", WIIU_PAD_RIGHT }, { "STICKL", WIIU_PAD_STICK_L },
-	{ "STICKR", WIIU_PAD_STICK_R },
+	{ "STICKR", WIIU_PAD_STICK_R }, { "TV", WIIU_PAD_TV },
 };
 
 unsigned int wiiu_debug_buttons(const char *names)

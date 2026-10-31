@@ -166,7 +166,14 @@ SCREENS = {
              [("PUSH TO TALK", "push_to_talk"), ("OPEN MIC", "open_mic"), ("OFF", "off")],
              "Talk in network games: while PUSH TO TALK is held\n(Controls), whenever you speak, or never.",
              "desktop android web"),
-            ("VOICE VOLUME:", "audio.voice_volume", VOLUMES, "The other players' voices.", "desktop android web"),
+            # (the Wii U's: push to talk is the GamePad's TV button, the one the game leaves free,
+            # port/wiiu/src/wiiu_input.c; open mic is best with a headset in the GamePad, whose own
+            # microphone hears its speaker)
+            ("VOICE CHAT:", "audio.voice_chat",
+             [("PUSH TO TALK", "push_to_talk"), ("OPEN MIC", "open_mic"), ("OFF", "off")],
+             "Talk in network games: while the GamePad's TV\nbutton is held, whenever you speak (best with a\nheadset in the GamePad), or never.",
+             "wiiu", "voice_chat_wiiu"),
+            ("VOICE VOLUME:", "audio.voice_volume", VOLUMES, "The other players' voices.", "desktop android web wiiu"),
         ],
     },
     "network_setup": {

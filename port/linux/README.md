@@ -366,6 +366,7 @@ the setting for one start of the game. It has priority over the file.
 | `audio.reverb` | `true` | `HALO_REVERB` | `true`: the sounds of the world reverberate as the place the player is in does: the sound environments of the maps (a corridor, a cave, a large hall, outdoors) set the reverberation, as the I3DL2 reverb of the Xbox did. A sound behind a wall or a door is muffled in it too. `false`: no reverberation (sounds behind a wall are still muffled). |
 | `audio.voice_chat` | `"push_to_talk"` | `HALO_VOICE_CHAT` | How you talk in voice chat: `"push_to_talk"` (while `controls.push_to_talk` is held; the microphone opens when you first press it), `"open_mic"` (when the microphone hears speech), or `"off"`. You hear the other players in every case. Refer to "Voice chat". |
 | `audio.voice_volume` | `1.0` | `HALO_VOICE_VOLUME` | The volume of the voices of the other players, `0` to `2`. |
+| `audio.wiiu_microphone_read` | `"auto"` | `HALO_WIIU_MICROPHONE_READ` | The Wii U build only. How voice chat reads the ring the GamePad's microphone fills, whose status the published sources read in two ways: `"consume"` (a read index and a count of samples, and the system is told what was read), `"position"` (the position the system writes at, in bytes, which the game follows), or either with its unit (`"consume bytes"`, `"position samples"`). `"auto"`: what the microphone probe found (`mic_probe_result.txt`; refer to port/wiiu/README.md), else `"consume"`. |
 | `audio.output_device`, `audio.input_device` | `"default"` | `HALO_AUDIO_OUTPUT_DEVICE`, `HALO_AUDIO_INPUT_DEVICE` | The speakers and the microphone, by the name that Settings > Audio shows, or `"default"` for the device of the system. If the device is not found, the game uses the device of the system. Not on Android. |
 | `audio.loose_sounds` | `false` | `HALO_LOOSE_SOUNDS` | For those who make sounds. `true`: each sound of a map that has a sound tag file of its name in `tags/` in the data root (for example `tags/sound/sfx/weapons/assault rifle/fire.sound`) plays from that file. The files are Halo PC tag files, as the Halo Editing Kit and Invader write them. At the console, `loose_sounds_reload` reads the files again, and `loose_sounds false` plays the sounds of the map again. When a file changes, all sounds stop. |
 | `input.wiiu_face_buttons` | `"auto"` | `HALO_WIIU_FACE_BUTTONS` | The Wii U build only. How the Wii U's A, B, X and Y match the Xbox pad's. `"position"`: by place (the Xbox's A, jump, is the bottom button, the Wii U's B) and the prompts show the letter that is there. `"label"`: by letter (the Wii U's A, on the right, jumps), and the prompts show the Xbox's own. `"auto"`: by letter in the menus (A selects, B goes back, as the menus' own prompts say) and by place in the game. |
@@ -683,7 +684,10 @@ Network games have voice chat, on the local network and on the internet.
 Hold V (`controls.push_to_talk`, Settings > Controls Setup) to talk, or set
 VOICE CHAT in Settings > Audio to OPEN MIC. VOICE VOLUME sets the volume of
 the other players. On Android, set VOICE CHAT to OPEN MIC to talk: the game
-then asks for the microphone.
+then asks for the microphone. On the Wii U, hold the GamePad's TV button to
+talk, into the GamePad's microphone or a headset in its jack (OPEN MIC is
+best with a headset: the GamePad's own microphone hears its speaker); refer to
+port/wiiu/README.md.
 
 OUTPUT DEVICE and INPUT DEVICE in Settings > Audio select the speakers and
 the microphone (SYSTEM DEFAULT, the default, follows the system). The list

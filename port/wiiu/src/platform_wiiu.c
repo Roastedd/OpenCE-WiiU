@@ -3,8 +3,8 @@ PLATFORM_WIIU.C
 
 The platform layer's calls that the Wii U does not need yet, or has no use for, answered as a build with nothing to answer them with would: the
 high-resolution HUD, text and menu art (OpenGL drawing in the Linux builds; the Wii U has none of them), the keyboard, mouse and touch aiming,
-the clipboard, the display settings, the voice chat, the network test's input hooks. Each is what the Linux code does when its feature is off.
-What the Wii U does need (input, audio, files, sockets) is in units of its own.
+the clipboard, the display settings, the network test's input hooks. Each is what the Linux code does when its feature is off.
+What the Wii U does need (input, audio, voice chat, files, sockets) is in units of its own.
 */
 
 #include "platform.h"
@@ -13,7 +13,6 @@ What the Wii U does need (input, audio, files, sockets) is in units of its own.
 #include "hud_hires.h"
 #include "text_hires.h"
 #include "menu_files.h"
-#include "voice_audio.h"
 #include "halo_menus.h"
 
 #include <stdio.h>
@@ -139,9 +138,13 @@ unsigned long halo_keyboard_actions(short controller_index)
 	return 0;
 }
 
+/* voice chat's push to talk: the GamePad's TV button, the one button the game does not have (wiiu_input.c, which takes it from the system's TV menu
+while it is asked for) */
+int wiiu_input_push_to_talk(void);
+
 int halo_push_to_talk_held(void)
 {
-	return 0;
+	return wiiu_input_push_to_talk();
 }
 
 /* ---------- aiming and moving by mouse or touch: none */
@@ -184,67 +187,4 @@ void test_input_set_game_time(long ticks)
 
 /* (the menus' files and art, and the high-resolution HUD, text and titles: menu_files.c, hud_hires.c and text_hires.c, built for the Wii U) */
 
-/* ---------- voice chat: none (the GamePad's microphone, later) */
-
-int voice_audio_microphone(int open)
-{
-	(void)open;
-	return 0;
-}
-
-int voice_audio_read_frame(float *frame)
-{
-	(void)frame;
-	return 0;
-}
-
-float voice_audio_level(const float *frame)
-{
-	(void)frame;
-	return 0.0f;
-}
-
-int voice_audio_encode(const float *frame, int bitrate, unsigned char *packet, int maximum)
-{
-	(void)frame;
-	(void)bitrate;
-	(void)packet;
-	(void)maximum;
-	return 0;
-}
-
-void voice_audio_forget(int speaker)
-{
-	(void)speaker;
-}
-
-void voice_audio_forget_all(void)
-{
-}
-
-int voice_audio_speaking(int speaker)
-{
-	(void)speaker;
-	return 0;
-}
-
-void voice_audio_set_volume(float volume)
-{
-	(void)volume;
-}
-
-void voice_audio_play(int speaker, unsigned short sequence, const unsigned char *packet, int length, float gain, float pan)
-{
-	(void)speaker;
-	(void)sequence;
-	(void)packet;
-	(void)length;
-	(void)gain;
-	(void)pan;
-}
-
-void voice_audio_mix(float *output, unsigned long frames)
-{
-	(void)output;
-	(void)frames;
-}
+/* (voice chat: wiiu_voice_audio.c) */

@@ -27,6 +27,8 @@ enum
 	WIIU_PAD_RIGHT = 1 << 13,
 	WIIU_PAD_STICK_L = 1 << 14,
 	WIIU_PAD_STICK_R = 1 << 15,
+	/* the GamePad's TV button: voice chat's push to talk (wiiu_input_push_to_talk), which no Xbox button is */
+	WIIU_PAD_TV = 1 << 16,
 };
 
 struct wiiu_pad
@@ -86,5 +88,18 @@ int wiiu_input_touch(float *x, float *y);
 /* Rumbles the pad of a port, 0 (still) to 1 (full): the GamePad's motor for port 0 and those of the Pro Controllers that drive the port. Does nothing in the
 background. */
 void wiiu_input_rumble(unsigned int port, float strength);
+
+/* Voice chat's push to talk (platform_wiiu.c's halo_push_to_talk_held, from the game thread): whether the GamePad's TV button is held, as the latest
+wiiu_input_read of port 0 found it. Every other button is the game's. Asking takes the button from the system's TV menu (VPADSetTVMenuInvalid) for as
+long as it is asked for; a second after the last asking, at the next read of the GamePad, the menu has it back. */
+int wiiu_input_push_to_talk(void);
+
+/* The microphone probe's (wiiu_voice_audio.c, from any thread): the TV button taken from the TV menu while take is 1, and its presses logged. */
+void wiiu_input_take_tv_button(int take);
+
+/* The GamePad's jack, as the latest read of the GamePad found it (VPADStatus.usingHeadphones): 1 with a headset in it (voice chat then hears the
+headset's microphone), 0 without, -1 before the GamePad has been read; and the microphone's status byte (VPADStatus.micStatus). */
+int wiiu_input_headset(void);
+unsigned int wiiu_input_mic_status(void);
 
 #endif
