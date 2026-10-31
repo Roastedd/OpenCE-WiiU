@@ -1710,6 +1710,11 @@ files without the game, and `tools/test_linux_port.py` runs it on the maps
 in `assets/maps`. `map_validate --fuzz <runs> map.map` changes a few words
 of the tags at random in each run. The checks must not crash or hang, and a
 map that they let through must need no more corrections.
+`map_validate --swap tags out [map.map]` and `--swap-xbox map.map out` write
+what the big-endian builds' byte swap of a Custom Edition map makes
+(`game/tag_swap.c`), for `tools/test_tag_swap.py` to compare with
+`tools/wiiu/map_convert.py`'s (`docs/custom_edition_caches.md`,
+"Big-endian builds").
 
 A map's scripts can call only the script functions that a map needs (the
 allowlist in `hs/hs.c`). They cannot call the functions for files, the

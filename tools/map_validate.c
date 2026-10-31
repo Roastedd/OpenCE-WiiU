@@ -553,6 +553,18 @@ static int map_fuzz(char const *path, unsigned char *tag_cache, unsigned long se
 
 /* ---------- Custom Edition maps */
 
+/* a file's 32-bit value of either order */
+static unsigned long little_long(unsigned char const *bytes)
+{
+	return bytes[0] | bytes[1] << 8 | (unsigned long)bytes[2] << 16 | (unsigned long)bytes[3] << 24;
+}
+
+static unsigned long big_long(unsigned char const *bytes)
+{
+	return bytes[3] | bytes[2] << 8 | (unsigned long)bytes[1] << 16 | (unsigned long)bytes[0] << 24;
+}
+
+
 enum
 {
 	/* where a Custom Edition map's bitmaps.map and sounds.map count in the
@@ -907,7 +919,12 @@ static int custom_edition_validate(char const *path, unsigned char *tag_cache, l
 			case 7: value = CUSTOM_EDITION_TAG_CACHE_ADDRESS + fuzz_random() % identity.tag_data_size; break;
 			default: value = CUSTOM_EDITION_TAG_CACHE_ADDRESS + fuzz_random() % CUSTOM_EDITION_TAG_CACHE_BYTES; break;
 			}
-			memcpy(map.bytes + offset, &value, 4);
+			/* (a word of the file, little-endian as a Custom Edition map's are,
+			so that every host fuzzes the same bytes) */
+			map.bytes[offset] = (unsigned char)value;
+			map.bytes[offset + 1] = (unsigned char)(value >> 8);
+			map.bytes[offset + 2] = (unsigned char)(value >> 16);
+			map.bytes[offset + 3] = (unsigned char)(value >> 24);
 		}
 
 		alarm(120);
@@ -927,7 +944,7 @@ static int custom_edition_validate(char const *path, unsigned char *tag_cache, l
 					{
 						unsigned long value;
 
-						memcpy(&value, map.bytes + offsets[change], 4);
+						value = little_long(map.bytes + offsets[change]);
 						fprintf(fuzz_log, " %lx:%lx", offsets[change], value);
 					}
 					fprintf(fuzz_log, "\n");
@@ -976,16 +993,6 @@ The swap turns little-endian into big-endian on any host, so these write
 what it makes of a map for tools/wiiu/map_convert.py's to be compared with
 (--custom-edition for a Custom Edition map's tags, its structure bsps and
 model data; an Xbox map converted without --rebase). */
-
-static unsigned long little_long(unsigned char const *bytes)
-{
-	return bytes[0] | bytes[1] << 8 | (unsigned long)bytes[2] << 16 | (unsigned long)bytes[3] << 24;
-}
-
-static unsigned long big_long(unsigned char const *bytes)
-{
-	return bytes[3] | bytes[2] << 8 | (unsigned long)bytes[1] << 16 | (unsigned long)bytes[0] << 24;
-}
 
 static int file_write(char const *path, void const *bytes, unsigned long size)
 {

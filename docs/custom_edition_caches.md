@@ -1,6 +1,7 @@
 # Halo Custom Edition maps
 
-The native builds (Linux, Windows, Android) load and run Halo Custom Edition
+The native builds (Linux, Windows, Android, and the big-endian ones: the Wii U's and
+the big-endian Linux build it is tested with) load and run Halo Custom Edition
 caches (`.map`, cache version 609), with the Custom Edition resource maps
 `bitmaps.map`, `sounds.map` and `loc.map`. A cache that needs OpenSauce
 (its OpenSauce header asks for memory upgrades, mod data files or the like)
@@ -138,6 +139,10 @@ map_name custom_maps\hugeass
   being rejected as "an old version" of this build's caches; so is one put
   in `maps`, which is told to go in `custom_maps`.
 - **Xbox caches** take the path they took before.
+- **On a big-endian host** (the Wii U) the map is read as its file has it,
+  little-endian, and its tags turned to the host's order as it loads
+  ([Big-endian builds](#big-endian-builds)). The Wii U's tag cache is a block of
+  the app's heap at the same address (`port/wiiu/src/wiiu_window.c`).
 
 The desktop builds' Xbox memory window is 512 MB (Android's 128 MB), in
 which the texture cache is 256 MB: Custom Edition maps draw more texture
@@ -229,8 +234,11 @@ changed:
 - **Bitmaps and sound permutations** get the state of ones not yet drawn or
   played, and name their own tags: `bitmaps.map` and `sounds.map` hold the
   tag handles of whatever map they were built with.
-- **Sounds this build cannot decode** (Custom Edition's Ogg Vorbis) are made
-  unplayable, by emptying their pitch ranges, which the game skips.
+- **Sounds this build cannot decode** are made unplayable, by emptying their
+  pitch ranges, which the game skips (`custom_edition_cache_sounds_silence`,
+  apart from the conversion: the game first decodes the Ogg Vorbis ones it
+  can, below, and silences what is left; the report tool silences every Ogg
+  Vorbis sound, having no decoder).
 - **Animation overlays naming animations that do not exist** are made to
   name none, which the game skips. Maps built with the editing kit can have
   them; Custom Edition reads past the graph's animations there, and this
@@ -376,6 +384,54 @@ changed:
   globals can list fewer, and oddball stopped on such a map. With fewer than
   three, the native builds predict none (`game_engine.c`).
 
+## Big-endian builds
+
+A Custom Edition map cannot be converted for a big-endian host ahead of time,
+as the Xbox maps are (`tools/wiiu/map_convert.py`): its hash is its network
+version and map sharing sends its bytes, so the file must stay as Halo PC wrote
+it. The big-endian builds turn it in memory as it loads instead
+(`port/linux/game/tag_swap.c`), with the walk the Xbox maps' converter makes:
+
+1. The loader, the group inference (`tag_validate_custom_edition_infer_groups`,
+   which reads the tags in their own order), the joined resource offsets and the
+   conversion run on the file's little-endian bytes, as on any host.
+2. The tags are turned to big-endian: the tag index, the tag table, and every
+   tag of a group the schemas know, by its group's schema (gbxmodels by
+   `tag_schema_custom_edition_groups`'), every value of 2, 4 or 8 bytes the
+   game's declarations name (`tag_swap_layouts.inc`, which
+   `tools/wiiu/tag_swap_tables.py` makes from `tools/wiiu/map_schema`, the files
+   map_convert.py converts with: the schemas as the big-endian build compiled
+   them, `tools/wiiu/schema_dump.c`, and their structures' scalar layouts), the
+   data fields as what they hold (text, 16- and 32-bit values, a material's
+   vertices, the scripts' syntax nodes), an animation's frames, a recorded
+   animation's events and a model part's indices walked as the game reads them.
+   Before following anything the swap checks each definition's blocks, data and
+   structures against the tables (tables of other schemas are refused); every
+   block and data must lie in the tags, none may overlap another (the
+   validator's rule), and no byte is turned twice. A map the swap cannot walk is
+   refused, and `debug.txt` says why.
+3. From here on everything reads the tags as the host's own: the Ogg Vorbis
+   sounds decoded, the undecodable silenced, the validator, the bitmaps, the
+   scripts, the models (whose model data, the parts' 68-byte vertices and 16-bit
+   strips, is turned by the parts' fields as it is read), and
+   `cache_file_formats.c`'s functions that read loaded tags (which read them in
+   the order their tag index's signature says).
+4. Each structure BSP is turned as soon as `cache_files.c` has read it,
+   before anything checks it.
+
+What stays little-endian: bitmap pixels and Xbox ADPCM samples (as in the
+converted Xbox maps, which the renderer and mixer read so), the vertices and
+strips the game compresses into buffers (made on the host, in its order), and
+the bytes the declarations leave unnamed, which nothing but
+`custom_edition_objects.c` reads (the vehicle placements' spawn flags, read as
+little-endian on every host). On a little-endian host the swap is not run.
+
+The swap turns little-endian into big-endian whatever the host, so the tools
+run it anywhere: `map_validate --swap tags out [map]` turns a map's tags as
+`cache_file_report --dump-tags` writes them (and, with the map, its bsps and model
+data), and `map_validate --swap-xbox` an Xbox map, for comparison with
+`map_convert.py --custom-edition` and `map_convert.py`.
+
 ## Checks
 
 The loader (`cache_file_formats.c`) checks the container: the header, the
@@ -471,6 +527,36 @@ host and another player at once with a second machine downloading beside it
 (on loopback, and through internet play's tunnels with a local broker), each
 file the same as the host's; with `network.map_download` off, or a host with
 `network.map_share` off, it was shown the error and left.
+
+### Big-endian
+
+No Custom Edition map was on the machine the big-endian work was done on; the
+repository's own test maps stood in.
+
+- The swap against `map_convert.py`: the 24 Xbox maps of an Xbox disc, inflated
+  (`map_validate --swap-xbox`, the big-endian build under qemu-ppc), are the
+  same bytes as map_convert.py makes of them (a10's 274,734,080 among them);
+  the tags, structure BSPs and model data of nine synthetic caches
+  (`tools/test_cache_file_formats.py`'s builder: tags from resource maps, a
+  gbxmodel with local nodes and one without, a BSP material, several BSPs,
+  pitch ranges, an animation graph, a weapon HUD) and of the four StageKit maps
+  (`tools/stagekit`: walk, obstacle, elevator, and drawn, whose wall's model
+  is a box of one part in the model data), as `cache_file_report
+  --dump-tags` leaves them, are the same bytes from `map_validate --swap` (the
+  x86 and the big-endian build alike) and from `map_convert.py
+  --custom-edition`. `tools/test_tag_swap.py` checks this where the build is.
+- `map_validate` needs no correction of the StageKit maps, x86 and big-endian
+  alike, and fuzzing each 200 times (`--fuzz`, its changes now written
+  little-endian, so that every host changes the same bytes) refuses and
+  corrects the same runs on both.
+- The big-endian Linux build plays the StageKit maps tick for tick as the x86
+  build does (single player, a tick a frame, the scripted bot, the elevator
+  ridden up and down by its cues): every logged second the same line in both,
+  16,843 seconds of walk, 12,822 of obstacle, 13,109 of the elevator and
+  12,792 of drawn, whose model both builds convert (`1 model parts converted
+  (8 vertices compressed`).
+- The Wii U build links (no stubs); nothing has run on a console
+  (`port/wiiu/README.md`, "The Custom Edition test plan").
 
 ### Not tested
 

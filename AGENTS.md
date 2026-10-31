@@ -91,6 +91,7 @@ python -m pytest -q tools/test_linux_port.py                # the build, the map
 python -m pytest -q tools/test_mods.py                      # mods played over a map (needs assets/maps)
 python -m pytest -q tools/test_bots.py                      # the bots in local games (needs assets/maps)
 python -m pytest -q tools/test_cache_file_formats.py tools/test_bmp_files.py tools/test_profile.py
+python -m pytest -q tools/test_tag_swap.py                   # the big-endian builds' byte swap of Custom Edition maps against map_convert.py (needs build/linux/map_validate)
 python tools/test_touch_layout.py                           # the Android touch layout (JDK 17+)
 python tools/test_light_storage.py
 python tools/test_death_timing.py
