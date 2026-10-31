@@ -75,7 +75,11 @@ struct dk_command_header
 /* a render target or depth buffer, known by the physical address of its
 data (Data in its D3DSurface), as d3d8_gl.c knows them; its size in the
 game's pixels, and in the host's: the screen's targets are drawn at
-display.resolution_limit's scale (d3d8_dk.c), the rest at their own */
+display.resolution_limit's scale (d3d8_dk.c), the rest at their own. The
+active size is the part of the host's pixels the frame draws into, from the
+top left: all of them, unless dynamic resolution has lowered the screen's
+lines (d3d8_gx2.c, drs_fraction). The host makes one target for all the
+active sizes of a surface, so it knows a target by the other fields. */
 struct dk_surface
 {
 	uint32_t data;
@@ -84,6 +88,8 @@ struct dk_surface
 	uint32_t kind;
 	uint32_t pixel_width;
 	uint32_t pixel_height;
+	uint32_t active_width;
+	uint32_t active_height;
 };
 
 /* the surfaces later commands draw into (either can be DK_SURFACE_NONE) */
@@ -107,10 +113,11 @@ struct dk_command_clear
 	uint32_t rectangles[][4];
 };
 
-/* shows the back buffer, letterboxed to the display. A screenshot is asked
-for by a guest address of width * height * 4 bytes (debug.screenshot_every),
-which the host fills with the back buffer's pixels, R G B A in memory, once the
-GPU has drawn them (the frame waits for it); 0 asks for none */
+/* shows the back buffer's active part, letterboxed to the display. A
+screenshot is asked for by a guest address of active_width * active_height * 4
+bytes (debug.screenshot_every), which the host fills with those pixels of the
+back buffer, R G B A in memory, once the GPU has drawn them (the frame waits
+for it); 0 asks for none */
 struct dk_command_present
 {
 	struct dk_command_header header;

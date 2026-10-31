@@ -98,6 +98,21 @@ static float screen_scale[2] = { 1.0f, 1.0f };
 static long ui_offset;
 #define UI_OFFSET ((GLint)ui_offset)
 
+/* Dynamic resolution (wiiu_gx2.c, wiiu_drs.c): the share of the screen's
+targets, each way, that frames draw into; 1 when they draw all of it. The
+targets keep the size screen_scale gives them, that of the most lines
+(display.render_lines), so that a change of step makes no new target and
+leaves them where they are in the eDRAM. A frame at fewer lines draws into
+their top left part: target_scale, which viewports, scissors, clears and
+visibility counts follow, is the screen's scale times this, and a draw that
+samples one of the targets reads that part (facts_make). It changes only
+between frames (halo_screen_commit), as the screen's scale does. */
+static float drs_fraction[2] = { 1.0f, 1.0f };
+
+/* wiiu_gx2.c's: the lines the GX2 thread asks the next frames to be drawn at
+(halo/drs_lines.txt's, or the controller's), or 0 before its first present */
+unsigned int host_gx2_drs_lines(void);
+
 #ifdef HALO_SWITCH
 /* the host's (host_dk.c): the height it presents at, 1080 docked and 720 in
 handheld */
@@ -166,7 +181,11 @@ long halo_screen_width(void)
 	return screen_width;
 }
 
-/* the display's pixels for each of the 480 lines (text_hires.c) */
+/* the display's pixels for each of the 480 lines (text_hires.c). It stays
+that of the most lines while dynamic resolution draws fewer: the high-res
+text's glyphs are made for it, and all of them are made again whenever it
+changes, so a lower step draws the glyphs made for the most lines a little
+smaller (by at most 1.33 times, at 0.75 of them). */
 float halo_screen_pixel_scale(void)
 {
 	halo_screen_width();
@@ -174,11 +193,18 @@ float halo_screen_pixel_scale(void)
 }
 
 /* how many pixels the screen's targets draw to the Xbox's one, the larger
-of the two ways (the screen effects' convolutions: rasterizer_xbox_screen_effect.c) */
+of the two ways, at the step of dynamic resolution the frame is drawn at
+(the screen effects' convolutions: rasterizer_xbox_screen_effect.c, which
+takes as many passes as there are pixels to the Xbox's one, so that a lower
+step takes no more passes than its pixels need) */
 float halo_screen_scale(void)
 {
+	float x, y;
+
 	halo_screen_width();
-	return screen_scale[0] > screen_scale[1] ? screen_scale[0] : screen_scale[1];
+	x = screen_scale[0] * drs_fraction[0];
+	y = screen_scale[1] * drs_fraction[1];
+	return x > y ? x : y;
 }
 
 void halo_screen_ui_offset(unsigned char centered)
@@ -846,27 +872,45 @@ static void surface_dimensions(const D3DSurface *surface, unsigned long *width, 
 }
 
 /* the host's pixels to a game pixel in the targets bound (targets_bind):
-the screen's scale for the screen's targets, else 1. Viewports, clears and
-visibility counts are scaled by it */
+the screen's scale for the screen's targets at dynamic resolution's step,
+else 1. Viewports, clears and visibility counts are scaled by it */
 static float target_scale[2] = { 1.0f, 1.0f };
 
-/* a surface's scale: the screen's, if it is the screen's size */
-static void target_scale_of(unsigned long width, unsigned long height, float scale[2])
+/* the share of a surface that frames draw into each way: dynamic
+resolution's, if it is the screen's size; all of any other */
+static void target_share_of(unsigned long width, unsigned long height, float share[2])
 {
+	const int screen = width == (unsigned long)halo_screen_width() && height == SCREEN_HEIGHT;
+
+	share[0] = screen ? drs_fraction[0] : 1.0f;
+	share[1] = screen ? drs_fraction[1] : 1.0f;
+}
+
+/* a surface's scale: the screen's, if it is the screen's size; and drawn,
+the scale frames draw into it at (the scale times its share) */
+static void target_scale_of(unsigned long width, unsigned long height, float scale[2], float drawn[2])
+{
+	float share[2];
+
 	scale[0] = scale[1] = 1.0f;
 	if (width == (unsigned long)halo_screen_width() && height == SCREEN_HEIGHT)
 	{
 		scale[0] = screen_scale[0];
 		scale[1] = screen_scale[1];
 	}
+	target_share_of(width, height, share);
+	drawn[0] = scale[0] * share[0];
+	drawn[1] = scale[1] * share[1];
 }
 
-/* a surface as the host knows it; depth_only: NONE unless it is a depth
-format (a depth buffer that is not one is left unbound, as d3d8_gl.c does) */
+/* a surface as the host knows it, and in scale the scale frames draw into
+it at; depth_only: NONE unless it is a depth format (a depth buffer that is
+not one is left unbound, as d3d8_gl.c does) */
 static void surface_describe(const D3DSurface *surface, BOOL depth_only, struct dk_surface *out, float scale[2])
 {
 	unsigned long width, height;
 	BOOL depth;
+	float pixels[2];
 
 	memset(out, 0, sizeof(*out));
 	scale[0] = scale[1] = 1.0f;
@@ -875,13 +919,21 @@ static void surface_describe(const D3DSurface *surface, BOOL depth_only, struct 
 	surface_dimensions(surface, &width, &height, &depth);
 	if (depth_only && !depth)
 		return;
-	target_scale_of(width, height, scale);
+	target_scale_of(width, height, pixels, scale);
 	out->data = surface->Data;
 	out->width = (uint32_t)width;
 	out->height = (uint32_t)height;
 	out->kind = depth ? DK_SURFACE_DEPTH : DK_SURFACE_COLOR;
-	out->pixel_width = (uint32_t)(width * scale[0] + 0.5f);
-	out->pixel_height = (uint32_t)(height * scale[1] + 0.5f);
+	out->pixel_width = (uint32_t)(width * pixels[0] + 0.5f);
+	out->pixel_height = (uint32_t)(height * pixels[1] + 0.5f);
+	out->active_width = (uint32_t)(width * scale[0] + 0.5f);
+	out->active_height = (uint32_t)(height * scale[1] + 0.5f);
+	/* (the share is below 1 or exactly 1: a rounding cannot make the part
+	larger than the whole) */
+	if (out->active_width > out->pixel_width)
+		out->active_width = out->pixel_width;
+	if (out->active_height > out->pixel_height)
+		out->active_height = out->pixel_height;
 }
 
 /* the color surfaces drawn into, by their data, and the size each was last
@@ -996,7 +1048,8 @@ static BOOL targets_known;
 there is nothing to draw into. has_depth (if not NULL) says whether there is
 a depth buffer. */
 /* the surfaces' description and scale as targets_bind last made them, and what they came from: the two surfaces, their data, format and size
-words, and the screen's width and scale. Every draw binds the targets, nearly always the ones before (0.8% of the game thread in a fight). */
+words, and the screen's width, scale and share (dynamic resolution's step). Every draw binds the targets, nearly always the ones before (0.8% of
+the game thread in a fight). */
 static struct
 {
 	BOOL valid;
@@ -1004,6 +1057,7 @@ static struct
 	DWORD words[6];
 	long screen_width;
 	float screen_scale[2];
+	float drs_fraction[2];
 	struct dk_command_targets targets;
 	float scale[2];
 } targets_memo;
@@ -1017,7 +1071,8 @@ static BOOL targets_bind(BOOL *has_depth)
 	struct dk_command_targets targets;
 
 	if (!targets_memo.valid || targets_memo.color != color || targets_memo.depth != depth || !words_equal(words, targets_memo.words, sizeof(words)) ||
-		targets_memo.screen_width != width || targets_memo.screen_scale[0] != screen_scale[0] || targets_memo.screen_scale[1] != screen_scale[1])
+		targets_memo.screen_width != width || targets_memo.screen_scale[0] != screen_scale[0] || targets_memo.screen_scale[1] != screen_scale[1] ||
+		targets_memo.drs_fraction[0] != drs_fraction[0] || targets_memo.drs_fraction[1] != drs_fraction[1])
 	{
 		float color_scale[2], depth_scale[2];
 
@@ -1033,6 +1088,8 @@ static BOOL targets_bind(BOOL *has_depth)
 		targets_memo.screen_width = width;
 		targets_memo.screen_scale[0] = screen_scale[0];
 		targets_memo.screen_scale[1] = screen_scale[1];
+		targets_memo.drs_fraction[0] = drs_fraction[0];
+		targets_memo.drs_fraction[1] = drs_fraction[1];
 	}
 	targets = targets_memo.targets;
 	if (targets.color.kind == DK_SURFACE_NONE && targets.depth.kind == DK_SURFACE_NONE)
@@ -1347,6 +1404,27 @@ static void cpu_clock_update(void)
 {
 }
 
+/* Takes up the lines the GX2 thread asks the next frames to be drawn at
+(host_gx2_drs_lines), as the share of the screen's targets they draw into:
+the lines over the targets' own, and the columns in the same proportion, in
+whole pixels, so that the part drawn keeps the picture's shape and its edge
+is a pixel's edge. */
+static void drs_commit(void)
+{
+	const unsigned long pool_width = (unsigned long)(screen_width * screen_scale[0] + 0.5f);
+	const unsigned long pool_height = (unsigned long)(SCREEN_HEIGHT * screen_scale[1] + 0.5f);
+	const unsigned long lines = host_gx2_drs_lines();
+
+	drs_fraction[0] = drs_fraction[1] = 1.0f;
+	if (lines && lines < pool_height && pool_width)
+	{
+		const unsigned long columns = (pool_width * lines + pool_height / 2) / pool_height;
+
+		drs_fraction[0] = (float)columns / (float)pool_width;
+		drs_fraction[1] = (float)lines / (float)pool_height;
+	}
+}
+
 long halo_screen_commit(void)
 {
 	long width;
@@ -1373,6 +1451,8 @@ long halo_screen_commit(void)
 		}
 #endif
 	}
+	/* (after the screen's size and scale, which the share is of) */
+	drs_commit();
 	return screen_width;
 }
 ULONG WINAPI D3DDevice_Release(void)
@@ -2444,8 +2524,13 @@ static void facts_make(struct dk_draw_facts *facts, BOOL has_depth, const struct
 					description.levels = 1;
 				if (description.linear)
 				{
-					found->scale[0] = 1.0f / (float)target->width;
-					found->scale[1] = 1.0f / (float)target->height;
+					float share[2];
+
+					/* (a linear texture's coordinates are the game's texels, 0 to its width: they reach as far
+					as the frame drew, the share of the target that dynamic resolution's step draws into) */
+					target_share_of(target->width, target->height, share);
+					found->scale[0] = share[0] / (float)target->width;
+					found->scale[1] = share[1] / (float)target->height;
 				}
 			}
 			else
@@ -3829,9 +3914,9 @@ static void D3DDevice_Present_inner(CONST RECT *source_rectangle, CONST RECT *de
 		if (screenshot_every > 0 && device.frame % (unsigned long)screenshot_every == 0 && command->back_buffer.width &&
 			*config_string("debug.screenshot_directory"))
 		{
-			/* (the back buffer's pixels: the host reads them as it has them) */
-			screenshot_width = command->back_buffer.pixel_width;
-			screenshot_height = command->back_buffer.pixel_height;
+			/* (the back buffer's pixels the frame drew, at dynamic resolution's step: the host reads them as it has them) */
+			screenshot_width = command->back_buffer.active_width;
+			screenshot_height = command->back_buffer.active_height;
 			screenshot_pixels = malloc((unsigned long)screenshot_width * screenshot_height * 4);
 			command->screenshot = (uint32_t)(uintptr_t)screenshot_pixels;
 		}
