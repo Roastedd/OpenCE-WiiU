@@ -183,6 +183,129 @@ only: it starts when `halo/debug_server.txt` on the card says `1`, and is off wi
   the app does close (the release and exit callbacks run, "Closed" is logged), but under Aroma the console then started the app again once, and
   twice stayed on the Wii U logo. HOME and Close software is the way out that has always worked.
 
+## Updates
+
+A release build updates itself from GitHub (`src/wiiu_update.c`, with `wiiu_update_core.c` and `wiiu_update_http.c`, which run on a desktop
+for their tests). It is off unless the build is given three things at configure time: a build number (`HALO_BUILD_NUMBER`, greater than
+0), the repository its releases are published in (`HALO_UPDATE_REPOSITORY`, `owner/repo`) and the Ed25519 public key their manifests are
+signed with (`HALO_UPDATE_PUBLIC_KEY`, 64 hexadecimal digits). Without them the log says `Update: off` once and nothing is fetched,
+written or renamed: a build made the usual way (`build_game.sh`) has none of them. What players see is in [PLAYING.md](PLAYING.md),
+"Updates".
+
+**A release** is the files the app owns beside the player's data (`halo.wuhb`, `shaders.pack` made for that build's shaders,
+`brokers.txt`), with a manifest and its signature:
+
+    halo-wiiu-manifest 1
+    build 124
+    tag wiiu-124
+    maps c1ea0000
+    file shaders.pack 2401600 <SHA-256>
+    file brokers.txt 611 <SHA-256>
+    file halo.wuhb 15038800 <SHA-256>
+
+`halo-wiiu-manifest.txt.sig` is the 64 bytes of `openssl pkeyutl -sign -rawin` over it, checked with Monocypher's `crypto_ed25519_check`.
+`maps` is the format of the maps the build reads (`tools/wiiu/convert_maps.py`'s rebase): a release whose maps differ is not offered. The
+parser refuses anything else: lines out of order, numbers with a sign or a leading zero, a name that is not `halo.wuhb`, `brokers.txt` or a
+`.pack` (so never `config.toml`, `data/`, `maps/` or `menus/`), a name twice, more than 8 files or 512 MB, no `halo.wuhb`.
+
+**At the start**, after the shell has read the last run's crash note and close trail and before the game starts
+(`wiiu_update_startup`), the journal is followed. Then a worker thread on core 0 fetches
+`https://github.com/<repo>/releases/latest/download/halo-wiiu-manifest.txt` and its `.sig` (the documented link to the latest release,
+which is neither a draft nor a pre-release, and uses no API quota: it answers 302 to a signed link to `release-assets.githubusercontent.com`,
+which expires), checks the signature, and offers a newer build, not the one rejected, at the main menu. A is "update", B "not now", X
+twice "never" (`update.auto = false`). `debug.update_answer` (`yes`, `no`, `never`) answers for automated runs.
+
+**HTTPS** is the port's Mbed TLS 3.6.7 over nsysnet's sockets, with its own roots (`src/wiiu_update_roots.h`, from the CA bundle by
+`tools/wiiu/update_roots.py`: ISRG X1 and X2, USERTrust RSA and ECC, Sectigo R46 and E46, and DigiCert Global Root G2 as a spare); the
+console's NSSL is not used, as its roots do not reach GitHub's file host (Let's Encrypt, under ISRG X1) or github.com (Sectigo E46, by
+USERTrust ECC). The console's entropy is weak (`src/wiiu_mbedtls.c`), so TLS only carries the files: the signature and the SHA-256s vouch
+for them. Every wait is at most 100 ms, between which the worker's flags are read.
+
+**The files** go to `update/<name>.part`, hashed as they are written, in 64 KB pieces, only in the foreground, with the network allowed
+(`wiiu_network_allowed`) and the main menu up. HOME (or the menus going) drops the connection and keeps the part; the download goes on
+with a `Range` request after a fresh redirect. A whole file is flushed (`fsync`) and renamed to `.new`. A file the folder already has,
+byte for byte, is not downloaded. The card must have the download's size and 32 MB more free (`FSAGetFreeSpaceSize`: newlib's `statvfs`
+refuses the SD card).
+
+**The swap**: every `.new` is read back and checked, HOME is turned off (`OSEnableHomeButtonMenu`), the journal says `swapping`, the
+running bundle is unmounted (RPXLoadingModule keeps it mounted as romfs until the app ends; its `RL_UnmountCurrentRunningBundle` is
+reached through `OSDynLoad_Acquire("homebrew_rpx_loader")` and `OSDynLoad_FindExport`, as librpxloader reaches it, so neither
+librpxloader nor anything else is added to the link), each current file is renamed to `update/<name>.old` and its `.new` into its place,
+`halo.wuhb` last, the volume is flushed, the journal says `trial`, HOME is turned on, and the new build is started
+(`RL_LaunchHomebrew("wiiu/apps/halo/halo.wuhb")`, the Wii U Menu if that fails). The bundle keeps its path, so Homebrew on Menu keeps its
+tile. A console without RPXLoadingModule, or an app started from another path (`RL_GetPathOfRunningExecutable`), is never offered an
+update. A rename is never asked to replace a file: FAT's rename may not.
+
+**The journal** (`update/state.txt` and `update/state2.txt`, written in turn, each with a sequence number and a CRC-32; the newer whole one
+counts) makes every step one the next start can resolve. Because `halo.wuhb` moves last, the build that is running says how far a swap
+got: the new build finishes it, the old build undoes it, file by file, from which of each file's places hold a file. A new build is on
+trial until it reaches its main menu (then `good`, and the `.old` files are deleted at the next start). A trial start that follows a crash
+note, or the third start of a build that has twice not reached its menu, puts the old build's files back the same way (`restoring`: the
+new ones to `.bad`), records the new build as rejected (never offered again; a later one is), starts the old build, and tells the player
+at its main menu, where Y has the rejected build offered again. Rollback is automatic because a build that cannot reach its menu cannot
+ask. `tools/test_wiiu_update.py` cuts the power at every step of a swap and of a rollback, then at every step of the start after it,
+and checks that the folder always ends as one build or the other; the one state the console cannot leave by itself is a cut between
+`halo.wuhb`'s two renames, which leaves no `halo.wuhb` (PLAYING.md, "If an update went wrong", is the recovery by hand).
+
+### Turning it on
+
+Nothing is published, signed or turned on by default; these are the owner's steps.
+
+1. **The signing key**, once, on a machine that does not build or publish (offline), with two backups: `openssl genpkey -algorithm
+   ed25519 -out halo-wiiu-signing.pem`. Every build trusts this key alone: losing it means installed builds can no longer update (a new
+   key needs a build installed by hand), and anyone with it can publish to every console.
+2. **Its public key**, for the builds: `python3 tools/wiiu/make_wiiu_release.py --print-public-key halo-wiiu-signing.pem`.
+3. **A public repository for releases only** (`owner/halo-wiiu-releases`): no code, no workflows that publish, write access for the
+   owner alone. Turn on immutable releases for it (a published release's assets then cannot be replaced or its tag moved). Test builds
+   go in another repository with another key; a pre-release or a draft is never "latest", so it is never offered.
+4. **A build per release**, its number one higher each time (`build_game.sh` does not pass these to the container yet):
+
+       docker run --rm -v "$OPENCE:/src" -w /src -e HALO_BUILD_NUMBER=124 -e HALO_UPDATE_REPOSITORY=owner/halo-wiiu-releases \
+           -e HALO_UPDATE_PUBLIC_KEY=<64 hex digits> opence-wiiu \
+           bash -ec 'python3 configure.py --linux-target=wiiu --release > /dev/null && ninja linux_wiiu'
+
+5. **The release's folder**: `build/linux-wiiu/halo.wuhb`, the `shaders.pack` made for that build, `port/assets/network/brokers.txt`.
+6. **The manifest**, signed where the key is: `python3 tools/wiiu/make_wiiu_release.py release-124 --build 124 --key
+   halo-wiiu-signing.pem --public-key <hex> --repository owner/halo-wiiu-releases`. It reads the build's own record out of `halo.wuhb`
+   (its RPX's compressed sections: `build=124 maps=c1ea0000 repository=... key=...`) and refuses a bundle of another build, maps,
+   repository or key; then it signs, and checks the signature (openssl), the manifest (the console's rules) and every hash again.
+7. **The release**, tagged `wiiu-124`, not a pre-release, with the five files.
+
+### What only the console can settle
+
+- How fast Mbed TLS is on Espresso: the handshake (an ECDHE and a certificate chain each time, one connection a request), AES-GCM or
+  ChaCha20 and SHA-256 at the card's speed. The log times each fetch and each file.
+- Whether Aroma honours `OSEnableHomeButtonMenu(FALSE)` during the swap (if not, a swap cut off by HOME's Close is resolved at the next
+  start).
+- `RL_UnmountCurrentRunningBundle` while the game runs (it removes the bundle's /vol/content and /vol/save layers, which Halo does not
+  use), the renames of `halo.wuhb` after it, and `RL_LaunchHomebrew` straight after the swap.
+- What `RL_GetPathOfRunningExecutable` says for a bundle started from Homebrew on Menu (`wiiu/apps/halo/halo.wuhb` is expected).
+- How long `FSAGetFreeSpaceSize` takes on a large card (wut's `statvfs` refuses the SD card, perhaps for that); the log times it.
+- The console's clock, against which certificates' dates are checked.
+- Mbed TLS is built without its threading module: the updater and internet play's DTLS (`posix_dtls.c`) share its random generator
+  without a lock, as the desktop updater and DTLS do.
+
+### Console test plan
+
+With the owner at the console, in a test repository with a test key (never the releases' own), each build made as in step 4:
+
+1. **Update**: install build A by hand; publish B (newer). A offers B at the main menu (`Update: build B is offered`); A downloads, swaps
+   and starts B (`Update: build B is in place of build A`); B logs its trial and `reached its main menu: it is kept`; the next start
+   deletes `update/*.old`. `config.toml`, `data/` and the maps are unchanged.
+2. **HOME and closing during a download**: HOME while the bar moves, then back: the download goes on (a `Range` in the log after the
+   redirect, `downloaded` with the right hash). Then close the app during a download (HOME, Close software): the exit trail says `the
+   updater's worker ended` and the close takes no longer than without it; the next start's A goes on from the `.part`.
+3. **Refusals**: a manifest signed with another key (`not signed with this build's key: it is ignored`, no panel); a release whose
+   `halo.wuhb` is not the manifest's (`damaged twice`, nothing changed, the `.part` deleted).
+4. **Low free space**: a card with less than the release and 32 MB free: `NOT ENOUGH ROOM ON THE SD CARD`, nothing changed.
+5. **Rollback**: publish C, a build made to crash after the shell has started and before the main menu (a deliberate fault in a scratch
+   commit). B updates to C; C crashes; the next start puts B back and starts it (`build C crashed before it reached the main menu`, then
+   `build B is back; build C is set aside`); B's main menu shows the notice; C is not offered again. Also with C hanging instead (no crash
+   note): the third start puts B back.
+6. **Offline**: no network at the start (unplugged, or the network off in the system settings): the game starts as usual; the log says the
+   manifest could not be fetched; no panel.
+7. **End on the production build**: put the production build back by hand, delete `update/`, and leave the card on the safe settings.
+
 ## What is written and not run on a console
 
 Compiled, linked and tested on the build machine where it can be, not run on the Wii U: the high-res text (`text_hires.c`: the fonts in the maps' tags replaced by

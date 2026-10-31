@@ -91,6 +91,7 @@ python tools/test_touch_layout.py                           # the Android touch 
 python tools/test_light_storage.py
 python tools/test_death_timing.py
 python -m pytest -q tools/test_web_build.py                 # the web build's graph, sockets, menus
+python -m pytest -q tools/test_wiiu_update.py tools/test_wiiu_release.py   # the Wii U's updater (power cut at every step, HTTPS) and its release script
 node --test "port/web/tests/*.test.js"                      # the web page's importer and service worker
 node port/web/tests/webrtc_native.mjs chromium firefox      # the native builds' WebRTC with browsers (Playwright)
 ```
