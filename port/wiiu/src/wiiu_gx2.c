@@ -18,6 +18,7 @@ Not run on a console.
 #include "dk_commands.h"
 #include "dk_derive.h"
 #include "wiiu_debug.h"
+#include "wiiu_drs.h"
 #include "wiiu_shell.h"
 #include "port_config.h"
 #include "wiiu_indices.h"
@@ -199,9 +200,12 @@ static struct
 	int gpu_frame_open;
 	uint8_t gpu_slot_state[GPU_SAMPLE_SLOTS];
 	OSTime gpu_slot_ended[GPU_SAMPLE_SLOTS];
+	unsigned gpu_slot_lines[GPU_SAMPLE_SLOTS]; /* the lines each slot's frame drew of the back buffer (dynamic resolution's step) */
 	OSTime gpu_window_ticks, gpu_window_longest;
 	unsigned gpu_window_frames;
-	float gpu_ms;
+	float gpu_ms; /* the last frame's read, the lines it drew, and how many frames have been read */
+	unsigned gpu_lines;
+	unsigned long gpu_reads;
 	unsigned overlay_frame;
 	/* the GPU test (halo/gpu_test.txt: 1): a frame's streams kept (test_armed 2), run again at its present, timed */
 	int test_armed, replaying;
@@ -230,6 +234,13 @@ static struct
 	volatile unsigned drs_lines;
 	unsigned drs_forced;
 	unsigned drs_clears;
+	/* its controller (wiiu_drs.c), display.dynamic_resolution and its floor as last read (at config_changes' drs_read_at), the GPU times read
+	when it last ran (gpu_reads), and the five seconds' numbers for the log */
+	struct wiiu_drs drs;
+	int drs_on, drs_read;
+	unsigned drs_floor;
+	unsigned long drs_read_at, drs_gpu_reads;
+	unsigned drs_drops, drs_rises, drs_waits, drs_frames, drs_menu_frames;
 	int trace_frame; /* halo/gx2_trace.txt: the frame whose draws are logged (-1: none) */
 	int debug_mode; /* and, after it, a mode: 1 draws without blending, 2 without culling */
 	int features_off; /* and a third number: bit 0 no mip levels, bit 1 no 3D and cube textures, bit 2 no mip composites, bit 3 visibility tests on, bit 4 samplers ignore mips,
@@ -3112,8 +3123,9 @@ static void gpu_frame_begin(void)
 	gx.gpu_frame_open = 1;
 }
 
-/* at the frame's present, before anything of it is drawn on the screens */
-static void gpu_frame_end(void)
+/* at the frame's present, before anything of it is drawn on the screens; lines: what the frame drew of the back buffer (dynamic resolution's
+controller counts a time only at the step it was measured at) */
+static void gpu_frame_end(unsigned lines)
 {
 	const unsigned slot = gx.gpu_slot;
 
@@ -3122,6 +3134,7 @@ static void gpu_frame_end(void)
 		gpu_sample(&gpu_samples[slot][1]);
 		gx.gpu_slot_state[slot] = 2;
 		gx.gpu_slot_ended[slot] = OSGetSystemTime();
+		gx.gpu_slot_lines[slot] = lines;
 		gx.gpu_slot = (slot + 1) % GPU_SAMPLE_SLOTS;
 	}
 	gx.gpu_frame_open = 0;
@@ -3166,6 +3179,8 @@ static void gpu_poll(void)
 				const OSTime ticks = (OSTime)((ended - begun) * (uint64_t)OSSecondsToTicks(1) / GPU_TIMER_HZ);
 
 				gx.gpu_ms = (float)OSTicksToMicroseconds(ticks) / 1000.0f;
+				gx.gpu_lines = gx.gpu_slot_lines[slot];
+				gx.gpu_reads++;
 				gx.gpu_window_ticks += ticks;
 				if (ticks > gx.gpu_window_longest)
 					gx.gpu_window_longest = ticks;
@@ -3580,6 +3595,69 @@ static void gpu_test_run(void)
 	gx.test_log_used = 0;
 }
 
+/* ---------- dynamic resolution (wiiu_drs.c): the lines the game thread's next frames draw */
+
+/* display.dynamic_resolution and display.dynamic_resolution_floor, read again when config.toml's settings have changed (the menus write them); the
+controller starts again at the most lines when either has changed */
+static void drs_settings(void)
+{
+	const unsigned long changes = config_changes();
+	long floor;
+	int on;
+
+	if (gx.drs_read && gx.drs_read_at == changes)
+		return;
+	gx.drs_read_at = changes;
+	on = config_boolean("display.dynamic_resolution") != 0;
+	floor = config_integer("display.dynamic_resolution_floor");
+	floor = floor < 540 ? 540 : floor > 810 ? 810 : floor;
+	if (gx.drs_read && on == gx.drs_on && (unsigned)floor == gx.drs_floor)
+		return;
+	gx.drs_read = 1;
+	gx.drs_on = on;
+	gx.drs_floor = (unsigned)floor;
+	wiiu_drs_reset(&gx.drs, gx.render_height, gx.drs_floor);
+	wiiu_log("GX2: dynamic resolution is %s (display.dynamic_resolution): %u lines, down to %u (display.dynamic_resolution_floor %u)", on ? "on" : "off",
+		gx.render_height, wiiu_drs_lines(&gx.drs, gx.drs.lowest), gx.drs_floor);
+}
+
+/* At a frame's present, after its wait for the flip (wait_ticks), frame_ticks after the present before: the controller's step for the frames the
+game thread draws next (host_gx2_drs_lines), unless halo/drs_lines.txt fixed it for the run or display.dynamic_resolution is off. It runs here,
+not on the game thread, because the GPU's times are read here and the flip is waited for here. */
+static void drs_present(const struct dk_command_present *command, OSTime wait_ticks, OSTime frame_ticks)
+{
+	struct wiiu_drs_frame frame;
+	unsigned before, step;
+
+	if (gx.drs_forced)
+		return;
+	drs_settings();
+	if (!gx.drs_on)
+	{
+		gx.drs_lines = gx.render_height;
+		return;
+	}
+	memset(&frame, 0, sizeof(frame));
+	if (gx.gpu_reads != gx.drs_gpu_reads)
+	{
+		frame.gpu_ms = gx.gpu_ms;
+		frame.gpu_lines = gx.gpu_lines;
+		gx.drs_gpu_reads = gx.gpu_reads;
+	}
+	frame.flip_wait_ms = (float)OSTicksToMicroseconds(wait_ticks) / 1000.0f;
+	frame.frame_ms = (float)OSTicksToMicroseconds(frame_ticks) / 1000.0f;
+	frame.budget_ms = (command->flags & DK_PRESENT_THIRTY) ? 1000.0f / 30.0f : 1000.0f / 60.0f;
+	frame.menu = (command->flags & DK_PRESENT_MENUS) != 0;
+	before = gx.drs.step;
+	step = wiiu_drs_frame(&gx.drs, &frame);
+	gx.drs_lines = wiiu_drs_lines(&gx.drs, step);
+	gx.drs_drops += gx.drs.step > before;
+	gx.drs_rises += gx.drs.step < before;
+	gx.drs_waits += frame.flip_wait_ms > 1.0f;
+	gx.drs_menu_frames += frame.menu != 0;
+	gx.drs_frames++;
+}
+
 /* the vertices of a screen's blit: the ring's, so that each screen's quad, and each frame's, is its own until the GPU has drawn it (the GamePad's view
 and a change of dynamic resolution's step give them other texture coordinates than the TV's and the last frame's); the quad made at the start if the
 ring is full */
@@ -3600,7 +3678,7 @@ static void present(const struct dk_command_present *command)
 	/* the part of the back buffer the frame drew, which the screens show: all of it, but at a lower step of dynamic resolution */
 	const uint32_t drawn[4] = { 0, 0, SURFACE_ACTIVE_WIDTH(&command->back_buffer), SURFACE_ACTIVE_HEIGHT(&command->back_buffer) };
 
-	gpu_frame_end();
+	gpu_frame_end(drawn[3]);
 	gpu_poll();
 	if (gx.overlay_on)
 	{
@@ -3673,6 +3751,7 @@ static void present(const struct dk_command_present *command)
 		gx.wait_ticks += OSGetSystemTime() - wait_start;
 		wait_ticks = OSGetSystemTime() - wait_start;
 	}
+	drs_present(command, wait_ticks, gx.last_present ? OSGetSystemTime() - gx.last_present : 0);
 	if (gx.overlay_on)
 	{
 		const OSTime end = OSGetSystemTime();
@@ -3684,8 +3763,9 @@ static void present(const struct dk_command_present *command)
 
 			/* (by how many of the display's refreshes the frame took: one is 60 a second) */
 			gx.frame_buckets[frame_ms < 20.0f ? 0 : frame_ms < 36.7f ? 1 : frame_ms < 53.3f ? 2 : 3]++;
-			gx.overlay.render_width = (unsigned)((float)gx.render_height * 16.0f / 9.0f + 0.5f);
-			gx.overlay.render_height = gx.render_height;
+			/* (what the frame drew: dynamic resolution's step shows) */
+			gx.overlay.render_width = drawn[2];
+			gx.overlay.render_height = drawn[3];
 			gx.overlay.interpolation = config_boolean("display.interpolation");
 			overlay_push(&gx.overlay, (float)OSTicksToMicroseconds(end - gx.overlay_previous_end) / 1000.0f, (float)OSTicksToMicroseconds(cpu_ticks) / 1000.0f,
 				(float)OSTicksToMicroseconds(end - present_start) / 1000.0f, (float)OSTicksToMicroseconds(wait_ticks) / 1000.0f, gx.gpu_ms, (unsigned)draws,
@@ -3785,6 +3865,13 @@ static void present(const struct dk_command_present *command)
 		gx.ring_bytes = gx.ring_calls = gx.ring_largest = gx.index_bytes = 0;
 		wiiu_log("GX2:   waiting for the display's flip: %.1f ms a frame", (double)OSTicksToMicroseconds(gx.wait_ticks) / 1000.0 / (double)gx.window_frames);
 		gx.wait_ticks = 0;
+		/* (dynamic resolution: the step, what changed it, and what the controller saw; the frame times' percentiles are the overlay's line) */
+		if (gx.drs_forced || gx.drs_on)
+			wiiu_log("GX2:   dynamic resolution: %u of %u lines (%s); since the last note %u drops and %u rises, %u of %u frames waited over 1 ms for the flip, "
+				"%u had a menu; the GPU's time at this step %.2f ms on average over %u frames; %u targets cleared at a change of step", gx.drs_lines,
+				gx.render_height, gx.drs_forced ? "halo/drs_lines.txt" : "the controller", gx.drs_drops, gx.drs_rises, gx.drs_waits, gx.drs_frames,
+				gx.drs_menu_frames, (double)wiiu_drs_average(&gx.drs), gx.drs.gpu_count, gx.drs_clears);
+		gx.drs_drops = gx.drs_rises = gx.drs_waits = gx.drs_frames = gx.drs_menu_frames = gx.drs_clears = 0;
 		wiiu_log("GX2:   frame times: longest %llu ms, %u over 40 ms; shaders loaded %u (%llu ms loading)", (unsigned long long)OSTicksToMilliseconds(gx.longest_frame),
 			gx.slow_frames, gx.shaders_loaded, (unsigned long long)OSTicksToMilliseconds(gx.shader_ticks));
 		gx.longest_frame = 0;

@@ -117,12 +117,24 @@ struct dk_command_clear
 screenshot is asked for by a guest address of active_width * active_height * 4
 bytes (debug.screenshot_every), which the host fills with those pixels of the
 back buffer, R G B A in memory, once the GPU has drawn them (the frame waits
-for it); 0 asks for none */
+for it); 0 asks for none. flags: what dynamic resolution's controller is to
+know of the frame (DK_PRESENT_*). */
+enum
+{
+	/* a menu has the screen: the controller is off, and the frames are
+	drawn with all the lines */
+	DK_PRESENT_MENUS = 1 << 0,
+	/* the frames come 30 a second (display.interpolation false), not 60: a
+	frame has twice the time */
+	DK_PRESENT_THIRTY = 1 << 1,
+};
+
 struct dk_command_present
 {
 	struct dk_command_header header;
 	struct dk_surface back_buffer;
 	uint32_t screenshot;
+	uint32_t flags;
 };
 
 /* ---------- draws (DEKO3D.md, phase 6)

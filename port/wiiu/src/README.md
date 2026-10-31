@@ -17,6 +17,7 @@ what newlib and wut lack, and, as they are written, stand-ins for the platform l
 | `wiiu_shell_watch.[ch]` | The decisions: has the game stalled, is the close deadline past. No clock and no thread of its own. Tested on the desktop. |
 | `wiiu_shell_log.[ch]` | The log queue and the worker that writes it to the card. Tested on the desktop. |
 | `wiiu_shell_blackbox.[ch]` | The black box's records and file. Tested on the desktop. |
+| `wiiu_drs.[ch]` | Dynamic resolution's controller: from each frame's GPU time and its wait for the flip, the step of the screen's lines the next frames draw (`wiiu_gx2.c` runs it at each present). No clock and no thread of its own. Tested on the desktop (`tools/harness/tests/test_wiiu_drs.py`). |
 | `wiiu_crash.[ch]` | The fault handler's note. |
 | `wiiu_atomic.[ch]` | 64-bit atomics (libatomic's names), for a core that has none. Tested on the desktop. |
 | `wiiu_libc.c` | `pause` and `sysconf`, which `xbox_kernel.c` calls and newlib lacks. |

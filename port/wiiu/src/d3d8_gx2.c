@@ -113,6 +113,10 @@ static float drs_fraction[2] = { 1.0f, 1.0f };
 (halo/drs_lines.txt's, or the controller's), or 0 before its first present */
 unsigned int host_gx2_drs_lines(void);
 
+/* port/linux/game/hud_hires_tags.c's: whether a menu has the screen (the
+controller is off while one has: the present command's DK_PRESENT_MENUS) */
+int port_menus_active(void);
+
 #ifdef HALO_SWITCH
 /* the host's (host_dk.c): the height it presents at, 1080 docked and 720 in
 handheld */
@@ -3911,6 +3915,9 @@ static void D3DDevice_Present_inner(CONST RECT *source_rectangle, CONST RECT *de
 
 		surface_describe(&device.back_buffer, FALSE, &command->back_buffer, scale);
 		command->screenshot = 0;
+		/* (for dynamic resolution's controller, which runs where the frame's GPU time is measured, on the GX2 thread: whether the frame is a menu's,
+		and the frame rate it has to keep) */
+		command->flags = (port_menus_active() ? DK_PRESENT_MENUS : 0u) | (halo_interpolation_enabled() ? 0u : DK_PRESENT_THIRTY);
 		if (screenshot_every > 0 && device.frame % (unsigned long)screenshot_every == 0 && command->back_buffer.width &&
 			*config_string("debug.screenshot_directory"))
 		{
