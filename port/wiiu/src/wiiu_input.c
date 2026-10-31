@@ -166,13 +166,22 @@ static struct wiiu_pad_players pad_players;
 static int pad_layout = WIIU_PAD_LAYOUT_AUTO;
 
 /* each channel's lights: the player number they were last set to (-1: not known, as after a connection, which the system lights with its channel's number),
-and when a setting was last tried (one at a time a tenth of a second apart: the controller's queue refuses one while it is busy) */
+when a setting was last tried (one at a time a tenth of a second apart: the controller's queue refuses one while it is busy), and when to set them once more
+after a connection or the HOME Menu (0: no need), in case the system's own lighting of the controller came after ours */
 static struct
 {
 	int shown;
 	OSTime tried;
-} lights[WIIU_PAD_CHANNELS] = { { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 } };
+	OSTime again_at;
+} lights[WIIU_PAD_CHANNELS] = { { -1, 0, 0 }, { -1, 0, 0 }, { -1, 0, 0 }, { -1, 0, 0 } };
 static int lights_foreground;
+
+/* the lights not known: set at the next poll, and again a second later */
+static void lights_forget(unsigned int channel, OSTime now)
+{
+	lights[channel].shown = -1;
+	lights[channel].again_at = now + (OSTime)OSSecondsToTicks(1);
+}
 
 /* The ranges the GamePad's sticks and gyro have given, in the log every few seconds while they grow: how far a stick goes each way (the look feels different
 up and down than left and right when the ranges are) and in what units the gyro is. */
@@ -353,7 +362,7 @@ static void pad_gone(unsigned int channel)
 	last_pro[channel].connected = 0;
 	memset(&last_pro[channel].pad, 0, sizeof(last_pro[channel].pad));
 	/* (whatever connects next is lit again: the system lights it with its channel's number) */
-	lights[channel].shown = -1;
+	lights_forget(channel, OSGetSystemTime());
 }
 
 /* The controller on a KPAD channel now, into last_pro: a sample if there is a new one, else as it was. Returns 1 if it is one the game reads. */
@@ -416,6 +425,11 @@ static void lights_update(unsigned int channel, OSTime now)
 	const int player = last_pro[channel].present ? wiiu_pad_players_lights(&pad_players, (int)channel) : 0;
 	WPADError error;
 
+	if (lights[channel].again_at && now >= lights[channel].again_at)
+	{
+		lights[channel].again_at = 0;
+		lights[channel].shown = -1;
+	}
 	if (!last_pro[channel].connected || lights[channel].shown == player)
 		return;
 	if (lights[channel].tried && now - lights[channel].tried < (OSTime)OSMillisecondsToTicks(100))
@@ -442,7 +456,7 @@ void wiiu_input_poll(int several_players)
 	{
 		lights_foreground = foreground;
 		for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
-			lights[channel].shown = -1;
+			lights_forget(channel, now);
 	}
 	for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
 	{
@@ -453,7 +467,7 @@ void wiiu_input_poll(int several_players)
 		if (changed)
 		{
 			connections_seen[channel] = count;
-			lights[channel].shown = -1;
+			lights_forget(channel, now);
 			probe_pending[channel] = 1;
 			wiiu_log("Input: channel %u %s", channel + 1, connection_status[channel] == WPAD_ERROR_NONE ? "connected" : "disconnected");
 		}
