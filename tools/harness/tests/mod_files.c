@@ -20,15 +20,22 @@ being printed as a format that reads arguments the game does not pass
 
 #include "under_test.inc"
 
-/* a string's bytes, as a tag file has them: UTF-16 little-endian or not */
-static unsigned long string_bytes(char const *text, boolean unicode, byte *bytes)
+/* a string's bytes, as a tag file has them (UTF-16 little-endian or not),
+or (host_order) as a map has them, its UTF-16 in this machine's order */
+static unsigned long string_bytes(char const *text, boolean unicode, boolean host_order, byte *bytes)
 {
 	unsigned long length = (unsigned long)strlen(text) + 1;
 	unsigned long index;
 
 	for (index = 0; index < length; index++)
 	{
-		if (unicode)
+		if (unicode && host_order)
+		{
+			unsigned short character = (unsigned char)text[index];
+
+			memcpy(bytes + 2 * index, &character, sizeof(character));
+		}
+		else if (unicode)
 		{
 			bytes[2 * index] = (byte)text[index];
 			bytes[2 * index + 1] = 0;
@@ -45,8 +52,9 @@ static boolean same_formats(char const *first, char const *second, boolean unico
 {
 	byte first_bytes[512];
 	byte second_bytes[512];
-	unsigned long first_size = string_bytes(first, unicode, first_bytes);
-	unsigned long second_size = string_bytes(second, unicode, second_bytes);
+	/* (a file's string, then the map's) */
+	unsigned long first_size = string_bytes(first, unicode, FALSE, first_bytes);
+	unsigned long second_size = string_bytes(second, unicode, TRUE, second_bytes);
 
 	return formats_match(first_bytes, first_size, second_bytes, second_size, unicode);
 }
@@ -119,15 +127,16 @@ int main(int argc, char **argv)
 		/* (a string that is not terminated ends at its size: "%%%%" then a
 		'%' with nothing after it) */
 		memset(bytes, '%', sizeof(bytes));
-		CHECK(format_conversions(bytes, 5, FALSE, (struct conversion[MAXIMUM_CONVERSIONS]){ { 0 } }) == 1,
+		CHECK(format_conversions(bytes, 5, FALSE, FALSE, (struct conversion[MAXIMUM_CONVERSIONS]){ { 0 } }) == 1,
 			"a string was read past its size");
 		/* (a character past ASCII is no conversion's: U+016C after '%' is not
 		the 'l' of its low byte) */
 		{
 			byte wide[8] = { '%', 0, 0x6C, 0x01, 'd', 0, 0, 0 };
-			byte modifier[8] = { '%', 0, 'l', 0, 'd', 0, 0, 0 };
+			/* (the map's, in this machine's order) */
+			unsigned short modifier[4] = { '%', 'l', 'd', 0 };
 
-			CHECK(!formats_match(wide, sizeof(wide), modifier, sizeof(modifier), TRUE),
+			CHECK(!formats_match(wide, sizeof(wide), (byte const *)modifier, sizeof(modifier), TRUE),
 				"a wide character was read as its low byte");
 		}
 		return 0;

@@ -349,8 +349,13 @@ static void check_tunnel_port(void)
 	if (!config_boolean("network.online") || port <= 0 || port > 65535)
 		return;
 	memset(address, 0, sizeof(address));
-	/* (a sockaddr_in: AF_INET, the port, any address) */
-	address[0] = 2;
+	/* (a sockaddr_in: AF_INET, a short in this machine's order, the port,
+	any address) */
+	{
+		unsigned short family = 2;
+
+		memcpy(address, &family, sizeof(family));
+	}
 	address[2] = (unsigned char)(port >> 8);
 	address[3] = (unsigned char)port;
 	socket = posix_socket(2, 2, 17);

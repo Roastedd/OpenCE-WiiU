@@ -27,7 +27,7 @@ NEGATIVE_CONTROLS = {
     "ignores-stars": (("conversions[index].stars != map_conversions[index].stars ||", ""), "formats_match", "formats"),
     "ignores-modifiers": (("strcmp(conversions[index].modifier, map_conversions[index].modifier)", "0"),
                           "formats_match", "formats"),
-    "counts-percent-signs": (("if (character_get(string, size, index, unicode) == '%')\n\t\t{",
+    "counts-percent-signs": (("if (character_get(string, size, index, unicode, host_order) == '%')\n\t\t{",
                               "if (0)\n\t\t{"), "format_conversions", "formats"),
     "channel-order-swapped": (("if (names_equal(text, \"xbox\"))\n\t\treturn 1;", "if (names_equal(text, \"xbox\"))\n\t\treturn 0;"),
                               "channel_order_xbox", "channel-order"),

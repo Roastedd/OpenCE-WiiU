@@ -345,7 +345,10 @@ enum
 	CUSTOM_EDITION_MAP_VERSION = 609,
 };
 
-/* a map file's cache version, by its header; 0 if it is not a cache file */
+/* a map file's cache version, by its header; 0 if it is not a cache file
+(little-endian, as the Xbox and Halo PC wrote them; and on a big-endian host
+big-endian too, as it plays maps converted to its order, tools/wiiu/
+map_convert.py) */
 static long map_file_version(const char *path)
 {
 	unsigned char header[8];
@@ -354,10 +357,14 @@ static long map_file_version(const char *path)
 
 	if (!file)
 		return 0;
-	if (fread(header, 1, sizeof(header), file) == sizeof(header) &&
-		(header[0] | header[1] << 8 | header[2] << 16 | (unsigned long)header[3] << 24) == MAP_HEADER_SIGNATURE)
+	if (fread(header, 1, sizeof(header), file) == sizeof(header))
 	{
-		version = (long)(header[4] | header[5] << 8 | header[6] << 16 | (unsigned long)header[7] << 24);
+		if ((header[0] | header[1] << 8 | header[2] << 16 | (unsigned long)header[3] << 24) == MAP_HEADER_SIGNATURE)
+			version = (long)(header[4] | header[5] << 8 | header[6] << 16 | (unsigned long)header[7] << 24);
+#ifdef __BIG_ENDIAN__
+		else if (((unsigned long)header[0] << 24 | header[1] << 16 | header[2] << 8 | header[3]) == MAP_HEADER_SIGNATURE)
+			version = (long)((unsigned long)header[4] << 24 | header[5] << 16 | header[6] << 8 | header[7]);
+#endif
 	}
 	fclose(file);
 	return version;

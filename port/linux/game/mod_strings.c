@@ -144,16 +144,29 @@ static void mod_string_list_free(
 	return;
 }
 
-/* the character at `index` of a string of `size` bytes */
+/* the character at `index` of a string of `size` bytes: a unicode one's
+UTF-16 as a tag file has it, little-endian, or (`host_order`) in this
+machine's order, as the map's strings are (port: a big-endian host's maps
+are big-endian: tools/wiiu/map_convert.py) */
 static unsigned short character_get(
 	byte const *string,
 	unsigned long size,
 	unsigned long index,
-	boolean unicode)
+	boolean unicode,
+	boolean host_order)
 {
 	if (unicode)
 	{
-		return 2 * index + 1 < size ? (unsigned short)(string[2 * index] | string[2 * index + 1] << 8) : 0;
+		unsigned short character;
+
+		if (2 * index + 1 >= size)
+			return 0;
+		if (host_order)
+		{
+			memcpy(&character, string + 2 * index, sizeof(character));
+			return character;
+		}
+		return (unsigned short)(string[2 * index] | string[2 * index + 1] << 8);
 	}
 
 	return index < size ? string[index] : 0;
@@ -173,25 +186,26 @@ static long format_conversions(
 	byte const *string,
 	unsigned long size,
 	boolean unicode,
+	boolean host_order,
 	struct conversion *conversions)
 {
 	unsigned long length = unicode ? size / 2 : size;
 	unsigned long index = 0;
 	long count = 0;
 
-	while (index < length && character_get(string, size, index, unicode))
+	while (index < length && character_get(string, size, index, unicode, host_order))
 	{
 		struct conversion *conversion;
 		unsigned short character;
 		short modifier_length = 0;
 
-		if (character_get(string, size, index, unicode) != '%')
+		if (character_get(string, size, index, unicode, host_order) != '%')
 		{
 			index++;
 			continue;
 		}
 		index++;
-		if (character_get(string, size, index, unicode) == '%')
+		if (character_get(string, size, index, unicode, host_order) == '%')
 		{
 			index++;
 			continue;
@@ -203,7 +217,7 @@ static long format_conversions(
 		conversion = &conversions[count++];
 		memset(conversion, 0, sizeof(*conversion));
 		/* (flags, width and precision, then the length modifier) */
-		while (character_in(character = character_get(string, size, index, unicode), "-+ #0123456789.*hlLqjzt"))
+		while (character_in(character = character_get(string, size, index, unicode, host_order), "-+ #0123456789.*hlLqjzt"))
 		{
 			if (character == '*')
 			{
@@ -235,8 +249,8 @@ static boolean formats_match(
 {
 	struct conversion conversions[MAXIMUM_CONVERSIONS];
 	struct conversion map_conversions[MAXIMUM_CONVERSIONS];
-	long count = format_conversions(string, size, unicode, conversions);
-	long map_count = format_conversions(map_string, map_size, unicode, map_conversions);
+	long count = format_conversions(string, size, unicode, FALSE, conversions);
+	long map_count = format_conversions(map_string, map_size, unicode, TRUE, map_conversions);
 	long index;
 
 	if (count == NONE || count != map_count)
@@ -349,6 +363,22 @@ static struct mod_string_list *mod_string_list_new(
 				memcpy(characters, string, size);
 				memset(characters + size, 0, terminator);
 				character_cursor += size + terminator;
+#ifdef __BIG_ENDIAN__
+				/* port: the file's UTF-16 little-endian, the game's text in
+				this machine's order (as the map's is) */
+				if (group->unicode)
+				{
+					unsigned long unit;
+
+					for (unit = 0; unit + 1 < size; unit += 2)
+					{
+						byte low = characters[unit];
+
+						characters[unit] = characters[unit + 1];
+						characters[unit + 1] = low;
+					}
+				}
+#endif
 				if (group->unicode)
 				{
 					tag_schema_unicode_string_end((wchar_t *)characters, (long)((size + terminator) / 2));

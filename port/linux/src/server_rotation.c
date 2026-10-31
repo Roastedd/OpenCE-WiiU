@@ -572,13 +572,27 @@ int server_map_header(const char *path, long *version, long *scenario_type)
 		return 0;
 	read = fread(header, 1, sizeof(header), file);
 	fclose(file);
+	if (read != sizeof(header))
+		return 0;
 	/* ('head' and 'foot', little-endian; Halo PC's and Custom Edition's
 	headers end where the Xbox's does) */
-	if (read != sizeof(header) || memcmp(header, "daeh", 4) || memcmp(header + 0x7FC, "toof", 4))
-		return 0;
-	*version = (long)(header[4] | header[5] << 8 | header[6] << 16 | (unsigned long)header[7] << 24);
-	*scenario_type = (long)(short)(header[0x60] | header[0x61] << 8);
-	return 1;
+	if (!memcmp(header, "daeh", 4) && !memcmp(header + 0x7FC, "toof", 4))
+	{
+		*version = (long)(header[4] | header[5] << 8 | header[6] << 16 | (unsigned long)header[7] << 24);
+		*scenario_type = (long)(short)(header[0x60] | header[0x61] << 8);
+		return 1;
+	}
+#ifdef __BIG_ENDIAN__
+	/* (port: or big-endian, as a big-endian host plays the maps converted
+	to its order, tools/wiiu/map_convert.py) */
+	if (!memcmp(header, "head", 4) && !memcmp(header + 0x7FC, "foot", 4))
+	{
+		*version = (long)((unsigned long)header[4] << 24 | header[5] << 16 | header[6] << 8 | header[7]);
+		*scenario_type = (long)(short)(header[0x60] << 8 | header[0x61]);
+		return 1;
+	}
+#endif
+	return 0;
 }
 
 /* the map file of a name in a folder (d:\maps, an absolute folder): the

@@ -434,6 +434,14 @@ void custom_edition_locale_close(
 	return;
 }
 
+/* port: a loc.map's value, little-endian as Halo PC wrote it, read by value
+(on a big-endian host too) */
+static uint32_t custom_edition_locale_u32(
+	byte const *bytes)
+{
+	return (uint32_t)bytes[0] | (uint32_t)bytes[1] << 8 | (uint32_t)bytes[2] << 16 | (uint32_t)bytes[3] << 24;
+}
+
 struct custom_edition_string_list *custom_edition_locale_strings(
 	char const *name)
 {
@@ -462,8 +470,8 @@ struct custom_edition_string_list *custom_edition_locale_strings(
 	}
 	/* (the tag's addresses count from its start; every string lies within
 	it, so together they are no longer than it) */
-	memcpy(&count, tag, sizeof(count));
-	memcpy(&address, tag + sizeof(count), sizeof(address));
+	count = (int32_t)custom_edition_locale_u32(tag);
+	address = custom_edition_locale_u32(tag + sizeof(count));
 	if (count <= 0 || count > STRING_LIST_MAXIMUM_COUNT || address > item->size ||
 		(uint32_t)count > (item->size - address) / STRING_LIST_ELEMENT_BYTES)
 	{
@@ -475,8 +483,8 @@ struct custom_edition_string_list *custom_edition_locale_strings(
 		int32_t size;
 		uint32_t data;
 
-		memcpy(&size, element, sizeof(size));
-		memcpy(&data, element + STRING_LIST_ELEMENT_ADDRESS_OFFSET, sizeof(data));
+		size = (int32_t)custom_edition_locale_u32(element);
+		data = custom_edition_locale_u32(element + STRING_LIST_ELEMENT_ADDRESS_OFFSET);
 		if (size < 0 || (size & 1) || data > item->size || (uint32_t)size > item->size - data ||
 			(uint32_t)size > item->size - text_bytes)
 		{
@@ -502,11 +510,15 @@ struct custom_edition_string_list *custom_edition_locale_strings(
 		int32_t size;
 		uint32_t data;
 		long length;
+		long unit;
 
-		memcpy(&size, element, sizeof(size));
-		memcpy(&data, element + STRING_LIST_ELEMENT_ADDRESS_OFFSET, sizeof(data));
-		memcpy(characters, tag + data, (size_t)size);
+		size = (int32_t)custom_edition_locale_u32(element);
+		data = custom_edition_locale_u32(element + STRING_LIST_ELEMENT_ADDRESS_OFFSET);
 		length = size / 2;
+		/* (UTF-16 little-endian, as the tag has it, into this machine's
+		order) */
+		for (unit = 0; unit < length; unit++)
+			characters[unit] = (unsigned short)(tag[data + 2 * unit] | tag[data + 2 * unit + 1] << 8);
 		if (!length || characters[length - 1])
 		{
 			characters[length++] = 0;
