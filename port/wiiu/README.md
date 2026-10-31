@@ -183,6 +183,78 @@ only: it starts when `halo/debug_server.txt` on the card says `1`, and is off wi
   the app does close (the release and exit callbacks run, "Closed" is logged), but under Aroma the console then started the app again once, and
   twice stayed on the Wii U logo. HOME and Close software is the way out that has always worked.
 
+## Dynamic resolution and the GamePad's view
+
+Written and tested on the build machine (branch `wiiu-drs`), not run on a console yet.
+
+- **One set of targets, drawn in part.** The screen's targets (the back buffer, the depth buffer, `render_primary_copy` on the depth buffer's
+  memory) keep the size of `display.render_lines`, the ceiling. A frame at fewer lines draws into their top left part: `src/d3d8_gx2.c`'s
+  `drs_fraction` is that part's share, viewports, scissors, clears and visibility counts follow it through `target_scale`, and a screen
+  target sampled as a texture is scaled to it. `src/wiiu_gx2.c` keeps one target for every step (`target_get` leaves the active size out),
+  clears a target whole when it is bound at another step than it was last drawn at (`target_step`), and blits only what was drawn. The
+  share changes only between frames (`halo_screen_commit`).
+- **The steps** are 1, 0.9, 0.8 and 0.75 of the ceiling: 720, 648, 576 and 540 lines, or 1080, 972, 864 and 810.
+  `halo/drs_lines.txt` (a number of lines, 240 to the ceiling) fixes one for the whole run, with the controller off whatever
+  `display.dynamic_resolution` says.
+- **The controller** (`src/wiiu_drs.c`, run in `present()` on the GX2 thread) drops a step when the last 8 frames' GPU time averages over 0.9
+  of the budget (16.7 ms, 33.3 at 30 frames a second) and the frame waited more than 1 ms for the flip; it raises one when the time
+  predicted at the step above fits in 0.75 of the budget, or after 120 frames without a wait. It holds 30 frames after any change and 3 s
+  after a drop, and is off while a menu has the screen (the menus draw every line). `display.dynamic_resolution` (off by default; the graphics
+  mode Quality turns it on) and `display.dynamic_resolution_floor` (540) set it.
+- **The HUD and text** are drawn at the step, the text from glyphs made for the ceiling (`halo_screen_pixel_scale` does not change, so the
+  glyph atlas is not made again), at most 1.33 times smaller. The performance overlay is drawn on the screens and does not change.
+- **The GamePad's view** (`input.wiiu_gamepad_view` `"player1"`): while the screen is split, the GamePad's blit samples the first window
+  (`port/linux/game/gamepad_window.c`, main.c's `compute_window_bounds`) instead of the whole frame; no more is drawn.
+
+The log says, at the start, `GX2: dynamic resolution: the frames draw N of the targets' M lines for this run (halo/drs_lines.txt)` when the
+note is there, and at the first present (and each change of the settings) `GX2: dynamic resolution is on|off ...`; every 5 s, with the other
+notes, `GX2:   dynamic resolution: N of M lines (...); since the last note D drops and R rises, W of F frames waited over 1 ms for the
+flip, K had a menu; the GPU's time at this step ... ms on average over n frames; C targets cleared at a change of step`. The frame times'
+percentiles are the line before it, `GX2:   frame times: median ..., 95th percentile ..., 99th ... ms`. The overlay shows the size drawn.
+
+### The console's tests
+
+For the session that has the console. Copy the build's `halo.wuhb`/`halo.rpx`; keep the card's other notes as that session's practice has
+them. Each run: read `log.txt` afterwards.
+
+1. **Each forced step in a10, a30 and Blood Gulch.** At 720 lines (the default), put `648`, then `576`, then `540` in `halo/drs_lines.txt`
+   (one run each), and once `1080` lines (`display.render_lines = 1080`, or `halo/render_height.txt` 1080) with `810`. In each map, look at:
+   - the HUD (meters, motion sensor, reticle, the text and waypoints): where it is at 720 without the note, only softer;
+   - the scope (zoom in with a sniper and a pistol): the view and its blur line up, and no dark band at the right or bottom edge beyond a
+     pixel or two (the blur's taps read the cleared pixels past the part drawn: note it if it shows);
+   - night vision (the sniper rifle's scope in a dark place: inside a base in Blood Gulch): the green covers the whole picture;
+   - lens flares (the sun in a30, lights in a10): as bright as without the note (their visibility counts are scaled to the step);
+   - water (a30's shore) and active camouflage (Blood Gulch's power-up, or an Elite that has it in the campaign): the water's ripples
+     and the camouflage's refraction line up with what is behind them;
+   - the log: no `GX2: color target` or `GX2: depth target` line after the map's first frames, and every target of the screen's size
+     (1280x720 or 1920x1080 pixels) says `in the eDRAM`; the 5 s line says `N of M lines (halo/drs_lines.txt)`.
+2. **Two players at each step.** Controllers SEPARATE and a Pro Controller (or the PS4 one through Bloopair); split screen in Blood Gulch with
+   each forced step: each player's view and HUD stay in their half, the black line between the halves is where it is, nothing of one half
+   shows in the other.
+3. **The controller.** No note; `display.dynamic_resolution = true`.
+   - Graphics mode Quality (1080 lines at 30): in the main menu and Video Setup the 5 s line says `1080 of 1080 lines`, with every frame
+     counted under `had a menu` and no drops or rises.
+   - Quality in an a30 fight (the first beach): at most 5 drops and rises in each 5 s line (once a second), the 99th percentile of the
+     frame times at most 34 ms, and the lines going back up when the fight is over.
+   - Balanced (720 at 60) with dynamic resolution on, in Blood Gulch: `720 of 720 lines` throughout, no drops (the GPU takes about 4 ms).
+     If it drops there, the controller is reading the game thread's lateness as the GPU's: say what the line's GPU time and flip waits were.
+4. **HOME at a lowered step.** With `576` in `halo/drs_lines.txt` in a10, and once with the controller at a lowered step in an a30 fight:
+   HOME, wait 10 s, back. The picture comes back as it was, the log says `GX2: back: N render targets are in the eDRAM again, 0 have no
+   memory`, no new target line follows, and the 5 s line still says 576 (or the controller's step).
+5. **The GamePad's view.** Wii U GamePad Setup, GAMEPAD SHOWS: PLAYER 1. Two players in Blood Gulch: the GamePad shows player 1's half,
+   letterboxed, with nothing of player 2's at its bottom edge; with four players (if controllers allow) player 1's quarter fills it.
+   Pause (a menu): the GamePad shows the whole picture and taps work. One player, or a cinematic: the whole picture. Once with `576` in
+   `halo/drs_lines.txt`: the same, at that step.
+
+Afterwards: remove `halo/drs_lines.txt`, set GAMEPAD SHOWS back to TV and the graphics mode back to what it was, and leave the card as the
+session found it.
+
+What the build machine could not settle: whether a wait for the flip tells a GPU that is behind from a display that holds a frame the GPU
+finished early (the GX2 thread waits about 14 ms a frame for the display in Blood Gulch, where the GPU takes 4: the drop also needs the GPU's
+time near the budget, which a game thread just under the budget could make it read if the GPU waits for its commands); how long the whole
+clears at a change of step take (a clear of a 1080-line target is expected under a millisecond); whether the edge of the part drawn shows
+during blurs; and the eDRAM: no target is added (one set serves every step), so its use is as at the same `display.render_lines` today.
+
 ## What is written and not run on a console
 
 Compiled, linked and tested on the build machine where it can be, not run on the Wii U: the high-res text (`text_hires.c`: the fonts in the maps' tags replaced by
