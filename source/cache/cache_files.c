@@ -138,6 +138,14 @@ symbols in this file:
 #include "custom_edition_cache.h" /* port: port/linux/game/custom_edition_cache.c */
 #include "cache_file_formats.h" /* port: CUSTOM_EDITION_TAG_CACHE_BYTES */
 #include "map_share.h" /* port: port/linux/game/map_share.c */
+#ifdef HALO_ANDROID
+/* port: geometry the map holds and does not write, drawn on Android from
+GL buffers of its own (port/linux/src/d3d8_gl.c) */
+void xgpu_static_buffers_add(const void *buffers, long count, unsigned long stride, int indices, const void *end);
+void xgpu_static_buffers_remove(const void *buffers, long count, unsigned long stride, int indices);
+void xgpu_static_range_add(const void *start, unsigned long size, int indices);
+void xgpu_static_range_remove(const void *start, int indices);
+#endif
 
 /* ---------- constants */
 
@@ -255,6 +263,8 @@ static boolean cache_file_structure_bsp_tag_valid(
 /* ---------- globals */
 
 static struct cache_file_globals cache_file_globals = { 0 };
+/* port: the name the map loaded last was loaded by (scenario_tags_load) */
+static char cache_file_loaded_name[64];
 extern struct cache_file_tag_instance *global_tag_instances;
 /* port: global_tag_instances' count. The menus add their tags to a copy of
 the table (port/linux/game/menu_tags.c); the map's tag header keeps its own,
@@ -599,14 +609,14 @@ void scenario_tags_unload(
 		hud_hires_tags_unloaded();
 	}
 	sound_cache_close();
-	/* port: the sounds of tag files go, after the sound cache that held them
-	(port/linux/game/loose_sounds.c) */
-	{
-		extern void loose_sounds_tags_unloaded(void);
-
-		loose_sounds_tags_unloaded();
-	}
 	texture_cache_close();
+	/* port: the mods' tags go, after the sound and texture caches that held
+	their sounds and bitmaps (port/linux/game/mods.c) */
+	{
+		extern void mods_tags_unloaded(void);
+
+		mods_tags_unloaded();
+	}
 	/* port: the menus' tags go, and the map's own table comes back
 	(port/linux/game/menu_tags.c): after the texture cache, which writes to
 	the bitmaps it has loaded as it closes, theirs among them */
@@ -621,7 +631,15 @@ void scenario_tags_unload(
 	if (custom_edition_cache_tags_loaded())
 		custom_edition_cache_tags_unload();
 	else
+	{
+#ifdef HALO_ANDROID
+		struct cache_file_tag_header *tags = cache_file_globals.tag_header;
+
+		xgpu_static_buffers_remove(tags->vertex_buffers, tags->vertex_buffer_count, CACHE_FILE_BUFFER_SIZE, 0);
+		xgpu_static_buffers_remove(tags->index_buffers, tags->index_buffer_count, CACHE_FILE_BUFFER_SIZE, 1);
+#endif
 		tags_header_deregister_vertex_and_index_buffers(cache_file_globals.tag_header);
+	}
 	cache_file_globals.tags_loaded = FALSE;
 	global_tag_instances = NULL;
 	global_tag_count = 0;
@@ -853,6 +871,14 @@ long tag_iterator_next(
 	}
 
 	return result;
+}
+
+/* port: the name the map loaded (or being loaded) was loaded by: its file's,
+<file>@ce and the like for the families past the Xbox's */
+char const *cache_file_loaded_map_name(
+	void)
+{
+	return cache_file_loaded_name;
 }
 
 boolean cache_file_header_verify(
@@ -1184,6 +1210,9 @@ long scenario_tags_load(
 
 	stripped_scenario_name = tag_name_strip_path(scenario_name);
 	result = NONE;
+	/* port: the map being loaded, by its name (cache_file_loaded_map_name) */
+	csstrncpy(cache_file_loaded_name, stripped_scenario_name, sizeof(cache_file_loaded_name) - 1);
+	cache_file_loaded_name[sizeof(cache_file_loaded_name) - 1] = 0;
 	texture_cache_open();
 	sound_cache_open();
 	/* port: a Halo Custom Edition map (custom_maps\<name>) is read in place
@@ -1193,6 +1222,9 @@ long scenario_tags_load(
 	name: a Custom Edition map that cannot load is not played at all. */
 	if (custom_edition_level_name(scenario_name))
 	{
+		/* port: a protected map's structure bsp names the groups of tags
+		whose own are scrambled (port/linux/game/tag_validate.c) */
+		custom_edition_structure_bsp_proc_set(tag_validate_custom_edition_note_structure_bsp);
 		cache_file_globals.tag_header = custom_edition_cache_tags_load(
 			stripped_scenario_name,
 			&cache_file_globals.header);
@@ -1207,11 +1239,18 @@ long scenario_tags_load(
 
 				menu_tags_loaded(cache_file_globals.header.name);
 			}
-			/* (and the sounds of tag files, as below) */
+			/* port: register CE HUD bitmaps before mods replace their tags
+			(port/linux/game/hud_hires_tags.c), as for Xbox maps below. */
 			{
-				extern void loose_sounds_tags_loaded(void);
+				extern void hud_hires_tags_loaded(long scenario_index);
 
-				loose_sounds_tags_loaded();
+				hud_hires_tags_loaded(cache_file_globals.tag_header->scenario_tag_index);
+			}
+			/* (and the mods' tags, as below) */
+			{
+				extern void mods_tags_loaded(char const *map_name);
+
+				mods_tags_loaded(stripped_scenario_name);
 			}
 			result = cache_file_globals.tag_header->scenario_tag_index;
 		}
@@ -1289,6 +1328,17 @@ long scenario_tags_load(
 			global_tag_instances = cache_file_globals.tag_header->tag_instances;
 			global_tag_count = cache_file_globals.tag_header->tag_count;
 			tags_header_register_vertex_and_index_buffers(cache_file_globals.tag_header);
+#ifdef HALO_ANDROID
+			/* port: (an Xbox map's model vertices and indices, in its tags
+			from the first buffer to their end) */
+			{
+				struct cache_file_tag_header *tags = cache_file_globals.tag_header;
+				const void *end = (const byte *)tag_cache_base_address + cache_file_globals.header.tag_data_size;
+
+				xgpu_static_buffers_add(tags->vertex_buffers, tags->vertex_buffer_count, CACHE_FILE_BUFFER_SIZE, 0, end);
+				xgpu_static_buffers_add(tags->index_buffers, tags->index_buffer_count, CACHE_FILE_BUFFER_SIZE, 1, end);
+			}
+#endif
 			cache_file_globals.tags_loaded = TRUE;
 			/* port: a PAL map played as the NTSC maps are (port/linux/game/pal_tags.c) */
 			{
@@ -1311,16 +1361,18 @@ long scenario_tags_load(
 			}
 			/* port: the bitmaps the high-res HUD stands for (port/linux/game/hud_hires_tags.c) */
 			{
-				extern void hud_hires_tags_loaded(void);
+				extern void hud_hires_tags_loaded(long scenario_index);
 
-				hud_hires_tags_loaded();
+				hud_hires_tags_loaded(cache_file_globals.tag_header->scenario_tag_index);
 			}
-			/* port: the sounds of tag files played over the map's
-			(audio.loose_sounds: port/linux/game/loose_sounds.c) */
+			/* port: the mods' sounds, bitmaps, text and models played over
+			the map's, last, over the menus' tags too, and with the high-res
+			HUD standing for the map's bitmaps, not a mod's (the main menu's
+			Mods: port/linux/game/mods.c) */
 			{
-				extern void loose_sounds_tags_loaded(void);
+				extern void mods_tags_loaded(char const *map_name);
 
-				loose_sounds_tags_loaded();
+				mods_tags_loaded(stripped_scenario_name);
 			}
 			result = cache_file_globals.tag_header->scenario_tag_index;
 		}
@@ -1447,6 +1499,20 @@ boolean scenario_structure_bsp_load(
 		0xE0,
 		cache_file_globals.structure_bsp_header->signature==CACHE_FILE_STRUCTURE_BSP_HEADER_SIGNATURE);
 	structure_bsp_header_register_vertex_buffers(cache_file_globals.structure_bsp_header);
+#ifdef HALO_ANDROID
+	/* port: (an Xbox bsp's vertices and lightmap vertices, from the first
+	buffer to the bsp's end, and the indices its surfaces draw: a Custom
+	Edition bsp's too, whose vertices custom_edition_geometry.c gave buffers) */
+	{
+		const void *end = (const byte *)reference->base_address + reference->file_size;
+
+		xgpu_static_buffers_add(structure_bsp_header->vertex_buffers, structure_bsp_header->vertex_buffer_count,
+			CACHE_FILE_BUFFER_SIZE, 0, end);
+		xgpu_static_buffers_add(structure_bsp_header->index_buffers, structure_bsp_header->index_buffer_count,
+			CACHE_FILE_BUFFER_SIZE, 0, end);
+		xgpu_static_range_add(reference->base_address, (unsigned long)reference->file_size, 1);
+	}
+#endif
 	tag_instance = cache_get_tag_instance(reference->structure_bsp.index);
 	match_assert(
 		"c:\\halo\\SOURCE\\cache\\cache_files.c",
@@ -1466,6 +1532,15 @@ void scenario_structure_bsp_unload(
 {
 	struct cache_file_tag_instance *tag_instance;
 
+#ifdef HALO_ANDROID
+	{
+		struct cache_file_structure_bsp_header *bsp = cache_file_globals.structure_bsp_header;
+
+		xgpu_static_buffers_remove(bsp->vertex_buffers, bsp->vertex_buffer_count, CACHE_FILE_BUFFER_SIZE, 0);
+		xgpu_static_buffers_remove(bsp->index_buffers, bsp->index_buffer_count, CACHE_FILE_BUFFER_SIZE, 0);
+		xgpu_static_range_remove(reference->base_address, 1);
+	}
+#endif
 	structure_bsp_header_deregister_vertex_buffers(cache_file_globals.structure_bsp_header);
 	/* port: the buffers a Halo Custom Edition bsp was given
 	(port/linux/game/custom_edition_geometry.c) */

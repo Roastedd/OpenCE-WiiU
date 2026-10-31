@@ -172,9 +172,9 @@ void test_input_hold_action(int hold)
 	(void)hold;
 }
 
-void test_input_set_game_time(long ticks)
+void test_input_press(unsigned long buttons)
 {
-	(void)ticks;
+	(void)buttons;
 }
 
 /* (the menus' files and art, and the high-resolution HUD, text and titles: menu_files.c, hud_hires.c and text_hires.c, built for the Wii U) */

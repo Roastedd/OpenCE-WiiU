@@ -117,6 +117,6 @@ def timeout_scale():
 
 def run(executable, case):
     """Run one case: (exit status, output)."""
-    result = subprocess.run([*runner(), str(executable), case], capture_output=True, text=True,
+    result = subprocess.run([*runner(), str(executable), case], capture_output=True, text=True, errors="replace",
                             timeout=60 * timeout_scale())
     return result.returncode, (result.stdout + result.stderr).strip()

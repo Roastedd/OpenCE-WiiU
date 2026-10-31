@@ -1,5 +1,6 @@
 """The real mixer of dsound_sdl.c on known signals (mixer.c): its resampler against the same low pass worked out in
-double precision, sines through it as the ear hears them, voices out of earshot and mono voices.
+double precision, sines through it as the ear hears them, voices out of earshot, mono voices and the linear
+resampler.
 
     python tools/harness/tests/test_mixer.py metrics   the figures
     python tools/harness/tests/test_mixer.py bench [voices] [out of earshot] [indoor]   a game's worth of voices, timed
@@ -16,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import CHECK_FAILED, big_endian, build, function, mutated, read, run, runner, timeout_scale  # noqa: E402
 
 SOURCE = "port/linux/src/dsound_sdl.c"
-CASES = ["reference", "impulse", "sines", "aliases", "silent-voice", "mono", "pending-packet", "pending-ramp"]
+CASES = ["reference", "impulse", "sines", "aliases", "silent-voice", "mono", "pending-packet", "pending-ramp", "linear"]
 GAIN_PUBLISHER = function(read(SOURCE), "mixer_settings_publish")
 
 # a fault in the mixer, and the case that must catch it
@@ -28,6 +29,7 @@ NEGATIVE_CONTROLS = {
     "no-stretch": (("#define RESAMPLER_MAXIMUM_STRETCH 2", "#define RESAMPLER_MAXIMUM_STRETCH 1"), "aliases"),
     "pending-as-silence": (("*waiting = TRUE;", "*waiting = FALSE;"), "pending-packet"),
     "pending-ramp-jumps": (("stream->current_left = waiting ? left : target_left;", "stream->current_left = target_left;"), "pending-ramp"),
+    "linear-nearest": (("left_frames[0] + (left_frames[1] - left_frames[0]) * fraction", "left_frames[0]"), "linear"),
 }
 
 
