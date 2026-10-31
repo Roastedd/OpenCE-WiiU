@@ -3407,7 +3407,9 @@ static void distributed_handle_actions(
 	long update_number;
 	short index;
 
-	if (!distributed_take(&data, end, &update_number, sizeof(update_number), sizeof(update_number)))
+	/* (the host's update in this machine's order already, turned with the
+	message by distributed_wire_entries: taken as it is, not turned again) */
+	if (!distributed_take(&data, end, &update_number, sizeof(update_number), sizeof(byte)))
 		return;
 	for (index = 0; index < count; index++)
 	{
@@ -5580,7 +5582,8 @@ static void distributed_wire_entries(
 		}
 		break;
 	case _distributed_message_relayed_actions:
-		/* (the host's update first, then entries value by value) */
+		/* (the host's update first, here alone (distributed_handle_actions
+		takes it as it is), then entries value by value) */
 		if (size >= (long)sizeof(long))
 			network_wire_values(entries, sizeof(long), sizeof(long));
 		break;
