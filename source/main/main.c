@@ -3379,7 +3379,9 @@ from the environment:
   on core 0, whose cache is a quarter of core 1's. */
 #ifndef HALO_WEB
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #ifdef HALO_WIIU
 void wiiu_fpu_setup(void);
@@ -3393,6 +3395,22 @@ static long main_study_setting(
 {
 	char const *value = getenv(name);
 
+#ifdef HALO_WIIU
+	/* (the console has no environment: the ticks' thread is halo/tick_thread.txt's number, 1 for core 0) */
+	if (!strcmp(name, "HALO_TICK_THREAD"))
+	{
+		FILE *file = fopen("/vol/external01/wiiu/apps/halo/tick_thread.txt", "r");
+		long number = fallback;
+
+		if (file)
+		{
+			if (fscanf(file, "%ld", &number) != 1)
+				number = fallback;
+			fclose(file);
+		}
+		return number;
+	}
+#endif
 	return value && *value ? strtol(value, NULL, 10) : fallback;
 }
 
@@ -3490,6 +3508,14 @@ static void main_game_time_update(
 			pthread_attr_destroy(&attributes);
 			error(_error_silent, "study: the ticks on a thread of their own (HALO_TICK_THREAD): %s",
 				main_tick_thread.state ? "running" : "could not be started");
+#ifdef HALO_WIIU
+			{
+				void platform_log(const char *format, ...);
+
+				platform_log("study: the ticks on a thread of their own on core 0 (tick_thread.txt), the game thread waiting: %s",
+					main_tick_thread.state ? "running" : "could not be started");
+			}
+#endif
 		}
 	}
 	if (!main_tick_thread.state)
