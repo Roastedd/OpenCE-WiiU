@@ -1,0 +1,9 @@
+{
+  "uniform_mode": "register",
+  "gfd_size": 1908,
+  "gfd_sha256": "5a5e0dfa77e8c601fada0fade328be114a09c8d072fd4737575ac09ea0ee7cde",
+  "source_sha256": {
+    "mip.vert": "ce8c8ebad2b3b6716ef93699e4ab688d67e2c979bd8bac0a453d8c7782a1210c",
+    "mip.frag": "90c3beb321693560d4cf206b10c2cdb57b691257304aba6baab320b88c80075d"
+  }
+}

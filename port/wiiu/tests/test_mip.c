@@ -60,7 +60,7 @@ int main(void)
 	CHECK(out[4 * 4] == 0xee && out[5 * 4 - 1] == 0xee); /* (only 2 x 1 texels written) */
 	CHECK(out[0] == 25);
 
-	/* odd sizes repeat the last row and column: a 3 x 3 gives 1 x 1 from texels (0..1, 0..1) */
+	/* odd sizes discard their unpaired edge: a 3 x 3 gives 1 x 1 from texels (0..1, 0..1) */
 	memset(source, 0, sizeof(source));
 	source[0] = 100;
 	source[4] = 200;
