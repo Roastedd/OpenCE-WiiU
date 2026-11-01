@@ -3396,19 +3396,13 @@ static long main_study_setting(
 	char const *value = getenv(name);
 
 #ifdef HALO_WIIU
-	/* (the console has no environment: the ticks' thread is halo/tick_thread.txt's number, 1 for core 0) */
+	/* (the console has no environment: the ticks' thread is halo/tick_thread.txt's number, 1 for core 0; port/wiiu/src/wiiu_study.c
+	reads it, as this file's fopen takes the Xbox's paths) */
 	if (!strcmp(name, "HALO_TICK_THREAD"))
 	{
-		FILE *file = fopen("/vol/external01/wiiu/apps/halo/tick_thread.txt", "r");
-		long number = fallback;
+		long wiiu_study_number(const char *name, long fallback);
 
-		if (file)
-		{
-			if (fscanf(file, "%ld", &number) != 1)
-				number = fallback;
-			fclose(file);
-		}
-		return number;
+		return wiiu_study_number("tick_thread.txt", fallback);
 	}
 #endif
 	return value && *value ? strtol(value, NULL, 10) : fallback;
