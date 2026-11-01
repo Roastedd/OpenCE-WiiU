@@ -1,0 +1,391 @@
+{
+  "base": "de64efdea42b1543bc695c67dbdcf8afbd639859",
+  "branch": "codex/audio-churn-mac-20261031",
+  "mac_reference": {
+    "binary_ppc_sha256": "33c536018095e41f0998c94573227ff05aee04465449b84a24616d59a95001cb",
+    "PCM_pool_function": "0x0034b8e0",
+    "callback_function": "0x003496f0",
+    "use": "Architectural reference only; no code copied."
+  },
+  "sources": {
+    "port/linux/src/dsound_sdl.c": "03666a66f79de36abea43da4da96d1c62a4049020474071486b97dd870f4379f",
+    "port/wiiu/src/wiiu_packet_pool.c": "3a2d0c307c37072a74f6037ed3139b77b5e6c7b19c936651536f75b5e68afb8c",
+    "port/wiiu/src/wiiu_packet_pool.h": "4e147f8d8d7424c4e269ddb16e168f93dbd43d721f85690c87dd50e4c300a061"
+  },
+  "artifacts": {
+    "allocation-bench-host.json": {
+      "sha256": "23f9a9ced59baaf9ed29fe31cc9207c5f4dc41ee096ec7365b998932c1333d62",
+      "local_path": "/Users/edl/Documents/GitHub/HALOCE_WIIU/runs/host-mac-perf-20261031/audio/allocation-bench-host.json",
+      "summary": [
+        {
+          "size": 2304,
+          "batch": 64,
+          "libc_median_ns": 23012000,
+          "pool_median_ns": 11549000,
+          "pool_ratio": 0.5018685903007126,
+          "libc_range_ns": [
+            22524000,
+            31925000
+          ],
+          "pool_range_ns": [
+            11377000,
+            11919000
+          ]
+        },
+        {
+          "size": 8192,
+          "batch": 64,
+          "libc_median_ns": 23590000,
+          "pool_median_ns": 12419000,
+          "pool_ratio": 0.5264518863925393,
+          "libc_range_ns": [
+            23176000,
+            24128000
+          ],
+          "pool_range_ns": [
+            12045000,
+            12539000
+          ]
+        },
+        {
+          "size": 8192,
+          "batch": 256,
+          "libc_median_ns": 99558000,
+          "pool_median_ns": 109011000,
+          "pool_ratio": 1.094949677574881,
+          "libc_range_ns": [
+            98885000,
+            100986000
+          ],
+          "pool_range_ns": [
+            107429000,
+            110058000
+          ]
+        },
+        {
+          "size": 32768,
+          "batch": 32,
+          "libc_median_ns": 13108000,
+          "pool_median_ns": 11468000,
+          "pool_ratio": 0.8748855660665242,
+          "libc_range_ns": [
+            12838000,
+            13552000
+          ],
+          "pool_range_ns": [
+            10923000,
+            11917000
+          ]
+        },
+        {
+          "size": 32768,
+          "batch": 64,
+          "libc_median_ns": 31916000,
+          "pool_median_ns": 74637000,
+          "pool_ratio": 2.3385449304424113,
+          "libc_range_ns": [
+            31044000,
+            32571000
+          ],
+          "pool_range_ns": [
+            74421000,
+            77325000
+          ]
+        },
+        {
+          "size": 65537,
+          "batch": 16,
+          "libc_median_ns": 24909000,
+          "pool_median_ns": 32689000,
+          "pool_ratio": 1.3123369063390742,
+          "libc_range_ns": [
+            24325000,
+            25420000
+          ],
+          "pool_range_ns": [
+            31813000,
+            33387000
+          ]
+        }
+      ],
+      "method": "5 paired repeats, alternating order; ordinary uncounted libc during wall timing; counts from a separate pass. Fixture mutex-depth hooks disabled; public pool API marked noinline to preserve the real separate-module boundary. No decode/mix included. Candidate miss accounting-wrapper branch remains conservative."
+    },
+    "allocation-bench-ppc.json": {
+      "sha256": "01a8eac242be0dd689d4fdeecba1a055ca88f3c9cec4876afbfdd6f7c724f15a",
+      "local_path": "/Users/edl/Documents/GitHub/HALOCE_WIIU/runs/host-mac-perf-20261031/audio/allocation-bench-ppc.json",
+      "summary": [
+        {
+          "size": 2304,
+          "batch": 64,
+          "libc_median_ns": 31451359,
+          "pool_median_ns": 14878863,
+          "pool_ratio": 0.47307536059093663
+        },
+        {
+          "size": 8192,
+          "batch": 64,
+          "libc_median_ns": 68080035,
+          "pool_median_ns": 14965655,
+          "pool_ratio": 0.21982443164137622
+        },
+        {
+          "size": 8192,
+          "batch": 256,
+          "libc_median_ns": 296320923,
+          "pool_median_ns": 219207969,
+          "pool_ratio": 0.7397654096805037
+        },
+        {
+          "size": 32768,
+          "batch": 32,
+          "libc_median_ns": 48124022,
+          "pool_median_ns": 7683287,
+          "pool_ratio": 0.15965596142400568
+        },
+        {
+          "size": 32768,
+          "batch": 64,
+          "libc_median_ns": 94989581,
+          "pool_median_ns": 67507866,
+          "pool_ratio": 0.7106870594576051
+        },
+        {
+          "size": 65537,
+          "batch": 16,
+          "libc_median_ns": 30559980,
+          "pool_median_ns": 35379003,
+          "pool_ratio": 1.1576906463944021
+        }
+      ],
+      "method": "Three paired alternating-order repeats, 2000 waves. These are emulated Linux allocator/locking timings, not Wii U newlib or console cycles. Separate counter pass. Fixture lock hooks disabled and public calls kept noinline."
+    },
+    "pipeline-host.json": {
+      "sha256": "0a35f244df5a93fd704523b194fb0cd6d6df36e9ebada45e8d60d31baa307f78",
+      "local_path": "/Users/edl/Documents/GitHub/HALOCE_WIIU/runs/host-mac-perf-20261031/audio/pipeline-host.json",
+      "summary": [
+        {
+          "format": "mono-adpcm",
+          "baseline_median_us": 67278,
+          "pool_median_us": 67009,
+          "baseline_mallocs": 12800,
+          "pool_mallocs": 0,
+          "baseline_frees": 12800,
+          "pool_frees": 0,
+          "checksum": "be9c9dc5"
+        },
+        {
+          "format": "stereo-pcm",
+          "baseline_median_us": 194804,
+          "pool_median_us": 196716,
+          "baseline_mallocs": 12800,
+          "pool_mallocs": 3300,
+          "baseline_frees": 12800,
+          "pool_frees": 3300,
+          "checksum": "6a549dc5"
+        }
+      ],
+      "method": "Five paired alternating-order repeats of actual stream_process, queue copy, packet_decode, publication and completion; deterministic single-thread queue draining. Public pool calls kept noinline to preserve the separate-module boundary. Timing includes decoding, locks, allocation counters and checksum, so it is not an isolated allocator timer or mixer/console deadline."
+    },
+    "wiiu-build-final.json": {
+      "sha256": "0b9c60b03994c35f63c3e9a73861da9232b6d9d5b753df8ffa73969ca407d76d",
+      "local_path": "/Users/edl/Documents/GitHub/HALOCE_WIIU/runs/host-mac-perf-20261031/audio/wiiu-build-final.json",
+      "result": {
+        "command": [
+          "docker",
+          "run",
+          "--pull=never",
+          "--rm",
+          "--network",
+          "none",
+          "-v",
+          "/Users/edl/Documents/GitHub/HALOCE_WIIU/scratch/opence-codex-audio-churn:/src",
+          "-w",
+          "/src",
+          "opence-wiiu",
+          "bash",
+          "-ec",
+          "python3 configure.py --linux-target=wiiu --wiiu-lto > /dev/null; ninja -j4 linux_wiiu"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 23.832914999919012,
+        "graph_restored": true,
+        "source_base": "de64efdea42b1543bc695c67dbdcf8afbd639859",
+        "files": {
+          "halo.wuhb": {
+            "size": 17834608,
+            "sha256": "b21b618997401411ca0ba334e9a22aa99070144c67e3fd420250e47b42386d8d"
+          },
+          "halo.elf": {
+            "size": 55218788,
+            "sha256": "4f5b46ee212a80f00d1aa2324c947ecd7bec96b9bd46dc1d8c1e4b23d1268824"
+          },
+          "wiiu_stubs.txt": {
+            "size": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        },
+        "sources": {
+          "port/linux/src/dsound_sdl.c": "03666a66f79de36abea43da4da96d1c62a4049020474071486b97dd870f4379f",
+          "port/wiiu/src/wiiu_packet_pool.c": "3a2d0c307c37072a74f6037ed3139b77b5e6c7b19c936651536f75b5e68afb8c",
+          "port/wiiu/src/wiiu_packet_pool.h": "4e147f8d8d7424c4e269ddb16e168f93dbd43d721f85690c87dd50e4c300a061"
+        }
+      }
+    },
+    "android-host-build.json": {
+      "sha256": "ffb19d4da86f1adf485364aa71eafba21e33eeb71661db6d39d02352069b7f0d",
+      "local_path": "/Users/edl/Documents/GitHub/HALOCE_WIIU/runs/host-mac-perf-20261031/audio/android-host-build.json",
+      "result": {
+        "commands": [
+          [
+            "python3",
+            "configure.py",
+            "--linux-target=ppc",
+            "--lto=off",
+            "--pgo=off",
+            "--android-ndk=/Users/edl/Library/Android/sdk/ndk/28.2.13676358"
+          ],
+          [
+            "/Users/edl/Library/Android/sdk/cmake/3.22.1/bin/ninja",
+            "-j4",
+            "android"
+          ]
+        ],
+        "results": [
+          0,
+          0
+        ],
+        "cached_dependencies_checked": true,
+        "SDK_bin": "/Users/edl/Library/Android/sdk/cmake/3.22.1/bin",
+        "elapsed_seconds": 68.28664516704157,
+        "graph_restored": true
+      }
+    },
+    "cross-platform-builds.json": {
+      "sha256": "f2ded0c3dcf22209bcc354a2f6c278332e83afc867ad4ae67b645905e709cfb1",
+      "local_path": "/Users/edl/Documents/GitHub/HALOCE_WIIU/runs/host-mac-perf-20261031/audio/cross-platform-builds.json",
+      "result": {
+        "results": [
+          {
+            "name": "android-build",
+            "command": [
+              "docker",
+              "run",
+              "--pull=never",
+              "--rm",
+              "--network",
+              "none",
+              "-v",
+              "/Users/edl/Documents/GitHub/HALOCE_WIIU/scratch/opence-codex-audio-churn:/src",
+              "-w",
+              "/src",
+              "opence-wiiu",
+              "bash",
+              "-ec",
+              "python3 configure.py --linux-target=ppc --lto=off --pgo=off > /tmp/audio-configure.log; cat /tmp/audio-configure.log; ninja -j4 android"
+            ],
+            "exit_code": 1,
+            "elapsed_seconds": 0.43602029187604785
+          },
+          {
+            "name": "web-build",
+            "command": [
+              "docker",
+              "run",
+              "--pull=never",
+              "--rm",
+              "--network",
+              "none",
+              "-v",
+              "/Users/edl/Documents/GitHub/HALOCE_WIIU/scratch/opence-codex-audio-churn:/src",
+              "-w",
+              "/src",
+              "opence-wiiu",
+              "bash",
+              "-ec",
+              "ninja -j4 web"
+            ],
+            "exit_code": 1,
+            "elapsed_seconds": 0.08986299997195601
+          }
+        ],
+        "graph_restored": true
+      }
+    },
+    "checks-final-target.json": {
+      "sha256": "feb00b560e41dff47f4923b68a551156732699e4f8120ba11577f130f0147f37",
+      "local_path": "/Users/edl/Documents/GitHub/HALOCE_WIIU/runs/host-mac-perf-20261031/audio/checks-final-target.json",
+      "result": [
+        {
+          "name": "flush-x86-final",
+          "command": [
+            "python3",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "tools/harness/tests/test_sound_stream_flush.py"
+          ],
+          "environment_overrides": {
+            "CC": "clang-i686",
+            "HALO_HARNESS_TARGET": "--target=i686-linux-gnu -m32",
+            "HALO_HARNESS_RUNNER": "qemu-i386 -L /usr/i686-linux-gnu"
+          },
+          "exit_code": 0
+        },
+        {
+          "name": "voice-chat-x86-final",
+          "command": [
+            "python3",
+            "-c",
+            "import os;os.cpu_count=lambda:4;import pytest;raise SystemExit(pytest.main(['-q','-p','no:cacheprovider','tools/harness/tests/test_wiiu_voice_audio.py','-k','test_case']))"
+          ],
+          "environment_overrides": {
+            "CC": "clang-i686",
+            "HALO_HARNESS_TARGET": "--target=i686-linux-gnu -m32",
+            "HALO_HARNESS_RUNNER": "qemu-i386 -L /usr/i686-linux-gnu"
+          },
+          "exit_code": 0
+        }
+      ]
+    }
+  },
+  "limits": [
+    "No console access or console performance result.",
+    "Cache cap is idle payload, not total live audio storage.",
+    "The full instrumented packet pipeline has no established timing gain.",
+    "Some host pressure/oversize allocation-only cases regress.",
+    "Console qualification is required before adopting this branch."
+  ],
+  "tests": {
+    "host_pool_and_lifetime": {
+      "tests": 13,
+      "passed": 13,
+      "log_sha256": "7c69d88dffe4cb275941993e8a42ca74bbaf64a91d7a826048f2eaaf7478e353"
+    },
+    "ppc_pool_and_lifetime": {
+      "tests": 13,
+      "passed": 10,
+      "host_sanitizers_skipped": 3,
+      "log_sha256": "6a4a0d9c6bfd0413f6987d5996717317cbc02bf49c358ea6c1050ffbc1d3e9d9"
+    },
+    "host_adpcm": {
+      "tests": 7,
+      "passed": 7
+    },
+    "ppc_adpcm": {
+      "tests": 7,
+      "passed": 6,
+      "host_sanitizers_skipped": 1
+    },
+    "ppc_mixer_selected": {
+      "passed": 11
+    },
+    "x86_cancellation": {
+      "passed": 12
+    },
+    "x86_voice_chat_base_cases": {
+      "passed": 16
+    }
+  }
+}

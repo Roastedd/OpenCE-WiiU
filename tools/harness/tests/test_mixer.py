@@ -40,11 +40,11 @@ def generated(source=None, fault=None, scalar=False, cache=False, gains=False):
     code = text[text.index("#define OUTPUT_RATE"):text.index("/* ---------- output")]
     if fault:
         code = mutated(code, *fault)
-    prefix, suffix = "", ""
+    prefix, suffix = "#define packet_allocate malloc\n", ""
     if gains:
         # Observe the real publisher's lock acquisition. Configuration reads
         # assert that file-reading work happens before that lock is held.
-        prefix = """
+        prefix += """
 static unsigned gain_config_lock_calls;
 static int gain_config_lock(pthread_mutex_t *lock)
 {

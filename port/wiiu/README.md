@@ -308,6 +308,21 @@ tools/wiiu/build_game.sh`), keep the card's `config.toml` and put it back at the
 It passes when 15 peers play a Wii U-hosted game for five minutes with the sockets as with none, no datagram lost in the process, and the joiners'
 views agreeing with the host's as `net_compare.py` judges two machines.
 
+## Owned game-audio packet storage
+
+The host-qualified audio branch reuses compressed packet copies and decoded
+PCM through `src/wiiu_packet_pool.c`. Idle payload is bounded to 1 MiB plus
+128 private headers; live buffers retain their independent ownership. A
+failed heap request reclaims only idle cache storage and retries once.
+Submission copies, packet serial guards and completion/flush order remain
+unchanged. The cache uses a short blocking mutex, with no heap operation
+under that lock. It is not a wait-free mixer.
+
+The existing `audio_profile.txt` flag also enables allocation/cache/retry
+counters. Host fitting-cohort allocation costs improve, but pressure cases
+can regress and no whole-mixer or console speedup is established. See the
+[measurements and console acceptance plan](../../docs/performance/mac-audio-churn.md).
+
 ## Voice chat
 
 `src/wiiu_voice_audio.c` is voice chat's sound for the Wii U (`voice_audio.h`; the other builds' is `port/linux/src/voice_audio.c`), and

@@ -48,7 +48,7 @@ def table(text):
 def current_code(text):
     code = "\n\n".join([declaration(text, "ima_index_table"), declaration(text, "ima_step_table"),
                             table(text), function(text, "ima_expand"), function(text, "decode_adpcm")])
-    pieces = []
+    pieces = ["#define packet_allocate malloc\n"]
     names = {"ima_decode_entry": "entry", "ima_decode_table": "table", "ima_index_table": "index_table",
              "ima_step_table": "step_table", "ima_expand": "expand", "decode_adpcm": "decode"}
     for mode in ("fast", "legacy"):
@@ -99,7 +99,7 @@ class AdpcmTest(unittest.TestCase):
         self.assertEqual(table(source), table(frozen))
         self.assertEqual(selected(function(source, "ima_expand"), True),
                          selected(function(frozen, "ima_expand_cached").replace("ima_expand_cached(", "ima_expand(", 1), True))
-        self.assertEqual(function(source, "decode_adpcm"),
+        self.assertEqual(function(source, "decode_adpcm").replace("packet_allocate(", "malloc(", 1),
                          function(frozen, "decode_original").replace("decode_original(", "decode_adpcm(", 1))
 
     def test_other_platform_arrays_and_kernel_are_unchanged(self):

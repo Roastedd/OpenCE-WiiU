@@ -21,7 +21,7 @@ NEGATIVE_CONTROLS = {
 def generated(fault=None):
     backend = read("port/linux/src/dsound_sdl.c")
     game = read("source/sound/sound_dsound_xbox.c")
-    code = function(game, "dsound_channel_callback") + "\n" + function(game, "channel_stop") + "\n"
+    code = "#define packet_deallocate free\n" + function(game, "dsound_channel_callback") + "\n" + function(game, "channel_stop") + "\n"
     code += "\n".join(function(backend, name) for name in ["packet_release", "stream_complete_head",
         "streams_complete_finished", "stream_from_interface", "stream_flush"])
     if fault:
