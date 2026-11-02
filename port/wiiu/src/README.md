@@ -28,6 +28,8 @@ what newlib and wut lack, and, as they are written, stand-ins for the platform l
 | `wiiu_update_core.[ch]` | The updater's decisions: the manifest, its Ed25519 signature, the journal, the swap, the trial and the rollback. Tested on the desktop, with the power cut at every step (`tools/test_wiiu_update.py`). |
 | `wiiu_update_http.[ch]` | The updater's HTTPS: Mbed TLS over the BSD sockets (nsysnet's here), redirects, ranges, downloads that go on after HOME. Tested on the desktop against local TLS servers. |
 | `wiiu_update_roots.h` | The certificate authorities the updater trusts, written by `tools/wiiu/update_roots.py`. |
+| `wiiu_bw_kernels.c` | The Broadway kernels' switch (`bw/`: paired-single assembly for `matrix4x3_multiply`, the sphere test, the collision BSP walks, the reference search and the animation quaternion load): the card file `halo/broadway.txt` (0 off, the default), the boot-time self-test against the C each kernel replaces, the timing, and the calls a tick. `wiiu_bw_reference.h` is that C, `wiiu_bw_testcases.h` the cases. `bw/README.md` has the rest. |
+| `wiiu_tick_parts.c` | The time of each part of a game tick (the sections of `game_tick`), said in the log every 150 ticks. |
 | `wiiu_voice_audio.c` | Voice chat's sound (`voice_audio.h`): the GamePad's microphone (mic.rpl), Opus on a voice thread of its own, the voices for the mixer, HOME and the close, the microphone probe. Cafe OS half. |
 | `wiiu_voice_core.[ch]` | Voice chat's queues and rings between its threads, the 32 to 48 kHz resampler, the two readings of the microphone's ring. Tested on the desktop (`tools/harness/tests/test_wiiu_voice.py`). |
 

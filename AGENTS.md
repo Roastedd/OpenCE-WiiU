@@ -76,6 +76,8 @@ python tools/ci_build.py linux release   # what CI builds
 | `HALO_WINDOWS` | Windows (`halo_windows_prefix.h`) | The Windows build |
 | `HALO_RELEASE` | `--release` | No assertions checked |
 | `HALO_PROFILE` | `--profile` | The profiling build; a normal build must be unchanged by it |
+| `HALO_BW_KERNELS` | the Wii U build; a host build with `HALO_BW_MODEL=1` in `configure.py`'s environment | The Broadway kernels (`port/wiiu/src/bw`) are called where the game's maths, collision and animation functions have them, behind a switch that is off until the card's `halo/broadway.txt` turns it on |
+| `HALO_BW_MODEL` | a host build with `HALO_BW_MODEL=1` in `configure.py`'s environment | The kernels are their scalar C models (`port/linux/include/halo_bw_model.h`), on from the start (`HALO_BW_KERNELS=0` in a run's environment turns them off): to prove the call sites on the big-endian host |
 
 `HALO_LINUX` and `HALO_CUSTOM_EDITION` are **not** defined by any build:
 code guarded by them compiles to nothing. Custom Edition support is a
@@ -97,6 +99,9 @@ python tools/test_light_storage.py
 python tools/test_death_timing.py
 python -m pytest -q tools/test_web_build.py                 # the web build's graph, sockets, menus
 python -m pytest -q tools/test_wiiu_update.py tools/test_wiiu_release.py   # the Wii U's updater (power cut at every step, HTTPS) and its release script
+python -m pytest -q tools/test_wiiu_bw_audit.py tools/test_bw_reference_sync.py   # the Broadway kernels' instruction allowlist, and their C reference against the game's
+port/wiiu/tests/bw_tests.sh                                 # the Broadway kernels' scalar models against the C, millions of cases on the container's CPU, 32-bit x86 and big-endian PowerPC (needs Docker, the opence-wiiu image)
+port/wiiu/tests/bw_asm_sim_tests.sh                         # the kernels' machine code run by an instruction simulator under qemu-ppc through the same cases
 node --test "port/web/tests/*.test.js"                      # the web page's importer and service worker
 node port/web/tests/webrtc_native.mjs chromium firefox      # the native builds' WebRTC with browsers (Playwright)
 python -m pytest -q tools/test_dedicated_server.py          # the dedicated server with clients (needs assets/maps)
