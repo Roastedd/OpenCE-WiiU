@@ -24,6 +24,12 @@ node stretch vertices across the screen.
 Particles, contrails and other effects already move every frame
 (game_frame), so they need nothing here.
 
+On the Wii U (HALO_WIIU), made for the ticks to run on a thread of their own while a frame is drawn (the tools repository's
+reports/research/2026-11-01/ticks-off-thread.md, stage 3): an object keeps three snapshots, not two, so that the tick can write the next
+while the game thread blends the two before it; the tick publishes the pair to blend (render_interpolation_tick ends each object with
+record_publish), and the game thread blends what was published; and each snapshot's rotations are found when it is taken (by the
+tick), not when first blended (by the game thread). Everything is still done in order on one thread, so the pictures are the same.
+
 An object the distributed netcode moves to where the host has it
 (port/linux/game/network_objects.c) is drawn gliding there over a few ticks
 rather than jumping: its snapshots move with it, and the difference is drawn
@@ -54,6 +60,13 @@ unsigned long config_changes(void);
 #include <string.h>
 
 /* ---------- constants */
+
+/* the snapshots an object keeps: the two blended, and (Wii U) the one a tick writes meanwhile */
+#ifdef HALO_WIIU
+#define INTERPOLATION_SNAPSHOTS 3
+#else
+#define INTERPOLATION_SNAPSHOTS 2
+#endif
 
 /* (by absolute index: the object array's all) */
 #define MAXIMUM_INTERPOLATED_OBJECTS MAXIMUM_OBJECTS_PER_MAP
@@ -113,12 +126,29 @@ struct interpolated_object
 	since the last tick, drawn whole until the next begins to fade them */
 	real_vector3d correction;
 	real_vector3d correction_pending;
-	/* [0] and [1]: the two snapshots, [2]: the blend drawn this frame */
+	/* [0] to [INTERPOLATION_SNAPSHOTS - 1]: the snapshots, after them the blend drawn this frame */
 	real_matrix4x3 *nodes;
-	/* ... the two snapshots' rotations, found when first blended */
+	/* ... the snapshots' rotations, found when first blended (Wii U: when taken) */
 	struct interpolation_rotation *rotations;
-	boolean rotations_valid[2];
+	boolean rotations_valid[INTERPOLATION_SNAPSHOTS];
+#ifdef HALO_WIIU
+	/* what the game thread blends: the tick's own fields above, copied when the tick has finished the snapshot (record_publish) */
+	struct
+	{
+		long object_index;
+		long tick;
+		short node_count;
+		boolean has_previous;
+		byte latest;
+	} published;
+#endif
 };
+
+#ifdef HALO_WIIU
+#define PUBLISHED(record, field) ((record)->published.field)
+#else
+#define PUBLISHED(record, field) ((record)->field)
+#endif
 
 struct interpolated_camera
 {
@@ -391,6 +421,30 @@ static real distance_squared(real_point3d const *a, real_point3d const *b)
 
 /* ---------- ticks */
 
+#ifdef HALO_WIIU
+/* the tick has finished with the object's latest snapshot: the game thread blends the pair that ends with it from now on (and draws the
+object's next frame afresh). The slot the tick writes next is the oldest, which no frame blends */
+static void record_publish(struct interpolated_object *record)
+{
+	record->published.object_index = record->object_index;
+	record->published.tick = record->tick;
+	record->published.node_count = record->node_count;
+	record->published.has_previous = record->has_previous;
+	record->published.latest = record->latest;
+	record->blended_frame = NONE;
+}
+
+/* port/wiiu/src/wiiu_tick_snapshot_timers.c, on the console (weak: the host's builds have none) */
+unsigned long long wiiu_snapshot_clock(void) __attribute__((weak));
+void wiiu_snapshot_add(int part, unsigned long long since) __attribute__((weak));
+#define SNAPSHOT_PART_ROTATIONS 3
+#else
+#define record_publish(record) ((void)0)
+#endif
+
+/* the slot before another among the snapshots */
+#define SNAPSHOT_BEFORE(slot) ((byte)(((slot) + INTERPOLATION_SNAPSHOTS - 1) % INTERPOLATION_SNAPSHOTS))
+
 void render_interpolation_tick(void)
 {
 	struct object_iterator iterator;
@@ -437,29 +491,33 @@ void render_interpolation_tick(void)
 		if (interpolation_tick - interpolation_drawn_tick[absolute_index] > INTERPOLATION_DRAWN_TICKS)
 		{
 			record->object_index = NONE; /* (not drawn lately: no snapshot, and none to continue from) */
+			record_publish(record);
 			continue;
 		}
 #endif
 		if (node_count <= 0 || node_count > MAXIMUM_INTERPOLATED_NODES)
 		{
 			record->object_index = NONE;
+			record_publish(record);
 			continue;
 		}
 		if (record->node_capacity < node_count)
 		{
-			real_matrix4x3 *nodes = realloc(record->nodes, 3 * node_count * sizeof(real_matrix4x3));
+			real_matrix4x3 *nodes = realloc(record->nodes, (INTERPOLATION_SNAPSHOTS + 1) * node_count * sizeof(real_matrix4x3));
 			struct interpolation_rotation *rotations;
 
 			if (!nodes)
 			{
 				record->object_index = NONE;
+				record_publish(record);
 				continue;
 			}
 			record->nodes = nodes;
-			rotations = realloc(record->rotations, 2 * node_count * sizeof(struct interpolation_rotation));
+			rotations = realloc(record->rotations, INTERPOLATION_SNAPSHOTS * node_count * sizeof(struct interpolation_rotation));
 			if (!rotations)
 			{
 				record->object_index = NONE;
+				record_publish(record);
 				continue;
 			}
 			record->rotations = rotations;
@@ -471,7 +529,8 @@ void render_interpolation_tick(void)
 			record->tick == previous_tick;
 		if (continuing)
 		{
-			record->latest ^= 1;
+			/* (the next slot: the oldest of the snapshots, which a frame blending the two before it does not read) */
+			record->latest = (byte)((record->latest + 1) % INTERPOLATION_SNAPSHOTS);
 			correction_advance(&record->correction, &record->correction_pending);
 		}
 		else
@@ -484,11 +543,27 @@ void render_interpolation_tick(void)
 			object_get_node_matrices(iterator.index),
 			node_count * sizeof(real_matrix4x3));
 		record->rotations_valid[record->latest] = FALSE;
+#ifdef HALO_WIIU
+		{
+			/* the snapshot's rotations found now, by the tick, not when a frame first blends it (the game thread's 0.57 ms a frame) */
+			const unsigned long long rotations_started = wiiu_snapshot_clock ? wiiu_snapshot_clock() : 0ULL;
+			real_matrix4x3 const *snapshot_nodes = record->nodes + record->latest * record->node_capacity;
+			struct interpolation_rotation *snapshot_rotations = record->rotations + record->latest * record->node_capacity;
+			short rotation_index;
+
+			for (rotation_index = 0; rotation_index < node_count; rotation_index++)
+				rotation_from_matrix(&snapshot_nodes[rotation_index], &snapshot_rotations[rotation_index]);
+			record->rotations_valid[record->latest] = TRUE;
+			if (wiiu_snapshot_add)
+				wiiu_snapshot_add(SNAPSHOT_PART_ROTATIONS, rotations_started);
+		}
+#endif
 		record->object_index = iterator.index;
 		record->node_count = node_count;
 		record->tick = interpolation_tick;
 		record->has_previous = continuing;
 		record->blended_frame = NONE;
+		record_publish(record);
 	}
 }
 
@@ -542,13 +617,14 @@ real_matrix4x3 *render_interpolation_object_node_matrices(long object_index)
 		return NULL;
 	interpolation_drawn_tick[absolute_index] = interpolation_tick;
 	record = &interpolated_objects[absolute_index];
-	if (record->object_index != object_index || record->tick != interpolation_tick || !record->has_previous)
+	if (PUBLISHED(record, object_index) != object_index || PUBLISHED(record, tick) != interpolation_tick || !PUBLISHED(record, has_previous))
 		return NULL;
 	if (record->blended_frame != interpolation_frame)
 	{
-		real_matrix4x3 const *previous = record->nodes + (record->latest ^ 1) * record->node_capacity;
-		real_matrix4x3 const *latest = record->nodes + record->latest * record->node_capacity;
-		real_matrix4x3 *blended = record->nodes + 2 * record->node_capacity;
+		const byte latest_slot = PUBLISHED(record, latest);
+		real_matrix4x3 const *previous = record->nodes + SNAPSHOT_BEFORE(latest_slot) * record->node_capacity;
+		real_matrix4x3 const *latest = record->nodes + latest_slot * record->node_capacity;
+		real_matrix4x3 *blended = record->nodes + INTERPOLATION_SNAPSHOTS * record->node_capacity;
 		short node_index;
 		/* (so written that a position not a number snaps) */
 		boolean snap = !(distance_squared(&previous[0].position, &latest[0].position) <=
@@ -557,7 +633,7 @@ real_matrix4x3 *render_interpolation_object_node_matrices(long object_index)
 		/* a node moved further in the root's frame than a tick allows: the
 		two snapshots are different poses, not one moving (so written that
 		a position not a number snaps) */
-		for (node_index = 1; !snap && node_index < record->node_count; node_index++)
+		for (node_index = 1; !snap && node_index < PUBLISHED(record, node_count); node_index++)
 		{
 			real_point3d previous_local, latest_local;
 
@@ -568,40 +644,43 @@ real_matrix4x3 *render_interpolation_object_node_matrices(long object_index)
 		if (!snap)
 		{
 			struct interpolation_rotation *previous_rotations =
-				record->rotations + (record->latest ^ 1) * record->node_capacity;
+				record->rotations + SNAPSHOT_BEFORE(latest_slot) * record->node_capacity;
 			struct interpolation_rotation *latest_rotations =
-				record->rotations + record->latest * record->node_capacity;
+				record->rotations + latest_slot * record->node_capacity;
+			byte pair[2];
 			short snapshot;
 
 			/* (each snapshot's rotations found once, not every frame: its
 			nodes' positions may move with a correction, their rotations
-			never) */
+			never; on the Wii U the tick found them when it took the snapshot) */
+			pair[0] = SNAPSHOT_BEFORE(latest_slot);
+			pair[1] = latest_slot;
 			for (snapshot = 0; snapshot < 2; snapshot++)
 			{
-				if (!record->rotations_valid[snapshot])
+				if (!record->rotations_valid[pair[snapshot]])
 				{
-					real_matrix4x3 const *nodes = record->nodes + snapshot * record->node_capacity;
-					struct interpolation_rotation *rotations = record->rotations + snapshot * record->node_capacity;
+					real_matrix4x3 const *nodes = record->nodes + pair[snapshot] * record->node_capacity;
+					struct interpolation_rotation *rotations = record->rotations + pair[snapshot] * record->node_capacity;
 
-					for (node_index = 0; node_index < record->node_count; node_index++)
+					for (node_index = 0; node_index < PUBLISHED(record, node_count); node_index++)
 						rotation_from_matrix(&nodes[node_index], &rotations[node_index]);
-					record->rotations_valid[snapshot] = TRUE;
+					record->rotations_valid[pair[snapshot]] = TRUE;
 				}
 			}
-			for (node_index = 0; node_index < record->node_count; node_index++)
+			for (node_index = 0; node_index < PUBLISHED(record, node_count); node_index++)
 			{
 				matrix_blend_rotations(&previous[node_index], &latest[node_index], &previous_rotations[node_index],
 					&latest_rotations[node_index], interpolation_fraction, &blended[node_index]);
 			}
 		}
 		if (snap)
-			memcpy(blended, latest, record->node_count * sizeof(real_matrix4x3));
+			memcpy(blended, latest, PUBLISHED(record, node_count) * sizeof(real_matrix4x3));
 		if (correction_significant(&record->correction) || correction_significant(&record->correction_pending))
 		{
 			real_vector3d drawn;
 
 			correction_drawn(&record->correction, &record->correction_pending, &drawn);
-			for (node_index = 0; node_index < record->node_count; node_index++)
+			for (node_index = 0; node_index < PUBLISHED(record, node_count); node_index++)
 			{
 				blended[node_index].position.x += drawn.i;
 				blended[node_index].position.y += drawn.j;
@@ -658,10 +737,11 @@ void render_interpolation_correct_object(long object_index, real_vector3d const 
 		short snapshot;
 		short node_index;
 
-		/* the snapshots where it would have been, the difference drawn */
+		/* the snapshots where it would have been, the difference drawn (the latest and the one before it: on the Wii U the third is
+		the oldest, which no frame blends) */
 		for (snapshot = 0; snapshot < 2; snapshot++)
 		{
-			real_matrix4x3 *nodes = record->nodes + snapshot * record->node_capacity;
+			real_matrix4x3 *nodes = record->nodes + (snapshot == 0 ? record->latest : SNAPSHOT_BEFORE(record->latest)) * record->node_capacity;
 
 			for (node_index = 0; node_index < record->node_count; node_index++)
 			{
