@@ -560,6 +560,7 @@ void game_time_update(
 						profile_scope(game_time_render_interpolation_tick_section, render_interpolation_tick();)
 						game_time_globals->server_time++;
 						game_time_globals->local_time++;
+						game_state_tick_hash(game_time_globals->server_time);
 						/* the distributed netcode's per-tick state (port: none of
 						the main menu's scene, which a lobby's machines do not share) */
 						if (!game_time_menu_scene())
