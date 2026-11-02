@@ -4035,8 +4035,6 @@ static boolean main_loop_iteration(
 						void wiiu_frame_part(int part, int ticks);
 						long repeat;
 
-						long repeat;
-
 						wiiu_frame_part(2, 0);
 						for (repeat = 0; repeat < main_render_repeat(); repeat++)
 							main_game_render((double)main_globals.seconds_elapsed);
