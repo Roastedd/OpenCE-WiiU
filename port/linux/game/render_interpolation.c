@@ -154,7 +154,14 @@ static struct interpolated_camera interpolated_cameras[MAXIMUM_LOCAL_PLAYERS];
 static struct interpolated_first_person interpolated_first_person[MAXIMUM_LOCAL_PLAYERS];
 static long interpolation_tick;
 static long interpolation_frame;
-static boolean interpolation_rendering;
+/* whether a frame is being drawn (render_interpolation_frame_begin), as the thread that is drawing it sees it: the ticks may run on a thread of their
+own, and what they ask the game for (an object's node matrices, a marker) is the tick's pose, whatever the other thread is blending. interpolation_
+rendering_threads says whether any thread is drawing, so that the ticks' reads (one for every node matrix they ask for) skip the thread's lookup
+when none is: on the Wii U a __thread variable is a call. The game's own frame work (game_frame, at the end of game_time_update) is a drawing too,
+and sets it on whichever thread runs it. */
+static __thread boolean interpolation_rendering_here;
+static volatile long interpolation_rendering_threads;
+#define interpolation_rendering (interpolation_rendering_threads > 0 && interpolation_rendering_here)
 static real interpolation_fraction = 1.0f;
 
 /* ---------- blending */
@@ -513,16 +520,25 @@ void render_interpolation_reset(void)
 
 /* ---------- frames */
 
+static void interpolation_rendering_set(boolean rendering)
+{
+	if (rendering && !interpolation_rendering_here)
+		__sync_fetch_and_add(&interpolation_rendering_threads, 1);
+	else if (!rendering && interpolation_rendering_here)
+		__sync_fetch_and_sub(&interpolation_rendering_threads, 1);
+	interpolation_rendering_here = rendering;
+}
+
 void render_interpolation_frame_begin(void)
 {
-	interpolation_rendering = halo_interpolation_enabled();
+	interpolation_rendering_set(halo_interpolation_enabled());
 	interpolation_frame++;
 	interpolation_fraction = game_time_get_tick_fraction();
 }
 
 void render_interpolation_frame_end(void)
 {
-	interpolation_rendering = FALSE;
+	interpolation_rendering_set(FALSE);
 }
 
 real render_interpolation_fraction(void)
