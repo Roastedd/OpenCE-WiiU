@@ -231,7 +231,9 @@ static void tick_snapshot_copy_block(long absolute_index, struct object_header_d
 		return;
 	if (s.capacity[absolute_index] < size)
 	{
-		free(s.blocks[absolute_index]);
+		/* (the game's free takes no NULL) */
+		if (s.blocks[absolute_index])
+			free(s.blocks[absolute_index]);
 		s.blocks[absolute_index] = (byte *)malloc((size_t)size);
 		s.capacity[absolute_index] = s.blocks[absolute_index] ? (unsigned short)size : 0;
 		if (!s.blocks[absolute_index])

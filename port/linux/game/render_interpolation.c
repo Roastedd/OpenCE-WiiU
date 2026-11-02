@@ -471,7 +471,12 @@ void render_interpolation_tick(void)
 		if (!interpolated_objects)
 			return;
 		for (index = 0; index < MAXIMUM_INTERPOLATED_OBJECTS; index++)
+		{
 			interpolated_objects[index].object_index = NONE;
+#ifdef HALO_WIIU
+			interpolated_objects[index].published.object_index = NONE;
+#endif
+		}
 	}
 
 	object_iterator_new(&iterator, _object_mask_all, 0);
@@ -573,7 +578,12 @@ void render_interpolation_reset(void)
 	if (interpolated_objects)
 	{
 		for (index = 0; index < MAXIMUM_INTERPOLATED_OBJECTS; index++)
+		{
 			interpolated_objects[index].object_index = NONE;
+#ifdef HALO_WIIU
+			interpolated_objects[index].published.object_index = NONE;
+#endif
+		}
 	}
 	memset(interpolated_cameras, 0, sizeof(interpolated_cameras));
 	for (index = 0; index < MAXIMUM_LOCAL_PLAYERS; index++)
