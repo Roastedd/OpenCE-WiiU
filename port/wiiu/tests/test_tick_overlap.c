@@ -209,6 +209,7 @@ struct request
 #define TICK_QUEUE_SMALL 4
 #define BIG 4096
 static long current_job; /* the tick thread's, the job it runs now */
+static long writes_done; /* the jobs that have made their captures and pushes (the tick thread's, read by the game thread) */
 static long tick_requests_applied;
 static long game_applied[200000];
 static long game_applied_count;
@@ -284,6 +285,8 @@ long main_overlap_tick_side(real dt, long ticks_elapsed, real leftover_after, lo
 		}
 		sched_yield();
 	}
+	/* (the job has written its captures and made its pushes: the game thread's frame, which is reading its pair beside it, may look at them) */
+	__atomic_store_n(&writes_done, job + 1, __ATOMIC_RELEASE);
 	tick_ring_commit(&ring);
 	return ticks_elapsed;
 }
@@ -357,6 +360,21 @@ static void test_frames(long frames)
 				{
 					held++;
 					CHECK(view_fraction == 1.0f);
+				}
+			}
+			/* (the reads go on until the tick thread's job has written what it will: a frame that is read from only before that proves nothing) */
+			{
+				const long expected_job = (long)o.posted_jobs - 1;
+				long spins = 0;
+
+				if (tick_overlap_job_in_flight())
+				{
+					while (__atomic_load_n(&writes_done, __ATOMIC_ACQUIRE) <= expected_job && ++spins < 200000)
+					{
+						/* (a tick thread that waits for room in a queue is served, as the game thread's wait for it would) */
+						tick_owners_drain_waited();
+						sched_yield();
+					}
 				}
 			}
 			for (reads = 0; reads < 15 && latest >= 0; reads++)
