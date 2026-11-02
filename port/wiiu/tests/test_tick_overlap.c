@@ -388,6 +388,7 @@ static void test_frames(long frames)
 		{
 			primed++;
 		}
+		tick_overlap_draw_done();
 		tick_overlap_frame_end();
 	}
 	tick_overlap_sync_point();

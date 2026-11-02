@@ -80,6 +80,8 @@ boolean tick_overlap_post_frame(real dt);
 boolean tick_overlap_frame_active(void);
 /* the job is still running (the game thread draws meanwhile) */
 boolean tick_overlap_job_in_flight(void);
+/* the frame's work is done but for the throttle and the present */
+void tick_overlap_draw_done(void);
 /* the end of the frame, after its present */
 void tick_overlap_frame_end(void);
 /* a map starts or ends, a game state is loaded: the tick thread is idle (the main loop's flags are handled at the sync point); forget the ring and the

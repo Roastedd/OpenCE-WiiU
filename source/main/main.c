@@ -4198,6 +4198,10 @@ static boolean main_loop_iteration(
 #endif
 					render_interpolation_frame_end();
 					profile_render_end();
+#ifdef HALO_WIIU
+					/* port: the frame's work is done but for the throttle and the present: its time, for the overlap's log */
+					tick_overlap_draw_done();
+#endif
 				}
 			}
 			/* port: nothing drawn on a dedicated server, nor waited for */

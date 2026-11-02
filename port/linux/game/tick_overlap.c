@@ -115,7 +115,7 @@ static struct
 	/* the numbers (the game thread's, but for the tick thread's, which it adds under the lock at a job's end) */
 	unsigned long long log_started_us;
 	unsigned long frames, overlap_frames, serial_frames, primed_frames, held_frames, no_pair_frames;
-	unsigned long long wait_us, wait_max_us, frame_us, frame_max_us, sync_us, post_us, draw_us;
+	unsigned long long wait_us, wait_max_us, frame_us, frame_max_us, sync_us, post_us, draw_us, draw_max_us;
 	unsigned long waits_long;
 	unsigned long jobs, ticks, ticks_total;
 	unsigned long long job_us, job_max_us, tick_work_us;
@@ -573,6 +573,20 @@ boolean tick_overlap_post_frame(
 	return TRUE;
 }
 
+/* the frame's work done (the sync point to the end of the draw), without the throttle and the present, which wait for the display */
+void tick_overlap_draw_done(
+	void)
+{
+	if (o.frame_active)
+	{
+		const unsigned long long took = tick_overlap_now_us() - o.frame_started_us;
+
+		o.draw_us += took;
+		if (took > o.draw_max_us)
+			o.draw_max_us = took;
+	}
+}
+
 /* the end of a frame, after its present: the view let go of, and the numbers said now and then */
 void tick_overlap_frame_end(
 	void)
@@ -661,11 +675,10 @@ void tick_overlap_log(
 		100.0 * (double)tick_idle_us / (seconds * 1.0e6));
 	platform_log("tick overlap, ahead of the picture: %.2f ticks on average (1 is the delay; more means the tick thread was late), %lu ticks in all this game",
 		(double)o.ahead_sum / 1000.0 / overlap_frames, o.ticks_total);
-	platform_log("tick overlap, game thread, ms a frame: %.2f (most %.2f), of that waiting for the tick thread %.2f (most %.2f, %lu waits over 4 ms), "
-		"without the wait %.2f, sync point %.3f",
-		(double)o.frame_us / 1000.0 / frames, (double)o.frame_max_us / 1000.0, (double)o.wait_us / 1000.0 / frames,
-		(double)o.wait_max_us / 1000.0, o.waits_long, (double)(o.frame_us - o.wait_us) / 1000.0 / frames,
-		(double)(o.sync_us - o.wait_us) / 1000.0 / frames);
+	platform_log("tick overlap, game thread, ms a frame: %.2f (most %.2f) in all, %.2f (most %.2f) of work to the end of the draw, of which waiting for the "
+		"tick thread %.2f (most %.2f, %lu waits over 4 ms) and the sync point %.3f",
+		(double)o.frame_us / 1000.0 / frames, (double)o.frame_max_us / 1000.0, (double)o.draw_us / 1000.0 / frames, (double)o.draw_max_us / 1000.0,
+		(double)o.wait_us / 1000.0 / frames, (double)o.wait_max_us / 1000.0, o.waits_long, (double)(o.sync_us - o.wait_us) / 1000.0 / frames);
 	platform_log("tick overlap, snapshot: capture %.3f ms a tick (%lu), publish %.3f ms a job (%lu), blends %.3f ms a frame (%lu objects), "
 		"queue waits %lu",
 		captures ? (double)capture_us / 1000.0 / (double)captures : 0.0, captures,
@@ -673,7 +686,7 @@ void tick_overlap_log(
 		push_waits);
 	o.log_started_us = now;
 	o.frames = o.overlap_frames = o.serial_frames = o.primed_frames = o.held_frames = o.no_pair_frames = 0;
-	o.wait_us = o.wait_max_us = o.frame_us = o.frame_max_us = o.sync_us = o.post_us = o.draw_us = 0;
+	o.wait_us = o.wait_max_us = o.frame_us = o.frame_max_us = o.sync_us = o.post_us = o.draw_us = o.draw_max_us = 0;
 	o.waits_long = 0;
 	o.jobs = o.ticks = 0;
 	o.job_us = o.job_max_us = o.tick_work_us = 0;
