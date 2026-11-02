@@ -77,6 +77,7 @@ int halo_bw_asm_bsp_ray_walk(struct halo_bw_bsp_walk *walk, int node, float t0, 
 int halo_bw_asm_bsp_sphere_walk(struct halo_bw_bsp_walk *walk, int node, float radius);
 int *halo_bw_asm_reference_find(const void *references, unsigned count, unsigned zero_invalid, int *first, int datum);
 int halo_bw_asm_quaternion_load(const void *compressed, float *quaternion);
+void halo_bw_asm_probe_ps(const float *two, float *out);
 void halo_bw_asm_read_gqr(unsigned *eight);
 void halo_bw_asm_set_gqr5(unsigned value);
 

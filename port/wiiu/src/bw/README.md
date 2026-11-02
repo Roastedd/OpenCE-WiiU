@@ -12,6 +12,7 @@ in its header comment and says what was changed.
 | `halo_bw_bsp.S` | the straight runs of `collision_bsp_test_vector_recursive` and `bsp3d_test_sphere_recursive` (`physics/collision_bsp.c`) | `wii_collision_bsp.S` |
 | `halo_bw_reference.S` | the search in `reference_list_remove` (`structures/cluster_partitions.c`) | `wii_reference_find.S` |
 | `halo_bw_quaternion.S` | `quaternion_decompress_8byte` (`models/model_animations.c`) | `wii_broadway_quaternion.S` (the load) |
+| `halo_bw_probe.S` | nothing: the start-up's leaves (a paired add, a read of GQR0 to GQR7, the write of GQR5 that `halo/broadway.txt` 3 asks for) | written for this port |
 
 Not taken from the bundle, and why:
 
@@ -31,6 +32,10 @@ Rules every kernel here follows (`tools/wiiu_check_objects.py --bw-kernel-object
 
 They are off until the card's `halo/broadway.txt` says 1 and each has passed its self-test on the console
 (`port/wiiu/src/wiiu_bw_kernels.c`). Host proof: `port/wiiu/tests/bw_tests.sh`.
+
+The kernels are leaves, so the start-up can run them under an exception guard: a program, alignment, data-access or floating-point
+exception at an address inside kernel code (a core that does not run paired singles, a misaligned quantized load) is caught, counted and
+said in the log, and the kernel stays off, where it would have been a crash. The guard is on only while the start-up runs.
 
 ## Why each kernel gives the C's bits
 

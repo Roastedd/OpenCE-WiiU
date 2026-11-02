@@ -18,6 +18,8 @@
     .machine "broadway"
     .section .text.halo_bw_matrix,"ax",@progbits
     .balign 4
+    .global halo_bw_range_matrix_begin
+halo_bw_range_matrix_begin:
 
     .macro ROW_VALUE xy, z
     psq_l       8,\xy(4),0,0        /* (Bx, By) */
@@ -68,3 +70,5 @@ halo_bw_asm_matrix4x3_multiply:
     stfs        11,48(5)
     blr
     .size halo_bw_asm_matrix4x3_multiply,.-halo_bw_asm_matrix4x3_multiply
+    .global halo_bw_range_matrix_end
+halo_bw_range_matrix_end:

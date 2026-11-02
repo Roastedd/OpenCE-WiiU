@@ -21,6 +21,8 @@
 
     .section .text.halo_bw_quaternion,"ax",@progbits
     .balign 4
+    .global halo_bw_range_quaternion_begin
+halo_bw_range_quaternion_begin:
     .global halo_bw_asm_quaternion_load
     .type halo_bw_asm_quaternion_load,@function
 halo_bw_asm_quaternion_load:
@@ -42,39 +44,5 @@ halo_bw_asm_quaternion_load:
     li          3,0
     blr
     .size halo_bw_asm_quaternion_load,.-halo_bw_asm_quaternion_load
-
-/* the user aliases of the eight quantization registers (896 to 903), for the log:
- *   void halo_bw_asm_read_gqr(unsigned *eight (r3)); */
-    .global halo_bw_asm_read_gqr
-    .type halo_bw_asm_read_gqr,@function
-halo_bw_asm_read_gqr:
-    mfspr       0,896
-    stw         0,0(3)
-    mfspr       0,897
-    stw         0,4(3)
-    mfspr       0,898
-    stw         0,8(3)
-    mfspr       0,899
-    stw         0,12(3)
-    mfspr       0,900
-    stw         0,16(3)
-    mfspr       0,901
-    stw         0,20(3)
-    mfspr       0,902
-    stw         0,24(3)
-    mfspr       0,903
-    stw         0,28(3)
-    blr
-    .size halo_bw_asm_read_gqr,.-halo_bw_asm_read_gqr
-
-/* GQR5 (user alias 901) made the signed 16-bit load, type 7 and scale 0 for loads and stores alike, as libogc's CAST_Init and Nintendo's
- * context setup make it: only if halo/broadway.txt asks (3), on the thread that will call the quaternion kernel (the register is per thread),
- * and only to make the register the kernel checks for; whether a user program may write the alias is not known (the console's log says), and
- * a program exception here ends the run.
- *   void halo_bw_asm_set_gqr5(unsigned value (r3)); */
-    .global halo_bw_asm_set_gqr5
-    .type halo_bw_asm_set_gqr5,@function
-halo_bw_asm_set_gqr5:
-    mtspr       901,3
-    blr
-    .size halo_bw_asm_set_gqr5,.-halo_bw_asm_set_gqr5
+    .global halo_bw_range_quaternion_end
+halo_bw_range_quaternion_end:

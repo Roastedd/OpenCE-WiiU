@@ -190,7 +190,7 @@ def test_broadway_kernels_are_audited_assembly_objects(monkeypatch):
     every object of the build is compiled for the kernels' call sites"""
     text = graph(monkeypatch)
     sources = sorted(Path("port/wiiu/src/bw").glob("*.S"))
-    assert len(sources) == 5
+    assert len(sources) == 6
     link = re.search(r"^build build/linux-wiiu/halo\.elf [^\n]*: wiiu_link ([^\n]*)", text, re.M).group(1)
     for source in sources:
         obj = "build/linux-wiiu/obj/" + source.with_suffix(".o").as_posix()

@@ -24,6 +24,8 @@
 
     .section .text.halo_bw_sphere,"ax",@progbits
     .balign 4
+    .global halo_bw_range_sphere_begin
+halo_bw_range_sphere_begin:
     .global halo_bw_asm_ray_sphere
     .type halo_bw_asm_ray_sphere,@function
 halo_bw_asm_ray_sphere:
@@ -76,3 +78,5 @@ halo_bw_asm_ray_sphere:
     li          3,1
     blr
     .size halo_bw_asm_ray_sphere,.-halo_bw_asm_ray_sphere
+    .global halo_bw_range_sphere_end
+halo_bw_range_sphere_end:

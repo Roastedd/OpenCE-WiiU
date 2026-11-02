@@ -154,6 +154,29 @@ int main(int argc, char **argv)
 		}
 		gqr5_value = 0x00070007u;
 	}
+	/* the start-up's leaves: the pair add, and the eight quantization registers read as the user aliases give them */
+	{
+		float in[2] = { 1.5f, -2.25f }, out[2] = { 0.0f, 0.0f };
+		unsigned gqr[8];
+		unsigned index;
+		int leaves_ok = 1;
+
+		sim_call("halo_bw_asm_probe_ps", POINTER(in), POINTER(out), 0, 0, 0, 0, 0);
+		memset(gqr, 0xff, sizeof(gqr));
+		sim_call("halo_bw_asm_read_gqr", POINTER(gqr), 0, 0, 0, 0, 0, 0);
+		if (out[0] != 3.0f || out[1] != -4.5f || gqr[0] != 0 || gqr[5] != gqr5_value)
+		{
+			printf("the start-up's leaves gave %f %f and GQR0 %08x GQR5 %08x\n", (double)out[0], (double)out[1], gqr[0], gqr[5]);
+			leaves_ok = 0;
+		}
+		for (index = 1; index < 8; index++)
+			if (index != 5 && gqr[index] != 0)
+				leaves_ok = 0;
+		if (leaves_ok)
+			printf("halo_bw_asm_probe_ps and halo_bw_asm_read_gqr: as they should be\n");
+		else
+			failed = 1;
+	}
 	printf("%lu instructions simulated\n", instructions_run);
 	printf(failed ? "bw asm: DIFFERENT\n" : "bw asm: every case equals the C\n");
 	return failed;

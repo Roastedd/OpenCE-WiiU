@@ -31,7 +31,9 @@ part the kernels' functions are mostly in) that is what a run with 0 in the file
 #include "halo_bw_kernels.h"
 #include "wiiu_bw_testcases.h"
 
+#include <coreinit/context.h>
 #include <coreinit/core.h>
+#include <coreinit/exception.h>
 #include <coreinit/time.h>
 
 #include <stdint.h>
@@ -69,6 +71,91 @@ static int test_game_qload(const void *compressed, float *quaternion)
 {
 	quaternion_decompress_8byte(compressed, quaternion);
 	return 1;
+}
+
+/* ---------- the exception guard
+The start-up runs the kernels once under a guard: a program, alignment, data-access or floating-point exception whose address is in the code of a
+kernel (the kernels are leaves, with no stack frame, and use only volatile registers) is not the run's end but a failure of that kernel: the handler
+returns to the kernel's caller, the caller finds the fault counted, and the log says the kind and the address. What a core does with a paired-single
+instruction it was not set up for, or with a misaligned quantized load, is then in the log, where it would have been a crash. Exceptions
+elsewhere go to the handlers that were there. The handlers are taken out before the start-up returns: the game runs with its own. */
+extern const char halo_bw_range_matrix_begin[], halo_bw_range_matrix_end[], halo_bw_range_sphere_begin[], halo_bw_range_sphere_end[],
+	halo_bw_range_bsp_begin[], halo_bw_range_bsp_end[], halo_bw_range_reference_begin[], halo_bw_range_reference_end[],
+	halo_bw_range_quaternion_begin[], halo_bw_range_quaternion_end[], halo_bw_range_probe_begin[], halo_bw_range_probe_end[];
+
+static const struct { const char *begin, *end; } kernel_ranges[] = {
+	{ halo_bw_range_matrix_begin, halo_bw_range_matrix_end },
+	{ halo_bw_range_sphere_begin, halo_bw_range_sphere_end },
+	{ halo_bw_range_bsp_begin, halo_bw_range_bsp_end },
+	{ halo_bw_range_reference_begin, halo_bw_range_reference_end },
+	{ halo_bw_range_quaternion_begin, halo_bw_range_quaternion_end },
+	{ halo_bw_range_probe_begin, halo_bw_range_probe_end },
+};
+
+static const OSExceptionType guard_types[4] = { OS_EXCEPTION_TYPE_PROGRAM, OS_EXCEPTION_TYPE_ALIGNMENT, OS_EXCEPTION_TYPE_DSI,
+	OS_EXCEPTION_TYPE_FLOATING_POINT };
+static const char *const guard_type_names[4] = { "program (an instruction this core does not allow)", "alignment", "data access", "floating point" };
+static OSExceptionCallbackFn guard_previous[4];
+static volatile unsigned guard_active, guard_faults, guard_slot, guard_pc, guard_address;
+
+static BOOL guard_recover(unsigned slot, OSContext *context)
+{
+	const uintptr_t pc = context->srr0;
+	unsigned range;
+
+	if (guard_active)
+		for (range = 0; range < sizeof(kernel_ranges) / sizeof(kernel_ranges[0]); range++)
+			if (pc >= (uintptr_t)kernel_ranges[range].begin && pc < (uintptr_t)kernel_ranges[range].end)
+			{
+				if (!guard_faults++)
+				{
+					guard_slot = slot;
+					guard_pc = (unsigned)pc;
+					guard_address = (unsigned)context->dar;
+				}
+				context->srr0 = context->lr;	/* (back to the caller: the kernels are leaves) */
+				return TRUE;
+			}
+	return guard_previous[slot] ? guard_previous[slot](context) : FALSE;
+}
+
+static BOOL guard_program(OSContext *context) { return guard_recover(0, context); }
+static BOOL guard_alignment(OSContext *context) { return guard_recover(1, context); }
+static BOOL guard_dsi(OSContext *context) { return guard_recover(2, context); }
+static BOOL guard_float(OSContext *context) { return guard_recover(3, context); }
+
+static void guard_begin(void)
+{
+	OSExceptionCallbackFn handlers[4] = { guard_program, guard_alignment, guard_dsi, guard_float };
+	unsigned slot;
+
+	guard_faults = 0;
+	guard_active = 1;
+	for (slot = 0; slot < 4; slot++)
+		guard_previous[slot] = OSSetExceptionCallbackEx(OS_EXCEPTION_MODE_GLOBAL_ALL_CORES, guard_types[slot], handlers[slot]);
+}
+
+static void guard_end(void)
+{
+	unsigned slot;
+
+	guard_active = 0;
+	for (slot = 0; slot < 4; slot++)
+		OSSetExceptionCallbackEx(OS_EXCEPTION_MODE_GLOBAL_ALL_CORES, guard_types[slot], guard_previous[slot]);
+}
+
+/* the faults counted since the last call: said, and cleared; returns how many */
+static unsigned guard_take(const char *what)
+{
+	const unsigned faults = guard_faults;
+
+	if (faults)
+	{
+		wiiu_log("Broadway kernels: %s: %u exceptions caught in kernel code, the first %s at %08x (address %08x)", what, faults,
+			guard_type_names[guard_slot & 3], guard_pc, guard_address);
+		guard_faults = 0;
+	}
+	return faults;
 }
 
 static unsigned read_fpscr(void)
@@ -397,12 +484,19 @@ static void bench(unsigned kernels_ready)
 
 void wiiu_bw_start(void);
 
+/* one kernel's tests are over: whether it passed (its classes all matched and it did not fault), and the bit it is */
+static unsigned judge(unsigned bit, int passed, const char *name)
+{
+	return passed && !guard_take(name) ? bit : 0;
+}
+
 void wiiu_bw_start(void)
 {
 	FILE *file = fopen(WIIU_DATA_DIRECTORY "/broadway.txt", "r");
 	unsigned gqr[8];
 	unsigned fpscr, ready = 0;
 	struct bw_stats stats[BW_CLASSES];
+	float probe_in[2] __attribute__((aligned(8))) = { 1.5f, -2.25f }, probe_out[2] __attribute__((aligned(8))) = { 0.0f, 0.0f };
 	int cls, gqr0_float, gqr5_signed16, unavailable;
 
 	if (file)
@@ -419,10 +513,28 @@ void wiiu_bw_start(void)
 	}
 	self_test_core = OSGetCoreId();
 	fpscr = read_fpscr();
-	/* (the first paired-single instruction of the thread follows the next line: a crash here is the first one) */
-	wiiu_log("Broadway kernels: halo/broadway.txt %d; self-test on core %u, FPSCR %08x; the first paired-single instruction is next", configured,
-		self_test_core, fpscr);
+	halo_bw_flags = 0;
+	wiiu_log("Broadway kernels: halo/broadway.txt %d; self-test on core %u, FPSCR %08x (the start-up runs under an exception guard: a core that refuses an instruction is said in the log, not a crash)",
+		configured, self_test_core, fpscr);
+	guard_begin();
+
+	/* the first paired-single instruction and the first read of the quantization registers' aliases */
+	halo_bw_asm_probe_ps(probe_in, probe_out);
+	if (guard_take("a paired-single add") || probe_out[0] != 3.0f || probe_out[1] != -4.5f)
+	{
+		wiiu_log("Broadway kernels: this core does not run paired-single instructions (or gave %f and %f for 1.5 + 1.5 and -2.25 + -2.25): every kernel stays off",
+			(double)probe_out[0], (double)probe_out[1]);
+		guard_end();
+		return;
+	}
+	memset(gqr, 0xff, sizeof(gqr));
 	halo_bw_asm_read_gqr(gqr);
+	if (guard_take("the read of GQR0 to GQR7 (SPR 896 to 903)"))
+	{
+		wiiu_log("Broadway kernels: the quantization registers cannot be read here: every kernel stays off");
+		guard_end();
+		return;
+	}
 	gqr0_float = (gqr[0] & (0x00070007u | 0x3f003f00u)) == 0;	/* (load and store type float, scales 0) */
 	gqr5_signed16 = (gqr[5] >> 16) == 7;
 	wiiu_log("Broadway kernels: GQR0-7 %08x %08x %08x %08x %08x %08x %08x %08x; GQR0 is %s; GQR5 is %s", gqr[0], gqr[1], gqr[2], gqr[3], gqr[4],
@@ -430,51 +542,55 @@ void wiiu_bw_start(void)
 		gqr5_signed16 ? "the signed 16-bit load the quaternion kernel needs" : "not the signed 16-bit load (type 7, scale 0): the quaternion kernel stays off");
 	if (configured == 3 && gqr0_float && !gqr5_signed16)
 	{
-		wiiu_log("Broadway kernels: halo/broadway.txt 3: setting GQR5 to 00070007 with mtspr 901; if the log ends here the CPU refused a user write of it (use 1)");
+		wiiu_log("Broadway kernels: halo/broadway.txt 3: setting GQR5 to 00070007 (mtspr 901, a user write of a quantization register)");
 		halo_bw_asm_set_gqr5(0x00070007u);
+		if (guard_take("the write of GQR5 (SPR 901)"))
+			wiiu_log("Broadway kernels: the CPU refused the write: GQR5 stays as it was");
 		halo_bw_asm_read_gqr(gqr);
+		guard_take("the second read of the quantization registers");
 		gqr5_signed16 = (gqr[5] >> 16) == 7;
 		wiiu_log("Broadway kernels: GQR5 is now %08x: %s", gqr[5], gqr5_signed16 ? "the signed 16-bit load" : "still not the signed 16-bit load");
 	}
 	if (!gqr0_float)
+	{
+		guard_end();
 		return;
+	}
 	if ((fpscr & 3u) != 0 || (fpscr & 0xf8u) != 0)
 	{
 		wiiu_log("Broadway kernels: FPSCR %08x has a rounding mode other than nearest or an exception enabled: every kernel stays off", fpscr);
+		guard_end();
 		return;
 	}
-	halo_bw_flags = 0;
 	if (!game_equals_reference())
+	{
+		guard_end();
 		return;
+	}
 
 	memset(stats, 0, sizeof(stats));
 	for (cls = 0; cls < BW_CLASSES; cls++)
 		bw_test_matrix(halo_bw_asm_matrix4x3_multiply, cls, CASES_MATRIX, 1u + (unsigned)cls, &stats[cls]);
-	if (say_classes("matrix4x3_multiply", stats))
-		ready |= HALO_BW_BIT(HALO_BW_K_MATRIX);
+	ready |= judge(HALO_BW_BIT(HALO_BW_K_MATRIX), say_classes("matrix4x3_multiply", stats), "matrix4x3_multiply");
 
 	memset(stats, 0, sizeof(stats));
 	for (cls = 0; cls < BW_CLASSES; cls++)
 		bw_test_sphere(test_ray_sphere, cls, CASES_SPHERE, 11u + (unsigned)cls, &stats[cls]);
-	if (say_classes("fast_vector_intersects_sphere", stats))
-		ready |= HALO_BW_BIT(HALO_BW_K_SPHERE);
+	ready |= judge(HALO_BW_BIT(HALO_BW_K_SPHERE), say_classes("fast_vector_intersects_sphere", stats), "fast_vector_intersects_sphere");
 
 	memset(stats, 0, sizeof(stats));
 	for (cls = 0; cls < BW_CLASSES; cls++)
 		bw_test_ray_walk(halo_bw_asm_bsp_ray_walk, cls, CASES_WALK, 21u + (unsigned)cls, &stats[cls]);
-	if (say_classes("collision bsp ray walk", stats))
-		ready |= HALO_BW_BIT(HALO_BW_K_BSP_RAY);
+	ready |= judge(HALO_BW_BIT(HALO_BW_K_BSP_RAY), say_classes("collision bsp ray walk", stats), "collision bsp ray walk");
 
 	memset(stats, 0, sizeof(stats));
 	for (cls = 0; cls < BW_CLASSES; cls++)
 		bw_test_sphere_walk(halo_bw_asm_bsp_sphere_walk, cls, CASES_WALK, 31u + (unsigned)cls, &stats[cls]);
-	if (say_classes("collision bsp sphere walk", stats))
-		ready |= HALO_BW_BIT(HALO_BW_K_BSP_SPHERE);
+	ready |= judge(HALO_BW_BIT(HALO_BW_K_BSP_SPHERE), say_classes("collision bsp sphere walk", stats), "collision bsp sphere walk");
 
 	memset(stats, 0, sizeof(stats));
 	bw_test_find(halo_bw_asm_reference_find, CASES_FIND, 41u, &stats[BW_NORMAL]);
-	if (say_classes("reference_list_remove search", stats))
-		ready |= HALO_BW_BIT(HALO_BW_K_REFERENCE);
+	ready |= judge(HALO_BW_BIT(HALO_BW_K_REFERENCE), say_classes("reference_list_remove search", stats), "reference_list_remove search");
 
 	memset(stats, 0, sizeof(stats));
 	if (gqr5_signed16)
@@ -482,13 +598,15 @@ void wiiu_bw_start(void)
 		bw_test_qload(halo_bw_asm_quaternion_load, CASES_QLOAD, 51u, &stats[BW_NORMAL], &unavailable);
 		if (unavailable)
 			wiiu_log("Broadway kernel quaternion_decompress_8byte: the kernel found GQR5 not to be the signed 16-bit load: left off");
-		else if (say_classes("quaternion_decompress_8byte", stats))
-			ready |= HALO_BW_BIT(HALO_BW_K_QUATERNION);
+		else
+			ready |= judge(HALO_BW_BIT(HALO_BW_K_QUATERNION), say_classes("quaternion_decompress_8byte", stats), "quaternion_decompress_8byte");
 	}
 	else
 		wiiu_log("Broadway kernel quaternion_decompress_8byte: not tested (GQR5 is %08x)", gqr[5]);
 
 	bench(ready);
+	guard_take("the timing");
+	guard_end();
 	if (configured != 2)
 		halo_bw_flags = ready;
 	wiiu_log("Broadway kernels: %s", configured != 2 ? "in use" : "self-test only (broadway.txt 2): none in use");

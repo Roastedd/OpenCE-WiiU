@@ -25,6 +25,8 @@
 
     .section .text.halo_bw_bsp,"ax",@progbits
     .balign 4
+    .global halo_bw_range_bsp_begin
+halo_bw_range_bsp_begin:
 
     .global halo_bw_asm_bsp_ray_walk
     .type halo_bw_asm_bsp_ray_walk,@function
@@ -152,3 +154,5 @@ halo_bw_asm_bsp_sphere_walk:
     mr          3,4
     blr
     .size halo_bw_asm_bsp_sphere_walk,.-halo_bw_asm_bsp_sphere_walk
+    .global halo_bw_range_bsp_end
+halo_bw_range_bsp_end:

@@ -10,6 +10,8 @@
     .machine "broadway"
     .section .text.halo_bw_reference,"ax",@progbits
     .balign 4
+    .global halo_bw_range_reference_begin
+halo_bw_range_reference_begin:
     .global halo_bw_asm_reference_find
     .type halo_bw_asm_reference_find,@function
 halo_bw_asm_reference_find:
@@ -48,3 +50,5 @@ halo_bw_asm_reference_find:
     mr          3,6
     blr
     .size halo_bw_asm_reference_find,.-halo_bw_asm_reference_find
+    .global halo_bw_range_reference_end
+halo_bw_range_reference_end:
