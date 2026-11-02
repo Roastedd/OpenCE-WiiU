@@ -130,6 +130,28 @@ int main(int argc, char **argv)
 		}
 		else
 			printf("quaternion load with GQR5 = 0: declines, nothing written\n");
+		/* and after the set-up writes GQR5 (the simulator keeps the register for the next call: one thread's, for the call after) */
+		{
+			struct gekko g;
+			unsigned object, entry;
+
+			for (object = 0; object < sizeof(bw_objects) / sizeof(bw_objects[0]); object++)
+				for (entry = 0; entry < bw_objects[object].function_count; entry++)
+					if (!strcmp(bw_objects[object].functions[entry].name, "halo_bw_asm_set_gqr5"))
+					{
+						gekko_start(&g, 0, 0);
+						g.r[3] = 0x00070007u;
+						gekko_run(&g, images[object].code, images[object].words, bw_objects[object].functions[entry].entry);
+						gekko_check_contract(&g, "halo_bw_asm_set_gqr5");
+						if (g.gqr[5] != 0x00070007u || g.gqr[0] != 0)
+						{
+							printf("halo_bw_asm_set_gqr5 did not set GQR5 alone\n");
+							failed = 1;
+						}
+						else
+							printf("halo_bw_asm_set_gqr5: sets GQR5 to 00070007 and nothing else\n");
+					}
+		}
 		gqr5_value = 0x00070007u;
 	}
 	printf("%lu instructions simulated\n", instructions_run);

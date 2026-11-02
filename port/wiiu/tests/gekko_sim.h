@@ -266,6 +266,15 @@ static unsigned long gekko_run(struct gekko *g, const unsigned *code, unsigned w
 			case 444:	/* or, mr */
 				gekko_gpr(g, ra, g->r[rd] | g->r[rb]);
 				break;
+			case 467:	/* mtspr: GQR5's user alias, as the kernel's set-up writes it */
+				{
+					const unsigned spr = ra | (rb << 5);
+
+					if (spr != 901)
+						gekko_stop("an spr the kernel may not write", w, pc);
+					g->gqr[5] = g->r[rd];
+				}
+				break;
 			case 339:	/* mfspr: the quantization registers' user aliases */
 				{
 					const unsigned spr = ra | (rb << 5);

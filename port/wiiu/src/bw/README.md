@@ -72,7 +72,10 @@ which operations or in what order.
 ## On the console
 
 `halo/broadway.txt` on the card: `0` off (the default; nothing changes, no paired-single instruction runs), `1` the self-test runs and the
-kernels that pass are used, `2` the self-test and the timing run and every kernel stays off. The log then has, in order:
+kernels that pass are used, `2` the self-test and the timing run and every kernel stays off, `3` as `1`, and the game thread's GQR5 is first
+set to the signed 16-bit load with `mtspr 901` if it is not already (the quaternion kernel needs it; this is the one write of a special
+register in the kernels, whether a user program may do it is not known, and a run that ends at that log line says no: use `1`).
+The log then has, in order:
 
     Broadway kernels: halo/broadway.txt 1; self-test on core N, FPSCR 0000xxxx; the first paired-single instruction is next
     Broadway kernels: GQR0-7 ...; GQR0 is ...; GQR5 is ...

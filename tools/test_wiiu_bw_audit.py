@@ -17,7 +17,7 @@ def listing(*lines):
 def test_the_exact_instructions_pass():
     text = listing("lfs     f0,0(r3)", "psq_l   f2,4(r3),0,0", "ps_muls0 f10,f2,f8", "ps_add  f10,f10,f12", "ps_sum0 f4,f4,f4,f4",
                    "fcmpu   cr0,f4,f0", "cror    eq,gt,eq", "beq-    ac <f+0xac>", "bge-    e8 <f+0xe8>", "bso-    cr1,e8 <f+0xe8>",
-                   "mfspr   r5,901", "mfspr   r0,896", "psq_st  f10,40(r5),0,0", "blr")
+                   "mfspr   r5,901", "mfspr   r0,896", "mtspr   901,r3", "psq_st  f10,40(r5),0,0", "blr")
     assert checker.bw_violations(text) == {}
 
 
@@ -31,7 +31,7 @@ def test_fused_and_estimating_instructions_fail():
 
 def test_control_registers_and_unlisted_special_registers_fail():
     for name in ("mtspr   917,r3", "mfspr   r5,917", "mfspr   r5,895", "mfspr   r5,904", "mtfsf   255,f1", "mtfsb1  29", "mtmsr   r3",
-                 "mffs    f0", "mtspr   896,r3", "bl      0 <f>", "bctr", "sc"):
+                 "mffs    f0", "mtspr   896,r3", "mtspr   900,r3", "mtspr   8,r3", "mtspr   920,r3", "bl      0 <f>", "bctr", "sc"):
         assert checker.bw_violations(listing(name)), name
 
 

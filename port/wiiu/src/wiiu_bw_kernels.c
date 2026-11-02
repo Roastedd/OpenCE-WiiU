@@ -9,6 +9,8 @@ halo/broadway.txt on the card (read once, as the game's thread starts; missing i
   1  on: the self-test runs each kernel against the C it replaces on a few hundred thousand random and edge inputs, and a kernel that
      gives every bit the C gives is switched on; the others stay C
   2  the self-test and the timing only: the same log, every kernel stays off
+  3  as 1, and if this thread's GQR5 is not the signed 16-bit load the quaternion kernel needs, it is set to it first (mtspr 901, the
+     user alias of GQR5; whether a user program may write it is not known, and if the CPU refuses, the run ends there: use 1)
 
 The self-test runs on the thread that calls this (the game's thread, which runs the ticks), after wiiu_fpu_setup, so with the FPSCR the
 game computes under; the log says the core, the FPSCR, the eight quantization registers (GQR0 must be the float load and store the kernels'
@@ -409,10 +411,10 @@ void wiiu_bw_start(void)
 			configured = 0;
 		fclose(file);
 	}
-	if (configured < 1 || configured > 2)
+	if (configured < 1 || configured > 3)
 	{
 		configured = 0;
-		wiiu_log("Broadway kernels: off (halo/broadway.txt is missing or 0; 1 turns on the kernels that pass the self-test, 2 runs the self-test only)");
+		wiiu_log("Broadway kernels: off (halo/broadway.txt is missing or 0; 1 turns on the kernels that pass the self-test, 2 runs the self-test only, 3 is 1 and sets GQR5)");
 		return;
 	}
 	self_test_core = OSGetCoreId();
@@ -426,6 +428,14 @@ void wiiu_bw_start(void)
 	wiiu_log("Broadway kernels: GQR0-7 %08x %08x %08x %08x %08x %08x %08x %08x; GQR0 is %s; GQR5 is %s", gqr[0], gqr[1], gqr[2], gqr[3], gqr[4],
 		gqr[5], gqr[6], gqr[7], gqr0_float ? "the float load and store the kernels assume" : "NOT the float load and store: every kernel stays off",
 		gqr5_signed16 ? "the signed 16-bit load the quaternion kernel needs" : "not the signed 16-bit load (type 7, scale 0): the quaternion kernel stays off");
+	if (configured == 3 && gqr0_float && !gqr5_signed16)
+	{
+		wiiu_log("Broadway kernels: halo/broadway.txt 3: setting GQR5 to 00070007 with mtspr 901; if the log ends here the CPU refused a user write of it (use 1)");
+		halo_bw_asm_set_gqr5(0x00070007u);
+		halo_bw_asm_read_gqr(gqr);
+		gqr5_signed16 = (gqr[5] >> 16) == 7;
+		wiiu_log("Broadway kernels: GQR5 is now %08x: %s", gqr[5], gqr5_signed16 ? "the signed 16-bit load" : "still not the signed 16-bit load");
+	}
 	if (!gqr0_float)
 		return;
 	if ((fpscr & 3u) != 0 || (fpscr & 0xf8u) != 0)
@@ -479,10 +489,10 @@ void wiiu_bw_start(void)
 		wiiu_log("Broadway kernel quaternion_decompress_8byte: not tested (GQR5 is %08x)", gqr[5]);
 
 	bench(ready);
-	if (configured == 1)
+	if (configured != 2)
 		halo_bw_flags = ready;
-	wiiu_log("Broadway kernels: %s", configured == 1 ? "in use" : "self-test only (broadway.txt 2): none in use");
-	if (configured == 1)
+	wiiu_log("Broadway kernels: %s", configured != 2 ? "in use" : "self-test only (broadway.txt 2): none in use");
+	if (configured != 2)
 	{
 		char list[160];
 		size_t used = 0;

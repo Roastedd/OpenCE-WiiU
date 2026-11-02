@@ -66,3 +66,15 @@ halo_bw_asm_read_gqr:
     stw         0,28(3)
     blr
     .size halo_bw_asm_read_gqr,.-halo_bw_asm_read_gqr
+
+/* GQR5 (user alias 901) made the signed 16-bit load, type 7 and scale 0 for loads and stores alike, as libogc's CAST_Init and Nintendo's
+ * context setup make it: only if halo/broadway.txt asks (3), on the thread that will call the quaternion kernel (the register is per thread),
+ * and only to make the register the kernel checks for; whether a user program may write the alias is not known (the console's log says), and
+ * a program exception here ends the run.
+ *   void halo_bw_asm_set_gqr5(unsigned value (r3)); */
+    .global halo_bw_asm_set_gqr5
+    .type halo_bw_asm_set_gqr5,@function
+halo_bw_asm_set_gqr5:
+    mtspr       901,3
+    blr
+    .size halo_bw_asm_set_gqr5,.-halo_bw_asm_set_gqr5

@@ -20,7 +20,7 @@ weaken the PS ban for other objects.
 The Broadway kernels' objects (port/wiiu/src/bw, tools/wiiu_build.py's wiiu_bw_asm) are named with --bw-kernel-object PATH, and held to
 an allowlist instead: only the instructions BW_ALLOWED lists, which have no fused multiply-add (fmadd*, ps_madd*, ps_msub*,
 ps_nmadd*...), no estimate (frsqrte, fres, ps_res, ps_rsqrte), no division or root, no control register or SPR written and only the
-quantization registers' user aliases (896 to 903) read. Anything else fails the object. Like the audio route it does not use --allow
+quantization registers' user aliases (896 to 903) read and only GQR5's (901) written. Anything else fails the object. Like the audio route it does not use --allow
 and does not weaken the ban for other objects.
 
     wiiu_check_objects.py [--quiet] [--allow NAME]... [--audio-ps-object PATH] [--bw-kernel-object PATH]... OBJECT_OR_FOLDER...
@@ -86,6 +86,10 @@ def bw_violations(listing):
             operands = match.group(2).split(",")
             if len(operands) != 2 or not operands[1].isdigit() or not 896 <= int(operands[1]) <= 903:
                 found["mfspr " + match.group(2)] = found.get("mfspr " + match.group(2), 0) + 1
+        elif name == "mtspr":
+            # (only GQR5's user alias, which the quaternion kernel's thread may be asked to set up: "mtspr 901,r3")
+            if match.group(2).split(",")[0] != "901":
+                found["mtspr " + match.group(2)] = found.get("mtspr " + match.group(2), 0) + 1
         elif name not in BW_ALLOWED:
             found[name] = found.get(name, 0) + 1
     return found
