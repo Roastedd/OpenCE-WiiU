@@ -25,6 +25,11 @@ void tick_snapshot_objects_changed(void);
 void tick_snapshot_view_begin(void);
 void tick_snapshot_view_end(void);
 int tick_snapshot_viewing(void);
+/* the console's timers (port/wiiu/src/wiiu_tick_snapshot_timers.c installs them; none on the host): a time to start with, and the time since it
+added to a part (tick_snapshot.c numbers them) */
+unsigned long long tick_snapshot_time(void);
+void tick_snapshot_time_add(int part, unsigned long long since);
+void tick_snapshot_timers_install(unsigned long long (*clock)(void), void (*add)(int part, unsigned long long since));
 /* the cameras as of the frame's start, while a frame is drawn from the snapshot (the game state's if not; the others answer 0 if not) */
 struct observer_result const *tick_snapshot_camera(short local_player_index, struct observer_result const *live);
 int tick_snapshot_director_perspective(short local_player_index, int *perspective);

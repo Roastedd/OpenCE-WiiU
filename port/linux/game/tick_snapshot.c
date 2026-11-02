@@ -61,9 +61,26 @@ port/wiiu/src/wiiu_tick_snapshot_timers.c, on the console, the milliseconds a fr
 
 void platform_log(char const *format, ...);
 
-/* port/wiiu/src/wiiu_tick_snapshot_timers.c, on the console: weak, so that a build without it (the host's) has no timers */
-unsigned long long wiiu_snapshot_clock(void) __attribute__((weak));
-void wiiu_snapshot_add(int part, unsigned long long since) __attribute__((weak));
+/* The timers are the console's (port/wiiu/src/wiiu_tick_snapshot_timers.c installs them when the program starts); the host's runs have none */
+static unsigned long long (*timer_clock)(void);
+static void (*timer_add)(int part, unsigned long long since);
+
+void tick_snapshot_timers_install(unsigned long long (*clock)(void), void (*add)(int part, unsigned long long since))
+{
+	timer_clock = clock;
+	timer_add = add;
+}
+
+unsigned long long tick_snapshot_time(void)
+{
+	return timer_clock ? timer_clock() : 0ULL;
+}
+
+void tick_snapshot_time_add(int part, unsigned long long since)
+{
+	if (timer_add)
+		timer_add(part, since);
+}
 
 /* the parts timed (wiiu_tick_snapshot_timers.c names them) */
 enum
@@ -78,8 +95,8 @@ enum
 	PART_COUNT
 };
 
-#define CLOCK() (wiiu_snapshot_clock ? wiiu_snapshot_clock() : 0ULL)
-#define ADD(part, since) do { if (wiiu_snapshot_add) wiiu_snapshot_add((part), (since)); } while (0)
+#define CLOCK() tick_snapshot_time()
+#define ADD(part, since) tick_snapshot_time_add((part), (since))
 
 #define SNAPSHOT_PATH "/vol/external01/wiiu/apps/halo/tick_snapshot.txt"
 

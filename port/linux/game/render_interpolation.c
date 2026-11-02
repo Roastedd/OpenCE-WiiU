@@ -434,9 +434,7 @@ static void record_publish(struct interpolated_object *record)
 	record->blended_frame = NONE;
 }
 
-/* port/wiiu/src/wiiu_tick_snapshot_timers.c, on the console (weak: the host's builds have none) */
-unsigned long long wiiu_snapshot_clock(void) __attribute__((weak));
-void wiiu_snapshot_add(int part, unsigned long long since) __attribute__((weak));
+/* (tick_snapshot.c's timer parts) */
 #define SNAPSHOT_PART_ROTATIONS 3
 #else
 #define record_publish(record) ((void)0)
@@ -546,7 +544,7 @@ void render_interpolation_tick(void)
 #ifdef HALO_WIIU
 		{
 			/* the snapshot's rotations found now, by the tick, not when a frame first blends it (the game thread's 0.57 ms a frame) */
-			const unsigned long long rotations_started = wiiu_snapshot_clock ? wiiu_snapshot_clock() : 0ULL;
+			const unsigned long long rotations_started = tick_snapshot_time();
 			real_matrix4x3 const *snapshot_nodes = record->nodes + record->latest * record->node_capacity;
 			struct interpolation_rotation *snapshot_rotations = record->rotations + record->latest * record->node_capacity;
 			short rotation_index;
@@ -554,8 +552,7 @@ void render_interpolation_tick(void)
 			for (rotation_index = 0; rotation_index < node_count; rotation_index++)
 				rotation_from_matrix(&snapshot_nodes[rotation_index], &snapshot_rotations[rotation_index]);
 			record->rotations_valid[record->latest] = TRUE;
-			if (wiiu_snapshot_add)
-				wiiu_snapshot_add(SNAPSHOT_PART_ROTATIONS, rotations_started);
+			tick_snapshot_time_add(SNAPSHOT_PART_ROTATIONS, rotations_started);
 		}
 #endif
 		record->object_index = iterator.index;

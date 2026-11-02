@@ -7,8 +7,9 @@ wiiu_render_passes.c. They are the cost of the stage that copies the renderer's 
 and so the time that moves to the tick thread when the ticks overlap rendering; the snapshot reads in the frame cost what they cost in
 "render passes".
 
-The game's units call wiiu_snapshot_clock and wiiu_snapshot_add as weak references, so a build without this file (the host's) has no timers. A
-mark costs a read of the time base. Nothing is timed while halo/tick_snapshot.txt is absent or holds 0, because nothing calls these.
+The game's units call the timers through tick_snapshot.c (tick_snapshot_time and tick_snapshot_time_add), which this file installs when the program
+starts; a build without this file (the host's) has no timers. A mark costs a read of the time base. Nothing is timed while halo/tick_snapshot.txt
+is absent or holds 0, because nothing calls them.
 */
 
 #include <coreinit/time.h>
@@ -18,8 +19,8 @@ mark costs a read of the time base. Nothing is timed while halo/tick_snapshot.tx
 
 void platform_log(const char *format, ...);
 
-unsigned long long wiiu_snapshot_clock(void);
-void wiiu_snapshot_add(int part, unsigned long long since);
+/* port/linux/game/tick_snapshot.c's (the game's side, whose names the C library's side does not see in a header) */
+void tick_snapshot_timers_install(unsigned long long (*clock)(void), void (*add)(int part, unsigned long long since));
 
 /* the parts, as tick_snapshot.c numbers them */
 static const char *const part_names[] =
@@ -35,7 +36,7 @@ static unsigned long part_calls[PART_COUNT];
 static unsigned long frames;
 static OSTime logged_at;
 
-unsigned long long wiiu_snapshot_clock(void)
+static unsigned long long snapshot_clock(void)
 {
 	return (unsigned long long)OSGetSystemTime();
 }
@@ -65,7 +66,7 @@ static void snapshot_log(void)
 	frames = 0;
 }
 
-void wiiu_snapshot_add(int part, unsigned long long since)
+static void snapshot_add(int part, unsigned long long since)
 {
 	const OSTime now = OSGetSystemTime();
 
@@ -85,4 +86,9 @@ void wiiu_snapshot_add(int part, unsigned long long since)
 		return;
 	part_ticks[part] += now - (OSTime)since;
 	part_calls[part]++;
+}
+
+__attribute__((constructor)) static void snapshot_timers_install(void)
+{
+	tick_snapshot_timers_install(snapshot_clock, snapshot_add);
 }
