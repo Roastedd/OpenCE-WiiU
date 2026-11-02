@@ -296,6 +296,15 @@ then ends in a fault in the system's code, and the console with it). The threads
 safe points; it returns at once in the foreground, and in the background holds the caller until the foreground is back (or the app is closing). The
 release callback waits for the game thread to be held before it lets the system have the GPU. */
 static volatile uint32_t game_gate_held;
+/* the tick thread (source/main/main.c, halo/tick_thread.txt) held at its own gate, before it starts a tick. While it runs ticks the game thread
+waits for it (nothing runs at the same time yet), so either being held is the game being held: the game thread cannot be at its gate then, and
+the tick thread is not in a GX2 call (the ticks make none). When the ticks run beside the drawing this becomes both, in game_threads_held. */
+static volatile uint32_t tick_gate_held;
+
+static int game_threads_held(void)
+{
+	return game_gate_held != 0 || tick_gate_held != 0;
+}
 
 void wiiu_foreground_gate(int is_game_thread);
 
@@ -317,6 +326,24 @@ void wiiu_foreground_gate(int is_game_thread)
 	}
 	if (is_game_thread)
 		game_gate_held = 0;
+}
+
+/* The tick thread's gate, called before each tick it is asked for: returns at once in the foreground, holds the thread in the background (and for
+good once the app is closing), as wiiu_foreground_gate does the game thread. The release callback and the close wait for it as for the game thread. */
+void wiiu_tick_thread_gate(void);
+
+void wiiu_tick_thread_gate(void)
+{
+	if (foreground && !exit_requested)
+		return;
+	tick_gate_held = 1;
+	while (!foreground || exit_requested)
+	{
+		if (wiiu_gate_poll)
+			wiiu_gate_poll();
+		sleep_ms(5);
+	}
+	tick_gate_held = 0;
 }
 
 /* The game quits (its Quit, or a timed run that is over): the Wii U Menu is asked for, and the system ends the app through ProcUI, as it does for HOME's Close
@@ -404,7 +431,7 @@ int wiiu_game_gate_is_held(void);
 
 int wiiu_game_gate_is_held(void)
 {
-	return game_gate_held != 0;
+	return game_threads_held();
 }
 
 static uint32_t on_release(void *unused)
@@ -419,12 +446,12 @@ static uint32_t on_release(void *unused)
 	{
 		uint32_t waited = 0;
 
-		while (!game_gate_held && waited < 2000u && started_game)
+		while (!game_threads_held() && waited < 2000u && started_game)
 		{
 			sleep_ms(5);
 			waited += 5u;
 		}
-		wiiu_log("HOME: the game thread is %s after %u ms", game_gate_held ? "held" : "NOT held", (unsigned)waited);
+		wiiu_log("HOME: the game thread is %s after %u ms", game_threads_held() ? (game_gate_held ? "held" : "waiting for the tick thread, which is held") : "NOT held", (unsigned)waited);
 	}
 	/* (voice chat first: its thread closes the microphone, which HOME is not documented to do, before the sound goes) */
 	wiiu_voice_suspend();
@@ -949,12 +976,12 @@ int wiiu_shell_run(int (*game_main)(void))
 	{
 		uint32_t waited = 0;
 
-		while (!game_gate_held && waited < 1500u && started_game && !game_done)
+		while (!game_threads_held() && waited < 1500u && started_game && !game_done)
 		{
 			sleep_ms(5);
 			waited += 5u;
 		}
-		wiiu_log("Closing: the game thread is %s after %u ms", game_gate_held ? "held" : "NOT held", (unsigned)waited);
+		wiiu_log("Closing: the game thread is %s after %u ms", game_threads_held() ? (game_gate_held ? "held" : "waiting for the tick thread, which is held") : "NOT held", (unsigned)waited);
 		/* (voice chat's thread closes the microphone and ends; one that does not within 300 ms is left, as the log writers are, and the
 		trail says so) */
 		{

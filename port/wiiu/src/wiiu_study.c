@@ -8,6 +8,9 @@ the file is read here, with the C library's.
 
 #include "wiiu_shell.h"
 
+#include <coreinit/core.h>
+
+#include <stdint.h>
 #include <stdio.h>
 
 long wiiu_study_number(const char *name, long fallback)
@@ -24,4 +27,20 @@ long wiiu_study_number(const char *name, long fallback)
 		number = fallback;
 	fclose(file);
 	return number;
+}
+
+/* The tick thread (source/main/main.c) says once, in the log, that it runs and on which core, and what its FPU's status register holds: Cafe OS starts
+a thread with the non-IEEE bit (00000004) set, which wiiu_fpu_setup clears, and a tick that ran with it set would flush denormals where a PC keeps
+them. Call it after wiiu_fpu_setup and wiiu_thread_off_game_core. */
+void wiiu_study_tick_thread_report(void)
+{
+	union
+	{
+		double value;
+		uint64_t bits;
+	} status;
+
+	__asm__ volatile("mffs %0" : "=f"(status.value));
+	wiiu_log("study: the tick thread runs on core %u, FPSCR %08x (bit 00000004 clear: IEEE denormals)", (unsigned)OSGetCoreId(),
+		(unsigned)(status.bits & 0xFFFFFFFFu));
 }

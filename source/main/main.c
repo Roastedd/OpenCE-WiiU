@@ -3366,17 +3366,21 @@ void main_loop_of_death(
 	return;
 }
 
-/* port: a study of the game's ticks on a thread of their own, overlapped
-with drawing in the end (the tools repository's
-reports/research/2026-11-01/ticks-off-thread.md). Two switches, read once
-from the environment:
+/* port: the game's ticks on a thread of their own, overlapped with drawing in the end (the tools repository's
+reports/research/2026-11-01/ticks-off-thread.md, ticks-stage1.md). Switches, read once, from the environment (the Wii U has none: its one is
+halo/tick_thread.txt, wiiu_study.c):
 - HALO_RENDER_REPEAT=<n>: every frame drawn n times (0: not at all), to show
   that what the ticks compute does not depend on how often the world is drawn
   between them, which overlapping them with drawing needs;
 - HALO_TICK_THREAD=1: game_time_update run on a second thread while this one
   waits for it. Nothing runs at the same time yet, so the ticks must come out
-  exactly as they do on one thread; on the Wii U it would measure a tick's cost
-  on core 0, whose cache is a quarter of core 1's. */
+  exactly as they do on one thread; on the Wii U it is core 0, whose cache is a
+  quarter of core 1's, to measure a tick's cost there beside the audio mixer.
+  What the thread does not share with the game's: the random seed's lock count,
+  the collision log's stack (and, on the Wii U, its counts), the frame's
+  interpolation and function-render modes, the profile, the diagnostics buffer;
+  and one lock covers the log's lines (error, terminal_printf). The renderer
+  finds its objects with a set of its own (render_objects.c). */
 #ifndef HALO_WEB
 #include <pthread.h>
 #include <stdio.h>
@@ -3387,6 +3391,8 @@ from the environment:
 void wiiu_fpu_setup(void);
 void wiiu_thread_off_game_core(void);
 void wiiu_tag_thread(const char *name);
+void wiiu_tick_thread_gate(void);
+void wiiu_study_tick_thread_report(void);
 #endif
 
 static long main_study_setting(
@@ -3467,13 +3473,20 @@ static void *main_tick_thread_run(
 	wiiu_fpu_setup();
 	wiiu_thread_off_game_core();
 	wiiu_tag_thread("ticks");
+	wiiu_study_tick_thread_report();
 #endif
+	/* (no part in the profile: its stack of sections and the frame's record are the game thread's) */
+	profile_thread_disable();
 	pthread_mutex_lock(&main_tick_thread.mutex);
 	for (;;)
 	{
 		while (!main_tick_thread.pending)
 			pthread_cond_wait(&main_tick_thread.posted, &main_tick_thread.mutex);
 		pthread_mutex_unlock(&main_tick_thread.mutex);
+#ifdef HALO_WIIU
+		/* (HOME and closing hold this thread before a tick, as they hold the game thread at its safe points) */
+		wiiu_tick_thread_gate();
+#endif
 		game_time_update(main_tick_thread.time_delta_sec);
 		pthread_mutex_lock(&main_tick_thread.mutex);
 		main_tick_thread.pending = FALSE;
