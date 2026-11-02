@@ -3391,6 +3391,7 @@ halo/tick_thread.txt, wiiu_study.c):
 void wiiu_fpu_setup(void);
 void wiiu_thread_off_game_core(void);
 void wiiu_tag_thread(const char *name);
+int wiiu_tick_thread_priority(void);
 void wiiu_tick_thread_gate(void);
 void wiiu_study_tick_thread_report(void);
 #endif
@@ -3472,6 +3473,7 @@ static void *main_tick_thread_run(
 	/* (what every thread that runs game code needs: wiiu_shell.h) */
 	wiiu_fpu_setup();
 	wiiu_thread_off_game_core();
+	wiiu_tick_thread_priority();
 	wiiu_tag_thread("ticks");
 	wiiu_study_tick_thread_report();
 #endif

@@ -391,6 +391,15 @@ void wiiu_thread_off_game_core(void)
 	OSSetThreadAffinity(OSGetCurrentThread(), OS_THREAD_ATTRIB_AFFINITY_CPU0);
 }
 
+/* the tick thread (source/main/main.c) at the game thread's priority: above the workers (the log, the debug server, the voice thread run at the game's +4,
+setup_thread) so that a tick is not held up behind a write of the log, and below the audio mixer (priority 10, wiiu_audio.c), which shares core 0 with it and
+must run when its ring needs filling: a tick is the one that waits. Returns the priority it set. */
+int wiiu_tick_thread_priority(void)
+{
+	OSSetThreadPriority(OSGetCurrentThread(), main_priority);
+	return (int)main_priority;
+}
+
 /* DirectSound's packet decoder (dsound_sdl.c): on core 2, which the GX2 thread leaves mostly idle, at the GX2 thread's priority: that thread waits for
 work yielding, which gives the core only to threads of its priority or above (at 20, below it, the decoder hardly ran: the sound stuttered, came late or not at all) */
 void wiiu_thread_beside_gx2(void)
