@@ -610,11 +610,63 @@ CPU regions (the arrays the simulation keeps, and the render-owned ones beside t
 leave in memory and not only by the players' states that tools/ppc-be/compare_network_tests.py reads (reports/research/2026-11-01/
 ticks-off-thread.md 8, check 2). Each line is "tick hash <tick> <region>:<hash> ..."; the first call says what the regions are. The hash is
 FNV-1a over the region's words, as the machine stores them (not comparable between a big-endian and a little-endian machine). */
+/* HALO_TICK_DUMP=<tick>:<region>,<region>... writes those regions as they are at that tick to d:\\tickdump-<tick>-<region>.bin (what two runs
+that differ in a region's hash differ by, byte for byte) */
+static void game_state_tick_dump(
+	long tick)
+{
+	static long dump_tick = -2;
+	static long regions[MAXIMUM_GAME_STATE_HASH_REGIONS];
+	static long region_count;
+
+	if (dump_tick == -2)
+	{
+		char const *setting = getenv("HALO_TICK_DUMP");
+		char *end;
+
+		dump_tick = -1;
+		if (setting && *setting)
+		{
+			dump_tick = strtol(setting, &end, 10);
+			while (*end == ':' || *end == ',')
+			{
+				if (region_count < MAXIMUM_GAME_STATE_HASH_REGIONS)
+					regions[region_count++] = strtol(end + 1, &end, 10);
+				else
+					break;
+			}
+		}
+	}
+	if (dump_tick == tick)
+	{
+		long index;
+
+		for (index = 0; index < region_count; index++)
+		{
+			if (regions[index] >= 0 && regions[index] < game_state_hash_region_count)
+			{
+				char path[64];
+				FILE *file;
+
+				sprintf(path, "d:\\tickdump-%ld-%ld.bin", tick, regions[index]);
+				file = fopen(path, "wb");
+				if (file)
+				{
+					fwrite(game_state_hash_regions[regions[index]].address, 1, (size_t)game_state_hash_regions[regions[index]].size, file);
+					fclose(file);
+				}
+			}
+		}
+	}
+}
+
 void game_state_tick_hash(
 	long tick)
 {
 	static long every = -1;
 	static boolean described;
+
+	game_state_tick_dump(tick);
 
 	if (every < 0)
 	{
@@ -632,8 +684,8 @@ void game_state_tick_hash(
 		{
 			described = TRUE;
 			for (region_index = 0; region_index < game_state_hash_region_count; region_index++)
-				platform_log("tick hash region %ld: %s, %ld bytes", region_index, game_state_hash_regions[region_index].name,
-					game_state_hash_regions[region_index].size);
+				platform_log("tick hash region %ld: %s, %ld bytes at %08lx", region_index, game_state_hash_regions[region_index].name,
+					game_state_hash_regions[region_index].size, (unsigned long)(size_t)game_state_hash_regions[region_index].address);
 		}
 		length = sprintf(line, "tick hash %ld:", tick);
 		for (region_index = 0; region_index < game_state_hash_region_count; region_index++)
