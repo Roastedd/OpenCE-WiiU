@@ -93,6 +93,70 @@ static void antenna_update(
 struct data_array *antenna_data;
 static struct antenna_shape antenna_shapes[MAXIMUM_ANTENNAS];
 
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+
+/* port: how many ticks have passed since the widget was last drawn, kept as two counts that one thread each writes
+(tick_owners.h): the tick's count of ticks, and the renderer's note of the tick count at its last draw. Their difference
+(taken as the short it was) is the old field's value. With the tick owners' queues off the field in the datum is used,
+as it was. */
+static unsigned short antenna_tick_counts[MAXIMUM_ANTENNAS];
+static unsigned short antenna_drawn_counts[MAXIMUM_ANTENNAS];
+#endif
+
+/* the tick: one more update; the ticks since the last draw */
+static short antenna_tick_updates_since_render(
+	long antenna_index,
+	struct antenna_datum *antenna)
+{
+#ifdef HALO_WIIU
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_WIDGET_COUNTS))
+	{
+		long slot = DATUM_INDEX_TO_ABSOLUTE_INDEX(antenna_index);
+
+		antenna_tick_counts[slot]++;
+		return (short)(antenna_tick_counts[slot] - antenna_drawn_counts[slot]);
+	}
+#endif
+	return ++antenna->updates_since_last_render;
+}
+
+/* the renderer: the ticks since the last draw */
+static short antenna_updates_since_render(
+	long antenna_index,
+	struct antenna_datum *antenna)
+{
+#ifdef HALO_WIIU
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_WIDGET_COUNTS))
+	{
+		long slot = DATUM_INDEX_TO_ABSOLUTE_INDEX(antenna_index);
+
+		return (short)(antenna_tick_counts[slot] - antenna_drawn_counts[slot]);
+	}
+#endif
+	return antenna->updates_since_last_render;
+}
+
+/* the renderer has drawn it, or it is new: none since */
+static void antenna_note_drawn(
+	long antenna_index,
+	struct antenna_datum *antenna,
+	boolean is_new)
+{
+#ifdef HALO_WIIU
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_WIDGET_COUNTS))
+	{
+		long slot = DATUM_INDEX_TO_ABSOLUTE_INDEX(antenna_index);
+
+		if (is_new)
+			antenna_tick_counts[slot] = 0;
+		antenna_drawn_counts[slot] = antenna_tick_counts[slot];
+		return;
+	}
+#endif
+	antenna->updates_since_last_render = 0;
+}
+
 /* ---------- public code */
 
 void antennas_initialize(
@@ -177,7 +241,7 @@ long antenna_new(
 			}
 			antenna->definition_index = definition_index;
 			antenna->object_index = NONE;
-			antenna->updates_since_last_render = 0;
+			antenna_note_drawn(antenna_index, antenna, TRUE);
 			/* (a new chain blends from no shape: the slot's record may be a
 			deleted antenna's, or an earlier map's) */
 			antenna_shapes[DATUM_INDEX_TO_ABSOLUTE_INDEX(antenna_index)].count = 0;
@@ -278,14 +342,14 @@ void antenna_render(
 	if (!antenna->disabled)
 	{
 		antenna->object_index = object_index;
-		if (antenna->updates_since_last_render > 5)
+		if (antenna_updates_since_render(antenna_index, antenna) > 5)
 		{
 			antenna_update(antenna, definition, 0.05f);
 			antenna_update(antenna, definition, 0.05f);
 			antenna_update(antenna, definition, 0.05f);
 		}
 
-		antenna->updates_since_last_render = 0;
+		antenna_note_drawn(antenna_index, antenna, FALSE);
 		antenna_render_proper(antenna_index, antenna, definition);
 	}
 
@@ -306,8 +370,9 @@ void antennas_update(
 
 		if (!antenna->disabled)
 		{
-			antenna->updates_since_last_render++;
-			if (antenna->object_index != NONE && antenna->updates_since_last_render < 5)
+			short updates_since_render = antenna_tick_updates_since_render(antenna_index, antenna);
+
+			if (antenna->object_index != NONE && updates_since_render < 5)
 			{
 				/* The chain is a simulation of the Xbox's own step, an update
 				a tick: its springs, its carry and its points' physics are

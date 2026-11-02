@@ -241,6 +241,22 @@ typedef char verify_animation_graph_node_size[
 typedef char verify_render_model_effect_size[
 	sizeof(struct render_model_effect) == 0x28 ? 1 : -1];
 
+/* port: what the renderer writes of a first-person weapon and the tick reads for the weapon's sway (first_person_weapon_update),
+laid out where the fields were in struct first_person_weapon (they are one member of it now). With the tick owners' queues on
+(port/linux/game/tick_owners.h) they are not kept in the game state but in a table of the renderer's own
+(first_person_render_side): the tick never reads what the renderer is writing in the game state, and a copy of the game
+state for the renderer is never written to */
+struct first_person_render_fields
+{
+	boolean rendered;
+	byte reserved0051[3];
+	real_vector3d render_forward;
+	real_euler_angles2d render_facing;
+	real_euler_angles2d last_render_facing;
+	real_point3d render_position;
+	real_point3d last_render_position;
+};
+
 struct first_person_weapon
 {
 	boolean visible;
@@ -262,13 +278,7 @@ struct first_person_weapon
 	real_vector2d position_velocity;
 	real_vector2d turning;
 	real_vector2d turning_velocity;
-	boolean rendered;
-	byte reserved0051[3];
-	real_vector3d render_forward;
-	real_euler_angles2d render_facing;
-	real_euler_angles2d last_render_facing;
-	real_point3d render_position;
-	real_point3d last_render_position;
+	struct first_person_render_fields render_fields;
 	short interpolation_frame_index;
 	short interpolation_frame_count;
 	real_orientation node_orientations[MAXIMUM_NODES_PER_ANIMATION];
@@ -295,7 +305,9 @@ typedef char verify_first_person_weapon_size[
 typedef char verify_first_person_weapon_node_matrices_offset[
 	offsetof(struct first_person_weapon, node_matrices) == 0x108C ? 1 : -1];
 typedef char verify_first_person_weapon_rendered_offset[
-	offsetof(struct first_person_weapon, rendered) == 0x50 ? 1 : -1];
+	offsetof(struct first_person_weapon, render_fields) == 0x50 ? 1 : -1];
+typedef char verify_first_person_render_fields_size[
+	sizeof(struct first_person_render_fields) == 0x38 ? 1 : -1];
 typedef char verify_first_person_weapon_node_orientations_offset[
 	offsetof(struct first_person_weapon, node_orientations) == 0x8C ? 1 : -1];
 typedef char verify_first_person_weapon_node_remapping_table_offset[
@@ -396,6 +408,70 @@ real pal_tags_first_person_fraction(short local_player_index, long graph_index, 
 
 static struct first_person_weapon *first_person_weapons;
 
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+
+/* the renderer's own table of what it writes of a first-person weapon (struct first_person_render_fields), used with the
+tick owners' queues on; and the epoch for "drawn since the weapon's unit changed", which the tick advances (a new unit) and
+the renderer answers (a draw), so that neither writes what the other owns */
+static struct first_person_render_fields first_person_render_side[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
+static long first_person_unit_epoch[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
+static long first_person_drawn_epoch[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
+#endif
+
+static struct first_person_render_fields *first_person_render_get(
+	short local_player_index,
+	struct first_person_weapon *first_person_weapon)
+{
+#ifdef HALO_WIIU
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_FIRST_PERSON))
+		return &first_person_render_side[local_player_index];
+#endif
+	return &first_person_weapon->render_fields;
+}
+
+/* whether the weapon has been drawn since its unit last changed (the tick's question) */
+static boolean first_person_rendered(
+	short local_player_index,
+	struct first_person_weapon *first_person_weapon)
+{
+#ifdef HALO_WIIU
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_FIRST_PERSON))
+		return first_person_drawn_epoch[local_player_index] == first_person_unit_epoch[local_player_index];
+#endif
+	return first_person_weapon->render_fields.rendered;
+}
+
+/* the renderer has drawn the weapon */
+static void first_person_set_rendered(
+	short local_player_index,
+	struct first_person_weapon *first_person_weapon)
+{
+#ifdef HALO_WIIU
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_FIRST_PERSON))
+	{
+		first_person_drawn_epoch[local_player_index] = first_person_unit_epoch[local_player_index];
+		return;
+	}
+#endif
+	first_person_weapon->render_fields.rendered= TRUE;
+}
+
+/* the weapon's unit changed (the tick): not drawn since */
+static void first_person_clear_rendered(
+	short local_player_index,
+	struct first_person_weapon *first_person_weapon)
+{
+#ifdef HALO_WIIU
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_FIRST_PERSON))
+	{
+		first_person_unit_epoch[local_player_index]++;
+		return;
+	}
+#endif
+	first_person_weapon->render_fields.rendered= FALSE;
+}
+
 /* ---------- public code */
 
 short animation_update_render_only(
@@ -445,6 +521,11 @@ void first_person_weapons_initialize_for_new_map(
 		first_person_weapons[local_player_index].unit_index= NONE;
 		first_person_weapons[local_player_index].current_sound_index= NONE;
 		first_person_weapons[local_player_index].current_sound_state= NONE;
+#ifdef HALO_WIIU
+		csmemset(&first_person_render_side[local_player_index], 0, sizeof(first_person_render_side[local_player_index]));
+		first_person_unit_epoch[local_player_index]= 1;
+		first_person_drawn_epoch[local_player_index]= 0;
+#endif
 	}
 
 	return;
@@ -1155,10 +1236,12 @@ static void first_person_weapon_build_node_matrices(
 {
 	struct first_person_weapon *first_person_weapon= first_person_weapon_get(local_player_index);
 
-	if (!first_person_weapon->rendered)
+	struct first_person_render_fields *render_fields= first_person_render_get(local_player_index, first_person_weapon);
+
+	if (!first_person_rendered(local_player_index, first_person_weapon))
 	{
-		euler_angles2d_from_vector3d(&first_person_weapon->render_facing, &render.camera.forward);
-		first_person_weapon->render_position= render.camera.position;
+		euler_angles2d_from_vector3d(&render_fields->render_facing, &render.camera.forward);
+		render_fields->render_position= render.camera.position;
 	}
 	/* The native ports draw several frames per tick. The turning sway
 	(first_person_weapon_update) takes the facing change since the last
@@ -1168,15 +1251,15 @@ static void first_person_weapon_build_node_matrices(
 
 		if (!halo_interpolation_enabled() || last_render_ticks[local_player_index] != game_time_get())
 		{
-			first_person_weapon->last_render_facing= first_person_weapon->render_facing;
-			first_person_weapon->last_render_position= first_person_weapon->render_position;
+			render_fields->last_render_facing= render_fields->render_facing;
+			render_fields->last_render_position= render_fields->render_position;
 			last_render_ticks[local_player_index]= game_time_get();
 		}
 	}
-	euler_angles2d_from_vector3d(&first_person_weapon->render_facing, &render.camera.forward);
-	first_person_weapon->render_position= render.camera.position;
-	first_person_weapon->render_forward= render.camera.forward;
-	first_person_weapon->rendered= TRUE;
+	euler_angles2d_from_vector3d(&render_fields->render_facing, &render.camera.forward);
+	render_fields->render_position= render.camera.position;
+	render_fields->render_forward= render.camera.forward;
+	first_person_set_rendered(local_player_index, first_person_weapon);
 
 	if (first_person_weapon->weapon_index!=NONE &&
 		!weapon_try_and_get(first_person_weapon->weapon_index))
@@ -1727,7 +1810,7 @@ static void first_person_weapon_new_unit(
 {
 	struct first_person_weapon *first_person_weapon= first_person_weapon_get(local_player_index);
 
-	first_person_weapon->rendered= FALSE;
+	first_person_clear_rendered(local_player_index, first_person_weapon);
 	first_person_weapon->unit_index= unit_index;
 	first_person_weapon_switch_weapons(local_player_index);
 
@@ -1999,8 +2082,9 @@ static void first_person_weapon_update(
 			first_person_weapon->overcharged_jitter_animation.index= NONE;
 		}
 
-		if (first_person_weapon->rendered)
+		if (first_person_rendered(local_player_index, first_person_weapon))
 		{
+			struct first_person_render_fields *render_fields= first_person_render_get(local_player_index, first_person_weapon);
 			real_vector2d turning;
 
 			accelerate_to_position(
@@ -2023,11 +2107,11 @@ static void first_person_weapon_update(
 				FALSE);
 
 			turning.i= signed_angular_difference(
-				first_person_weapon->last_render_facing.yaw,
-				first_person_weapon->render_facing.yaw)*30.0f;
+				render_fields->last_render_facing.yaw,
+				render_fields->render_facing.yaw)*30.0f;
 			turning.j= signed_angular_difference(
-				first_person_weapon->last_render_facing.pitch,
-				first_person_weapon->render_facing.pitch)*-30.0f;
+				render_fields->last_render_facing.pitch,
+				render_fields->render_facing.pitch)*-30.0f;
 
 			turning.i= PIN(turning.i, -1.0f, 1.0f);
 			turning.j= PIN(turning.j, -1.0f, 1.0f);
