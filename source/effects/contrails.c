@@ -76,6 +76,10 @@ symbols in this file:
 #include "physics/point_physics.h"
 #include "saved games/game_state.h"
 #include "scenario/scenario.h"
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#include "tick_presentation.h" /* port: port/linux/game/tick_presentation.c */
+#endif
 
 /* ---------- constants */
 
@@ -240,8 +244,38 @@ void contrails_dispose(
 	return;
 }
 
+#ifdef HALO_WIIU
+void contrail_delete_now(
+	long contrail_index);
+
+/* port: the contrails are the render thread's (tick_owners.h): a tick holds a ticket (contrail_new), and its delete and its
+points wait for the render thread's turn (tick_presentation.h) */
 void contrail_delete(
 	long contrail_index)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_CONTRAILS))
+		tick_presentation_contrail_delete(contrail_index);
+	else
+		contrail_delete_now(contrail_index);
+
+	return;
+}
+
+void contrail_delete_if_alive(
+	long contrail_index)
+{
+	if (datum_try_and_get(contrail_data, contrail_index))
+		contrail_delete_now(contrail_index);
+
+	return;
+}
+
+void contrail_delete_now(
+	long contrail_index)
+#else
+void contrail_delete(
+	long contrail_index)
+#endif
 {
 	struct contrail_datum *contrail = contrail_get(contrail_index);
 	short instance_index;
@@ -302,10 +336,34 @@ void contrails_reconnect_to_structure_bsp(
 	return;
 }
 
+#ifdef HALO_WIIU
+long contrail_new_now(
+	long definition_index,
+	long object_index,
+	short attachment_index);
+
 long contrail_new(
 	long definition_index,
 	long object_index,
 	short attachment_index)
+{
+	/* (none for no definition, as the old one answered) */
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_CONTRAILS) && definition_index != NONE)
+		return tick_presentation_contrail_new(definition_index, object_index, attachment_index);
+
+	return contrail_new_now(definition_index, object_index, attachment_index);
+}
+
+long contrail_new_now(
+	long definition_index,
+	long object_index,
+	short attachment_index)
+#else
+long contrail_new(
+	long definition_index,
+	long object_index,
+	short attachment_index)
+#endif
 {
 	long contrail_index = NONE;
 
@@ -485,17 +543,73 @@ void contrails_update(
 		if (instance_index == MAXIMUM_CONTRAIL_INSTANCES &&
 			contrail->object_index == NONE)
 		{
+#ifdef HALO_WIIU
+			/* port: the render thread's own, by the datum's index (contrail_delete is the ticks', by ticket) */
+			contrail_delete_now(contrail_index);
+#else
 			contrail_delete(contrail_index);
+#endif
 		}
 	}
 
 	return;
 }
 
+#ifdef HALO_WIIU
+void contrail_owner_collision_now(
+	long contrail_index,
+	unsigned char object_dying,
+	real dt);
+
 void contrail_owner_collision(
 	long contrail_index,
 	unsigned char object_dying,
 	real dt)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_CONTRAILS))
+		tick_presentation_contrail_owner_collision(contrail_index, object_dying, dt);
+	else
+		contrail_owner_collision_now(contrail_index, object_dying, dt);
+
+	return;
+}
+
+void contrail_owner_collision_if_alive(
+	long contrail_index,
+	unsigned char object_dying,
+	real dt)
+{
+	struct contrail_datum *contrail = (struct contrail_datum *)datum_try_and_get(contrail_data, contrail_index);
+
+	if (contrail)
+	{
+		if (contrail->object_index == NONE || !object_header_try_and_get(contrail->object_index))
+		{
+			/* its object is gone: a tick deleted it before this turn, and the points the contrail would add as the object
+			dies are of a place the object no longer has (the direct call was made before the object was let go of). It is
+			let go of, and loses those last points. */
+			contrail->object_index = NONE;
+			contrail->expired_dt += dt;
+		}
+		else
+		{
+			contrail_owner_collision_now(contrail_index, object_dying, dt);
+		}
+	}
+
+	return;
+}
+
+void contrail_owner_collision_now(
+	long contrail_index,
+	unsigned char object_dying,
+	real dt)
+#else
+void contrail_owner_collision(
+	long contrail_index,
+	unsigned char object_dying,
+	real dt)
+#endif
 {
 	struct contrail_datum *contrail = contrail_get(contrail_index);
 	struct contrail_definition *definition = contrail_definition_get(contrail->definition_index);
@@ -541,7 +655,12 @@ static void contrail_verify(
 				contrail->attachment_index));
 		/* port: and only an index the object holds (8; the first assert
 		only logs in a release build, and the count is the map's) */
-		if (VALID_INDEX(contrail->attachment_index, MAXIMUM_NUMBER_OF_ATTACHMENTS_PER_OBJECT))
+		/* (port: with the tick owners' queues on the object holds the ticket the contrail was made for, not its index) */
+		if (VALID_INDEX(contrail->attachment_index, MAXIMUM_NUMBER_OF_ATTACHMENTS_PER_OBJECT)
+#ifdef HALO_WIIU
+			&& !TICK_OWNERS_FEATURE(TICK_FEATURE_CONTRAILS)
+#endif
+			)
 		{
 			match_vassert(
 				"c:\\halo\\SOURCE\\effects\\contrails.c",
