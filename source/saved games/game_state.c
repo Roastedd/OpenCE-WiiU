@@ -553,7 +553,7 @@ static void game_state_allocation_record(
 	return;
 }
 
-/* port: the regions the game state's allocators handed out, kept for game_state_tick_hash (a name is the caller's literal) */
+/* port: the regions the game state's allocators handed out, kept for game_state_tick_hash */
 enum
 {
 	MAXIMUM_GAME_STATE_HASH_REGIONS = 128,
@@ -561,7 +561,7 @@ enum
 
 static struct
 {
-	char const *name;
+	char name[48]; /* (a copy: some callers format the name into a buffer they use again) */
 	byte const *address;
 	long size;
 } game_state_hash_regions[MAXIMUM_GAME_STATE_HASH_REGIONS];
@@ -593,7 +593,8 @@ void *game_state_malloc(
 	game_state_globals.cpu_allocation_size+= size;
 	if (game_state_hash_region_count < MAXIMUM_GAME_STATE_HASH_REGIONS)
 	{
-		game_state_hash_regions[game_state_hash_region_count].name = name;
+		strncpy(game_state_hash_regions[game_state_hash_region_count].name, name ? name : "", sizeof(game_state_hash_regions[0].name) - 1);
+		game_state_hash_regions[game_state_hash_region_count].name[sizeof(game_state_hash_regions[0].name) - 1] = 0;
 		game_state_hash_regions[game_state_hash_region_count].address = pointer;
 		game_state_hash_regions[game_state_hash_region_count].size = size;
 		game_state_hash_region_count++;
