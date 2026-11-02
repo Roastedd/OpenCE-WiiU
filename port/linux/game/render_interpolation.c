@@ -696,7 +696,7 @@ real_matrix4x3 *render_interpolation_object_node_matrices(long object_index)
 		}
 		record->blended_frame = interpolation_frame;
 	}
-	return record->nodes + 2 * record->node_capacity;
+	return record->nodes + INTERPOLATION_SNAPSHOTS * record->node_capacity;
 }
 
 /* a point placed on the object from the tick, moved with the object's root
