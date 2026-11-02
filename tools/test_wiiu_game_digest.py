@@ -144,6 +144,10 @@ def start(program: Path, run: str, ticks: int, trace: str = None, detail: str = 
                        GAME_DIGEST_RANDOM="1" if random else "0")
     # (the tick owners' settings of the environment, to compare the switch on and off: HALO_TICK_*)
     environment.update({key: value for key, value in os.environ.items() if key.startswith("HALO_TICK_")})
+    # (and any others, "NAME=VALUE,NAME=VALUE": the render probe's HALO_RENDER_REPEAT=3)
+    for setting in filter(None, os.environ.get("GAME_DIGEST_ENV", "").split(",")):
+        key, _, value = setting.partition("=")
+        environment[key] = value
     command = ["docker", "run", "--rm", "--network", "none", "--ulimit", "core=0", "-v", f"{program}:/program:ro", "-v", f"{folder / 'data'}:/data",
                "-v", f"{folder / 'out'}:/out", "-v", f"{maps_folder()}:/data/maps:ro", "-w", "/data"]
     for key, value in environment.items():

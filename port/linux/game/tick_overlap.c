@@ -10,7 +10,6 @@ The overlap of the game's ticks with its drawing (tick_overlap.h).
 #ifdef HALO_WIIU
 
 #include "cseries/errors.h"
-#include "game/game.h"
 #include "tick_input.h"
 
 #include <errno.h>
@@ -35,6 +34,7 @@ void wiiu_tick_idle_set(int idle);
 void wiiu_game_waiting_set(int waiting);
 unsigned long long wiiu_now_us(void);
 int wiiu_current_core(void);
+int halo_interpolation_enabled(void);
 
 /* the main loop's (main.c) */
 boolean main_overlap_eligible(void);
@@ -48,6 +48,11 @@ enum
 	/* a log line of the numbers every this many seconds of the game thread's frames */
 	TICK_OVERLAP_LOG_SECONDS = 5,
 };
+
+/* the words the two threads read of each other: single words, read and written with the builtins (the order that matters is the job's: its writes
+before it is over, and the game thread's before it is posted; the others only say what the other thread may do) */
+#define LOAD(field) __atomic_load_n(&(field), __ATOMIC_RELAXED)
+#define STORE(field, value) __atomic_store_n(&(field), (value), __ATOMIC_RELAXED)
 
 /* ---------- structures */
 
@@ -190,12 +195,12 @@ static void *tick_overlap_thread_run(
 		void *argument;
 		unsigned long long idle_from;
 
-		o.idle = 1;
+		STORE(o.idle, 1);
 		wiiu_tick_idle_set(1);
 		idle_from = tick_overlap_now_us();
-		while (!o.pending)
+		while (!__atomic_load_n(&o.pending, __ATOMIC_ACQUIRE))
 			pthread_cond_wait(&o.posted, &o.lock);
-		o.idle = 0;
+		STORE(o.idle, 0);
 		wiiu_tick_idle_set(0);
 		work = o.work;
 		argument = o.argument;
@@ -205,7 +210,7 @@ static void *tick_overlap_thread_run(
 		wiiu_tick_thread_gate();
 		work(argument);
 		pthread_mutex_lock(&o.lock);
-		o.pending = FALSE;
+		__atomic_store_n(&o.pending, FALSE, __ATOMIC_RELEASE);
 	}
 	return NULL;
 }
@@ -246,12 +251,12 @@ static void tick_overlap_wait(void)
 	unsigned long long started = 0;
 	long looks = 0;
 
-	if (!o.pending)
+	if (!__atomic_load_n(&o.pending, __ATOMIC_ACQUIRE))
 		return;
 	started = tick_overlap_now_us();
-	o.game_waiting = 1;
+	STORE(o.game_waiting, 1);
 	wiiu_game_waiting_set(1);
-	while (o.pending)
+	while (__atomic_load_n(&o.pending, __ATOMIC_ACQUIRE))
 	{
 		struct timespec pause = { 0, 100000 };
 
@@ -267,11 +272,8 @@ static void tick_overlap_wait(void)
 			sched_yield();
 		}
 	}
-	o.game_waiting = 0;
+	STORE(o.game_waiting, 0);
 	wiiu_game_waiting_set(0);
-	/* (the job's writes, which happened before it said it was over) */
-	pthread_mutex_lock(&o.lock);
-	pthread_mutex_unlock(&o.lock);
 	{
 		const unsigned long long took = tick_overlap_now_us() - started;
 
@@ -290,7 +292,7 @@ static void tick_overlap_post(
 	pthread_mutex_lock(&o.lock);
 	o.work = work;
 	o.argument = argument;
-	o.pending = TRUE;
+	__atomic_store_n(&o.pending, TRUE, __ATOMIC_RELEASE);
 	pthread_cond_signal(&o.posted);
 	pthread_mutex_unlock(&o.lock);
 }
@@ -340,33 +342,33 @@ boolean tick_overlap_enabled(
 boolean tick_overlap_forcing_drain(
 	void)
 {
-	return o.forcing != 0;
+	return LOAD(o.forcing) != 0;
 }
 
 boolean tick_overlap_defer_drain(
 	struct tick_queue const *queue)
 {
-	if (o.enabled <= 0 || !o.job_in_flight || o.forcing)
+	if (o.enabled <= 0 || !LOAD(o.job_in_flight) || LOAD(o.forcing))
 		return FALSE;
 	if (queue->owner == TICK_OWNER_TICK || !tick_overlap_thread_is_render())
 		return FALSE;
 	/* (a producer waiting for room in it: now) */
-	return queue->waiters == 0;
+	return __atomic_load_n(&queue->waiters, __ATOMIC_RELAXED) == 0;
 }
 
 unsigned long tick_overlap_push_tag(
 	void)
 {
 	if (o.enabled > 0 && tick_overlap_thread_is_render())
-		return o.posted_jobs;
+		return LOAD(o.posted_jobs);
 	return 0;
 }
 
 unsigned long tick_overlap_drain_limit(
 	void)
 {
-	if (o.enabled > 0 && o.in_overlap_job && tick_overlap_thread_is_tick())
-		return o.running_sequence - 1;
+	if (o.enabled > 0 && LOAD(o.in_overlap_job) && tick_overlap_thread_is_tick())
+		return LOAD(o.running_sequence) - 1;
 	return (unsigned long)-1;
 }
 
@@ -375,7 +377,8 @@ boolean tick_overlap_owner_blocked(
 {
 	/* only the tick thread's queues: the game thread, their producer, finds the thread idle and has nothing to wait for. The game thread's own are
 	served by the game thread, at its drain points and in its wait for the tick thread, whenever a producer waits (queue->waiters) */
-	return o.state > 0 && owner == TICK_OWNER_TICK && o.idle != 0 && !o.pending && !tick_overlap_thread_is_tick();
+	return o.state > 0 && owner == TICK_OWNER_TICK && LOAD(o.idle) != 0 && !__atomic_load_n(&o.pending, __ATOMIC_ACQUIRE) &&
+		!tick_overlap_thread_is_tick();
 }
 
 boolean tick_overlap_owner_is_caller(
@@ -397,7 +400,7 @@ boolean tick_overlap_frame_active(
 boolean tick_overlap_job_in_flight(
 	void)
 {
-	return o.job_in_flight;
+	return LOAD(o.job_in_flight);
 }
 
 boolean tick_overlap_reading_published(
@@ -428,11 +431,11 @@ static void tick_overlap_collect(void)
 	void player_control_sync_display_facing(void);
 	void observer_sync_published(void);
 
-	if (o.job_in_flight)
+	if (LOAD(o.job_in_flight))
 	{
 		const unsigned long long took = o.job.ended_us - o.job.started_us;
 
-		o.job_in_flight = FALSE;
+		STORE(o.job_in_flight, FALSE);
 		o.job_collected = TRUE;
 		o.jobs++;
 		o.ticks += (unsigned long)o.job.ticks_run;
@@ -444,13 +447,13 @@ static void tick_overlap_collect(void)
 	if (o.job_collected)
 	{
 		o.job_collected = FALSE;
-		o.forcing = 1;
+		STORE(o.forcing, 1);
 		player_control_sync_display_facing();
 		observer_sync_published();
 		tick_owners_drain(TICK_OWNER_GAME);
 		tick_owners_drain(TICK_OWNER_SOUND);
 		tick_owners_drain(TICK_OWNER_RENDER);
-		o.forcing = 0;
+		STORE(o.forcing, 0);
 	}
 }
 
@@ -475,10 +478,10 @@ static void tick_overlap_job_work(
 	struct tick_overlap_job *job = (struct tick_overlap_job *)argument;
 
 	job->started_us = tick_overlap_now_us();
-	o.running_sequence = job->sequence;
-	o.in_overlap_job = 1;
+	STORE(o.running_sequence, job->sequence);
+	STORE(o.in_overlap_job, 1);
 	job->ticks_run = main_overlap_tick_side(job->dt, job->ticks_elapsed, job->leftover_after, job->previous_job_tick);
-	o.in_overlap_job = 0;
+	STORE(o.in_overlap_job, 0);
 	job->ended_us = tick_overlap_now_us();
 }
 
@@ -517,14 +520,14 @@ boolean tick_overlap_post_frame(
 	job->leftover_after = leftover_after;
 	job->time_before = time_now;
 	job->previous_job_tick = published;
-	job->sequence = o.posted_jobs + 1;
+	job->sequence = LOAD(o.posted_jobs) + 1;
 	fraction = leftover_after * speed * TICKS_PER_SECOND;
 	fraction = PIN(fraction, 0.0f, 1.0f);
 	/* the picture is of the clock one tick behind: the tick before the one the job ends on, which the ring has if the tick thread was not behind */
 	want = time_now + ticks - 1;
 	tick = want < published ? want : published;
 	o.frame_active = TRUE;
-	o.posted_jobs++;
+	STORE(o.posted_jobs, LOAD(o.posted_jobs) + 1);
 	if (published != tick_snapshot_none() && tick_snapshot_pin(tick))
 	{
 		/* the tick thread was late (the tick wanted is not committed yet): the last pose is held, the pair at its end */
@@ -534,7 +537,7 @@ boolean tick_overlap_post_frame(
 			o.held_frames++;
 		}
 		tick_overlap_set_view(tick, fraction, ticks);
-		o.job_in_flight = TRUE;
+		STORE(o.job_in_flight, TRUE);
 		o.overlap_frames++;
 		o.ahead_sum += (unsigned long long)((time_now + ticks - tick) * 1000);
 		tick_overlap_post(tick_overlap_job_work, job);
@@ -543,7 +546,7 @@ boolean tick_overlap_post_frame(
 	/* no pair to draw yet (the first frame of a map, or after frames of the serial loop's that kept no ring): the job is run at once, and the
 	picture is of the latest tick, as the serial loop's */
 	tick_snapshot_unpin();
-	o.job_in_flight = TRUE;
+	STORE(o.job_in_flight, TRUE);
 	o.primed_frames++;
 	tick_overlap_run_and_wait(tick_overlap_job_work, job);
 	tick_overlap_collect();

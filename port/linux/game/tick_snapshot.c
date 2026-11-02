@@ -63,6 +63,7 @@ port/wiiu/src/wiiu_tick_snapshot_timers.c, on the console, the milliseconds a fr
 
 #include "tick_owners.h"
 #include "tick_overlap.h"
+#include "tick_ring.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -140,7 +141,7 @@ enum
 #define VERIFY_TYPES 16
 #define VERIFY_WORDS 4096
 /* no tick */
-#define NO_TICK ((long)0x80000000)
+#define NO_TICK TICK_RING_NONE
 
 /* the fields of an object the renderer writes, kept apart from the copies (kept by object; the bytes put into each new copy) */
 static const struct
@@ -189,8 +190,6 @@ latest and the tick before) and a job capturing at most two ticks (the last two 
 are enough. A capture is visible to the game thread when it is committed, which the tick thread does when its job is over. */
 struct slot
 {
-	long tick; /* NO_TICK: none */
-	boolean ready;
 	struct data_array array; /* the object header array as of the capture, its data the copies below */
 	struct object_header_datum headers[MAXIMUM_OBJECTS_PER_MAP];
 	byte *blocks[MAXIMUM_OBJECTS_PER_MAP]; /* by absolute index: the copy of an object's block (the buffer is kept) */
@@ -212,8 +211,7 @@ static struct
 	int mode; /* -1 not read yet */
 	boolean all; /* every object is copied at each capture (the mode's bit, or the overlap's) */
 	boolean overlap_requested; /* halo/tick_overlap.txt is on: the ring is drawn from beside the tick thread, the copies hold the tick's fields */
-	volatile long published_tick; /* the newest committed capture's tick, NO_TICK before one */
-	long captured_tick; /* the newest capture's tick */
+	struct tick_ring ring; /* which slot holds which tick, what is committed, what is pinned (tick_ring.h) */
 	volatile boolean dirty; /* objects made or deleted since the last capture */
 	boolean capturing_cameras;
 	long serial; /* the captures made, counted from 1 */
@@ -221,8 +219,6 @@ static struct
 	struct slot *view;
 	struct slot *previous;
 	boolean pair_view; /* the view is of a pinned pair (the overlap's), not of the newest capture */
-	/* the slots the frame pins, for the tick thread's choice of a slot to write (-1: none) */
-	volatile int pinned[2];
 	long wanted[MAXIMUM_OBJECTS_PER_MAP]; /* the capture an object was last asked for in (the lazy copy of the serial mode) */
 	/* the render-owned fields of each object (by absolute index) with the identifier they are of */
 	short field_identifier[MAXIMUM_OBJECTS_PER_MAP];
@@ -239,7 +235,7 @@ static struct
 	unsigned long verify_objects_begin, verify_objects_end, verify_views;
 	unsigned long verify_size_differences;
 	unsigned long verify_partition_begin, verify_partition_end; /* lists' words that differ from the game state's, summed over the views */
-} s = { -1, FALSE, FALSE, NO_TICK, NO_TICK };
+} s = { -1 };
 
 /* the view, for each core: the game thread's (core 1) is the only one that ever has one, so a tick on another core reads the game state
 (objects.h) */
@@ -298,14 +294,9 @@ int tick_snapshot_viewing(void)
 /* the slot of a tick, or NULL */
 static struct slot *tick_snapshot_slot_of(long tick)
 {
-	int index;
+	const int index = tick_ring_find(&s.ring, tick);
 
-	for (index = 0; index < TICK_SNAPSHOT_SLOTS; index++)
-	{
-		if (slots[index].ready && slots[index].tick == tick)
-			return &slots[index];
-	}
-	return NULL;
+	return index >= 0 ? &slots[index] : NULL;
 }
 
 /* ---------- the copies */
@@ -465,33 +456,12 @@ struct cluster_partition const *tick_snapshot_cluster_partition(struct cluster_p
 	return live;
 }
 
-static boolean tick_snapshot_slot_pinned(int index)
-{
-	return s.pinned[0] == index || s.pinned[1] == index;
-}
-
-/* the slot a capture of tick is written to: that tick's own if it has one (the catch-up of the serial mode), else an unused one, else the oldest
-that is not pinned and is neither one of the two newest committed nor newer than them (the captures of the job being run). NULL if there is none */
+/* the slot a capture of tick is written to (tick_ring.h's rules). NULL if there is none */
 static struct slot *tick_snapshot_slot_for(long tick)
 {
-	struct slot *found = tick_snapshot_slot_of(tick);
-	struct slot *best = NULL;
-	int index;
+	const int index = tick_ring_slot_for(&s.ring, tick);
 
-	if (found && !tick_snapshot_slot_pinned((int)(found - slots)))
-		return found;
-	for (index = 0; index < TICK_SNAPSHOT_SLOTS; index++)
-	{
-		struct slot *slot = &slots[index];
-
-		if (tick_snapshot_slot_pinned(index))
-			continue;
-		if (!slot->ready)
-			return slot;
-		if (s.published_tick != NO_TICK && slot->tick <= s.published_tick - 2 && (!best || slot->tick < best->tick))
-			best = slot;
-	}
-	return best;
+	return index >= 0 ? &slots[index] : NULL;
 }
 
 void tick_snapshot_capture_tick(long tick, boolean commit)
@@ -516,8 +486,7 @@ void tick_snapshot_capture_tick(long tick, boolean commit)
 	live_headers = (struct object_header_datum const *)live->data;
 	count = live->count;
 	previous_count = slot->array.count;
-	slot->ready = FALSE;
-	slot->tick = tick;
+	tick_ring_begin_write(&s.ring, (int)(slot - slots), tick);
 	s.serial++;
 	headers_started = CLOCK();
 	/* the headers, whole */
@@ -547,13 +516,10 @@ void tick_snapshot_capture_tick(long tick, boolean commit)
 	tick_snapshot_capture_lights(slot);
 	memset(slot->cameras, 0, sizeof(slot->cameras));
 	ADD(PART_BLOCKS, headers_started);
-	slot->ready = TRUE;
-	s.captured_tick = tick;
+	tick_ring_end_write(&s.ring, (int)(slot - slots), commit);
 	s.dirty = FALSE;
 	s.captures++;
 	s.window_captures++;
-	if (commit)
-		s.published_tick = tick;
 	ADD(PART_CAPTURE, started);
 	tick_overlap_note_capture(tick_overlap_now_us() - started_us);
 	if (s.window_captures >= LOG_CAPTURES)
@@ -569,13 +535,12 @@ void tick_snapshot_capture(void)
 
 void tick_snapshot_commit(void)
 {
-	if (s.captured_tick != NO_TICK && (s.published_tick == NO_TICK || s.captured_tick > s.published_tick))
-		s.published_tick = s.captured_tick;
+	tick_ring_commit(&s.ring);
 }
 
 long tick_snapshot_published_tick(void)
 {
-	return s.published_tick;
+	return tick_ring_published(&s.ring);
 }
 
 void tick_snapshot_reset(void)
@@ -587,8 +552,6 @@ void tick_snapshot_reset(void)
 	{
 		struct slot *slot = &slots[slot_index];
 
-		slot->ready = FALSE;
-		slot->tick = NO_TICK;
 		memset(&slot->array, 0, sizeof(slot->array));
 		for (index = 0; index < MAXIMUM_OBJECTS_PER_MAP; index++)
 		{
@@ -607,13 +570,11 @@ void tick_snapshot_reset(void)
 		s.field_identifier[index] = 0;
 		s.applied[index] = 0;
 	}
-	s.published_tick = NO_TICK;
-	s.captured_tick = NO_TICK;
+	tick_ring_reset(&s.ring, TICK_SNAPSHOT_SLOTS);
 	s.dirty = FALSE;
 	s.view = NULL;
 	s.previous = NULL;
 	s.pair_view = FALSE;
-	s.pinned[0] = s.pinned[1] = -1;
 	tick_snapshot_view_for_core[tick_overlap_render_core() & 3] = NULL;
 	tick_snapshot_view_any = 0;
 }
@@ -1060,27 +1021,12 @@ static void tick_snapshot_verify_log(void)
 not running a job. FALSE if there is no committed capture of that tick. */
 boolean tick_snapshot_pin(long tick)
 {
-	struct slot *latest = s.published_tick == NO_TICK || tick > s.published_tick ? NULL : tick_snapshot_slot_of(tick);
-	struct slot *before;
-
-	s.pinned[0] = s.pinned[1] = -1;
-	if (!latest)
-		return FALSE;
-	before = tick_snapshot_slot_of(tick - 1);
-	s.pinned[0] = (int)(latest - slots);
-	s.pinned[1] = before ? (int)(before - slots) : -1;
-	return TRUE;
+	return tick_ring_pin(&s.ring, tick) != 0;
 }
 
 void tick_snapshot_unpin(void)
 {
-	s.pinned[0] = s.pinned[1] = -1;
-}
-
-/* whether a pair of the ring can be drawn: the newest committed tick (NO_TICK: none) */
-long tick_snapshot_view_tick(void)
-{
-	return s.view && tick_snapshot_headers ? s.view->tick : NO_TICK;
+	tick_ring_unpin(&s.ring);
 }
 
 void tick_snapshot_view_begin(void)
@@ -1092,32 +1038,32 @@ void tick_snapshot_view_begin(void)
 	if (!tick_snapshot_mode() || !object_header_data || !object_header_data->valid)
 		return;
 	started = CLOCK();
-	if (s.pinned[0] >= 0)
+	if (s.ring.pinned[0] >= 0)
 	{
 		/* the overlap's: the tick pinned (tick_snapshot_pin) */
-		latest = &slots[s.pinned[0]];
-		before = s.pinned[1] >= 0 ? &slots[s.pinned[1]] : NULL;
-		if (!latest->ready)
+		latest = &slots[s.ring.pinned[0]];
+		before = s.ring.pinned[1] >= 0 ? &slots[s.ring.pinned[1]] : NULL;
+		if (!s.ring.ready[s.ring.pinned[0]])
 			return;
 	}
 	else
 	{
-		if (s.published_tick == NO_TICK || s.dirty)
+		if (tick_ring_published(&s.ring) == NO_TICK || s.dirty)
 		{
 			/* (objects made or deleted since the last capture, or no tick yet in this map: the ticks have finished, so the copy is of now) */
 			tick_snapshot_capture();
 			s.catch_ups++;
 		}
-		if (s.published_tick == NO_TICK)
+		if (tick_ring_published(&s.ring) == NO_TICK)
 			return;
-		latest = tick_snapshot_slot_of(s.published_tick);
+		latest = tick_snapshot_slot_of(tick_ring_published(&s.ring));
 		if (!latest)
 			return;
 		memset(latest->cameras, 0, sizeof(latest->cameras));
 	}
 	s.view = latest;
 	s.previous = before;
-	s.pair_view = s.pinned[0] >= 0;
+	s.pair_view = s.ring.pinned[0] >= 0;
 	s.view_serial++;
 	object_function_inputs_set_view((int)(latest - slots));
 	if ((s.mode & MODE_VERIFY) && !s.verify_begin)
@@ -1125,7 +1071,7 @@ void tick_snapshot_view_begin(void)
 		s.verify_begin = (unsigned long *)calloc((size_t)VERIFY_TYPES * VERIFY_WORDS, sizeof(unsigned long));
 		s.verify_end = (unsigned long *)calloc((size_t)VERIFY_TYPES * VERIFY_WORDS, sizeof(unsigned long));
 	}
-	if (s.verify_begin && s.pinned[0] < 0)
+	if (s.verify_begin && s.ring.pinned[0] < 0)
 		tick_snapshot_verify(FALSE);
 	/* (the headers last: from here the accessors on this core give the copies) */
 	tick_snapshot_view_for_core[tick_overlap_render_core() & 3] = &latest->array;
@@ -1143,7 +1089,7 @@ void tick_snapshot_view_end(void)
 	if (!tick_snapshot_headers || !view)
 		return;
 	started = CLOCK();
-	if (s.verify_end && s.pinned[0] < 0)
+	if (s.verify_end && s.ring.pinned[0] < 0)
 	{
 		tick_snapshot_verify(TRUE);
 		if (++s.verify_views % 300 == 0)

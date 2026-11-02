@@ -308,8 +308,13 @@ static volatile uint32_t tick_overlap_registered;
 static volatile uint32_t tick_thread_idle;
 static volatile uint32_t game_thread_waiting;
 
+static volatile uint32_t game_halted;
+
 static int game_threads_held(void)
 {
+	/* (a halt: the thread that halted is parked for good, and the other is held at its next gate) */
+	if (game_halted)
+		return 1;
 	if (tick_overlap_registered)
 		return (game_gate_held != 0 || game_thread_waiting != 0) && (tick_gate_held != 0 || tick_thread_idle != 0);
 	return game_gate_held != 0 || tick_gate_held != 0;
@@ -324,7 +329,6 @@ starts (and unregisters when it ends), and calls wiiu_tick_gate at its safe poin
 for it as for the game thread's gate, and a halted game holds it for good. Nothing registers while the ticks run on the game thread. */
 static volatile uint32_t tick_gate_registered;
 static volatile uint32_t tick_gate_held;
-static volatile uint32_t game_halted;
 
 void wiiu_tick_gate_register(int registered);
 void wiiu_tick_gate(void);
@@ -355,10 +359,10 @@ void wiiu_tick_thread_gate(void);
 
 void wiiu_tick_thread_gate(void)
 {
-	if (foreground && !exit_requested)
+	if (foreground && !exit_requested && !game_halted)
 		return;
 	tick_gate_held = 1;
-	while (!foreground || exit_requested)
+	while (!foreground || exit_requested || game_halted)
 	{
 		if (wiiu_gate_poll)
 			wiiu_gate_poll();
