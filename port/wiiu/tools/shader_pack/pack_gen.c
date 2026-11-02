@@ -34,6 +34,33 @@ static int exists(const char *path)
 	return file != NULL;
 }
 
+/* The vertex shaders' height fade (nv2a_vsh.c's "uniform vec4 height_fade", which multiplies the vertex colours while height_fade.w is not zero) is the OpenGL
+renderer's (d3d8_gl_set_height_fade); d3d8_gx2.c's is empty, so nothing sets the uniform and it held whatever the GPU's register held: the colours of the draws
+that vertex colours tint (the HUD's bitmaps and text, the menus') were multiplied away (2026-11-01: the first-person HUD's crosshair, ammo and radar and the pause
+menu's text were gone from the upstream merge on). Here it is a constant zero, which the compiler removes. */
+static char *no_height_fade(char *text)
+{
+	static const char declaration[] = "uniform vec4 height_fade;";
+	static const char constant[] = "const vec4 height_fade = vec4(0.0);";
+	char *at = strstr(text, declaration), *result;
+	size_t before;
+
+	if (!at)
+		return text;
+	result = malloc(strlen(text) + sizeof(constant));
+	if (!result)
+	{
+		perror("malloc");
+		exit(1);
+	}
+	before = (size_t)(at - text);
+	memcpy(result, text, before);
+	strcpy(result + before, constant);
+	strcpy(result + before + sizeof(constant) - 1, at + sizeof(declaration) - 1);
+	free(text);
+	return result;
+}
+
 static void write_file(const char *path, char *text)
 {
 	FILE *file = fopen(path, "w");
@@ -111,7 +138,7 @@ int main(int argc, char **argv)
 					fprintf(stderr, "line %lu: no GLSL for the vertex program\n", line_number);
 					return 1;
 				}
-				write_file(path, source);
+				write_file(path, no_height_fade(source));
 				vertex_count++;
 			}
 			free(words);
