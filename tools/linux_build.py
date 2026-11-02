@@ -189,6 +189,15 @@ def configuration_defines(sln: Any) -> List[str]:
     return defines
 
 
+def bw_model_defines() -> List[str]:
+    """HALO_BW_MODEL=1 in the environment of configure.py: the host build calls the scalar models of the Wii U's Broadway kernels
+    (port/linux/include/halo_bw_model.h) at the places the kernels are called, to prove the call sites; HALO_BW_KERNELS=0 in the
+    environment of the run turns them off in the same binary. Without it the build has none of that."""
+    if os.environ.get("HALO_BW_MODEL"):
+        return ["-DHALO_BW_KERNELS", "-DHALO_BW_MODEL"]
+    return []
+
+
 def check_profile_options(profile: bool, pgo: str) -> None:
     """A profiling build is optimised with the committed profiles or none:
     trained, a profile would record the profiling code's own paths."""
@@ -567,7 +576,7 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
     # (a debug build checks its stack frames, and stops at the first one
     # overrun, as it stops at the first failed assertion; a release build
     # does not, so that an overrun nobody has met cannot end a game)
-    abi = " ".join(target_flags(sln, LINUX_ABI_FLAGS) + target + configuration_defines(sln)
+    abi = " ".join(target_flags(sln, LINUX_ABI_FLAGS) + target + configuration_defines(sln) + bw_model_defines()
                    + ([] if getattr(sln, "port_release", False) else ["-fstack-protector-strong"]))
     port_include = PORT_DIR / "include"
     sdk_flags = f"-idirafter {XDK_INCLUDE}"

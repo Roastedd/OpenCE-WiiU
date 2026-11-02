@@ -88,6 +88,10 @@ symbols in this file:
 
 #include "cseries.h"
 #include "real_math.h"
+#ifdef HALO_BW_KERNELS
+#include "halo_bw_kernels.h"
+typedef char halo_bw_matrix4x3_layout_assert[sizeof(real_matrix4x3) == 52 && sizeof(real) == 4 ? 1 : -1];
+#endif
 
 /* ---------- constants */
 
@@ -926,6 +930,37 @@ real_plane3d *matrix4x3_inverse_transform_plane(
 	return result;
 }
 
+#ifdef HALO_BW_KERNELS
+/* port: the Broadway kernel (port/wiiu/src/bw/halo_bw_matrix.S) gives the same bits as the C below, aliasing as the C allows. The function
+that asks for it is small, so that the kernel's path has none of the C's frame (it saves most of the floating-point registers), and while
+halo_bw_flags is zero it is a test and a jump to the C, which is halo_bw_c_matrix4x3_multiply, the function below under another name. */
+__attribute__((noinline)) void halo_bw_c_matrix4x3_multiply(real_matrix4x3 const *a, real_matrix4x3 const *b, real_matrix4x3 *result);
+
+static __attribute__((noinline)) void halo_bw_ask_matrix4x3_multiply(real_matrix4x3 const *a, real_matrix4x3 const *b, real_matrix4x3 *result)
+{
+	HALO_BW_COUNT(HALO_BW_K_MATRIX);
+	if (halo_bw_flags & HALO_BW_BIT(HALO_BW_K_MATRIX))
+	{
+		HALO_BW_USED(HALO_BW_K_MATRIX);
+		halo_bw_matrix4x3_multiply((float const *)a, (float const *)b, (float *)result);
+		return;
+	}
+	halo_bw_c_matrix4x3_multiply(a, b, result);
+}
+
+void matrix4x3_multiply(
+	real_matrix4x3 const *a,
+	real_matrix4x3 const *b,
+	real_matrix4x3 *result)
+{
+	if (halo_bw_flags)
+		halo_bw_ask_matrix4x3_multiply(a, b, result);
+	else
+		halo_bw_c_matrix4x3_multiply(a, b, result);
+}
+
+#define matrix4x3_multiply halo_bw_c_matrix4x3_multiply
+#endif
 void matrix4x3_multiply(
 	real_matrix4x3 const *a,
 	real_matrix4x3 const *b,
@@ -963,6 +998,9 @@ void matrix4x3_multiply(
 
 	return;
 }
+#ifdef HALO_BW_KERNELS
+#undef matrix4x3_multiply
+#endif
 
 real
 matrix3x3_determinant(

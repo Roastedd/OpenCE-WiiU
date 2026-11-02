@@ -2401,6 +2401,9 @@ void wiiu_core_probe(void);
 /* wiiu_profile.c: a sampling profiler of this thread, if halo/profile.txt is there */
 void wiiu_profile_start(void);
 
+/* wiiu_bw_kernels.c: the Broadway kernels' self-test and switch, if halo/broadway.txt is 1 or 2 (the thread that calls it should be the one that runs the ticks) */
+void wiiu_bw_start(void);
+
 /* ---------- starting */
 
 /* (There is no GX2 shutdown at exit: the shell drains the GPU before the app is let go, and any GX2 call after ProcUI has been shut down - which is where atexit handlers run - freezes the console
@@ -2665,6 +2668,7 @@ static int initialize(void)
 		}
 	}
 	wiiu_log("memcpy/memset self-test (wiiu_memcpy.c): %d wrong", wiiu_memcpy_selftest());
+	wiiu_bw_start();
 	if (!profile_by_game_thread)
 		wiiu_profile_start(); /* (with a GX2 thread the game's thread is the one to sample: gt_start does it) */
 	gx.state_dirty = 1;
