@@ -14,6 +14,9 @@ b30 could not (2026-10-31). A part costs two reads of the time base.
 
 void platform_log(const char *format, ...);
 
+/* wiiu_bw_kernels.c: what the game asked of the Broadway kernels' functions in these ticks */
+void wiiu_bw_tick_report(unsigned long ticks);
+
 #define PART_LIMIT 32
 
 static struct
@@ -93,6 +96,7 @@ void wiiu_tick_done(long long started)
 			used = 0;
 		}
 	}
+	wiiu_bw_tick_report(game_ticks);
 	for (index = 0; index < part_count; index++)
 		parts[index].ticks = 0;
 	game_ticks = 0;
