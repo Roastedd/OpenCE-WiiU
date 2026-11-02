@@ -20,8 +20,9 @@ leaves its kernel off, and the first failure is said with the words that differe
 against kernel, which is what a console run needs to know what the kernel gains.
 
 While the game runs, every 150 ticks (wiiu_tick_parts.c calls wiiu_bw_tick_report) the log says how many calls of each replaced function a
-tick made, how many the kernel answered, and for the BSP walks how many nodes they went through; with the tick parts line ("objects" is the
-part the kernels' functions are mostly in) that is what a run with 0 in the file is compared with a run with 1.
+tick made, how many the kernel answered, and for the BSP walks how many nodes they went through (counted with 1, 2 and 3; with 0 nothing is
+counted, and the replaced functions are a test and a jump more than they were); with the tick parts lines that is what a run with 0 in the file
+is compared with a run with 1.
 */
 
 #define HALO_BW_KERNELS 1
@@ -607,8 +608,8 @@ void wiiu_bw_start(void)
 	bench(ready);
 	guard_take("the timing");
 	guard_end();
-	if (configured != 2)
-		halo_bw_flags = ready;
+	/* (the calls are counted from here, with the kernels or without: the log's per-tick counts of a run with 2 are what a run with 1 is read against) */
+	halo_bw_flags = HALO_BW_COUNTING | (configured != 2 ? ready : 0u);
 	wiiu_log("Broadway kernels: %s", configured != 2 ? "in use" : "self-test only (broadway.txt 2): none in use");
 	if (configured != 2)
 	{
@@ -652,5 +653,6 @@ void wiiu_bw_tick_report(unsigned long ticks)
 		reported_used[k] = halo_bw_used[k];
 		reported_walked[k] = halo_bw_walked[k];
 	}
-	wiiu_log("bw calls a tick, asked/answered by a kernel (broadway.txt %d, %u in use): %s", configured, (unsigned)halo_bw_flags, line);
+	wiiu_log("bw calls a tick, asked/answered by a kernel (broadway.txt %d, kernels in use %u): %s", configured,
+		(unsigned)(halo_bw_flags & (HALO_BW_BIT(HALO_BW_K_COUNT) - 1u)), line);
 }

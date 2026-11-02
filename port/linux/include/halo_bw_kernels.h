@@ -31,8 +31,11 @@ enum halo_bw_kernel
 };
 
 #define HALO_BW_BIT(kernel) (1u << (kernel))
+/* in halo_bw_flags with the kernels' bits: the calls are counted (the counts are for the log; while the flags are zero nothing is counted and
+the replaced functions cost a test and a jump more than they did) */
+#define HALO_BW_COUNTING 0x80000000u
 
-/* the kernels in use: a bit of HALO_BW_BIT for each (zero until the console's self-test turns them on) */
+/* the kernels in use: a bit of HALO_BW_BIT for each, and HALO_BW_COUNTING (all zero until the console's self-test sets them) */
 extern unsigned halo_bw_flags;
 /* calls of each replaced function; those a kernel answered (the rest ran the C); the nodes the BSP walks went through */
 extern unsigned long halo_bw_calls[HALO_BW_K_COUNT];

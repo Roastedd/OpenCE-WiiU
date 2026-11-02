@@ -1978,12 +1978,13 @@ void aiming_screen_apply(
 #ifdef HALO_BW_KERNELS
 /* port: the Broadway kernel (port/wiiu/src/bw/halo_bw_quaternion.S) does the same four products; it returns 0, with nothing written, where the
 thread's quantization register is not the signed 16-bit load it needs, and the C runs. The function that asks for it is small, so that the
-kernel's path has none of the C's frame; the C is halo_bw_c_quaternion_decompress_8byte, the function below under another name. */
+kernel's path has none of the C's frame, and while halo_bw_flags is zero it is a test and a jump to the C, which is
+halo_bw_c_quaternion_decompress_8byte, the function below under another name. */
 typedef char halo_bw_quaternion_layout_assert[sizeof(struct compressed_quaternion_8byte) == 8 && sizeof(real_quaternion) == 16 ? 1 : -1];
 
 __attribute__((noinline)) void halo_bw_c_quaternion_decompress_8byte(struct compressed_quaternion_8byte const *compressed, real_quaternion *quaternion);
 
-void quaternion_decompress_8byte(
+static __attribute__((noinline)) void halo_bw_ask_quaternion_decompress_8byte(
 	struct compressed_quaternion_8byte const *compressed,
 	real_quaternion *quaternion)
 {
@@ -1994,6 +1995,16 @@ void quaternion_decompress_8byte(
 		return;
 	}
 	halo_bw_c_quaternion_decompress_8byte(compressed, quaternion);
+}
+
+void quaternion_decompress_8byte(
+	struct compressed_quaternion_8byte const *compressed,
+	real_quaternion *quaternion)
+{
+	if (halo_bw_flags)
+		halo_bw_ask_quaternion_decompress_8byte(compressed, quaternion);
+	else
+		halo_bw_c_quaternion_decompress_8byte(compressed, quaternion);
 }
 
 #define quaternion_decompress_8byte halo_bw_c_quaternion_decompress_8byte

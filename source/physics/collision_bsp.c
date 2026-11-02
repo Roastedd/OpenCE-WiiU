@@ -2033,12 +2033,13 @@ static void bsp3d_test_sphere_recursive(
 #ifdef HALO_BW_KERNELS
 	/* port: the nodes the sphere passes to one side, as many in a row as there are, in the kernel; the C below goes on from the node
 	it gives back (a crossing, a leaf, a bad index, the end of the budget), taking that node as it takes any */
-	HALO_BW_COUNT(HALO_BW_K_BSP_SPHERE);
-	if ((halo_bw_flags & HALO_BW_BIT(HALO_BW_K_BSP_SPHERE)) && !(node_index & LONG_MIN))
+	if (halo_bw_flags)
 	{
 		struct halo_bw_bsp_walk walk;
 
-		if (halo_bw_bsp_walk_begin(&walk, data->bsp, data->center, (real_vector3d const *)0, data->nodes_left, depth))
+		HALO_BW_COUNT(HALO_BW_K_BSP_SPHERE);
+		if ((halo_bw_flags & HALO_BW_BIT(HALO_BW_K_BSP_SPHERE)) && !(node_index & LONG_MIN) &&
+			halo_bw_bsp_walk_begin(&walk, data->bsp, data->center, (real_vector3d const *)0, data->nodes_left, depth))
 		{
 			node_index = halo_bw_bsp_sphere_walk(&walk, (int)node_index, data->radius);
 			if (walk.nodes_left != data->nodes_left)
@@ -2192,12 +2193,13 @@ static boolean collision_bsp_test_vector_recursive(
 #ifdef HALO_BW_KERNELS
 	/* port: the nodes the segment passes to one side, as many in a row as there are, in the kernel; the C below goes on from the node
 	it gives back (a crossing, a leaf, a bad index, the end of the budget, a distance that is not a number) as it does from any */
-	HALO_BW_COUNT(HALO_BW_K_BSP_RAY);
-	if ((halo_bw_flags & HALO_BW_BIT(HALO_BW_K_BSP_RAY)) && !(node_index & LONG_MIN))
+	if (halo_bw_flags)
 	{
 		struct halo_bw_bsp_walk walk;
 
-		if (halo_bw_bsp_walk_begin(&walk, data->bsp, data->point, data->vector, data->nodes_left, depth))
+		HALO_BW_COUNT(HALO_BW_K_BSP_RAY);
+		if ((halo_bw_flags & HALO_BW_BIT(HALO_BW_K_BSP_RAY)) && !(node_index & LONG_MIN) &&
+			halo_bw_bsp_walk_begin(&walk, data->bsp, data->point, data->vector, data->nodes_left, depth))
 		{
 			node_index = halo_bw_bsp_ray_walk(&walk, (int)node_index, t0, t1);
 			if (walk.nodes_left != data->nodes_left)

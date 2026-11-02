@@ -140,10 +140,11 @@ static struct
 /* port: the Broadway kernel (port/wiiu/src/bw/halo_bw_reference.S) finds the link that holds the datum's reference, checking each reference
 on the way as datum_get does; where it finds none (the datum is not on the list, or a reference on the way is not one datum_get returns) the
 C below runs and does what it does, errors included. The function that asks for it is small, so that the kernel's path has none of the C's
-frame; the C is halo_bw_c_reference_list_remove, the function below under another name. */
+frame, and while halo_bw_flags is zero it is a test and a jump to the C, which is halo_bw_c_reference_list_remove, the function below under
+another name. */
 __attribute__((noinline)) void halo_bw_c_reference_list_remove(struct data_array *array, long *first_reference_index, long datum_index);
 
-void reference_list_remove(
+static __attribute__((noinline)) void halo_bw_ask_reference_list_remove(
 	struct data_array *array,
 	long *first_reference_index,
 	long datum_index)
@@ -167,6 +168,17 @@ void reference_list_remove(
 		}
 	}
 	halo_bw_c_reference_list_remove(array, first_reference_index, datum_index);
+}
+
+void reference_list_remove(
+	struct data_array *array,
+	long *first_reference_index,
+	long datum_index)
+{
+	if (halo_bw_flags)
+		halo_bw_ask_reference_list_remove(array, first_reference_index, datum_index);
+	else
+		halo_bw_c_reference_list_remove(array, first_reference_index, datum_index);
 }
 
 #define reference_list_remove halo_bw_c_reference_list_remove
@@ -632,7 +644,8 @@ static void cluster_partition_port_remove(
 		{
 #ifdef HALO_BW_KERNELS
 			/* (counted for the log: this walk is the one place the cluster code still searches a list; the kernel is not used here) */
-			halo_bw_walked[HALO_BW_K_REFERENCE]++;
+			if (halo_bw_flags)
+				halo_bw_walked[HALO_BW_K_REFERENCE]++;
 #endif
 			reference = (struct data_reference *)datum_get(array, index);
 			if (reference->datum_index == datum_index)

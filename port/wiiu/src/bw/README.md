@@ -93,7 +93,9 @@ The log then has, in order:
     Broadway kernels: in use
     Broadway kernels: matrix on, ray-sphere on, ...
 
-and every 150 ticks, next to the tick parts lines:
+(With `0` nothing is counted and the six replaced functions cost a test of one word and a jump more than they did; with `2` the calls are
+counted and no kernel runs, so that a run with `2` gives the calls a tick that a run with `1` is read against.) Every 150 ticks, next to the
+tick parts lines:
 
     bw calls a tick, asked/answered by a kernel (broadway.txt 1, 63 in use): matrix 41.2/41.2, ray-sphere ..., bsp-ray 9.1/6.0 (21.3 nodes), ...
 
