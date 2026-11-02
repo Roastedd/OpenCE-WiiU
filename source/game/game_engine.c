@@ -599,6 +599,9 @@ struct network_game *network_game_server_get_game(struct network_game_server *se
 #include "network_wire_order.h" /* port: port/linux/game/network_wire_order.c */
 #include "latency_meter.h" /* port: port/linux/game/latency_meter.c */
 #include "touch_postgame.h" /* port: port/linux/game/touch_postgame.c */
+#ifdef HALO_WIIU
+#include "tick_input.h" /* port: port/linux/game/tick_input.c: the input this file reads is the frame's copy (tick_input.h) */
+#endif
 
 /* network_game_globals.c's */
 boolean network_game_distributed_client(void);

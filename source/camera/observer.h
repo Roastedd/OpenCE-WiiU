@@ -103,6 +103,13 @@ void observer_reconnect_to_structure_bsp(
 void observer_update(
 	real time_delta_sec);
 
+#ifdef HALO_WIIU
+/* port: the camera as the renderer and the sound listener take it (port/linux/game/tick_owners.h): the observer is updated by the
+tick side, and what it works out is published when the update is done; this is the published result (the live one with the tick
+owners' queues off) */
+struct observer_result const *observer_get_published_camera(
+	short local_player_index);
+#endif
 struct observer_result const *observer_get_camera(
 	short local_player_index);
 boolean observer_command_has_finished(
