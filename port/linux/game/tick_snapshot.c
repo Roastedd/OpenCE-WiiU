@@ -473,12 +473,12 @@ void tick_snapshot_capture_tick(long tick, boolean commit)
 	struct object_header_datum const *live_headers;
 	struct slot *slot;
 	long count, previous_count, index;
-	unsigned long long started, headers_started, started_us;
+	unsigned long long started, headers_started, started_ticks;
 
 	if (!tick_snapshot_mode() || !live || !live->valid)
 		return;
 	started = CLOCK();
-	started_us = tick_overlap_now_us();
+	started_ticks = tick_overlap_now();
 	slot = tick_snapshot_slot_for(tick);
 	if (!slot)
 	{
@@ -524,7 +524,7 @@ void tick_snapshot_capture_tick(long tick, boolean commit)
 	s.captures++;
 	s.window_captures++;
 	ADD(PART_CAPTURE, started);
-	tick_overlap_note_capture(tick_overlap_now_us() - started_us);
+	tick_overlap_note_capture(tick_overlap_now() - started_ticks);
 	if (s.window_captures >= LOG_CAPTURES)
 		tick_snapshot_log();
 }
@@ -760,7 +760,7 @@ void tick_snapshot_job_end(long tick, long ticks_in_job, long previous_job_tick)
 	struct slot *before;
 	struct slot *earlier;
 	short local_player_index;
-	const unsigned long long started_us = tick_overlap_now_us();
+	const unsigned long long started_ticks = tick_overlap_now();
 
 	if (!newest || ticks_in_job <= 0)
 		return;
@@ -790,7 +790,7 @@ void tick_snapshot_job_end(long tick, long ticks_in_job, long previous_job_tick)
 		}
 	}
 	tick_snapshot_commit();
-	tick_overlap_note_publish(tick_overlap_now_us() - started_us);
+	tick_overlap_note_publish(tick_overlap_now() - started_ticks);
 }
 
 struct observer_result const *tick_snapshot_camera(short local_player_index, struct observer_result const *live)

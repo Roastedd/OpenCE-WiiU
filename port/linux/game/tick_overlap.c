@@ -32,7 +32,8 @@ void wiiu_foreground_gate(int is_game_thread);
 void wiiu_study_tick_thread_report(void);
 void wiiu_tick_idle_set(int idle);
 void wiiu_game_waiting_set(int waiting);
-unsigned long long wiiu_now_us(void);
+unsigned long long wiiu_now_ticks(void);
+unsigned long wiiu_ticks_per_second(void);
 int halo_interpolation_enabled(void);
 
 /* the main loop's (main.c) */
@@ -65,8 +66,8 @@ struct tick_overlap_job
 	unsigned long sequence;
 	/* the result */
 	long ticks_run;
-	unsigned long long started_us;
-	unsigned long long ended_us;
+	unsigned long long started_ticks;
+	unsigned long long ended_ticks;
 };
 
 /* ---------- globals */
@@ -113,21 +114,21 @@ static struct
 	real view_fraction;
 	boolean job_collected; /* a job has finished since the last sync point */
 	/* the numbers (the game thread's, but for the tick thread's, which it adds under the lock at a job's end) */
-	unsigned long long log_started_us;
+	unsigned long long log_started_ticks;
 	unsigned long frames, overlap_frames, serial_frames, primed_frames, held_frames, no_pair_frames;
-	unsigned long long wait_us, wait_max_us, frame_us, frame_max_us, sync_us, sync_wait_us, post_us, draw_us, draw_max_us, serial_wait_us;
+	unsigned long long wait_ticks, wait_max_ticks, frame_ticks, frame_max_ticks, sync_ticks, sync_wait_ticks, post_ticks, draw_ticks, draw_max_ticks, serial_wait_ticks;
 	unsigned long waits_long, serial_waits, active_frames, clock_disagreements;
 	unsigned long jobs, ticks, ticks_total;
-	unsigned long long job_us, job_max_us, tick_work_us;
+	unsigned long long job_ticks, job_max_ticks, tick_work_ticks;
 	unsigned long long ahead_sum; /* (clock tick after the job) - (tick drawn), in thousandths, summed over overlap frames */
-	unsigned long long frame_started_us;
-	unsigned long long idle_started_us;
+	unsigned long long frame_started_ticks;
+	unsigned long long idle_started_ticks;
 	unsigned long push_waits, pool_waits;
-	unsigned long long blend_us;
+	unsigned long long blend_ticks;
 	unsigned long blends;
-	unsigned long capture_us, publish_us, tick_idle_us; /* (the tick thread's: one word each, so that a read and an add by another thread cannot tear) */
+	unsigned long capture_ticks, publish_ticks, tick_idle_ticks; /* (the tick thread's: one word each, so that a read and an add by another thread cannot tear) */
 	unsigned long captures, publishes;
-	unsigned long long first_us;
+	unsigned long long first_ticks;
 	unsigned long reports;
 } o = { -1, -1, -1 };
 
@@ -172,11 +173,11 @@ boolean tick_overlap_thread_is_tick(
 
 /* ---------- the thread */
 
-/* the time since a start, in microseconds, on the console's clock (the host's elsewhere) */
-unsigned long long tick_overlap_now_us(
+/* the time on the console's clock, in the clock's ticks (the host's elsewhere: microseconds): the numbers are kept in them and said in milliseconds by the log */
+unsigned long long tick_overlap_now(
 	void)
 {
-	return wiiu_now_us();
+	return wiiu_now_ticks();
 }
 
 static void *tick_overlap_thread_run(
@@ -200,14 +201,14 @@ static void *tick_overlap_thread_run(
 
 		STORE(o.idle, 1);
 		wiiu_tick_idle_set(1);
-		idle_from = tick_overlap_now_us();
+		idle_from = tick_overlap_now();
 		while (!__atomic_load_n(&o.pending, __ATOMIC_ACQUIRE))
 			pthread_cond_wait(&o.posted, &o.lock);
 		STORE(o.idle, 0);
 		wiiu_tick_idle_set(0);
 		work = o.work;
 		argument = o.argument;
-		__atomic_add_fetch(&o.tick_idle_us, (unsigned long)(tick_overlap_now_us() - idle_from), __ATOMIC_RELAXED);
+		__atomic_add_fetch(&o.tick_idle_ticks, (unsigned long)(tick_overlap_now() - idle_from), __ATOMIC_RELAXED);
 		pthread_mutex_unlock(&o.lock);
 		/* (HOME and closing hold this thread before a job, as they hold the game thread at its safe points) */
 		wiiu_tick_thread_gate();
@@ -255,7 +256,7 @@ static void tick_overlap_wait(void)
 
 	if (!__atomic_load_n(&o.pending, __ATOMIC_ACQUIRE))
 		return;
-	started = tick_overlap_now_us();
+	started = tick_overlap_now();
 	STORE(o.game_waiting, 1);
 	wiiu_game_waiting_set(1);
 	while (__atomic_load_n(&o.pending, __ATOMIC_ACQUIRE))
@@ -277,12 +278,12 @@ static void tick_overlap_wait(void)
 	STORE(o.game_waiting, 0);
 	wiiu_game_waiting_set(0);
 	{
-		const unsigned long long took = tick_overlap_now_us() - started;
+		const unsigned long long took = tick_overlap_now() - started;
 
-		o.wait_us += took;
-		if (took > o.wait_max_us)
-			o.wait_max_us = took;
-		if (took > 4000)
+		o.wait_ticks += took;
+		if (took > o.wait_max_ticks)
+			o.wait_max_ticks = took;
+		if (took > 4 * (unsigned long long)wiiu_ticks_per_second() / 1000)
 			o.waits_long++;
 	}
 }
@@ -304,16 +305,16 @@ void tick_overlap_run_and_wait(
 	tick_overlap_work work,
 	void *argument)
 {
-	const unsigned long long wait_before = o.wait_us;
-	const unsigned long long max_before = o.wait_max_us;
+	const unsigned long long wait_before = o.wait_ticks;
+	const unsigned long long max_before = o.wait_max_ticks;
 	const unsigned long long long_before = o.waits_long;
 
 	tick_overlap_post(work, argument);
 	tick_overlap_wait();
-	o.serial_wait_us += o.wait_us - wait_before;
+	o.serial_wait_ticks += o.wait_ticks - wait_before;
 	o.serial_waits++;
-	o.wait_us = wait_before;
-	o.wait_max_us = max_before;
+	o.wait_ticks = wait_before;
+	o.wait_max_ticks = max_before;
 	o.waits_long = (unsigned long)long_before;
 }
 
@@ -342,7 +343,7 @@ boolean tick_overlap_enabled(
 				tick_owners_set_threaded(TRUE);
 				tick_overlap_listeners_frozen = 1;
 				o.enabled = 1;
-				o.first_us = tick_overlap_now_us();
+				o.first_ticks = tick_overlap_now();
 				platform_log("tick overlap: on (halo/tick_overlap.txt): the ticks run beside the drawing on core 0, the frame drawn from the ring one tick behind the clock");
 			}
 		}
@@ -446,7 +447,7 @@ static void tick_overlap_collect(void)
 
 	if (LOAD(o.job_in_flight))
 	{
-		const unsigned long long took = o.job.ended_us - o.job.started_us;
+		const unsigned long long took = o.job.ended_ticks - o.job.started_ticks;
 
 		STORE(o.job_in_flight, FALSE);
 		o.job_collected = TRUE;
@@ -456,9 +457,9 @@ static void tick_overlap_collect(void)
 		/* the clock the game thread decided and the clock the tick thread ended with agree, or the picture's tick was chosen on a wrong count */
 		if (o.job.ticks_run != o.job.ticks_elapsed || game_time_overlap_time() != o.job.time_before + o.job.ticks_run)
 			o.clock_disagreements++;
-		o.job_us += took;
-		if (took > o.job_max_us)
-			o.job_max_us = took;
+		o.job_ticks += took;
+		if (took > o.job_max_ticks)
+			o.job_max_ticks = took;
 	}
 	if (o.job_collected)
 	{
@@ -481,15 +482,15 @@ void tick_overlap_sync_point(
 
 	if (!tick_overlap_enabled())
 		return;
-	wait_before = o.wait_us;
-	started = tick_overlap_now_us();
-	o.frame_started_us = started;
+	wait_before = o.wait_ticks;
+	started = tick_overlap_now();
+	o.frame_started_ticks = started;
 	tick_overlap_wait();
 	tick_overlap_collect();
 	/* (what the ticks of this frame hear: the listeners as the frame before left them) */
 	sound_manager_freeze_listeners();
-	o.sync_us += tick_overlap_now_us() - started;
-	o.sync_wait_us += o.wait_us - wait_before;
+	o.sync_ticks += tick_overlap_now() - started;
+	o.sync_wait_ticks += o.wait_ticks - wait_before;
 }
 
 /* the tick thread's job */
@@ -498,7 +499,7 @@ static void tick_overlap_job_work(
 {
 	struct tick_overlap_job *job = (struct tick_overlap_job *)argument;
 
-	job->started_us = tick_overlap_now_us();
+	job->started_ticks = tick_overlap_now();
 	/* (a test aid: halo/tick_overlap_stall.txt, in milliseconds, holds each job back by up to that and a third of it again, so that the tick thread is late
 	for the frame drawn beside it, as a long tick makes it) */
 	{
@@ -518,7 +519,7 @@ static void tick_overlap_job_work(
 	STORE(o.in_overlap_job, 1);
 	job->ticks_run = main_overlap_tick_side(job->dt, job->ticks_elapsed, job->leftover_after, job->previous_job_tick);
 	STORE(o.in_overlap_job, 0);
-	job->ended_us = tick_overlap_now_us();
+	job->ended_ticks = tick_overlap_now();
 }
 
 static void tick_overlap_set_view(
@@ -611,11 +612,11 @@ void tick_overlap_draw_done(
 {
 	if (o.frame_active)
 	{
-		const unsigned long long took = tick_overlap_now_us() - o.frame_started_us;
+		const unsigned long long took = tick_overlap_now() - o.frame_started_ticks;
 
-		o.draw_us += took;
-		if (took > o.draw_max_us)
-			o.draw_max_us = took;
+		o.draw_ticks += took;
+		if (took > o.draw_max_ticks)
+			o.draw_max_ticks = took;
 	}
 }
 
@@ -632,14 +633,14 @@ void tick_overlap_frame_end(
 	tick_snapshot_unpin();
 	o.pair_active = FALSE;
 	o.frame_active = FALSE;
-	now = tick_overlap_now_us();
+	now = tick_overlap_now();
 	o.active_frames++;
-	o.frame_us += now - o.frame_started_us;
-	if (now - o.frame_started_us > o.frame_max_us)
-		o.frame_max_us = now - o.frame_started_us;
-	if (!o.log_started_us)
-		o.log_started_us = now;
-	if (now - o.log_started_us >= (unsigned long long)TICK_OVERLAP_LOG_SECONDS * 1000000ULL)
+	o.frame_ticks += now - o.frame_started_ticks;
+	if (now - o.frame_started_ticks > o.frame_max_ticks)
+		o.frame_max_ticks = now - o.frame_started_ticks;
+	if (!o.log_started_ticks)
+		o.log_started_ticks = now;
+	if (now - o.log_started_ticks >= (unsigned long long)TICK_OVERLAP_LOG_SECONDS * (unsigned long long)wiiu_ticks_per_second())
 		tick_overlap_log(now);
 }
 
@@ -658,9 +659,9 @@ void tick_overlap_map_reset(
 }
 
 void tick_overlap_note_blend(
-	unsigned long long microseconds)
+	unsigned long long elapsed)
 {
-	o.blend_us += microseconds;
+	o.blend_ticks += elapsed;
 	o.blends++;
 }
 
@@ -671,16 +672,16 @@ void tick_overlap_note_push_wait(
 }
 
 void tick_overlap_note_capture(
-	unsigned long long microseconds)
+	unsigned long long elapsed)
 {
-	__atomic_add_fetch(&o.capture_us, (unsigned long)microseconds, __ATOMIC_RELAXED);
+	__atomic_add_fetch(&o.capture_ticks, (unsigned long)elapsed, __ATOMIC_RELAXED);
 	__atomic_add_fetch(&o.captures, 1, __ATOMIC_RELAXED);
 }
 
 void tick_overlap_note_publish(
-	unsigned long long microseconds)
+	unsigned long long elapsed)
 {
-	__atomic_add_fetch(&o.publish_us, (unsigned long)microseconds, __ATOMIC_RELAXED);
+	__atomic_add_fetch(&o.publish_ticks, (unsigned long)elapsed, __ATOMIC_RELAXED);
 	__atomic_add_fetch(&o.publishes, 1, __ATOMIC_RELAXED);
 }
 
@@ -688,51 +689,53 @@ void tick_overlap_note_publish(
 void tick_overlap_log(
 	unsigned long long now)
 {
-	const double seconds = (double)(now - o.log_started_us) / 1.0e6;
+	const double per_ms = (double)wiiu_ticks_per_second() / 1000.0;
+	const double window = (double)(now - o.log_started_ticks);
+	const double seconds = window / (per_ms * 1000.0);
 	const double active = o.active_frames ? (double)o.active_frames : 1.0;
 	const double overlap_frames = o.overlap_frames ? (double)o.overlap_frames : 1.0;
 	const double jobs = o.jobs ? (double)o.jobs : 1.0;
 	const double ticks = o.ticks ? (double)o.ticks : 1.0;
 	const unsigned long captures = __atomic_exchange_n(&o.captures, 0, __ATOMIC_RELAXED);
-	const unsigned long capture_us = __atomic_exchange_n(&o.capture_us, 0, __ATOMIC_RELAXED);
+	const unsigned long capture_ticks = __atomic_exchange_n(&o.capture_ticks, 0, __ATOMIC_RELAXED);
 	const unsigned long publishes = __atomic_exchange_n(&o.publishes, 0, __ATOMIC_RELAXED);
-	const unsigned long publish_us = __atomic_exchange_n(&o.publish_us, 0, __ATOMIC_RELAXED);
-	const unsigned long tick_idle_us = __atomic_exchange_n(&o.tick_idle_us, 0, __ATOMIC_RELAXED);
+	const unsigned long publish_ticks = __atomic_exchange_n(&o.publish_ticks, 0, __ATOMIC_RELAXED);
+	const unsigned long tick_idle_ticks = __atomic_exchange_n(&o.tick_idle_ticks, 0, __ATOMIC_RELAXED);
 	const unsigned long push_waits = __atomic_exchange_n(&o.push_waits, 0, __ATOMIC_RELAXED);
 
 	platform_log("tick overlap (%.1f s, %lu frames: %lu overlapped, %lu serial, %lu primed, %lu held, %lu no pair): %.1f ticks a second, %.1f frames a second",
 		seconds, o.frames, o.overlap_frames, o.serial_frames, o.primed_frames, o.held_frames, o.no_pair_frames, (double)o.ticks / seconds,
 		(double)o.frames / seconds);
 	platform_log("tick overlap, tick thread: %.2f ms a job (most %.2f), %.2f ms a tick (%.2f ticks a job), busy %.0f%% of the time, waiting for a job %.0f%%",
-		(double)o.job_us / 1000.0 / jobs, (double)o.job_max_us / 1000.0, (double)o.job_us / 1000.0 / ticks, ticks / jobs,
-		100.0 * (double)o.job_us / (seconds * 1.0e6), 100.0 * (double)(tick_idle_us > seconds * 1.0e6 ? seconds * 1.0e6 : tick_idle_us) / (seconds * 1.0e6));
+		(double)o.job_ticks / per_ms / jobs, (double)o.job_max_ticks / per_ms, (double)o.job_ticks / per_ms / ticks, ticks / jobs,
+		100.0 * (double)o.job_ticks / window, 100.0 * (double)(tick_idle_ticks > window ? window : tick_idle_ticks) / window);
 	platform_log("tick overlap, ahead of the picture: %.2f ticks on average (1 is the delay; more means the tick thread was late), %lu ticks in all this game, "
 		"%lu jobs whose ticks were not the clock's decision",
 		(double)o.ahead_sum / 1000.0 / overlap_frames, o.ticks_total, o.clock_disagreements);
 	platform_log("tick overlap, game thread, ms a frame (%lu): %.2f (most %.2f) in all, %.2f (most %.2f) of work to the end of the draw, waiting for the "
 		"tick thread %.2f (most %.2f, %lu waits over 4 ms), sync point %.3f",
-		o.active_frames, (double)o.frame_us / 1000.0 / active, (double)o.frame_max_us / 1000.0, (double)o.draw_us / 1000.0 / active,
-		(double)o.draw_max_us / 1000.0, (double)o.wait_us / 1000.0 / active, (double)o.wait_max_us / 1000.0, o.waits_long,
-		(double)(o.sync_us - o.sync_wait_us) / 1000.0 / active);
+		o.active_frames, (double)o.frame_ticks / per_ms / active, (double)o.frame_max_ticks / per_ms, (double)o.draw_ticks / per_ms / active,
+		(double)o.draw_max_ticks / per_ms, (double)o.wait_ticks / per_ms / active, (double)o.wait_max_ticks / per_ms, o.waits_long,
+		(double)(o.sync_ticks - o.sync_wait_ticks) / per_ms / active);
 	if (o.serial_waits)
 	{
 		platform_log("tick overlap, serial frames: the game thread waited %.2f ms a frame for the tick thread (%lu frames)",
-			(double)o.serial_wait_us / 1000.0 / (double)o.serial_waits, o.serial_waits);
+			(double)o.serial_wait_ticks / per_ms / (double)o.serial_waits, o.serial_waits);
 	}
 	platform_log("tick overlap, snapshot: capture %.3f ms a tick (%lu), publish %.3f ms a job (%lu), blends %.3f ms a frame (%lu objects), "
 		"queue waits %lu",
-		captures ? (double)capture_us / 1000.0 / (double)captures : 0.0, captures,
-		publishes ? (double)publish_us / 1000.0 / (double)publishes : 0.0, publishes, (double)o.blend_us / 1000.0 / active, o.blends,
+		captures ? (double)capture_ticks / per_ms / (double)captures : 0.0, captures,
+		publishes ? (double)publish_ticks / per_ms / (double)publishes : 0.0, publishes, (double)o.blend_ticks / per_ms / active, o.blends,
 		push_waits);
-	o.log_started_us = now;
+	o.log_started_ticks = now;
 	o.frames = o.overlap_frames = o.serial_frames = o.primed_frames = o.held_frames = o.no_pair_frames = 0;
-	o.wait_us = o.wait_max_us = o.frame_us = o.frame_max_us = o.sync_us = o.sync_wait_us = o.post_us = o.draw_us = o.draw_max_us = 0;
-	o.serial_wait_us = 0;
+	o.wait_ticks = o.wait_max_ticks = o.frame_ticks = o.frame_max_ticks = o.sync_ticks = o.sync_wait_ticks = o.post_ticks = o.draw_ticks = o.draw_max_ticks = 0;
+	o.serial_wait_ticks = 0;
 	o.waits_long = o.serial_waits = o.active_frames = 0;
 	o.jobs = o.ticks = 0;
-	o.job_us = o.job_max_us = o.tick_work_us = 0;
+	o.job_ticks = o.job_max_ticks = o.tick_work_ticks = 0;
 	o.ahead_sum = 0;
-	o.blend_us = 0;
+	o.blend_ticks = 0;
 	o.blends = 0;
 	o.reports++;
 }

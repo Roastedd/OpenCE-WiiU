@@ -118,15 +118,15 @@ long tick_overlap_view_tick(void);
 /* The steps of the main loop's tick side that the tick thread runs for a job: returns the ticks run. */
 long main_overlap_tick_side(real dt, long ticks_elapsed, real leftover_after, long previous_time);
 
-/* ---------- timing (the console's clock; a host clock elsewhere) */
+/* ---------- timing (the console's clock, in its ticks; a host clock's microseconds elsewhere) */
 
-unsigned long long tick_overlap_now_us(void);
+unsigned long long tick_overlap_now(void);
 /* the game thread's time in the blends of a frame, and the log (every few seconds, from the frame's end) */
-void tick_overlap_note_blend(unsigned long long microseconds);
+void tick_overlap_note_blend(unsigned long long elapsed);
 /* the tick thread's, adding to the numbers under no lock (single words; a count that loses an add is no matter): a capture of a tick, and the
 cameras and the commit that make a job's captures visible */
-void tick_overlap_note_capture(unsigned long long microseconds);
-void tick_overlap_note_publish(unsigned long long microseconds);
+void tick_overlap_note_capture(unsigned long long elapsed);
+void tick_overlap_note_publish(unsigned long long elapsed);
 /* a producer waits for room in a queue */
 void tick_overlap_note_push_wait(void);
 void tick_overlap_log(unsigned long long now);

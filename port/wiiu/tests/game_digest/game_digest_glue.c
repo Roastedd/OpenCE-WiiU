@@ -950,12 +950,17 @@ void wiiu_thread_stack_range(unsigned long *low, unsigned long *size)
 	}
 }
 
-unsigned long long wiiu_now_us(void)
+unsigned long long wiiu_now_ticks(void)
 {
 	struct timespec now;
 
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	return (unsigned long long)now.tv_sec * 1000000ULL + (unsigned long long)now.tv_nsec / 1000ULL;
+}
+
+unsigned long wiiu_ticks_per_second(void)
+{
+	return 1000000UL;
 }
 
 /* wiiu_tick_parts.c: the console's timing of the parts of a tick */

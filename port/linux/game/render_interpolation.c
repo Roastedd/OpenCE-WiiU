@@ -589,7 +589,7 @@ static real_matrix4x3 *overlap_object_node_matrices(long object_index)
 	previous = tick_snapshot_previous_node_matrices(object_index, node_count);
 	if (!previous)
 		return NULL;
-	started = tick_overlap_now_us();
+	started = tick_overlap_now();
 	latest = (real_matrix4x3 const *)((byte const *)object + object->object.node_matrices.offset);
 	if (record->capacity < node_count)
 	{
@@ -633,7 +633,7 @@ static real_matrix4x3 *overlap_object_node_matrices(long object_index)
 		}
 	}
 	record->blended = TRUE;
-	tick_overlap_note_blend(tick_overlap_now_us() - started);
+	tick_overlap_note_blend(tick_overlap_now() - started);
 	return blended;
 }
 

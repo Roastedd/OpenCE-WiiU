@@ -114,12 +114,17 @@ void wiiu_game_waiting_set(int waiting) { (void)waiting; }
 void wiiu_tick_gate_register(int registered) { (void)registered; }
 void wiiu_tick_gate(void) {}
 
-unsigned long long wiiu_now_us(void)
+unsigned long long wiiu_now_ticks(void)
 {
 	struct timespec now;
 
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	return (unsigned long long)now.tv_sec * 1000000ULL + (unsigned long long)now.tv_nsec / 1000ULL;
+}
+
+unsigned long wiiu_ticks_per_second(void)
+{
+	return 1000000UL;
 }
 
 void sound_manager_freeze_listeners(void) {}

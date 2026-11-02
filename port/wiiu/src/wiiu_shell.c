@@ -397,9 +397,10 @@ void wiiu_game_waiting_set(int waiting)
 }
 
 /* the calling thread's stack, as the OS says it: the tick snapshot's view belongs to the game thread's, found by it (port/linux/game/tick_stack.h); and the
-time in microseconds (tick_overlap.c's numbers) */
+time base (tick_overlap.c's numbers) */
 void wiiu_thread_stack_range(unsigned long *low, unsigned long *size);
-unsigned long long wiiu_now_us(void);
+unsigned long long wiiu_now_ticks(void);
+unsigned long wiiu_ticks_per_second(void);
 
 void wiiu_thread_stack_range(unsigned long *low, unsigned long *size)
 {
@@ -411,9 +412,15 @@ void wiiu_thread_stack_range(unsigned long *low, unsigned long *size)
 	*size = start < end ? end - start : start - end;
 }
 
-unsigned long long wiiu_now_us(void)
+/* the time base's ticks, as the OS counts them (a conversion to microseconds is a 64-bit division, which the blends' two reads an object would pay) */
+unsigned long long wiiu_now_ticks(void)
 {
-	return (unsigned long long)OSTicksToMicroseconds(OSGetSystemTime());
+	return (unsigned long long)OSGetSystemTime();
+}
+
+unsigned long wiiu_ticks_per_second(void)
+{
+	return (unsigned long)OSTimerClockSpeed;
 }
 
 void wiiu_tick_gate(void)
