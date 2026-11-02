@@ -88,6 +88,10 @@ symbols in this file:
 
 #include "cseries.h"
 #include "real_math.h"
+#ifdef HALO_BW_KERNELS
+#include "halo_bw_kernels.h"
+typedef char halo_bw_matrix4x3_layout_assert[sizeof(real_matrix4x3) == 52 && sizeof(real) == 4 ? 1 : -1];
+#endif
 
 /* ---------- constants */
 
@@ -931,6 +935,16 @@ void matrix4x3_multiply(
 	real_matrix4x3 const *b,
 	real_matrix4x3 *result)
 {
+#ifdef HALO_BW_KERNELS
+	/* port: the Broadway kernel (port/wiiu/src/bw/halo_bw_matrix.S), the same bits as the C below; aliasing as the C allows */
+	HALO_BW_COUNT(HALO_BW_K_MATRIX);
+	if (halo_bw_flags & HALO_BW_BIT(HALO_BW_K_MATRIX))
+	{
+		HALO_BW_USED(HALO_BW_K_MATRIX);
+		halo_bw_matrix4x3_multiply((float const *)a, (float const *)b, (float *)result);
+		return;
+	}
+#endif
 	real const *a_elements = a->n[0];
 	real const *b_elements = b->n[0];
 	real *result_elements = result->n[0];

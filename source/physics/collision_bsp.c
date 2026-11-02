@@ -85,6 +85,9 @@ symbols in this file:
 #include "render/render_debug.h"
 #include "scenario/scenario.h"
 #include "tag_files/tag_groups.h"
+#ifdef HALO_BW_KERNELS
+#include "halo_bw_kernels.h"
+#endif
 
 /* ---------- constants */
 
@@ -1987,11 +1990,67 @@ static boolean pill_test_vector(
 	return FALSE;
 }
 
+#ifdef HALO_BW_KERNELS
+/* port: the Broadway BSP walks (port/wiiu/src/bw/halo_bw_bsp.S) read the node and plane blocks as arrays, which they may where
+tag_block_get_element_fast would too: the blocks have addresses and an element size their definitions agree with */
+typedef char halo_bw_bsp_layout_assert[sizeof(struct bsp3d_node) == 12 && sizeof(real_plane3d) == 16 && offsetof(real_plane3d, d) == 12 && sizeof(real) == 4 ? 1 : -1];
+
+static boolean halo_bw_bsp_walk_begin(
+	struct halo_bw_bsp_walk *walk,
+	struct collision_bsp const *bsp,
+	real_point3d const *point,
+	real_vector3d const *vector,
+	long nodes_left,
+	short depth)
+{
+	struct tag_block const *nodes = &bsp->bsp3d.nodes;
+	struct tag_block const *planes = &bsp->bsp3d.planes;
+
+	if (!nodes->address || !planes->address || nodes->count < 0 || planes->count < 0 ||
+		(nodes->definition && nodes->definition->element_size != (long)sizeof(struct bsp3d_node)) ||
+		(planes->definition && planes->definition->element_size != (long)sizeof(real_plane3d)))
+	{
+		return FALSE;
+	}
+	walk->nodes = nodes->address;
+	walk->planes = planes->address;
+	walk->point = (float const *)point;
+	walk->vector = (float const *)vector;
+	walk->node_count = (unsigned)nodes->count;
+	walk->plane_count = (unsigned)planes->count;
+	walk->nodes_left = (int)nodes_left;
+	walk->depth = depth;
+
+	return TRUE;
+}
+#endif
+
 static void bsp3d_test_sphere_recursive(
 	struct test_sphere_data *data,
 	long node_index,
 	short depth)
 {
+#ifdef HALO_BW_KERNELS
+	/* port: the nodes the sphere passes to one side, as many in a row as there are, in the kernel; the C below goes on from the node
+	it gives back (a crossing, a leaf, a bad index, the end of the budget), taking that node as it takes any */
+	HALO_BW_COUNT(HALO_BW_K_BSP_SPHERE);
+	if ((halo_bw_flags & HALO_BW_BIT(HALO_BW_K_BSP_SPHERE)) && !(node_index & LONG_MIN))
+	{
+		struct halo_bw_bsp_walk walk;
+
+		if (halo_bw_bsp_walk_begin(&walk, data->bsp, data->center, (real_vector3d const *)0, data->nodes_left, depth))
+		{
+			node_index = halo_bw_bsp_sphere_walk(&walk, (int)node_index, data->radius);
+			if (walk.nodes_left != data->nodes_left)
+			{
+				HALO_BW_USED(HALO_BW_K_BSP_SPHERE);
+				halo_bw_walked[HALO_BW_K_BSP_SPHERE] += (unsigned long)(data->nodes_left - walk.nodes_left);
+			}
+			data->nodes_left = walk.nodes_left;
+			depth = (short)walk.depth;
+		}
+	}
+#endif
 	while (!(node_index & LONG_MIN))
 	{
 		struct bsp3d_node const *node;
@@ -2130,6 +2189,27 @@ static boolean collision_bsp_test_vector_recursive(
 	real t1,
 	short depth)
 {
+#ifdef HALO_BW_KERNELS
+	/* port: the nodes the segment passes to one side, as many in a row as there are, in the kernel; the C below goes on from the node
+	it gives back (a crossing, a leaf, a bad index, the end of the budget, a distance that is not a number) as it does from any */
+	HALO_BW_COUNT(HALO_BW_K_BSP_RAY);
+	if ((halo_bw_flags & HALO_BW_BIT(HALO_BW_K_BSP_RAY)) && !(node_index & LONG_MIN))
+	{
+		struct halo_bw_bsp_walk walk;
+
+		if (halo_bw_bsp_walk_begin(&walk, data->bsp, data->point, data->vector, data->nodes_left, depth))
+		{
+			node_index = halo_bw_bsp_ray_walk(&walk, (int)node_index, t0, t1);
+			if (walk.nodes_left != data->nodes_left)
+			{
+				HALO_BW_USED(HALO_BW_K_BSP_RAY);
+				halo_bw_walked[HALO_BW_K_BSP_RAY] += (unsigned long)(data->nodes_left - walk.nodes_left);
+			}
+			data->nodes_left = walk.nodes_left;
+			depth = (short)walk.depth;
+		}
+	}
+#endif
 	if (!(node_index & LONG_MIN))
 	{
 		struct bsp3d_node const *node;

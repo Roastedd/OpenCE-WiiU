@@ -7,6 +7,9 @@ REAL_MATH.C
 #include "cseries.h"
 #include "real_math.h"
 #include "periodic_functions.h"
+#ifdef HALO_BW_KERNELS
+#include "halo_bw_kernels.h"
+#endif
 
 /* ---------- constants */
 
@@ -411,6 +414,15 @@ boolean fast_vector_intersects_sphere(
 	real_point3d const *center,
 	real radius)
 {
+#ifdef HALO_BW_KERNELS
+	/* port: the Broadway kernel (port/wiiu/src/bw/halo_bw_sphere.S), the same answer as the C below for every input */
+	HALO_BW_COUNT(HALO_BW_K_SPHERE);
+	if (halo_bw_flags & HALO_BW_BIT(HALO_BW_K_SPHERE))
+	{
+		HALO_BW_USED(HALO_BW_K_SPHERE);
+		return halo_bw_ray_sphere((float const *)point, (float const *)vector, (float const *)center, radius) != 0;
+	}
+#endif
 	real_point3d p = {point->x-center->x, point->y-center->y, point->z - center->z};
 	real c = (p.x*p.x) + (p.y*p.y) + (p.z*p.z) - (radius*radius);
 	real_vector3d direction;

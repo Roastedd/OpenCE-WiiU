@@ -72,6 +72,10 @@ symbols in this file:
 #include "cluster_partitions.h"
 #include "structure_bsp_definitions.h"
 #include "structures/structures.h"
+#ifdef HALO_BW_KERNELS
+#include "halo_bw_kernels.h"
+typedef char halo_bw_reference_layout_assert[sizeof(struct data_reference) == 12 && offsetof(struct data_reference, datum_index) == 4 && offsetof(struct data_reference, next_reference_index) == 8 ? 1 : -1];
+#endif
 
 /* ---------- constants */
 
@@ -139,6 +143,29 @@ void reference_list_remove(
 {
 	long *reference_index = first_reference_index;
 	struct data_reference *reference;
+
+#ifdef HALO_BW_KERNELS
+	/* port: the Broadway kernel (port/wiiu/src/bw/halo_bw_reference.S) finds the link that holds the datum's reference, checking each
+	reference on the way as datum_get does; where it finds none (it is not on the list, or a reference is not one datum_get returns) the
+	C below runs and does what it does, errors included */
+	HALO_BW_COUNT(HALO_BW_K_REFERENCE);
+	if ((halo_bw_flags & HALO_BW_BIT(HALO_BW_K_REFERENCE)) && array->valid && array->count >= 0 && array->size == sizeof(struct data_reference) &&
+		array->data)
+	{
+		long *found = (long *)halo_bw_reference_find(array->data, (unsigned)array->count, array->identifier_zero_invalid ? 1u : 0u,
+			(int *)first_reference_index, (int)datum_index);
+
+		if (found)
+		{
+			HALO_BW_USED(HALO_BW_K_REFERENCE);
+			reference = (struct data_reference *)datum_get(array, *found);
+			datum_delete(array, *found);
+			*found = reference->next_reference_index;
+
+			return;
+		}
+	}
+#endif
 
 	while (*reference_index != NONE)
 	{

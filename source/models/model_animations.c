@@ -153,6 +153,9 @@ symbols in this file:
 #include "models/models.h"
 #include "models/model_definitions.h"
 #include "objects/objects.h"
+#ifdef HALO_BW_KERNELS
+#include "halo_bw_kernels.h"
+#endif
 
 /* ---------- constants */
 
@@ -1976,6 +1979,18 @@ void quaternion_decompress_8byte(
 	struct compressed_quaternion_8byte const *compressed,
 	real_quaternion *quaternion)
 {
+#ifdef HALO_BW_KERNELS
+	/* port: the Broadway kernel (port/wiiu/src/bw/halo_bw_quaternion.S): the same four products; it returns 0, with nothing written,
+	where the thread's quantization register is not the signed 16-bit load it needs */
+	typedef char halo_bw_quaternion_layout_assert[sizeof(struct compressed_quaternion_8byte) == 8 && sizeof(real_quaternion) == 16 ? 1 : -1];
+
+	HALO_BW_COUNT(HALO_BW_K_QUATERNION);
+	if ((halo_bw_flags & HALO_BW_BIT(HALO_BW_K_QUATERNION)) && halo_bw_quaternion_load(compressed, (float *)quaternion))
+	{
+		HALO_BW_USED(HALO_BW_K_QUATERNION);
+		return;
+	}
+#endif
 	real const scale = 1.f / COMPRESSED_QUATERNION_COMPONENT_MAXIMUM;
 
 	quaternion->v.i = compressed->i * scale;
