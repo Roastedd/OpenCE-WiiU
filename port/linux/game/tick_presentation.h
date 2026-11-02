@@ -27,6 +27,8 @@ struct new_particle_data;
 void tick_presentation_particle_new(struct new_particle_data const *data);
 void tick_presentation_particles_stop_on_first_person_weapon(short local_player_index);
 long tick_presentation_particle_system_new_attached(long definition_index, long object_index, short attachment_index);
+void tick_presentation_particle_system_new_unattached(long definition_index, real_point3d const *position, real_vector3d const *velocity,
+	real_argb_color const *color, real scale);
 void tick_presentation_particle_system_orphan(long ticket);
 long tick_presentation_contrail_new(long definition_index, long object_index, short attachment_index);
 void tick_presentation_contrail_delete(long ticket);

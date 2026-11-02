@@ -437,12 +437,46 @@ static void particle_system_next_particle_state_index(
 	return;
 }
 
+#ifdef HALO_WIIU
+long particle_system_new_unattached_now(
+	long definition_index,
+	real_point3d const *position,
+	real_vector3d const *velocity,
+	real_argb_color const *color,
+	real scale);
+
+/* port: the particle systems are the render thread's (tick_owners.h): an effect's, made by a tick, is made by the render thread when its turn comes
+(tick_presentation.h). Nothing keeps the index it would return. */
 long particle_system_new_unattached(
 	long definition_index,
 	real_point3d const *position,
 	real_vector3d const *velocity,
 	real_argb_color const *color,
 	real scale)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_PARTICLE_SYSTEMS))
+	{
+		tick_presentation_particle_system_new_unattached(definition_index, position, velocity, color, scale);
+		return NONE;
+	}
+
+	return particle_system_new_unattached_now(definition_index, position, velocity, color, scale);
+}
+
+long particle_system_new_unattached_now(
+	long definition_index,
+	real_point3d const *position,
+	real_vector3d const *velocity,
+	real_argb_color const *color,
+	real scale)
+#else
+long particle_system_new_unattached(
+	long definition_index,
+	real_point3d const *position,
+	real_vector3d const *velocity,
+	real_argb_color const *color,
+	real scale)
+#endif
 {
 	long system_index = datum_new(particle_systems);
 

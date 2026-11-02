@@ -24,6 +24,8 @@ struct decal_editor_geometry;
 void particle_new_now(struct new_particle_data const *data);
 void particles_stop_on_first_person_weapon_now(short local_player_index);
 long particle_system_new_attached_now(long definition_index, long object_index, short attachment_index);
+long particle_system_new_unattached_now(long definition_index, real_point3d const *position, real_vector3d const *velocity, real_argb_color const *color,
+	real scale);
 void particle_system_orphan_if_alive(long system_index);
 long contrail_new_now(long definition_index, long object_index, short attachment_index);
 void contrail_delete_if_alive(long contrail_index);
@@ -44,6 +46,7 @@ enum presentation_request_kind
 	_presentation_particle_new,
 	_presentation_particles_stop_on_first_person_weapon,
 	_presentation_particle_system_new_attached,
+	_presentation_particle_system_new_unattached,
 	_presentation_particle_system_orphan,
 	_presentation_contrail_new,
 	_presentation_contrail_delete,
@@ -76,6 +79,7 @@ struct presentation_request
 	short forced_sequence_index;
 	real_point3d origin;
 	real_vector3d velocity;
+	real_argb_color color;
 	struct new_particle_data particle;
 };
 
@@ -173,6 +177,9 @@ static void presentation_request_apply(
 			object_header_try_and_get(request->object_index) ?
 				particle_system_new_attached_now(request->definition_index, request->object_index, request->attachment_index) : NONE);
 		break;
+	case _presentation_particle_system_new_unattached:
+		particle_system_new_unattached_now(request->definition_index, &request->origin, &request->velocity, &request->color, request->amount);
+		break;
 	case _presentation_particle_system_orphan:
 	{
 		long index = presentation_ticket_index(request->ticket);
@@ -254,6 +261,25 @@ long tick_presentation_particle_system_new_attached(
 	presentation_request_push(&request);
 
 	return request.ticket;
+}
+
+void tick_presentation_particle_system_new_unattached(
+	long definition_index,
+	real_point3d const *position,
+	real_vector3d const *velocity,
+	real_argb_color const *color,
+	real scale)
+{
+	struct presentation_request request;
+
+	csmemset(&request, 0, sizeof(request));
+	request.kind = _presentation_particle_system_new_unattached;
+	request.definition_index = definition_index;
+	request.origin = *position;
+	request.velocity = *velocity;
+	request.color = *color;
+	request.amount = scale;
+	presentation_request_push(&request);
 }
 
 void tick_presentation_particle_system_orphan(

@@ -670,9 +670,9 @@ void tick_overlap_log(
 	platform_log("tick overlap (%.1f s, %lu frames: %lu overlapped, %lu serial, %lu primed, %lu held, %lu no pair): %.1f ticks a second, %.1f frames a second",
 		seconds, o.frames, o.overlap_frames, o.serial_frames, o.primed_frames, o.held_frames, o.no_pair_frames, (double)o.ticks / seconds,
 		(double)o.frames / seconds);
-	platform_log("tick overlap, tick thread: %.2f ms a job (most %.2f), %.2f ms a tick (%.2f ticks a job), waiting for a job %.0f%% of the time",
+	platform_log("tick overlap, tick thread: %.2f ms a job (most %.2f), %.2f ms a tick (%.2f ticks a job), busy %.0f%% of the time, waiting for a job %.0f%%",
 		(double)o.job_us / 1000.0 / jobs, (double)o.job_max_us / 1000.0, (double)o.job_us / 1000.0 / ticks, ticks / jobs,
-		100.0 * (double)tick_idle_us / (seconds * 1.0e6));
+		100.0 * (double)o.job_us / (seconds * 1.0e6), 100.0 * (double)(tick_idle_us > seconds * 1.0e6 ? seconds * 1.0e6 : tick_idle_us) / (seconds * 1.0e6));
 	platform_log("tick overlap, ahead of the picture: %.2f ticks on average (1 is the delay; more means the tick thread was late), %lu ticks in all this game",
 		(double)o.ahead_sum / 1000.0 / overlap_frames, o.ticks_total);
 	platform_log("tick overlap, game thread, ms a frame: %.2f (most %.2f) in all, %.2f (most %.2f) of work to the end of the draw, of which waiting for the "
