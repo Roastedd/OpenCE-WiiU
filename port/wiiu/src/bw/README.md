@@ -31,3 +31,62 @@ Rules every kernel here follows (`tools/wiiu_check_objects.py --bw-kernel-object
 
 They are off until the card's `halo/broadway.txt` says 1 and each has passed its self-test on the console
 (`port/wiiu/src/wiiu_bw_kernels.c`). Host proof: `port/wiiu/tests/bw_tests.sh`.
+
+## Why each kernel gives the C's bits
+
+The ticks must come out the same on a Wii U and on a PC. What a kernel may differ in is only how many operations it does at once, never
+which operations or in what order.
+
+- `matrix4x3_multiply`: every element is `(b0*a + b1*a') + b2*a''` with the three products rounded to single precision one at a time and
+  added left to right, and in the position row `value * scale + position`, as the C writes it; the pair lanes are two columns of the same
+  expression. The bundle's `ps_madds0` and `fmadds` fuse the multiply and the add into one rounding and so gave other bits than the C.
+  The kernel reads all of `a` before it writes, and each row of `b` before it writes that row, so `out` may be `a` or `b`.
+- `fast_vector_intersects_sphere`: the whole function, squares and sums in the C's order, and each branch the C comparison's own. A NaN
+  makes `b >= 0` and `disc <= 0` false in the C; the bundle's `bge` and `ble` after `fcmpu` take their branch for an unordered compare, which
+  answers "miss" where the C goes on (a squared length that overflowed to infinity times a zero gives a NaN `disc`, and the C then answers
+  "hit" from `-a - b`). Here those two tests are `cror` of the greater/less bit with the equal bit, which an unordered compare does not set.
+- the BSP walks: at a node the kernel does what the C does when the test passes to one side (the same dot products in `dot_product3d`'s
+  order, `distance0 = dot*t0 + distance`, the same comparisons), and for anything else it stops before the node, having changed nothing, so
+  the C does that node. It stops at: a leaf or an index out of range, depth 128, a spent node budget (the C's `collision_bsp3d_enter_node`
+  checks, in the C's order, with nothing taken when one fails), a plane designator out of range, a crossing, and any distance that is a
+  NaN (the C's own behaviour with a NaN is to go to `children[0]`; stopping is always safe). The state it carries is the budget and the depth.
+- the reference search: integer work. Each reference on the list is checked as `datum_get` checks it (the index, the identifier rules and the
+  `identifier_zero_invalid` assert), and anything that `datum_get` would refuse returns NULL, so that the C runs and reports it.
+- `quaternion_decompress_8byte`: four signed 16-bit samples converted exactly by the quantized load (GQR5 = type 7, scale 0), each times
+  `1.f / 32767` (`0x38000100`), rounded once. If the thread's GQR5 is anything else the kernel returns 0 and writes nothing.
+
+## How they are proven
+
+1. `port/wiiu/tests/bw_tests.sh`: the scalar model of each kernel (`port/linux/include/halo_bw_model.h`, operation for operation) against the
+   C (`wiiu_bw_reference.h`), millions of cases in six input classes (normal, ties, wide, denormal, inf, NaN), every output bit compared, on
+   the container's CPU, on 32-bit x86 and on 32-bit big-endian PowerPC. `tools/test_bw_reference_sync.py` keeps the reference equal to the
+   game's code.
+2. `port/wiiu/tests/bw_asm_sim_tests.sh`: the real machine code (as devkitPPC assembles it), run by a small instruction simulator
+   (`gekko_sim.h`) through the same cases, to prove the assembly is what the model says; it also checks that only volatile registers are
+   written and that no kernel relies on the second half of a register a scalar instruction wrote.
+3. `port/wiiu/tests/bw_tick_run.sh`: the b30 co-op host run under qemu-ppc with the models in the kernels' places and the same binary with
+   them off, compared tick by tick (`tools/ppc-be/compare_network_tests.py`, in the tools repository).
+4. On the console, at start (below): the same cases through the assembly itself, which finds what only the hardware does (subnormals and NaN
+   payloads in paired operations).
+
+## On the console
+
+`halo/broadway.txt` on the card: `0` off (the default; nothing changes, no paired-single instruction runs), `1` the self-test runs and the
+kernels that pass are used, `2` the self-test and the timing run and every kernel stays off. The log then has, in order:
+
+    Broadway kernels: halo/broadway.txt 1; self-test on core N, FPSCR 0000xxxx; the first paired-single instruction is next
+    Broadway kernels: GQR0-7 ...; GQR0 is ...; GQR5 is ...
+    Broadway reference: the game's own ... equal the reference
+    Broadway kernel matrix4x3_multiply: every bit equals the C (N cases: normal ok, ties ok, wide ok, denormal ok, inf ok, nan ok)
+    ... (one line for each kernel; a class that differs says so, with the first case)
+    Broadway timing matrix4x3_multiply: C x ns a call, kernel y ns
+    Broadway kernels: in use
+    Broadway kernels: matrix on, ray-sphere on, ...
+
+and every 150 ticks, next to the tick parts lines:
+
+    bw calls a tick, asked/answered by a kernel (broadway.txt 1, 63 in use): matrix 41.2/41.2, ray-sphere ..., bsp-ray 9.1/6.0 (21.3 nodes), ...
+
+To measure: the same save and the same fight twice, once with `0` and once with `1`; compare the `tick parts` line's `objects` (ms a tick)
+and the first line's `ms each in all`, and read the calls a tick to see how much each function is asked. The saving of a kernel is about
+(calls a tick) x (C ns - kernel ns) from the timing lines.
