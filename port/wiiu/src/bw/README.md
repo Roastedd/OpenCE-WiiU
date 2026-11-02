@@ -104,3 +104,23 @@ To measure: the same save and the same fight twice, once with `0` and once with 
 load and the reference search are mostly called), `ai` and `units` (the sight and aim tests: the BSP walks and the sphere test). Read the
 calls a tick to see how much each function is asked; the saving of a kernel is about (calls a tick) x (the game's call with the C - the game's
 call with the kernel) from the timing lines. The expected total is under a millisecond a tick; the logs say what it is.
+
+## What was measured, and what was not (2026-11-01)
+
+On the host (big-endian Linux under qemu-ppc, b30 co-op host, `tickbot:7`, seed 12345, ticks 1 to 2462, models in the kernels' places):
+
+- Every tick equal to a build of the branch's base without any of this, on everything the ticks decide (`bw_tick_compare.py`): with the
+  models on, with them off, and the base. A control proves the comparison sees a last-bit difference: a model that adds one row of the matrix
+  product in another order diverges from tick 642 (a position differs in the third decimal).
+- What the game asks of the six functions in a tick, with the models on (2462 ticks): `matrix4x3_multiply` 3,520 calls; the sphere test
+  6,610; the BSP ray recursion 7,030 node visits, of which the kernel walks 5,200 (74%) in runs of 4.3 nodes; the sphere BSP 1,620 recursion
+  entries, of which the kernel walks 1,140 nodes in runs of 3.3; the quaternion load 2,360; `reference_list_remove` none. The cluster code
+  of this tree already finds the reference it removes in one step (`cluster_partition_port_remove`, with a previous-link array) and walks a
+  list only 4.7 steps a tick, so that kernel has nothing to do in this scenario.
+- At about 100 ns a call the C could cost, and a kernel half of that, the total would be 0.3 to 1 ms a tick. That is a guess from the call
+  counts, not a measurement: nothing here has run on a console, and the timing lines of the self-test are what say what a call costs.
+
+Not measured: anything on the Wii U. The self-test and the timing run when the card file says so; what a core does with a subnormal or a NaN in
+a paired operation, whether core 1 runs paired singles (they have been run on core 0, by the audio resampler: `scratch/paired-single-probe`'s
+reports say they match scalar results there, subnormals included, in both FPSCR modes), the quantization registers of the game thread, and
+what any of it gains in a fight.
