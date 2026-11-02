@@ -634,7 +634,8 @@ void wiiu_bw_tick_report(unsigned long ticks)
 	size_t used = 0;
 	int k;
 
-	if (!ticks)
+	/* (halo/broadway.txt missing or 0: the log says so once at the start and says nothing more) */
+	if (!ticks || !configured)
 		return;
 	if (OSGetCoreId() != self_test_core && self_test_core != 99)
 		wiiu_log("Broadway kernels: the ticks now run on core %u, the self-test ran on core %u", OSGetCoreId(), self_test_core);
