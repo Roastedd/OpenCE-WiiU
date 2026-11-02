@@ -104,13 +104,17 @@ static struct random_math_globals random_math_globals;
 #pragma bss_seg()
 #endif
 
+/* port: the lock is each thread's own count (the frame holds it over all of its drawing, and the ticks, which may run on a thread of their own,
+use the seed lawfully in the meantime: random_math_globals.global_random_seed_lock, which was one count for the process, is no longer used) */
+static __thread long global_random_seed_lock_here;
+
 /* ---------- public code */
 
 void
 lock_global_random_seed(
 	void)
 {
-	random_math_globals.global_random_seed_lock++;
+	global_random_seed_lock_here++;
 	return;
 }
 
@@ -121,9 +125,9 @@ unlock_global_random_seed(
 	match_dassert(
 		"c:\\halo\\SOURCE\\math\\random_math.c",
 		41,
-		random_math_globals.global_random_seed_lock>0,
+		global_random_seed_lock_here>0,
 		"unmatched call to unlock_random_seed() somewhere");
-	random_math_globals.global_random_seed_lock--;
+	global_random_seed_lock_here--;
 	return;
 }
 
@@ -139,7 +143,7 @@ unsigned long *get_global_random_seed_address(
 	match_dassert(
 		"c:\\halo\\SOURCE\\math\\random_math.c",
 		56,
-		!game_engine_running() || !random_math_globals.global_random_seed_lock,
+		!game_engine_running() || !global_random_seed_lock_here,
 		"you should not be using global random(); use local random() instead");
 	return &random_math_globals.global_random_seed;
 }
