@@ -54,6 +54,7 @@ symbols in this file:
 
 /* ---------- headers */
 
+#include <stdlib.h>
 #include "cseries.h"
 #include "cseries_windows.h"
 #include "real_math.h"
@@ -152,6 +153,29 @@ unsigned long *get_global_local_random_seed_address(
 	void)
 {
 	return &random_math_globals.global_local_random_seed;
+}
+
+/* port: HALO_MAP_START_SEED=1 (the host test runs; the environment, so never set on the Wii U): the local random seed is debug.random_seed at each
+map's start (game.c) and for the random colour a joining player is given (network_server_manager.c), so that what the game draws from it does not
+depend on how many numbers the menus drew before, which varies from run to run. Runs to be compared by the state the ticks leave
+(HALO_TICK_HASH) need it. The digest harness does the same (port/wiiu/tests/game_digest/game_digest_glue.c). */
+boolean random_math_test_seed(
+	unsigned long *seed)
+{
+	static long enabled = -1;
+
+	if (enabled < 0)
+	{
+		char const *setting = getenv("HALO_MAP_START_SEED");
+
+		enabled = setting && *setting && atol(setting) > 0 && config_integer("debug.random_seed");
+	}
+	if (enabled)
+	{
+		*seed = (unsigned long)config_integer("debug.random_seed");
+	}
+
+	return enabled != 0;
 }
 
 void

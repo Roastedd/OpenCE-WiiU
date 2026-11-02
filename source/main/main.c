@@ -3454,36 +3454,6 @@ static boolean main_study_skip_frame(
 /* (the same 8 MiB as the game's own thread: port/wiiu/src/wiiu_shell.c) */
 #define MAIN_TICK_THREAD_STACK_BYTES (8 * 1024 * 1024)
 
-#ifndef HALO_WIIU
-/* HALO_TICK_SCRUB=1 (host runs; a test aid): the stack below the caller is zeroed before each frame's ticks, so that what the game copies out
-of its locals without setting it (the padding of a struct, a field a function leaves alone: the "bonus" of a prop's body_location is one) is
-zero in every run and on either thread. Without it two runs of one build differ in those bytes of the game state, and a hash of the state
-(HALO_TICK_HASH) differs with them though no tick is. */
-static void __attribute__((noinline)) main_scrub_stack(
-	void)
-{
-	char buffer[512 * 1024];
-
-	memset(buffer, 0, sizeof(buffer));
-	__asm__ volatile("" : : "r"(buffer) : "memory");
-}
-#endif
-
-/* what the ticks of a frame are run by, on whichever thread has them */
-static void main_game_time_update_here(
-	real time_delta_sec)
-{
-#ifndef HALO_WIIU
-	static long scrub = -1;
-
-	if (scrub < 0)
-		scrub = main_study_setting("HALO_TICK_SCRUB", 0) > 0;
-	if (scrub)
-		main_scrub_stack();
-#endif
-	game_time_update(time_delta_sec);
-}
-
 static struct
 {
 	int state; /* -1 not set up yet, 0 off, 1 running */
@@ -3519,7 +3489,7 @@ static void *main_tick_thread_run(
 		/* (HOME and closing hold this thread before a tick, as they hold the game thread at its safe points) */
 		wiiu_tick_thread_gate();
 #endif
-		main_game_time_update_here(main_tick_thread.time_delta_sec);
+		game_time_update(main_tick_thread.time_delta_sec);
 		pthread_mutex_lock(&main_tick_thread.mutex);
 		main_tick_thread.pending = FALSE;
 		pthread_cond_signal(&main_tick_thread.done);
@@ -3559,7 +3529,7 @@ static void main_game_time_update(
 	}
 	if (!main_tick_thread.state)
 	{
-		main_game_time_update_here(time_delta_sec);
+		game_time_update(time_delta_sec);
 		return;
 	}
 	pthread_mutex_lock(&main_tick_thread.mutex);
