@@ -52,6 +52,10 @@ boolean tick_overlap_enabled(void);
 (objects.c, structures.c) */
 extern volatile int tick_overlap_markers_split;
 
+/* set once the ticks run beside the drawing: what they read of the sound listeners is a copy taken at the start of each frame (sound_manager.c) */
+extern volatile int tick_overlap_listeners_frozen;
+void sound_manager_freeze_listeners(void);
+
 /* The game thread tells where its stack is when its main loop starts (tick_stack.h); the calling thread is the game thread if its stack is there. */
 void tick_overlap_note_render_thread(void);
 #define tick_overlap_thread_is_render() (TICK_OVERLAP_ON_RENDER_STACK())

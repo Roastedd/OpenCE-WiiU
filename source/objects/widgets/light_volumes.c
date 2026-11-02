@@ -43,6 +43,9 @@ symbols in this file:
 #include "game/game.h" /* port: game_connection */
 #include "interface/first_person_weapons.h" /* port: the viewmodel's markers */
 #include "objects/objects.h"
+#ifdef HALO_WIIU
+#include "objects/widgets/widgets.h" /* port: widgets_lock */
+#endif
 #include "rasterizer/rasterizer_widgets.h"
 #include "rasterizer/rasterizer.h"
 #include "render/render.h"
@@ -262,9 +265,33 @@ static boolean light_volume_marker(
 	return FALSE;
 }
 
+#ifdef HALO_WIIU
+/* port: a light volume is drawn later than it is submitted (the transparent geometry's draw), when the ticks, beside the drawing (tick_overlap.h), may
+have let go of it with its object: it is drawn with the widgets held (widgets.h) and only if it is still there */
+static void light_volume_render_now(
+	long object_index,
+	long light_volume_index);
+
 void light_volume_render(
 	long object_index,
 	long light_volume_index)
+{
+	widgets_lock();
+	if (light_volume_index != NONE && datum_try_and_get(light_volume_globals.light_volume_data, light_volume_index))
+		light_volume_render_now(object_index, light_volume_index);
+	widgets_unlock();
+
+	return;
+}
+
+static void light_volume_render_now(
+	long object_index,
+	long light_volume_index)
+#else
+void light_volume_render(
+	long object_index,
+	long light_volume_index)
+#endif
 {
 	if (object_index != NONE && light_volume_index != NONE)
 	{

@@ -122,6 +122,7 @@ unsigned long long wiiu_now_us(void)
 	return (unsigned long long)now.tv_sec * 1000000ULL + (unsigned long long)now.tv_nsec / 1000ULL;
 }
 
+void sound_manager_freeze_listeners(void) {}
 void tick_input_capture(void) {}
 void tick_input_release(void) {}
 void player_control_sync_display_facing(void) {}

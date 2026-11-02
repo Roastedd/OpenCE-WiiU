@@ -246,6 +246,7 @@ symbols in this file:
 
 #ifdef HALO_WIIU
 #include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
 #endif
 
 /* port: a stereo channel's sound in the world panned towards it, muffled
@@ -750,6 +751,10 @@ static struct profile_section sound_render_section =
 	{"sound_render", NONE, TRUE};
 real sound_fade_exponent = 2.5f;
 static struct sound_manager_globals sound_manager_globals = { 0 };
+#ifdef HALO_WIIU
+/* (the listeners as the ticks see them: sound_manager_freeze_listeners) */
+static struct sound_listener sound_listeners_for_ticks[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
+#endif
 
 #ifdef HALO_WIIU
 /* port: the tick owners' queue of the sound list (tick_owners.h). The ticks, the HUD and the menus start and stop
@@ -1184,8 +1189,24 @@ static struct sound_listener *listener_get(
 		0x430,
 		index>=0 && index<MAXIMUM_NUMBER_OF_LOCAL_PLAYERS);
 
+#ifdef HALO_WIIU
+	/* port: the ticks decide whether a sound is heard (a scripted sound makes its unit speak only if it is), from where the listeners were when the frame
+	before them drew: the copy the game thread takes at the start of each frame (tick_overlap.h), not the listeners it sets while the ticks run */
+	if (tick_overlap_listeners_frozen && !tick_overlap_thread_is_render())
+		return &sound_listeners_for_ticks[index];
+#endif
 	return &sound_manager_globals.listeners[index];
 }
+
+#ifdef HALO_WIIU
+void sound_manager_freeze_listeners(
+	void)
+{
+	csmemcpy(sound_listeners_for_ticks, sound_manager_globals.listeners, sizeof(sound_listeners_for_ticks));
+
+	return;
+}
+#endif
 
 static short sound_definition_promote(
 	long definition_index)

@@ -72,6 +72,7 @@ struct tick_overlap_job
 /* ---------- globals */
 
 volatile int tick_overlap_markers_split = 0;
+volatile int tick_overlap_listeners_frozen = 0;
 
 /* (data.c's lock: a thread that waits long for it gives the core up) */
 void sched_yield_for_data(
@@ -329,6 +330,7 @@ boolean tick_overlap_enabled(
 				if (tick_owners_mode() < 2)
 					platform_log("tick overlap: the tick owners' queues must be on in mode 2; they are mode %ld", tick_owners_mode());
 				tick_owners_set_threaded(TRUE);
+				tick_overlap_listeners_frozen = 1;
 				o.enabled = 1;
 				o.first_us = tick_overlap_now_us();
 				platform_log("tick overlap: on (halo/tick_overlap.txt): the ticks run beside the drawing on core 0, the frame drawn from the ring one tick behind the clock");
@@ -469,6 +471,8 @@ void tick_overlap_sync_point(
 	o.frame_started_us = started;
 	tick_overlap_wait();
 	tick_overlap_collect();
+	/* (what the ticks of this frame hear: the listeners as the frame before left them) */
+	sound_manager_freeze_listeners();
 	o.sync_us += tick_overlap_now_us() - started;
 }
 
