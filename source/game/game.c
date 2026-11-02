@@ -676,6 +676,9 @@ void game_initialize_for_new_map(
 	the host's indices, not its own objects' of the last game's */
 	network_distributed_new_game();
 	render_interpolation_reset();
+#ifdef HALO_WIIU
+	tick_snapshot_reset();
+#endif
 	render_initialize_for_new_map();
 	structures_initialize_for_new_map();
 	breakable_surfaces_initialize_for_new_map();

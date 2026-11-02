@@ -14,6 +14,25 @@ void wiiu_missing_keys_gameplay(int active);
 void game_time_wiiu_capture_menu(int main_menu);
 #endif
 
+#ifdef HALO_WIIU
+/* the render view snapshot (port/linux/game/tick_snapshot.c): a copy, made after each tick, of what the renderer reads of the game state, which a
+frame is drawn from while halo/tick_snapshot.txt says so */
+struct observer_result;
+union real_vector3d;
+void tick_snapshot_capture(void);
+void tick_snapshot_reset(void);
+void tick_snapshot_objects_changed(void);
+void tick_snapshot_view_begin(void);
+void tick_snapshot_view_end(void);
+int tick_snapshot_viewing(void);
+/* the cameras as of the frame's start, while a frame is drawn from the snapshot (the game state's if not; the others answer 0 if not) */
+struct observer_result const *tick_snapshot_camera(short local_player_index, struct observer_result const *live);
+int tick_snapshot_director_perspective(short local_player_index, int *perspective);
+int tick_snapshot_director_inhibited_facing(short local_player_index, int *inhibited_facing);
+int tick_snapshot_player_unit(short local_player_index, long *unit_index);
+int tick_snapshot_player_facing(short local_player_index, union real_vector3d *facing);
+#endif
+
 /* frames between the 30 Hz ticks (port/linux/game/render_interpolation.c);
 the platform layer reads the display.interpolation setting */
 struct observer_result;

@@ -558,6 +558,10 @@ void game_time_update(
 					{
 						game_tick();
 						profile_scope(game_time_render_interpolation_tick_section, render_interpolation_tick();)
+#ifdef HALO_WIIU
+						/* the render view snapshot (tick_snapshot.c): what the renderer reads of this tick's objects */
+						tick_snapshot_capture();
+#endif
 						game_time_globals->server_time++;
 						game_time_globals->local_time++;
 						/* the distributed netcode's per-tick state (port: none of

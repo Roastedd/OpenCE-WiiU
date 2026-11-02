@@ -3345,6 +3345,31 @@ void main_loop_of_death(
 	return;
 }
 
+#ifdef HALO_WIIU
+#include <stdlib.h>
+
+/* port: HALO_RENDER_REPEAT=<n> (an environment variable of the host's runs, the study of the ticks on a thread of their own in
+reports/research/2026-11-01/ticks-off-thread.md): every frame is drawn n times, to show that what the ticks compute does not depend on
+how often the world is drawn between them, which overlapping the ticks with drawing needs. The default, 1, is the game's own. */
+static long main_render_repeat(
+	void)
+{
+	static long repeat = -1;
+
+	if (repeat < 0)
+	{
+		char const *value = getenv("HALO_RENDER_REPEAT");
+
+		repeat = value && *value ? strtol(value, NULL, 10) : 1;
+		if (repeat < 0)
+			repeat = 1;
+		if (repeat != 1)
+			error(_error_silent, "every frame drawn %ld times (HALO_RENDER_REPEAT)", repeat);
+	}
+	return repeat;
+}
+#endif
+
 static void main_game_render(
 	double time_delta_since_tick_sec)
 {
@@ -3359,6 +3384,11 @@ static void main_game_render(
 	lock_global_random_seed();
 	collision_log_continue_period(TRUE);
 	sound_render();
+#ifdef HALO_WIIU
+	/* port: from here the frame reads the tick snapshot, if halo/tick_snapshot.txt says so (port/linux/game/tick_snapshot.c): the sound
+	above writes game state (mouth apertures) and reads what the tick sends it, and stays on the game state */
+	tick_snapshot_view_begin();
+#endif
 	force_single_screen = game_engine_force_single_screen();
 	last_local_player_index = NONE;
 
@@ -3401,6 +3431,9 @@ static void main_game_render(
 
 			window->local_player_index = last_local_player_index;
 			observer = observer_get_camera(window->local_player_index);
+#ifdef HALO_WIIU
+			observer = tick_snapshot_camera(window->local_player_index, observer);
+#endif
 			observer = render_interpolation_camera(window->local_player_index, observer);
 		}
 		else
@@ -3437,6 +3470,9 @@ static void main_game_render(
 		screenshot_render(global_screenshot_count.windows);
 	}
 
+#ifdef HALO_WIIU
+	tick_snapshot_view_end();
+#endif
 	collision_log_end_period();
 	unlock_global_random_seed();
 	return;
@@ -3770,9 +3806,11 @@ static boolean main_loop_iteration(
 #ifdef HALO_WIIU
 					{
 						void wiiu_frame_part(int part, int ticks);
+						long repeat;
 
 						wiiu_frame_part(2, 0);
-						main_game_render((double)main_globals.seconds_elapsed);
+						for (repeat = 0; repeat < main_render_repeat(); repeat++)
+							main_game_render((double)main_globals.seconds_elapsed);
 						wiiu_frame_part(3, 0);
 					}
 #else
