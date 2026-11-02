@@ -39,8 +39,8 @@ __attribute__((destructor)) static void halo_bw_model_report(void)
 	fprintf(stderr, "halo-bw: models in use %u;", halo_bw_flags);
 	for (kernel = 0; kernel < HALO_BW_K_COUNT; kernel++)
 		fprintf(stderr, " %s %lu/%lu", names[kernel], halo_bw_used[kernel], halo_bw_calls[kernel]);
-	fprintf(stderr, " (answered/asked); nodes walked: bsp-ray %lu, bsp-sphere %lu\n", halo_bw_walked[HALO_BW_K_BSP_RAY],
-		halo_bw_walked[HALO_BW_K_BSP_SPHERE]);
+	fprintf(stderr, " (answered/asked); nodes walked: bsp-ray %lu, bsp-sphere %lu; steps of the cluster code's own list walk %lu\n",
+		halo_bw_walked[HALO_BW_K_BSP_RAY], halo_bw_walked[HALO_BW_K_BSP_SPHERE], halo_bw_walked[HALO_BW_K_REFERENCE]);
 }
 #endif
 

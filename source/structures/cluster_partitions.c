@@ -630,6 +630,10 @@ static void cluster_partition_port_remove(
 
 		while (index != NONE)
 		{
+#ifdef HALO_BW_KERNELS
+			/* (counted for the log: this walk is the one place the cluster code still searches a list; the kernel is not used here) */
+			halo_bw_walked[HALO_BW_K_REFERENCE]++;
+#endif
 			reference = (struct data_reference *)datum_get(array, index);
 			if (reference->datum_index == datum_index)
 			{

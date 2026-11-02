@@ -528,6 +528,8 @@ void wiiu_bw_tick_report(unsigned long ticks)
 			(double)used_now / (double)ticks);
 		if (k == HALO_BW_K_BSP_RAY || k == HALO_BW_K_BSP_SPHERE)
 			used += (size_t)snprintf(line + used, sizeof(line) - used, " (%.1f nodes)", (double)walked / (double)ticks);
+		else if (k == HALO_BW_K_REFERENCE)
+			used += (size_t)snprintf(line + used, sizeof(line) - used, " (%.1f steps of the cluster code's own list walk)", (double)walked / (double)ticks);
 		reported_calls[k] = halo_bw_calls[k];
 		reported_used[k] = halo_bw_used[k];
 		reported_walked[k] = halo_bw_walked[k];

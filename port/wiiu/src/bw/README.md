@@ -64,8 +64,10 @@ which operations or in what order.
 2. `port/wiiu/tests/bw_asm_sim_tests.sh`: the real machine code (as devkitPPC assembles it), run by a small instruction simulator
    (`gekko_sim.h`) through the same cases, to prove the assembly is what the model says; it also checks that only volatile registers are
    written and that no kernel relies on the second half of a register a scalar instruction wrote.
-3. `port/wiiu/tests/bw_tick_run.sh`: the b30 co-op host run under qemu-ppc with the models in the kernels' places and the same binary with
-   them off, compared tick by tick (`tools/ppc-be/compare_network_tests.py`, in the tools repository).
+3. `port/wiiu/tests/bw_tick_run.sh` and `bw_tick_compare.py`: the b30 co-op host run (`tickbot:7`, seed 12345, a tick a frame) under qemu-ppc
+   with the models in the kernels' places, the same binary with them off, and a build of the branch's base without any of this, compared
+   tick by tick on everything the ticks decide (the players, items, score, hits and drift; not the network's counts or the local camera,
+   which differ between two runs of one build). The run also says at its end how often each model was asked and answered.
 4. On the console, at start (below): the same cases through the assembly itself, which finds what only the hardware does (subnormals and NaN
    payloads in paired operations).
 
