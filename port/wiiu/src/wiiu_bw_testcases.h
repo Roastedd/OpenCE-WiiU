@@ -84,7 +84,7 @@ static int bw_is_nan(float value)
 	return (bw_bits(value) & 0x7fffffffu) > 0x7f800000u;
 }
 
-/* a random float of the class; payload is the NaN of this case (its low 22 bits, and its sign in the top bit) */
+/* a random float of the class; payload is the NaN of this case (its low 23 bits, whose top one makes it quiet, and its sign in the top bit) */
 static float bw_float(struct bw_rng *rng, int cls, unsigned payload)
 {
 	static const float ties[] = { 0.0f, -0.0f, 1.0f, -1.0f, 0.5f, -0.5f, 2.0f, -2.0f, 0.25f, 3.0f, -3.0f, 4.0f, 0.125f, -0.125f };
@@ -118,7 +118,7 @@ static float bw_float(struct bw_rng *rng, int cls, unsigned payload)
 		break;
 	case BW_NAN:
 		if (pick < 12)
-			return bw_float_from_bits(0x7fc00000u | payload);	/* (the payload has the NaN's sign in it: one NaN, bit for bit, in a case) */
+			return bw_float_from_bits(0x7f800000u | ((payload & 0x7fffffu) ? payload : payload | 1u));	/* (quiet or signaling; the payload has the NaN's sign in it: one NaN, bit for bit, in a case) */
 		break;
 	default:
 		break;
@@ -154,7 +154,7 @@ static void bw_test_matrix(bw_matrix_fn kernel, int cls, unsigned long cases, un
 		float a[13] __attribute__((aligned(16))), b[13] __attribute__((aligned(16))), expect[13];
 		float guard[13 + 8] __attribute__((aligned(16)));
 		float t[13] __attribute__((aligned(16)));
-		const unsigned payload = (bw_next(&rng) & 0x3fffffu) | (bw_next(&rng) & 0x80000000u);
+		const unsigned payload = (bw_next(&rng) & 0x7fffffu) | (bw_next(&rng) & 0x80000000u);
 		const int lenient = cls == BW_NAN && (bw_next(&rng) & 3u) == 0;
 		int k, variant;
 
@@ -224,7 +224,7 @@ static void bw_test_sphere(bw_sphere_fn kernel, int cls, unsigned long cases, un
 	{
 		float point[3] __attribute__((aligned(16))), vector[3] __attribute__((aligned(16))), center[3] __attribute__((aligned(16)));
 		float radius;
-		const unsigned payload = (bw_next(&rng) & 0x3fffffu) | (bw_next(&rng) & 0x80000000u);
+		const unsigned payload = (bw_next(&rng) & 0x7fffffu) | (bw_next(&rng) & 0x80000000u);
 		const int lenient = cls == BW_NAN && (bw_next(&rng) & 3u) == 0;
 		const unsigned shape = bw_next(&rng) % 4;
 		int k, expect, got;
@@ -365,7 +365,7 @@ static void bw_test_ray_walk(bw_ray_walk_fn kernel, int cls, unsigned long cases
 		if (index % BW_WALKS_PER_TREE == 0)
 		{
 			/* (a tree for several rays: building one costs more than walking it) */
-			payload = (bw_next(&rng) & 0x3fffffu) | (bw_next(&rng) & 0x80000000u);
+			payload = (bw_next(&rng) & 0x7fffffu) | (bw_next(&rng) & 0x80000000u);
 			lenient = cls == BW_NAN && (bw_next(&rng) & 3u) == 0;
 			bw_make_tree(&rng, cls, lenient ? payload ^ 0x155u : payload, &tree);
 		}
@@ -420,7 +420,7 @@ static void bw_test_sphere_walk(bw_sphere_walk_fn kernel, int cls, unsigned long
 
 		if (index % BW_WALKS_PER_TREE == 0)
 		{
-			payload = (bw_next(&rng) & 0x3fffffu) | (bw_next(&rng) & 0x80000000u);
+			payload = (bw_next(&rng) & 0x7fffffu) | (bw_next(&rng) & 0x80000000u);
 			lenient = cls == BW_NAN && (bw_next(&rng) & 3u) == 0;
 			bw_make_tree(&rng, cls, lenient ? payload ^ 0x155u : payload, &tree);
 		}

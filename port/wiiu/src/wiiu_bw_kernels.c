@@ -193,31 +193,50 @@ static void bench(unsigned kernels_ready)
 	}
 	if (kernels_ready & HALO_BW_BIT(HALO_BW_K_MATRIX))
 	{
+		/* (the game's function as the game calls it, with the kernel off and on, and the kernel alone) */
+		OSTime w_off, w_on, direct;
+
+		halo_bw_flags = 0;
 		started = OSGetSystemTime();
 		for (call = 0; call < BENCH_CALLS; call++)
 			matrix4x3_multiply(a[call % BENCH_VARIANTS], b[(call * 7) % BENCH_VARIANTS], out);
-		c_time = OSGetSystemTime() - started;
+		w_off = OSGetSystemTime() - started;
+		halo_bw_flags = HALO_BW_BIT(HALO_BW_K_MATRIX);
+		started = OSGetSystemTime();
+		for (call = 0; call < BENCH_CALLS; call++)
+			matrix4x3_multiply(a[call % BENCH_VARIANTS], b[(call * 7) % BENCH_VARIANTS], out);
+		w_on = OSGetSystemTime() - started;
+		halo_bw_flags = 0;
 		started = OSGetSystemTime();
 		for (call = 0; call < BENCH_CALLS; call++)
 			halo_bw_asm_matrix4x3_multiply(a[call % BENCH_VARIANTS], b[(call * 7) % BENCH_VARIANTS], out);
-		k_time = OSGetSystemTime() - started;
+		direct = OSGetSystemTime() - started;
 		sink_float = out[12];
-		wiiu_log("Broadway timing matrix4x3_multiply: C %.0f ns a call, kernel %.0f ns", microseconds(c_time) * 1000.0 / BENCH_CALLS,
-			microseconds(k_time) * 1000.0 / BENCH_CALLS);
+		wiiu_log("Broadway timing matrix4x3_multiply: the game's call %.0f ns with the C, %.0f ns with the kernel (the kernel alone %.0f ns)",
+			microseconds(w_off) * 1000.0 / BENCH_CALLS, microseconds(w_on) * 1000.0 / BENCH_CALLS, microseconds(direct) * 1000.0 / BENCH_CALLS);
 	}
 	if (kernels_ready & HALO_BW_BIT(HALO_BW_K_SPHERE))
 	{
+		OSTime w_off, w_on, direct;
+
+		halo_bw_flags = 0;
 		started = OSGetSystemTime();
 		for (call = 0; call < BENCH_CALLS; call++)
 			total += fast_vector_intersects_sphere(point[call % BENCH_VARIANTS], vector[call % BENCH_VARIANTS], center[(call * 5) % BENCH_VARIANTS], 0.5f);
-		c_time = OSGetSystemTime() - started;
+		w_off = OSGetSystemTime() - started;
+		halo_bw_flags = HALO_BW_BIT(HALO_BW_K_SPHERE);
+		started = OSGetSystemTime();
+		for (call = 0; call < BENCH_CALLS; call++)
+			total += fast_vector_intersects_sphere(point[call % BENCH_VARIANTS], vector[call % BENCH_VARIANTS], center[(call * 5) % BENCH_VARIANTS], 0.5f);
+		w_on = OSGetSystemTime() - started;
+		halo_bw_flags = 0;
 		started = OSGetSystemTime();
 		for (call = 0; call < BENCH_CALLS; call++)
 			total += halo_bw_asm_ray_sphere(point[call % BENCH_VARIANTS], vector[call % BENCH_VARIANTS], center[(call * 5) % BENCH_VARIANTS], 0.5f);
-		k_time = OSGetSystemTime() - started;
+		direct = OSGetSystemTime() - started;
 		sink_int = total;
-		wiiu_log("Broadway timing fast_vector_intersects_sphere: C %.0f ns a call, kernel %.0f ns", microseconds(c_time) * 1000.0 / BENCH_CALLS,
-			microseconds(k_time) * 1000.0 / BENCH_CALLS);
+		wiiu_log("Broadway timing fast_vector_intersects_sphere: the game's call %.0f ns with the C, %.0f ns with the kernel (the kernel alone %.0f ns)",
+			microseconds(w_off) * 1000.0 / BENCH_CALLS, microseconds(w_on) * 1000.0 / BENCH_CALLS, microseconds(direct) * 1000.0 / BENCH_CALLS);
 	}
 	if (kernels_ready & (HALO_BW_BIT(HALO_BW_K_BSP_RAY) | HALO_BW_BIT(HALO_BW_K_BSP_SPHERE)))
 	{
@@ -347,17 +366,28 @@ static void bench(unsigned kernels_ready)
 			for (k = 0; k < 4; k++)
 				samples[variant][k] = (short)bw_next(&rng);
 		}
-		started = OSGetSystemTime();
-		for (call = 0; call < BENCH_CALLS; call++)
-			quaternion_decompress_8byte(samples[call % BENCH_VARIANTS], quaternion);
-		c_time = OSGetSystemTime() - started;
-		started = OSGetSystemTime();
-		for (call = 0; call < BENCH_CALLS; call++)
-			halo_bw_asm_quaternion_load(samples[call % BENCH_VARIANTS], quaternion);
-		k_time = OSGetSystemTime() - started;
-		sink_float = quaternion[3];
-		wiiu_log("Broadway timing quaternion_decompress_8byte: C %.0f ns a call, kernel %.0f ns", microseconds(c_time) * 1000.0 / BENCH_CALLS,
-			microseconds(k_time) * 1000.0 / BENCH_CALLS);
+		{
+			OSTime w_off, w_on, direct;
+
+			halo_bw_flags = 0;
+			started = OSGetSystemTime();
+			for (call = 0; call < BENCH_CALLS; call++)
+				quaternion_decompress_8byte(samples[call % BENCH_VARIANTS], quaternion);
+			w_off = OSGetSystemTime() - started;
+			halo_bw_flags = HALO_BW_BIT(HALO_BW_K_QUATERNION);
+			started = OSGetSystemTime();
+			for (call = 0; call < BENCH_CALLS; call++)
+				quaternion_decompress_8byte(samples[call % BENCH_VARIANTS], quaternion);
+			w_on = OSGetSystemTime() - started;
+			halo_bw_flags = 0;
+			started = OSGetSystemTime();
+			for (call = 0; call < BENCH_CALLS; call++)
+				halo_bw_asm_quaternion_load(samples[call % BENCH_VARIANTS], quaternion);
+			direct = OSGetSystemTime() - started;
+			sink_float = quaternion[3];
+			wiiu_log("Broadway timing quaternion_decompress_8byte: the game's call %.0f ns with the C, %.0f ns with the kernel (the kernel alone %.0f ns)",
+				microseconds(w_off) * 1000.0 / BENCH_CALLS, microseconds(w_on) * 1000.0 / BENCH_CALLS, microseconds(direct) * 1000.0 / BENCH_CALLS);
+		}
 	}
 }
 

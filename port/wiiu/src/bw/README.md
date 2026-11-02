@@ -87,6 +87,8 @@ and every 150 ticks, next to the tick parts lines:
 
     bw calls a tick, asked/answered by a kernel (broadway.txt 1, 63 in use): matrix 41.2/41.2, ray-sphere ..., bsp-ray 9.1/6.0 (21.3 nodes), ...
 
-To measure: the same save and the same fight twice, once with `0` and once with `1`; compare the `tick parts` line's `objects` (ms a tick)
-and the first line's `ms each in all`, and read the calls a tick to see how much each function is asked. The saving of a kernel is about
-(calls a tick) x (C ns - kernel ns) from the timing lines.
+To measure: the same save and the same fight twice, once with `0` and once with `1`; compare the `tick parts` lines: the first line's
+`ms each in all`, and `objects` (animation, node matrices, object references and the physics: where `matrix4x3_multiply`, the quaternion
+load and the reference search are mostly called), `ai` and `units` (the sight and aim tests: the BSP walks and the sphere test). Read the
+calls a tick to see how much each function is asked; the saving of a kernel is about (calls a tick) x (the game's call with the C - the game's
+call with the kernel) from the timing lines. The expected total is under a millisecond a tick; the logs say what it is.
