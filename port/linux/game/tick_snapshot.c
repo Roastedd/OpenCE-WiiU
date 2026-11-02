@@ -378,6 +378,9 @@ static void tick_snapshot_capture_partitions(struct slot *slot)
 		struct data_array const *references = live->data_reference_data;
 
 		copy->valid = FALSE;
+		/* (the lights' partition is the overlap's: stage 3's snapshot, on its own, leaves the lights to the game state) */
+		if (partition_index == 2 && !s.overlap_requested)
+			continue;
 		if (!live->cluster_first_data_references || !references || !references->valid)
 			continue;
 		memcpy(copy->first_references, live->cluster_first_data_references, sizeof(copy->first_references));
@@ -411,7 +414,7 @@ static void tick_snapshot_capture_lights(struct slot *slot)
 	long needed;
 
 	slot->lights_valid = FALSE;
-	if (!light_data || !light_data->valid)
+	if (!s.overlap_requested || !light_data || !light_data->valid)
 		return;
 	needed = (long)light_data->count * (long)light_data->size;
 	if (slot->light_bytes_capacity < needed)
