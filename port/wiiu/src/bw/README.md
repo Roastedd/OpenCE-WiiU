@@ -28,7 +28,8 @@ Rules every kernel here follows (`tools/wiiu_check_objects.py --bw-kernel-object
 - the same bits as the C it replaces, for every input: no fused multiply-add (`ps_madd*`, `fmadds`, ...), no estimate (`frsqrte`,
   `fres`), every multiply and add separate and in the C expression's order, every branch the C comparison's own (NaNs included);
 - a kernel that meets what it does not do hands it to the C and has taken nothing from it;
-- volatile EABI registers only, no stack, no calls, no writes to control registers.
+- volatile EABI registers only, no stack, no calls, no writes to control registers (the one exception is `halo_bw_probe.S`'s write of GQR5,
+  which only `halo/broadway.txt` 3 runs, under the start-up's exception guard).
 
 They are off until the card's `halo/broadway.txt` says 1 and each has passed its self-test on the console
 (`port/wiiu/src/wiiu_bw_kernels.c`). Host proof: `port/wiiu/tests/bw_tests.sh`.
