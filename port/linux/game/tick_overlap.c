@@ -116,7 +116,7 @@ static struct
 	unsigned long long log_started_us;
 	unsigned long frames, overlap_frames, serial_frames, primed_frames, held_frames, no_pair_frames;
 	unsigned long long wait_us, wait_max_us, frame_us, frame_max_us, sync_us, sync_wait_us, post_us, draw_us, draw_max_us, serial_wait_us;
-	unsigned long waits_long, serial_waits, active_frames;
+	unsigned long waits_long, serial_waits, active_frames, clock_disagreements;
 	unsigned long jobs, ticks, ticks_total;
 	unsigned long long job_us, job_max_us, tick_work_us;
 	unsigned long long ahead_sum; /* (clock tick after the job) - (tick drawn), in thousandths, summed over overlap frames */
@@ -453,6 +453,9 @@ static void tick_overlap_collect(void)
 		o.jobs++;
 		o.ticks += (unsigned long)o.job.ticks_run;
 		o.ticks_total += (unsigned long)o.job.ticks_run;
+		/* the clock the game thread decided and the clock the tick thread ended with agree, or the picture's tick was chosen on a wrong count */
+		if (o.job.ticks_run != o.job.ticks_elapsed || game_time_overlap_time() != o.job.time_before + o.job.ticks_run)
+			o.clock_disagreements++;
 		o.job_us += took;
 		if (took > o.job_max_us)
 			o.job_max_us = took;
@@ -703,8 +706,9 @@ void tick_overlap_log(
 	platform_log("tick overlap, tick thread: %.2f ms a job (most %.2f), %.2f ms a tick (%.2f ticks a job), busy %.0f%% of the time, waiting for a job %.0f%%",
 		(double)o.job_us / 1000.0 / jobs, (double)o.job_max_us / 1000.0, (double)o.job_us / 1000.0 / ticks, ticks / jobs,
 		100.0 * (double)o.job_us / (seconds * 1.0e6), 100.0 * (double)(tick_idle_us > seconds * 1.0e6 ? seconds * 1.0e6 : tick_idle_us) / (seconds * 1.0e6));
-	platform_log("tick overlap, ahead of the picture: %.2f ticks on average (1 is the delay; more means the tick thread was late), %lu ticks in all this game",
-		(double)o.ahead_sum / 1000.0 / overlap_frames, o.ticks_total);
+	platform_log("tick overlap, ahead of the picture: %.2f ticks on average (1 is the delay; more means the tick thread was late), %lu ticks in all this game, "
+		"%lu jobs whose ticks were not the clock's decision",
+		(double)o.ahead_sum / 1000.0 / overlap_frames, o.ticks_total, o.clock_disagreements);
 	platform_log("tick overlap, game thread, ms a frame (%lu): %.2f (most %.2f) in all, %.2f (most %.2f) of work to the end of the draw, waiting for the "
 		"tick thread %.2f (most %.2f, %lu waits over 4 ms), sync point %.3f",
 		o.active_frames, (double)o.frame_us / 1000.0 / active, (double)o.frame_max_us / 1000.0, (double)o.draw_us / 1000.0 / active,
