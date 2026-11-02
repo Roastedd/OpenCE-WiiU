@@ -385,6 +385,10 @@ symbols in this file:
 #include "network_chat.h" /* port: port/linux/game/network_chat.c */
 #include "network_aim_assist.h" /* port: port/linux/game/network_aim_assist.c */
 #include "network_shield_effects.h" /* port: port/linux/game/network_shield_effects.c */
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#include "tick_input.h" /* port: port/linux/game/tick_input.c */
+#endif
 #include "map_share.h" /* port: port/linux/game/map_share.c */
 #include "profile_sections.h" /* port: port/linux/include/profile_sections.h */
 #ifdef HALO_PROFILE
@@ -3334,6 +3338,9 @@ void main_loop_of_death(
 
 			wiiu_debug_console_run();
 		}
+		/* port: and the lines the telnet console and that server queued for the hs runtime, run by the tick thread
+		(tick_owners.h; at once with the queues in mode 1, here with them in mode 2) */
+		tick_owners_drain(TICK_OWNER_TICK);
 #endif
 		process_ui_widgets();
 		main_pregame_render();
@@ -3356,6 +3363,13 @@ static void main_game_render(
 	long window_count;
 	short last_local_player_index;
 
+#ifdef HALO_WIIU
+	/* port: the particles, particle systems, contrails and decals that the ticks made since the frame's game_frame
+	(tick_owners.h), before the frame's draw reads and ages them */
+	tick_owners_drain(TICK_OWNER_RENDER);
+	/* port: the objects' memory pool is not compacted while this frame holds pointers into it (tick_owners.h) */
+	tick_owners_object_pool_reader_begin();
+#endif
 	lock_global_random_seed();
 	collision_log_continue_period(TRUE);
 	sound_render();
@@ -3400,7 +3414,12 @@ static void main_game_render(
 			}
 
 			window->local_player_index = last_local_player_index;
+#ifdef HALO_WIIU
+			/* port: the camera as the observer's last update published it (tick_owners.h) */
+			observer = observer_get_published_camera(window->local_player_index);
+#else
 			observer = observer_get_camera(window->local_player_index);
+#endif
 			observer = render_interpolation_camera(window->local_player_index, observer);
 		}
 		else
@@ -3439,6 +3458,9 @@ static void main_game_render(
 
 	collision_log_end_period();
 	unlock_global_random_seed();
+#ifdef HALO_WIIU
+	tick_owners_object_pool_reader_end();
+#endif
 	return;
 }
 
@@ -3615,6 +3637,9 @@ static boolean main_loop_iteration(
 
 			wiiu_debug_console_run();
 		}
+		/* port: and the lines the telnet console and that server queued for the hs runtime, run by the tick thread
+		(tick_owners.h; at once with the queues in mode 1, here with them in mode 2) */
+		tick_owners_drain(TICK_OWNER_TICK);
 #endif
 		profile_scope_exit(main_platform_events_section)
 
@@ -3709,10 +3734,18 @@ static boolean main_loop_iteration(
 
 				if (!console_update() || main_globals.connection!=_game_connection_local)
 				{
+#ifdef HALO_WIIU
+					/* port: the tick side of the frame reads the input as of here (tick_input.h): the game thread hands it a copy */
+					tick_input_capture();
+#endif
 					/* port: not while a chat line is typed (its K plays an animation) */
 					if (!network_chat_typing())
 						debug_keys_update();
 					cheats_update();
+#ifdef HALO_WIIU
+					/* port: the console's and the cheats' lines, run by the tick thread (tick_owners.h) */
+					tick_owners_drain(TICK_OWNER_TICK);
+#endif
 					player_control_update((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);
 
 					connection = main_globals.connection;
@@ -3756,6 +3789,12 @@ static boolean main_loop_iteration(
 					collision_log_end_period();
 					game_engine_update_non_deterministic((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);
 					profile_scope_exit(main_non_deterministic_update_section)
+#ifdef HALO_WIIU
+					/* port: the frame's tick side is done: what the game thread draws from (the facing) is published, and the
+					input copy let go of (tick_owners.h) */
+					player_control_publish_display_facing();
+					tick_input_release();
+#endif
 				}
 
 				if (main_globals.saving_map)
@@ -3763,6 +3802,10 @@ static boolean main_loop_iteration(
 					main_save_map_private();
 				}
 
+#ifdef HALO_WIIU
+				/* port: what the ticks asked of the texture and sound caches, made by the game thread before it draws (tick_owners.h) */
+				tick_owners_drain(TICK_OWNER_GAME);
+#endif
 				if (render_frame && !debug_no_drawing)
 				{
 					profile_render_start();
@@ -3785,6 +3828,9 @@ static boolean main_loop_iteration(
 			/* port: nothing drawn on a dedicated server, nor waited for */
 			else if (!halo_server_mode())
 			{
+#ifdef HALO_WIIU
+				tick_owners_drain(TICK_OWNER_GAME);
+#endif
 				profile_render_start();
 				main_pregame_render();
 				profile_render_end();
