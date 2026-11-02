@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import wiiu_check_objects as checker  # noqa: E402
 
@@ -36,3 +37,12 @@ def test_control_registers_and_unlisted_special_registers_fail():
 
 def test_a_prediction_hint_is_not_part_of_the_name():
     assert checker.bw_violations(listing("blt+    10 <f+0x10>", "bge-    10 <f+0x10>")) == {}
+
+
+def test_the_host_model_build_is_asked_for_by_the_environment(monkeypatch):
+    from tools import linux_build
+
+    monkeypatch.delenv("HALO_BW_MODEL", raising=False)
+    assert linux_build.bw_model_defines() == []
+    monkeypatch.setenv("HALO_BW_MODEL", "1")
+    assert linux_build.bw_model_defines() == ["-DHALO_BW_KERNELS", "-DHALO_BW_MODEL"]
