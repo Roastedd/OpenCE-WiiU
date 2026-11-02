@@ -467,10 +467,12 @@ void platform_request_quit(void)
 }
 
 /* for the threads the game and the port make with pthreads (the game's CreateThread: its file reads, input; the vertical blank): off the game thread's core and the GX2
-thread's, on core 0 */
+thread's, on core 0. A running thread keeps its core until it is next scheduled (2026-11-02: the tick thread said core 2 right after this), so it
+sleeps a moment here and is on core 0 when it returns. */
 void wiiu_thread_off_game_core(void)
 {
 	OSSetThreadAffinity(OSGetCurrentThread(), OS_THREAD_ATTRIB_AFFINITY_CPU0);
+	OSSleepTicks(OSMillisecondsToTicks(1));
 }
 
 /* the tick thread (source/main/main.c) at the game thread's priority: above the workers (the log, the debug server, the voice thread run at the game's +4,
