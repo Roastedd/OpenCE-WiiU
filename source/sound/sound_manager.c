@@ -244,6 +244,10 @@ symbols in this file:
 #include <math.h>
 #include <stdio.h>
 
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#endif
+
 /* port: a stereo channel's sound in the world panned towards it, muffled
 and reverberated as a 3D channel's is (sound_dsound_xbox.c; update_channels) */
 void dsound_port_set_channel_stereo_position(short virtual_channel_index, boolean positioned, real pan,
@@ -673,6 +677,16 @@ static real sound_scale_random_value(
 	real lower_bound_modifier,
 	real upper_bound_modifier,
 	real scale);
+static void sound_stop_impulse_datum(
+	long sound_index);
+#ifdef HALO_WIIU
+static void sound_requests_drain(
+	void);
+static void sound_requests_discard(
+	void);
+static void sound_ticket_gone_for_slot(
+	long sound_index);
+#endif
 static real source_distance(
 	short listener_index,
 	struct sound_source *source);
@@ -736,6 +750,61 @@ static struct profile_section sound_render_section =
 	{"sound_render", NONE, TRUE};
 real sound_fade_exponent = 2.5f;
 static struct sound_manager_globals sound_manager_globals = { 0 };
+
+#ifdef HALO_WIIU
+/* port: the tick owners' queue of the sound list (tick_owners.h). The ticks, the HUD and the menus start and stop
+impulse sounds; the sound list has one owner, sound_render, and a start or a stop waits in this queue until it runs.
+
+What the caller keeps to name a sound is a ticket, a positive number (a sound datum's index is always negative: a data
+array's identifiers start at 0x8000), not the datum's index, which does not exist until the owner makes the datum. The
+tickets' table says what became of each: waiting for the owner or playing (alive), or gone. The table is kept by the
+ticket's low bits, so that one older than the table is long gone: a stop for it does nothing, as a stop for a sound that
+ended does not. */
+enum
+{
+	SOUND_TICKET_COUNT = 8192,
+	SOUND_REQUEST_QUEUE_CAPACITY = 512,
+};
+
+enum sound_request_kind
+{
+	_sound_request_start,
+	_sound_request_stop,
+};
+
+enum sound_ticket_state
+{
+	_sound_ticket_free,
+	_sound_ticket_alive,
+	_sound_ticket_gone,
+};
+
+struct sound_request
+{
+	short kind;
+	long ticket;
+	/* (a start's sound, ready but for its datum) */
+	struct sound_datum sound;
+};
+
+struct sound_ticket_entry
+{
+	long ticket;
+	long sound_index;
+	long state;
+};
+
+static void sound_request_apply(
+	void const *record);
+
+TICK_QUEUE_DEFINE(sound_request_queue, "sound", TICK_OWNER_SOUND, struct sound_request, SOUND_REQUEST_QUEUE_CAPACITY, sound_request_apply);
+
+static struct sound_ticket_entry sound_tickets[SOUND_TICKET_COUNT];
+/* (which ticket made the sound in each datum slot: 0 for a sound made here) */
+static long sound_ticket_of_slot[0x200];
+static long sound_ticket_counter = 0;
+
+#endif /* HALO_WIIU */
 boolean debug_sound;
 boolean debug_sound_channels;
 
@@ -790,6 +859,9 @@ struct sound_platform_definition *current_platform_definition(
 void sound_dispose(
 	void)
 {
+#ifdef HALO_WIIU
+	sound_requests_discard();
+#endif
 	if (sound_manager_globals.initialized)
 	{
 		sound_manager_globals.platform_definition->dispose();
@@ -988,6 +1060,30 @@ void sound_initialize(
 void sound_stop_impulse(
 	long sound_index)
 {
+#ifdef HALO_WIIU
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_SOUND))
+	{
+		/* port: the number is a ticket (sound_new_impulse); the owner of the sound list stops the sound it names */
+		if (sound_index != NONE)
+		{
+			struct sound_request request;
+
+			csmemset(&request, 0, sizeof(request));
+			request.kind = _sound_request_stop;
+			request.ticket = sound_index;
+			tick_queue_push(&sound_request_queue, &request);
+		}
+		return;
+	}
+#endif
+	sound_stop_impulse_datum(sound_index);
+
+	return;
+}
+
+static void sound_stop_impulse_datum(
+	long sound_index)
+{
 	if (sound_try_and_get(sound_index))
 	{
 		match_assert(
@@ -1022,7 +1118,7 @@ void sound_stop_impulse_by_source_and_definition(
 			sound->source_identifier == source_identifier &&
 			sound->definition_index == definition_index)
 		{
-			sound_stop_impulse(sound_index);
+			sound_stop_impulse_datum(sound_index);
 			break;
 		}
 
@@ -1165,6 +1261,9 @@ static void sound_delete(
 		"c:\\halo\\SOURCE\\sound\\sound_manager.c",
 		0x4CF,
 		sound_get(sound_index)->playing_channel_index==NONE);
+#ifdef HALO_WIIU
+	sound_ticket_gone_for_slot(sound_index);
+#endif
 	datum_delete(sound_data, sound_index);
 
 	return;
@@ -2049,6 +2148,11 @@ static void sound_stop(
 		}
 	}
 
+#ifdef HALO_WIIU
+	/* port: with the tick owners' queues on, the ticks' number for the sound is its ticket, which stops being
+	alive with the sound (sound_impulse_current); this list's owner leaves the ticks' field alone */
+	if (!TICK_OWNERS_FEATURE(TICK_FEATURE_SOUND))
+#endif
 	if (definition->scripting_sound_index == sound_index)
 	{
 		definition->scripting_sound_index = NONE;
@@ -2407,6 +2511,10 @@ static void update_channel_for_impulse_sound(
 void sound_stop_all(
 	void)
 {
+#ifdef HALO_WIIU
+	/* port: the sounds asked for and not yet made would be stopped at once; they are not made */
+	sound_requests_discard();
+#endif
 	if (sound_manager_globals.initialized)
 	{
 		long sound_index = data_next_index(sound_data, NONE);
@@ -2426,6 +2534,267 @@ void sound_stop_all(
 	return;
 }
 
+/* port: the fields of a new impulse sound, set the same way whether the sound's datum is made here or by the owner's queue
+(sound_request_apply); the datum is zeroed, but for the identifier the data array gave it */
+static void sound_impulse_prepare(
+	struct sound_datum *sound,
+	long definition_index,
+	short listener_index,
+	struct sound_source *source,
+	long source_identifier,
+	boolean (*track_proc)(
+		long source_identifier,
+		void const *track_data,
+		struct sound_source *source),
+	void const *track_data,
+	short track_data_size)
+{
+	struct sound_definition *definition = sound_definition_get(definition_index);
+	long travel_milliseconds = sound_travel_milliseconds(
+		source_distance(listener_index, source));
+
+	sound->definition_index = definition_index;
+	sound->playing_channel_index = NONE;
+	sound->listener_index = listener_index;
+	sound->type = _sound_impulse;
+	sound->pitch = sound_scale_random_value(
+		definition->random_pitch_bounds.lower,
+		definition->random_pitch_bounds.upper,
+		definition->zero_pitch_modifier,
+		definition->one_pitch_modifier,
+		source->scale);
+	sound->flags = 0;
+	sound->source_identifier = source_identifier;
+	sound->source = *source;
+	sound->track_proc = track_proc;
+
+	if (track_proc)
+	{
+		match_assert(
+			"c:\\halo\\SOURCE\\sound\\sound_manager.c",
+			0x28E,
+			sound->track_data);
+		csmemcpy(
+			sound->track_data,
+			track_data,
+			track_data_size);
+	}
+
+	sound->pitch_range_index =
+		sound_definition_find_pitch_range_by_pitch(
+			definition,
+			sound->pitch,
+			NONE);
+	sound->permutation_index =
+		sound_definition_next_permutation(
+			definition,
+			sound->pitch_range_index,
+			NONE);
+	sound->fade_stop_time = 0;
+	sound->fade_start_time = 0;
+	sound->loop_track_index = NONE;
+
+	if (travel_milliseconds > speed_of_sound_threshold)
+	{
+		sound->start_time =
+			sound_manager_globals.render_time +
+			travel_milliseconds;
+		SET_FLAG(sound->flags, _sound_delayed_bit, TRUE);
+	}
+	else
+	{
+		sound->start_time = sound_manager_globals.render_time;
+	}
+
+	return;
+}
+
+/* port: the sound's wave asked of the sound cache (the sound list's owner is the cache's too) */
+static void sound_impulse_request_cache(
+	struct sound_datum *sound)
+{
+	_sound_cache_sound_request(
+		sound_permutation_get(
+			sound->definition_index,
+			sound->pitch_range_index,
+			sound->permutation_index),
+		FALSE,
+		TRUE,
+		FALSE);
+
+	return;
+}
+
+#ifdef HALO_WIIU
+static void sound_ticket_set(
+	long ticket,
+	long sound_index,
+	long state)
+{
+	struct sound_ticket_entry *entry = &sound_tickets[ticket % SOUND_TICKET_COUNT];
+
+	entry->ticket = ticket;
+	entry->sound_index = sound_index;
+	__atomic_store_n(&entry->state, state, __ATOMIC_RELEASE);
+
+	return;
+}
+
+static long sound_impulse_request_start(
+	long definition_index,
+	short listener_index,
+	struct sound_source *source,
+	long source_identifier,
+	boolean (*track_proc)(
+		long source_identifier,
+		void const *track_data,
+		struct sound_source *source),
+	void const *track_data,
+	short track_data_size)
+{
+	struct sound_request request;
+	long ticket = (__atomic_add_fetch(&sound_ticket_counter, 1, __ATOMIC_RELAXED) & 0x7FFFFFFF);
+
+	if (!ticket)
+		ticket = (__atomic_add_fetch(&sound_ticket_counter, 1, __ATOMIC_RELAXED) & 0x7FFFFFFF);
+	csmemset(&request, 0, sizeof(request));
+	request.kind = _sound_request_start;
+	request.ticket = ticket;
+	sound_impulse_prepare(
+		&request.sound,
+		definition_index,
+		listener_index,
+		source,
+		source_identifier,
+		track_proc,
+		track_data,
+		track_data_size);
+	sound_ticket_set(ticket, NONE, _sound_ticket_alive);
+	tick_queue_push(&sound_request_queue, &request);
+
+	return ticket;
+}
+
+static void sound_request_apply(
+	void const *record)
+{
+	struct sound_request const *request = (struct sound_request const *)record;
+	struct sound_ticket_entry *entry = &sound_tickets[request->ticket % SOUND_TICKET_COUNT];
+
+	if (!sound_manager_globals.initialized || !sound_data)
+		return;
+
+	if (request->kind == _sound_request_start)
+	{
+		long sound_index = datum_new(sound_data);
+
+		if (sound_index != NONE)
+		{
+			struct sound_datum *sound = sound_get(sound_index);
+			short identifier = sound->identifier;
+
+			csmemcpy(sound, &request->sound, sizeof(*sound));
+			sound->identifier = identifier;
+			sound_impulse_request_cache(sound);
+			sound_ticket_of_slot[DATUM_INDEX_TO_ABSOLUTE_INDEX(sound_index)] = request->ticket;
+			sound_ticket_set(request->ticket, sound_index, _sound_ticket_alive);
+		}
+		else
+		{
+			sound_ticket_set(request->ticket, NONE, _sound_ticket_gone);
+		}
+	}
+	else if (entry->ticket == request->ticket && entry->state == _sound_ticket_alive && entry->sound_index != NONE)
+	{
+		sound_stop_impulse_datum(entry->sound_index);
+	}
+
+	return;
+}
+
+/* the sound list's owner: what waits is made now (the start of sound_render, and anywhere the list is read or changed) */
+static void sound_requests_drain(
+	void)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_SOUND))
+		tick_queue_drain(&sound_request_queue);
+
+	return;
+}
+
+/* the sounds nothing names any more: a map's end, or the sound manager's */
+static void sound_requests_discard(
+	void)
+{
+	long slot;
+
+	if (!TICK_OWNERS_FEATURE(TICK_FEATURE_SOUND))
+		return;
+	tick_queue_discard(&sound_request_queue);
+	for (slot = 0; slot < SOUND_TICKET_COUNT; slot++)
+		sound_tickets[slot].state = _sound_ticket_free;
+	for (slot = 0; slot < (long)NUMBEROF(sound_ticket_of_slot); slot++)
+		sound_ticket_of_slot[slot] = 0;
+
+	return;
+}
+
+/* a sound datum is deleted: its ticket's sound is gone */
+static void sound_ticket_gone_for_slot(
+	long sound_index)
+{
+	long ticket = sound_ticket_of_slot[DATUM_INDEX_TO_ABSOLUTE_INDEX(sound_index)];
+
+	if (ticket)
+	{
+		struct sound_ticket_entry *entry = &sound_tickets[ticket % SOUND_TICKET_COUNT];
+
+		if (entry->ticket == ticket)
+			sound_ticket_set(ticket, NONE, _sound_ticket_gone);
+		sound_ticket_of_slot[DATUM_INDEX_TO_ABSOLUTE_INDEX(sound_index)] = 0;
+	}
+
+	return;
+}
+#endif /* HALO_WIIU */
+
+/* port: the number an impulse sound is known by, if its sound is still there (the sound manager keeps a script's field
+NONE when its sound ends; with the tick owners' queues on, the number is a ticket, and this says whether it is alive) */
+long sound_impulse_current(
+	long sound_index)
+{
+#ifdef HALO_WIIU
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_SOUND) && sound_index != NONE)
+	{
+		struct sound_ticket_entry *entry;
+
+		if (sound_index < 0)
+			return NONE;
+		entry = &sound_tickets[sound_index % SOUND_TICKET_COUNT];
+		if (entry->ticket != sound_index || __atomic_load_n(&entry->state, __ATOMIC_ACQUIRE) != _sound_ticket_alive)
+			return NONE;
+	}
+#endif
+
+	return sound_index;
+}
+
+/* port: sound_new_impulse as made by the sound list's owner (queued FALSE: the sound is made here) or by anyone else
+(queued TRUE with the tick owners' queues on: the sound is made at the owner's next point, and the number returned names
+it; sound_impulse_request_start). Everything that decides whether the sound is made (the audibility, the skip fraction's
+random number, the promotion) is decided here in both. */
+static long sound_new_impulse_core(
+	long definition_index,
+	struct sound_source *source,
+	long source_identifier,
+	boolean (*track_proc)(
+		long source_identifier,
+		void const *track_data,
+		struct sound_source *source),
+	void const *track_data,
+	short track_data_size,
+	boolean queued);
+
 long sound_new_impulse(
 	long definition_index,
 	struct sound_source *source,
@@ -2436,6 +2805,34 @@ long sound_new_impulse(
 		struct sound_source *source),
 	void const *track_data,
 	short track_data_size)
+{
+#ifdef HALO_WIIU
+	boolean queued = TICK_OWNERS_FEATURE(TICK_FEATURE_SOUND);
+#else
+	boolean queued = FALSE;
+#endif
+
+	return sound_new_impulse_core(
+		definition_index,
+		source,
+		source_identifier,
+		track_proc,
+		track_data,
+		track_data_size,
+		queued);
+}
+
+static long sound_new_impulse_core(
+	long definition_index,
+	struct sound_source *source,
+	long source_identifier,
+	boolean (*track_proc)(
+		long source_identifier,
+		void const *track_data,
+		struct sound_source *source),
+	void const *track_data,
+	short track_data_size,
+	boolean queued)
 {
 	long sound_index = NONE;
 	struct sound_definition *definition = sound_definition_get(definition_index);
@@ -2512,84 +2909,48 @@ long sound_new_impulse(
 
 							if (promotion_result == _sound_promotion_dont)
 							{
-								sound_index = datum_new(sound_data);
-								if (sound_index != NONE)
+#ifdef HALO_WIIU
+								if (queued)
 								{
-									struct sound_datum *sound = sound_get(sound_index);
-									long travel_milliseconds = sound_travel_milliseconds(
-										source_distance(listener_index, source));
-
-									sound->definition_index = definition_index;
-									sound->playing_channel_index = NONE;
-									sound->listener_index = listener_index;
-									sound->type = _sound_impulse;
-									sound->pitch = sound_scale_random_value(
-										definition->random_pitch_bounds.lower,
-										definition->random_pitch_bounds.upper,
-										definition->zero_pitch_modifier,
-										definition->one_pitch_modifier,
-										source->scale);
-									sound->flags = 0;
-									sound->source_identifier = source_identifier;
-									sound->source = *source;
-									sound->track_proc = track_proc;
-
-									if (track_proc)
+									/* port: the owner of the sound list makes the sound (sound_request_apply) */
+									sound_index = sound_impulse_request_start(
+										definition_index,
+										listener_index,
+										source,
+										source_identifier,
+										track_proc,
+										track_data,
+										track_data_size);
+								}
+								else
+#endif
+								{
+									sound_index = datum_new(sound_data);
+									if (sound_index != NONE)
 									{
-										match_assert(
-											"c:\\halo\\SOURCE\\sound\\sound_manager.c",
-											0x28E,
-											sound->track_data);
-										csmemcpy(
-											sound->track_data,
+										sound_impulse_prepare(
+											sound_get(sound_index),
+											definition_index,
+											listener_index,
+											source,
+											source_identifier,
+											track_proc,
 											track_data,
 											track_data_size);
-									}
-
-									sound->pitch_range_index =
-										sound_definition_find_pitch_range_by_pitch(
-											definition,
-											sound->pitch,
-											NONE);
-									sound->permutation_index =
-										sound_definition_next_permutation(
-											definition,
-											sound->pitch_range_index,
-											NONE);
-									sound->fade_stop_time = 0;
-									sound->fade_start_time = 0;
-									sound->loop_track_index = NONE;
-									_sound_cache_sound_request(
-										sound_permutation_get(
-											sound->definition_index,
-											sound->pitch_range_index,
-											sound->permutation_index),
-										FALSE,
-										TRUE,
-										FALSE);
-
-									if (travel_milliseconds > speed_of_sound_threshold)
-									{
-										sound->start_time =
-											sound_manager_globals.render_time +
-											travel_milliseconds;
-										SET_FLAG(sound->flags, _sound_delayed_bit, TRUE);
-									}
-									else
-									{
-										sound->start_time = sound_manager_globals.render_time;
+										sound_impulse_request_cache(sound_get(sound_index));
 									}
 								}
 							}
 							else if (promotion_result == _sound_promotion_do)
 							{
-								sound_index = sound_new_impulse(
+								sound_index = sound_new_impulse_core(
 									definition->promotion_sound.index,
 									source,
 									source_identifier,
 									track_proc,
 									track_data,
-									track_data_size);
+									track_data_size,
+									queued);
 							}
 							else
 							{
@@ -3188,13 +3549,14 @@ static void process_looping_sounds(
 							looping_sound_index,
 							&tracking_data,
 							&source);
-						sound_new_impulse(
+						sound_new_impulse_core(
 							detail->sound.index,
 							&source,
 							looping_sound_index,
 							track_loop_impulse_sound,
 							&tracking_data,
-							sizeof(tracking_data));
+							sizeof(tracking_data),
+							FALSE);
 					}
 
 					upper_scale = definition->scale_upper_bound.detail_period;
@@ -3838,6 +4200,9 @@ static void prioritize_sounds(
 void sound_idle(
 	void)
 {
+#ifdef HALO_WIIU
+	sound_requests_drain();
+#endif
 	sound_manager_globals.idling = TRUE;
 
 	if (sound_manager_globals.initialized && sound_manager_globals.enabled)
@@ -3879,8 +4244,14 @@ static void refresh_listener(
 
 		if (local_player_get_player_index(local_player_index) != NONE)
 		{
+#ifdef HALO_WIIU
+			/* port: the camera as the observer's last update published it (tick_owners.h) */
+			struct observer_result const *camera =
+				observer_get_published_camera(local_player_index);
+#else
 			struct observer_result const *camera =
 				observer_get_camera(local_player_index);
+#endif
 			boolean underwater;
 
 			match_assert(
@@ -3913,13 +4284,14 @@ static void refresh_listener(
 
 						if (sound_index != NONE)
 						{
-							sound_new_impulse(
+							sound_new_impulse_core(
 								sound_index,
 								&splash,
 								NONE,
 								NULL,
 								NULL,
-								0);
+								0,
+								FALSE);
 						}
 					}
 				}
@@ -3932,13 +4304,14 @@ static void refresh_listener(
 
 					if (sound_index != NONE)
 					{
-						sound_new_impulse(
+						sound_new_impulse_core(
 							sound_index,
 							&splash,
 							NONE,
 							NULL,
 							NULL,
-							0);
+							0,
+							FALSE);
 					}
 				}
 			}
@@ -4003,6 +4376,10 @@ static void detail_sound_random_offset(
 void sound_render(
 	void)
 {
+#ifdef HALO_WIIU
+	/* port: what the ticks and the menus asked of the sound list since the last frame */
+	sound_requests_drain();
+#endif
 	profile_enter(sound_render_section);
 
 	if (sound_manager_globals.initialized && sound_manager_globals.enabled)
