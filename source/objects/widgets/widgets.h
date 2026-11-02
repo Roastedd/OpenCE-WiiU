@@ -59,6 +59,14 @@ void widgets_render(
 	long object_index,
 	struct render_lighting const *lighting,
 	struct render_animation const *animation);
+#ifdef HALO_WIIU
+/* port: the widgets (the flags, antennas, glows and light volumes an object carries) are made, deleted and stepped by the ticks, and drawn and stepped by
+the frame, which with the ticks beside the drawing (tick_overlap.h) are two threads: a lock around each of those, taken while a tick thread exists. The
+ticks hold it to make, delete and step the antennas (game_tick), the frame to draw an object's widgets and step the flags. A widget the frame's copy of
+the object names that the ticks have let go of since is skipped. */
+void widgets_lock(void);
+void widgets_unlock(void);
+#endif
 void widgets_update(
 	real delta);
 

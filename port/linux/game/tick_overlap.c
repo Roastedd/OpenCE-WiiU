@@ -33,7 +33,6 @@ void wiiu_study_tick_thread_report(void);
 void wiiu_tick_idle_set(int idle);
 void wiiu_game_waiting_set(int waiting);
 unsigned long long wiiu_now_us(void);
-int wiiu_current_core(void);
 int halo_interpolation_enabled(void);
 
 /* the main loop's (main.c) */
@@ -89,7 +88,6 @@ static struct
 	/* the switch */
 	int requested; /* -1 not read */
 	int enabled; /* -1 not decided */
-	int render_core;
 	/* the thread */
 	int state; /* -1 not tried, 0 could not be started, 1 running */
 	pthread_t thread;
@@ -130,7 +128,7 @@ static struct
 	unsigned long captures, publishes;
 	unsigned long long first_us;
 	unsigned long reports;
-} o = { -1, -1, 1, -1 };
+} o = { -1, -1, -1 };
 
 /* ---------- the switch */
 
@@ -149,16 +147,20 @@ boolean tick_overlap_requested(
 	return o.requested != 0;
 }
 
-int tick_overlap_render_core(
-	void)
-{
-	return o.render_core;
-}
+unsigned long tick_overlap_stack_low = 0;
+unsigned long tick_overlap_stack_size = 0;
 
-boolean tick_overlap_thread_is_render(
+/* the game thread's own stack (port/wiiu/src/wiiu_shell.c; the digest harness's glue on the host) */
+void wiiu_thread_stack_range(unsigned long *low, unsigned long *size);
+
+void tick_overlap_note_render_thread(
 	void)
 {
-	return wiiu_current_core() == o.render_core;
+	unsigned long low = 0, size = 0;
+
+	wiiu_thread_stack_range(&low, &size);
+	tick_overlap_stack_low = low;
+	tick_overlap_stack_size = size;
 }
 
 boolean tick_overlap_thread_is_tick(
@@ -223,7 +225,6 @@ boolean tick_overlap_start_thread(
 	if (o.state >= 0)
 		return o.state > 0;
 	o.state = 0;
-	o.render_core = wiiu_current_core();
 	tick_overlap_markers_split = 1;
 	if (pthread_mutex_init(&o.lock, NULL) == 0 && pthread_cond_init(&o.posted, NULL) == 0 &&
 		pthread_attr_init(&attributes) == 0)
@@ -646,6 +647,7 @@ void tick_overlap_log(
 	const unsigned long publishes = __atomic_exchange_n(&o.publishes, 0, __ATOMIC_RELAXED);
 	const unsigned long publish_us = __atomic_exchange_n(&o.publish_us, 0, __ATOMIC_RELAXED);
 	const unsigned long tick_idle_us = __atomic_exchange_n(&o.tick_idle_us, 0, __ATOMIC_RELAXED);
+	const unsigned long push_waits = __atomic_exchange_n(&o.push_waits, 0, __ATOMIC_RELAXED);
 
 	platform_log("tick overlap (%.1f s, %lu frames: %lu overlapped, %lu serial, %lu primed, %lu held, %lu no pair): %.1f ticks a second, %.1f frames a second",
 		seconds, o.frames, o.overlap_frames, o.serial_frames, o.primed_frames, o.held_frames, o.no_pair_frames, (double)o.ticks / seconds,
@@ -664,7 +666,7 @@ void tick_overlap_log(
 		"queue waits %lu",
 		captures ? (double)capture_us / 1000.0 / (double)captures : 0.0, captures,
 		publishes ? (double)publish_us / 1000.0 / (double)publishes : 0.0, publishes, (double)o.blend_us / 1000.0 / frames, o.blends,
-		o.push_waits);
+		push_waits);
 	o.log_started_us = now;
 	o.frames = o.overlap_frames = o.serial_frames = o.primed_frames = o.held_frames = o.no_pair_frames = 0;
 	o.wait_us = o.wait_max_us = o.frame_us = o.frame_max_us = o.sync_us = o.post_us = o.draw_us = 0;
@@ -674,7 +676,6 @@ void tick_overlap_log(
 	o.ahead_sum = 0;
 	o.blend_us = 0;
 	o.blends = 0;
-	o.push_waits = 0;
 	o.reports++;
 }
 

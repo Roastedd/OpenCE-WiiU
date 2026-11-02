@@ -393,7 +393,12 @@ void game_tick(
 	physics act against the frames' own movement of it, and a vehicle at
 	speed swings it far wider than a tick's step does. The frames between the
 	ticks are drawn from what each tick leaves (antenna.c). */
+#ifdef HALO_WIIU
+	/* port: the antennas stepped with the widgets held, which a frame drawn beside the tick thread draws (widgets.h) */
+	profile_scope(game_tick_antennas_section, widgets_lock(); antennas_update(seconds_per_tick); widgets_unlock();)
+#else
 	profile_scope(game_tick_antennas_section, antennas_update(seconds_per_tick);)
+#endif
 	profile_scope(game_tick_first_person_section,
 		lock_global_random_seed();
 		rumble_update();

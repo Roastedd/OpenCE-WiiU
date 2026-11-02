@@ -33,6 +33,7 @@ and waited for (and its picture is the latest tick's).
 #ifdef HALO_WIIU
 
 #include "tick_owners.h"
+#include "tick_stack.h"
 #include "math/real_math.h"
 
 struct observer_result;
@@ -51,9 +52,9 @@ boolean tick_overlap_enabled(void);
 (objects.c, structures.c) */
 extern volatile int tick_overlap_markers_split;
 
-/* the core the game thread runs on (the render view of the snapshot belongs to it), and whether the calling thread is the game thread */
-int tick_overlap_render_core(void);
-boolean tick_overlap_thread_is_render(void);
+/* The game thread tells where its stack is when its main loop starts (tick_stack.h); the calling thread is the game thread if its stack is there. */
+void tick_overlap_note_render_thread(void);
+#define tick_overlap_thread_is_render() (TICK_OVERLAP_ON_RENDER_STACK())
 /* the calling thread is the tick thread */
 boolean tick_overlap_thread_is_tick(void);
 

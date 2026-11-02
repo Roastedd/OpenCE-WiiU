@@ -237,12 +237,12 @@ struct object_header_datum
 /* the captures the tick snapshot keeps (tick_snapshot.c's ring) */
 #define TICK_SNAPSHOT_SLOTS 4
 /* port: non-NULL only while this thread draws a frame from the tick snapshot (port/linux/game/tick_snapshot.c). The view belongs to the thread that
-draws, found by the core it runs on (the ticks may run on another core, beside the drawing: they must read the game state): the plain
+draws, found by its stack (tick_stack.h; the ticks may run on another thread, beside the drawing: they must read the game state): the plain
 flag says whether any thread has one, so that the ticks' reads, which are most of the game's, cost a load and a branch when none does. */
 extern volatile int tick_snapshot_view_any;
-extern struct data_array *volatile tick_snapshot_view_for_core[4];
-int wiiu_current_core(void);
-#define tick_snapshot_headers (tick_snapshot_view_any ? tick_snapshot_view_for_core[wiiu_current_core() & 3] : (struct data_array *)0)
+extern struct data_array *volatile tick_snapshot_view_array;
+#include "tick_stack.h"
+#define tick_snapshot_headers (tick_snapshot_view_any && TICK_OVERLAP_ON_RENDER_STACK() ? tick_snapshot_view_array : (struct data_array *)0)
 struct object_header_datum *tick_snapshot_object_header_get(long object_index);
 struct object_header_datum *tick_snapshot_object_header_try_and_get(long object_index);
 extern struct data_array *object_header_data;

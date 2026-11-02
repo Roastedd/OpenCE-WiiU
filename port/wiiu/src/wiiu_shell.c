@@ -396,13 +396,19 @@ void wiiu_game_waiting_set(int waiting)
 	game_thread_waiting = waiting != 0;
 }
 
-/* the core the calling thread runs on (the tick snapshot's view belongs to the game thread's: objects.h), and the time in microseconds (tick_overlap.c's numbers) */
-int wiiu_current_core(void);
+/* the calling thread's stack, as the OS says it: the tick snapshot's view belongs to the game thread's, found by it (port/linux/game/tick_stack.h); and the
+time in microseconds (tick_overlap.c's numbers) */
+void wiiu_thread_stack_range(unsigned long *low, unsigned long *size);
 unsigned long long wiiu_now_us(void);
 
-int wiiu_current_core(void)
+void wiiu_thread_stack_range(unsigned long *low, unsigned long *size)
 {
-	return (int)OSGetCoreId();
+	const OSThread *thread = OSGetCurrentThread();
+	const unsigned long start = (unsigned long)(uintptr_t)thread->stackStart;
+	const unsigned long end = (unsigned long)(uintptr_t)thread->stackEnd;
+
+	*low = start < end ? start : end;
+	*size = start < end ? end - start : start - end;
 }
 
 unsigned long long wiiu_now_us(void)

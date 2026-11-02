@@ -3840,6 +3840,11 @@ void main_loop(
 	main_globals.want_to_be_at_main_menu = !game_in_editor();
 	main_globals.switch_to_structure_bsp_index = NONE;
 	main_globals.halt_time_scale = TRUE;
+#ifdef HALO_WIIU
+	/* port: this is the drawing thread: the tick snapshot's view, the markers and the game clock's view are its own, and the ticks, on another thread
+	beside it, find which is which by the stack (tick_stack.h) */
+	tick_overlap_note_render_thread();
+#endif
 
 	console_initialize();
 	debug_keys_initialize();

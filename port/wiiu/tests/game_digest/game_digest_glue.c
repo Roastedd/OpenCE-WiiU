@@ -930,18 +930,23 @@ void wiiu_game_waiting_set(int waiting)
 	(void)waiting;
 }
 
-static pthread_t game_digest_first_thread;
-static int game_digest_first_thread_known;
-
-__attribute__((constructor)) static void game_digest_note_first_thread(void)
+/* the calling thread's stack (the game thread's: the tick snapshot's view belongs to it, tick_stack.h) */
+void wiiu_thread_stack_range(unsigned long *low, unsigned long *size)
 {
-	game_digest_first_thread = pthread_self();
-	game_digest_first_thread_known = 1;
-}
+	pthread_attr_t attributes;
+	void *address = NULL;
+	size_t length = 0;
 
-int wiiu_current_core(void)
-{
-	return game_digest_first_thread_known && pthread_equal(pthread_self(), game_digest_first_thread) ? 1 : 0;
+	*low = *size = 0;
+	if (pthread_getattr_np(pthread_self(), &attributes) == 0)
+	{
+		if (pthread_attr_getstack(&attributes, &address, &length) == 0)
+		{
+			*low = (unsigned long)(uintptr_t)address;
+			*size = (unsigned long)length;
+		}
+		pthread_attr_destroy(&attributes);
+	}
 }
 
 unsigned long long wiiu_now_us(void)

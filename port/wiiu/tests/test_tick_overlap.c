@@ -80,9 +80,26 @@ int halo_interpolation_enabled(void)
 }
 
 
-int wiiu_current_core(void)
+/* the calling thread's stack: the game thread's, when it asks (tick_stack.h) */
+void wiiu_thread_stack_range(unsigned long *low, unsigned long *size)
 {
-	return pthread_equal(pthread_self(), game_thread) ? 1 : 0;
+#ifdef __APPLE__
+	const pthread_t self = pthread_self();
+	const unsigned long high = (unsigned long)(uintptr_t)pthread_get_stackaddr_np(self);
+
+	*size = (unsigned long)pthread_get_stacksize_np(self);
+	*low = high - *size;
+#else
+	pthread_attr_t attributes;
+	void *address = NULL;
+	size_t length = 0;
+
+	pthread_getattr_np(pthread_self(), &attributes);
+	pthread_attr_getstack(&attributes, &address, &length);
+	pthread_attr_destroy(&attributes);
+	*low = (unsigned long)(uintptr_t)address;
+	*size = (unsigned long)length;
+#endif
 }
 
 void wiiu_fpu_setup(void) {}
@@ -230,6 +247,7 @@ long main_overlap_tick_side(real dt, long ticks_elapsed, real leftover_after, lo
 	(void)dt;
 	(void)leftover_after;
 	current_job = job;
+	CHECK(!tick_overlap_thread_is_render());
 	/* (what the game thread left it) */
 	tick_owners_drain(TICK_OWNER_TICK);
 	CHECK(previous_job_tick == tick_ring_published(&ring));
@@ -278,6 +296,8 @@ static void test_frames(long frames)
 	long applied_at_sync = 0;
 
 	game_thread = pthread_self();
+	tick_overlap_note_render_thread();
+	CHECK(tick_overlap_thread_is_render());
 	tick_ring_reset(&ring, SLOTS);
 	setenv("HALO_TICK_OWNERS", "2", 1);
 	CHECK(tick_overlap_enabled());

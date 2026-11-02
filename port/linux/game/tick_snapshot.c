@@ -237,10 +237,10 @@ static struct
 	unsigned long verify_partition_begin, verify_partition_end; /* lists' words that differ from the game state's, summed over the views */
 } s = { -1 };
 
-/* the view, for each core: the game thread's (core 1) is the only one that ever has one, so a tick on another core reads the game state
-(objects.h) */
+/* the view: the drawing thread's is the only one that ever has one (objects.h's tick_snapshot_headers finds the calling thread by its stack), so a tick
+on another thread reads the game state */
 volatile int tick_snapshot_view_any;
-struct data_array *volatile tick_snapshot_view_for_core[4];
+struct data_array *volatile tick_snapshot_view_array;
 
 /* ---------- the switch */
 
@@ -575,7 +575,7 @@ void tick_snapshot_reset(void)
 	s.view = NULL;
 	s.previous = NULL;
 	s.pair_view = FALSE;
-	tick_snapshot_view_for_core[tick_overlap_render_core() & 3] = NULL;
+	tick_snapshot_view_array = NULL;
 	tick_snapshot_view_any = 0;
 }
 
@@ -1074,7 +1074,7 @@ void tick_snapshot_view_begin(void)
 	if (s.verify_begin && s.ring.pinned[0] < 0)
 		tick_snapshot_verify(FALSE);
 	/* (the headers last: from here the accessors on this core give the copies) */
-	tick_snapshot_view_for_core[tick_overlap_render_core() & 3] = &latest->array;
+	tick_snapshot_view_array = &latest->array;
 	tick_snapshot_view_any = 1;
 	s.views++;
 	ADD(PART_VIEW_BEGIN, started);
@@ -1114,7 +1114,7 @@ void tick_snapshot_view_end(void)
 		}
 		s.field_identifier[index] = view->headers[index].identifier;
 	}
-	tick_snapshot_view_for_core[tick_overlap_render_core() & 3] = NULL;
+	tick_snapshot_view_array = NULL;
 	tick_snapshot_view_any = 0;
 	s.view = NULL;
 	s.previous = NULL;
