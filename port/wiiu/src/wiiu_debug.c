@@ -509,20 +509,26 @@ script waits at a time: the state goes 0 (none) -> 1 (waiting, its text written)
 static char console_script[WIIU_DEBUG_CONSOLE_MAX];
 static int console_state;
 
-unsigned char hs_compile_and_evaluate(char const *expression);
+/* (the hs runtime is the tick thread's: with the tick owners' queues on, the script waits in the queue until that thread
+runs it, and the answer is logged when it has; source/hs/hs.c, port/linux/game/tick_owners.h) */
+void hs_compile_and_evaluate_queued(char const *expression, void (*done)(long argument, unsigned char succeeded), long argument);
+
+static void console_done(long argument, unsigned char done)
+{
+	(void)argument;
+	wiiu_log("Debug console: %s", done ? "done" : "not done (the log says why)");
+}
 
 void wiiu_debug_console_run(void)
 {
 	char script[WIIU_DEBUG_CONSOLE_MAX];
-	unsigned char done;
 
 	if (!__atomic_load_n(&console_state, __ATOMIC_ACQUIRE))
 		return;
 	memcpy(script, console_script, sizeof(script));
 	__atomic_store_n(&console_state, 0, __ATOMIC_RELEASE);
 	wiiu_log("Debug console: %s", script);
-	done = hs_compile_and_evaluate(script);
-	wiiu_log("Debug console: %s", done ? "done" : "not done (the log says why)");
+	hs_compile_and_evaluate_queued(script, console_done, 0);
 }
 
 static void do_request(const wiiu_debug_request *request)

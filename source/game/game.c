@@ -183,6 +183,9 @@ struct game_options;
 #include "units/units.h"
 #include "units/vehicles.h"
 #include "network_coop.h" /* port: port/linux/game/network_coop.c */
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#endif
 #ifdef HALO_PROFILE
 #include "profile_console.h" /* port: port/linux/game/profile_console.c */
 #endif
@@ -913,6 +916,12 @@ void game_precache_new_map(
 void game_dispose_from_old_map(
 	void)
 {
+#ifdef HALO_WIIU
+	/* port: the tick owners' queues (tick_owners.h): what they carried this map, and what is still waiting names
+	nothing that stays */
+	tick_owners_report();
+	tick_owners_discard_all();
+#endif
 	rasterizer_dispose_from_old_map();
 	game_state_dispose_from_old_map();
 	cheats_dispose_from_old_map();
@@ -968,6 +977,11 @@ void game_frame(
 		585,
 		game_globals->active);
 
+#ifdef HALO_WIIU
+	/* port: what the ticks made and deleted among the particles, particle systems, contrails and decals since the last frame
+	(tick_presentation.h), made by the render thread before it updates them */
+	tick_owners_drain(TICK_OWNER_RENDER);
+#endif
 	collision_log_begin_period(1);
 	particles_update(frame_dt);
 	contrails_update(frame_dt);

@@ -98,6 +98,9 @@ symbols in this file:
 
 #include "cseries.h"
 #include "cache/cache_files.h"
+#ifdef HALO_WIIU
+#include "cache/predicted_resources.h" /* port: the caches are the game thread's (tick_owners.h) */
+#endif
 #include "cache/sound_cache.h"
 #include "camera/observer.h"
 #include "game/game.h"
@@ -537,7 +540,7 @@ void scripted_sound_new(
 	{
 		network_coop_note_sound(_coop_sound_impulse, definition_index, source_object_index, scale);
 		definition = sound_definition_get(definition_index);
-		sound_stop_impulse(definition->scripting_sound_index);
+		sound_stop_impulse(sound_impulse_current(definition->scripting_sound_index));
 		definition->scripting_time = game_time_get()
 			+ (long)definition->longest_permutation_length * TICKS_PER_SECOND / 1000;
 		scale = PIN(scale, 0.f, 1.f);
@@ -610,7 +613,7 @@ void scripted_sound_stop(
 	if (sound_index != NONE)
 	{
 		definition = sound_definition_get(sound_index);
-		if (definition->scripting_sound_index != NONE)
+		if (sound_impulse_current(definition->scripting_sound_index) != NONE)
 		{
 			sound_stop_impulse(definition->scripting_sound_index);
 			definition->scripting_sound_index = NONE;
@@ -655,7 +658,12 @@ void scripted_foley_predict(
 							0,
 							struct sound_permutation);
 
+#ifdef HALO_WIIU
+						/* port: the sound cache is the game thread's (tick_owners.h) */
+						predicted_resources_request_sound(permutation);
+#else
 						_sound_cache_sound_request(permutation, FALSE, TRUE, FALSE);
+#endif
 					}
 				}
 			}

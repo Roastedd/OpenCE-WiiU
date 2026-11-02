@@ -680,6 +680,18 @@ struct widget_instance;
 #include "text/text_group.h"
 #include "text/unicode.h"
 #include "ui_widget.h"
+
+#ifdef HALO_WIIU
+/* port: a menu's pause of the game clock is a message to the tick thread, and the menu reads what it has asked for
+(game.h; port/linux/game/tick_owners.h) */
+#define game_time_ui_get_paused_port game_time_ui_get_paused
+#define game_time_post_paused_port game_time_post_paused
+#define game_time_flush_paused_port game_time_ui_flush_paused
+#else
+#define game_time_ui_get_paused_port game_time_get_paused
+#define game_time_post_paused_port game_time_set_paused
+#define game_time_flush_paused_port() ((void)0)
+#endif
 /* port: port/linux/game/menu_functions.c: a text's colour in place of its
 own (the server browser's pings) */
 boolean pc_menu_text_color(struct widget_instance *widget, real_argb_color *color);
@@ -2325,11 +2337,12 @@ void ui_widget_delete(
 			"widget pause counter out of whack");
 		if (--widget_globals.pause_game_time_count == 0)
 		{
-			if (game_time_get_paused())
+			if (game_time_ui_get_paused_port())
 			{
-				game_time_set_paused(FALSE);
+				game_time_post_paused_port(FALSE);
 				if (we_are_at_the_main_menu)
 				{
+					game_time_flush_paused_port();
 					main_menu_ensure_player_queues_exist();
 					game_time_dispose_from_old_map();
 					game_time_initialize_for_new_map();
@@ -3869,8 +3882,8 @@ static void widget_instance_initialize(
 		/* port: not at the main menu, where the clock only runs the menu's
 		scene, which stopped behind the screen and started again from its
 		beginning as it closed */
-		if (!game_time_get_paused() && !we_are_at_the_main_menu)
-			game_time_set_paused(TRUE);
+		if (!game_time_ui_get_paused_port() && !we_are_at_the_main_menu)
+			game_time_post_paused_port(TRUE);
 		if (!widget_globals.sound_paused && !we_are_at_the_main_menu)
 		{
 			sound_pause(TRUE);
@@ -4671,8 +4684,8 @@ void display_error(
 							"widget pause counter is out of whack");
 						widget_globals.pause_game_time_count++;
 						/* port: not at the main menu (above) */
-						if (!game_time_get_paused() && !we_are_at_the_main_menu)
-							game_time_set_paused(TRUE);
+						if (!game_time_ui_get_paused_port() && !we_are_at_the_main_menu)
+							game_time_post_paused_port(TRUE);
 						if (!widget_globals.sound_paused && !we_are_at_the_main_menu)
 						{
 							sound_pause(TRUE);
@@ -8463,7 +8476,7 @@ static boolean ui_check_for_pause_game(
 			case 1:
 				if (widget_globals.active_widgets[controller_index])
 				{
-					if (game_time_get_paused() == TRUE)
+					if (game_time_ui_get_paused_port() == TRUE)
 						ui_widgets_close_all();
 					/* port: (and a multiplayer map's own, below, which pauses
 					nothing, closes as in a multiplayer game) */
@@ -8507,10 +8520,10 @@ static boolean ui_check_for_pause_game(
 			case 2:
 				if (widget_globals.active_widgets[controller_index])
 				{
-					if (game_time_get_paused() == TRUE)
+					if (game_time_ui_get_paused_port() == TRUE)
 						ui_widgets_close_all();
 				}
-				else if (!game_time_get_paused())
+				else if (!game_time_ui_get_paused_port())
 				{
 					if (!ui_widget_load_by_name_or_tag(
 						"ui\\shell\\solo_game\\pause_game\\pause_game_split_screen",

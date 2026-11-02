@@ -20,6 +20,10 @@ symbols in this file:
 #include "sound/sound_definitions.h"
 #include "tag_files/tag_groups.h"
 
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#endif
+
 /* ---------- constants */
 
 /* ---------- macros */
@@ -33,9 +37,110 @@ static boolean predicted_resource_valid(struct predicted_resource const *predict
 
 /* ---------- globals */
 
+#ifdef HALO_WIIU
+/* port: the tick owners' queue of the texture and sound caches (tick_owners.h). The caches are the game thread's: the
+ticks (an object made, a weapon readied, a script's sound predicted) and the observer ask for the resources of what
+they make, and the asks wait here until the game thread runs them. A request names tag data, which lasts the map. */
+enum resource_request_kind
+{
+	_resource_request_predicted_resources,
+	_resource_request_bitmap,
+	_resource_request_sound,
+};
+
+struct resource_request
+{
+	short kind;
+	void *pointer;
+};
+
+static void resource_request_apply(
+	void const *record);
+
+TICK_QUEUE_DEFINE(resource_request_queue, "resources", TICK_OWNER_GAME, struct resource_request, 1024, resource_request_apply);
+
+static void resource_request_push(
+	short kind,
+	void *pointer)
+{
+	struct resource_request request;
+
+	request.kind = kind;
+	request.pointer = pointer;
+	tick_queue_push(&resource_request_queue, &request);
+
+	return;
+}
+#endif
+
 /* ---------- public code */
 
+static void predicted_resources_precache_now(
+	struct tag_block *predicted_resources);
+
 void predicted_resources_precache(
+	struct tag_block *predicted_resources)
+{
+#ifdef HALO_WIIU
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_RESOURCES))
+	{
+		resource_request_push(_resource_request_predicted_resources, predicted_resources);
+		return;
+	}
+#endif
+	predicted_resources_precache_now(predicted_resources);
+
+	return;
+}
+
+#ifdef HALO_WIIU
+/* port: a bitmap and a sound wave asked of the caches by tick code (weapon.c, game_sound.c) */
+void predicted_resources_request_bitmap(
+	struct bitmap_data *bitmap)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_RESOURCES))
+		resource_request_push(_resource_request_bitmap, bitmap);
+	else
+		_texture_cache_bitmap_get_hardware_format(bitmap, FALSE, TRUE);
+
+	return;
+}
+
+void predicted_resources_request_sound(
+	struct sound_permutation *permutation)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_RESOURCES))
+		resource_request_push(_resource_request_sound, permutation);
+	else
+		_sound_cache_sound_request(permutation, FALSE, TRUE, FALSE);
+
+	return;
+}
+
+/* the game thread's turn (tick_owners_drain) */
+static void resource_request_apply(
+	void const *record)
+{
+	struct resource_request const *request = (struct resource_request const *)record;
+
+	switch (request->kind)
+	{
+	case _resource_request_predicted_resources:
+		predicted_resources_precache_now((struct tag_block *)request->pointer);
+		break;
+	case _resource_request_bitmap:
+		_texture_cache_bitmap_get_hardware_format((struct bitmap_data *)request->pointer, FALSE, TRUE);
+		break;
+	case _resource_request_sound:
+		_sound_cache_sound_request((struct sound_permutation *)request->pointer, FALSE, TRUE, FALSE);
+		break;
+	}
+
+	return;
+}
+#endif
+
+static void predicted_resources_precache_now(
 	struct tag_block *predicted_resources)
 {
 	/* port: long, as the count is (a short wrapped on a longer block and

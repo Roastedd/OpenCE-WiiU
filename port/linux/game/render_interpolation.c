@@ -763,7 +763,12 @@ static struct observer_result const *render_interpolation_direct_camera(
 
 	direct = &direct_cameras[local_player_index];
 	*direct = *observer;
+#ifdef HALO_WIIU
+	/* port: the facing as the tick side published it (tick_owners.h) */
+	player_control_get_display_facing_direction(local_player_index, &direct->forward);
+#else
 	player_control_get_facing_direction(local_player_index, &direct->forward);
+#endif
 	observer_up_from_forward(&direct->forward, &direct->up);
 	return direct;
 #endif

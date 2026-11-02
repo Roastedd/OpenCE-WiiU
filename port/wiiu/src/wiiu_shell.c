@@ -308,6 +308,18 @@ static int game_threads_held(void)
 
 void wiiu_foreground_gate(int is_game_thread);
 
+/* The tick thread (the game's ticks on a thread of their own: port/linux/game/tick_owners.h) has a gate of its own. It touches neither
+the GPU, the controllers nor the sound, so HOME does not need it held for the system's sake; but a tick thread that goes on in the background
+would run the game on with nobody drawing it, and after the game has halted or the app is closing it must not run at all. It registers when it
+starts (and unregisters when it ends), and calls wiiu_tick_gate at its safe points, between two ticks; the release callback and the close wait
+for it as for the game thread's gate, and a halted game holds it for good. Nothing registers while the ticks run on the game thread. */
+static volatile uint32_t tick_gate_registered;
+static volatile uint32_t tick_gate_held;
+static volatile uint32_t game_halted;
+
+void wiiu_tick_gate_register(int registered);
+void wiiu_tick_gate(void);
+
 /* called every few milliseconds by a thread held at the gate: the GX2 thread drains the GPU here when the release callback asks it to (wiiu_gx2.c) */
 void (*wiiu_gate_poll)(void);
 
@@ -344,6 +356,22 @@ void wiiu_tick_thread_gate(void)
 		sleep_ms(5);
 	}
 	tick_gate_held = 0;
+}
+
+/* the tick owners' (port/linux/game/tick_owners.c) calls of the gate: the tick thread gates itself in main.c's loop (wiiu_tick_thread_gate above), so the
+registration needs nothing here, and a gate asked for from the game thread returns at once in the foreground and holds in the background as the game
+thread's own does */
+void wiiu_tick_gate_register(int registered);
+void wiiu_tick_gate(void);
+
+void wiiu_tick_gate_register(int registered)
+{
+	(void)registered;
+}
+
+void wiiu_tick_gate(void)
+{
+	wiiu_tick_thread_gate();
 }
 
 /* The game quits (its Quit, or a timed run that is over): the Wii U Menu is asked for, and the system ends the app through ProcUI, as it does for HOME's Close
@@ -776,6 +804,33 @@ static int start_game(void)
 	/* the core the game runs on (halo/game_core.txt: 0, 1 or 2; 1 if none). GX2 must be driven from the core ProcUI's callbacks run on (1): the system does not run the app's threads on the
 	other cores while its HOME callback does, and the GPU's release then never completes: so with the GX2 thread on core 1 the game itself can be on 0 or 2 (wiiu_gx2.c) */
 	unsigned game_core = 1;
+	/* the tick owners' queues (port/linux/game/tick_owners.h; halo/tick_owners.txt: 0 off, 1 queues applied where the direct call was, 2
+	queues applied at their owner's points, off if none; and after it the parts to leave out, a number): the game reads the setting from its environment, as the host runs do */
+	{
+		FILE *file = fopen(WIIU_DATA_DIRECTORY "/tick_owners.txt", "r");
+
+		if (file)
+		{
+			unsigned mode = 0;
+			unsigned long off = 0;
+			int read = fscanf(file, "%u %li", &mode, (long *)&off);
+
+			if (read >= 1 && mode >= 1 && mode <= 2)
+			{
+				char text[16];
+
+				setenv("HALO_TICK_OWNERS", mode == 1 ? "1" : "2", 1);
+				/* (an optional second number: the parts left out, tick_owners.h) */
+				if (read == 2 && off)
+				{
+					snprintf(text, sizeof(text), "0x%lx", off);
+					setenv("HALO_TICK_OWNERS_OFF", text, 1);
+				}
+				wiiu_log("Tick owners: the queues are on, mode %u, parts left out 0x%lx (halo/tick_owners.txt)", mode, off);
+			}
+			fclose(file);
+		}
+	}
 	{
 		FILE *file = fopen(WIIU_DATA_DIRECTORY "/game_core.txt", "r");
 
@@ -810,6 +865,7 @@ void wiiu_game_halted(void)
 	wiiu_shell_log_flush(&shell_log, 1000);
 	/* (this thread is parked for good, as the foreground gate parks it: the release callback must not wait for it to be held, as it did, 2 s a time, with the
 	console left on the Wii U's logo) */
+	game_halted = 1;
 	game_gate_held = 1;
 	SYSLaunchMenu();
 	for (;;)

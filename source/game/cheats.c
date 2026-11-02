@@ -67,6 +67,9 @@ symbols in this file:
 #include "scenario/scenario.h"
 #include "tag_files/tag_groups.h"
 #include "units/units.h"
+#ifdef HALO_WIIU
+#include "tick_input.h" /* port: port/linux/game/tick_input.c: the input this file reads is the frame's copy (tick_input.h) */
+#endif
 
 /* ---------- constants */
 
@@ -195,6 +198,19 @@ void cheats_network_client_enforce(
 	return;
 }
 
+#ifdef HALO_WIIU
+/* port: a cheat button's command, run by the tick thread: one that fails is forgotten */
+static void cheat_command_done(
+	long button_index,
+	boolean succeeded)
+{
+	if (!succeeded)
+		cheat_strings[button_index][0] = 0;
+
+	return;
+}
+#endif
+
 void cheats_update(
 	void)
 {
@@ -222,8 +238,13 @@ void cheats_update(
 						if (gamepad->buttons[button_index]==1)
 						{
 							console_printf(FALSE, cheat_strings[button_index]);
+#ifdef HALO_WIIU
+							/* port: the hs runtime is the tick thread's (tick_owners.h) */
+							hs_compile_and_evaluate_queued(cheat_strings[button_index], cheat_command_done, button_index);
+#else
 							if (!hs_compile_and_evaluate(cheat_strings[button_index]))
 								cheat_strings[button_index][0] = 0;
+#endif
 						}
 					}
 				}

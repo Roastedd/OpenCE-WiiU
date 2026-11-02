@@ -30,6 +30,14 @@ struct predicted_resource
 /* ---------- prototypes/PREDICTED_RESOURCES.C */
 
 void predicted_resources_precache(struct tag_block *predicted_resources);
+#ifdef HALO_WIIU
+/* port: a bitmap's or a sound wave's ask of the texture or sound cache from tick code, queued for the game thread with the
+tick owners' queues on (port/linux/game/tick_owners.h) and made at once otherwise */
+struct bitmap_data;
+struct sound_permutation;
+void predicted_resources_request_bitmap(struct bitmap_data *bitmap);
+void predicted_resources_request_sound(struct sound_permutation *permutation);
+#endif
 
 /* ---------- globals */
 

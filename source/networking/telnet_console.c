@@ -95,6 +95,11 @@ static boolean process_telnet_client_buffer(
 	char *buffer,
 	long size,
 	struct telnet_client *client);
+#ifdef HALO_WIIU
+static void telnet_expression_done(
+	long client_index,
+	boolean succeeded);
+#endif
 
 /* ---------- globals */
 
@@ -319,6 +324,19 @@ static void telnet_client_disconnect(
 	return;
 }
 
+#ifdef HALO_WIIU
+/* port: a line the tick thread ran (hs_compile_and_evaluate_queued): the answer goes to the client if it is still there */
+static void telnet_expression_done(
+	long client_index,
+	boolean succeeded)
+{
+	if (succeeded)
+		telnet_client_write(&telnet_console_globals.clients[client_index], "\r\n", 2);
+
+	return;
+}
+#endif
+
 /* port: whether a line is part of an HTTP request. A web page can make the
 browser send one to this machine's port, whose lines would otherwise run as
 scripts: such a client is dropped at its first line. No script starts with
@@ -394,10 +412,15 @@ static boolean process_telnet_client_buffer(
 						error(2, "dropped a telnet client that sent an HTTP request");
 						return TRUE;
 					}
+#ifdef HALO_WIIU
+					/* port: the hs runtime is the tick thread's (tick_owners.h) */
+					hs_compile_and_evaluate_queued(expression, telnet_expression_done, (long)(client - telnet_console_globals.clients));
+#else
 					if (hs_compile_and_evaluate(expression))
 					{
 						telnet_client_write(client, "\r\n", 2);
 					}
+#endif
 				}
 				continue;
 

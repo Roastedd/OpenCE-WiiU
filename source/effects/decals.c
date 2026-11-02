@@ -238,6 +238,10 @@ symbols in this file:
 #include "saved games/game_state.h"
 #include "shaders/shader_definitions.h"
 #include "tag_files/tag_files.h"
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#include "tick_presentation.h" /* port: port/linux/game/tick_presentation.c */
+#endif
 
 /* ---------- constants */
 
@@ -2270,6 +2274,18 @@ void decal_new_from_collision(
 	return;
 }
 
+#ifdef HALO_WIIU
+void decal_new_now(
+	long decal_definition_index,
+	real_point3d const *origin,
+	real_vector3d const *velocity,
+	real radius_modifier,
+	boolean permanent,
+	short forced_sequence_index,
+	struct decal_editor_geometry *editor_geometry);
+
+/* port: the decals are the render thread's (tick_owners.h): a tick's decal waits for its turn (tick_presentation.h; the
+editor's, which has geometry, is made at once) */
 void decal_new(
 	long decal_definition_index,
 	real_point3d const *origin,
@@ -2278,6 +2294,41 @@ void decal_new(
 	boolean permanent,
 	short forced_sequence_index,
 	struct decal_editor_geometry *editor_geometry)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_DECALS) && !editor_geometry)
+	{
+		/* (nothing to make if they are off: the old one made none either, before it read anything) */
+		if (decals_enabled)
+		{
+			tick_presentation_decal_new(decal_definition_index, origin, velocity, radius_modifier, permanent, forced_sequence_index);
+		}
+	}
+	else
+	{
+		decal_new_now(decal_definition_index, origin, velocity, radius_modifier, permanent, forced_sequence_index, editor_geometry);
+	}
+
+	return;
+}
+
+void decal_new_now(
+	long decal_definition_index,
+	real_point3d const *origin,
+	real_vector3d const *velocity,
+	real radius_modifier,
+	boolean permanent,
+	short forced_sequence_index,
+	struct decal_editor_geometry *editor_geometry)
+#else
+void decal_new(
+	long decal_definition_index,
+	real_point3d const *origin,
+	real_vector3d const *velocity,
+	real radius_modifier,
+	boolean permanent,
+	short forced_sequence_index,
+	struct decal_editor_geometry *editor_geometry)
+#endif
 {
 	if (decals_enabled)
 	{

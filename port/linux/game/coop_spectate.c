@@ -30,6 +30,9 @@ It also draws the line telling players about the vote to skip a cutscene
 #include "network_coop.h"
 
 #include <math.h>
+#ifdef HALO_WIIU
+#include "tick_input.h" /* port: port/linux/game/tick_input.c: the input this file reads is the frame's copy (tick_input.h) */
+#endif
 
 /* ---------- constants */
 

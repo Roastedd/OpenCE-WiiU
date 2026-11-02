@@ -78,6 +78,9 @@ symbols in this file:
 #include "scenario/scenario.h" /* port: game_time_menu_scene */
 #include "scenario/scenario_definitions.h"
 #include "profile_sections.h" /* port: port/linux/include/profile_sections.h */
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#endif
 /* port/linux/game/network_distributed.c's */
 void network_distributed_tick(void);
 
@@ -318,6 +321,68 @@ void game_time_set_paused(
 
 	return;
 }
+
+#ifdef HALO_WIIU
+/* port: the menus' pause, a message to the tick thread (tick_owners.h). The queue's records are the pause wanted; the menu's
+own reading of the pause is the last message while any waits. */
+struct game_time_pause_message
+{
+	boolean paused;
+};
+
+static void game_time_pause_message_apply(
+	void const *record);
+
+TICK_QUEUE_DEFINE(game_time_pause_queue, "pause", TICK_OWNER_TICK, struct game_time_pause_message, 16, game_time_pause_message_apply);
+
+static boolean game_time_pause_shadow = FALSE;
+
+static void game_time_pause_message_apply(
+	void const *record)
+{
+	game_time_set_paused(((struct game_time_pause_message const *)record)->paused);
+
+	return;
+}
+
+void game_time_post_paused(
+	boolean paused)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_PAUSE))
+	{
+		struct game_time_pause_message message;
+
+		message.paused = paused;
+		game_time_pause_shadow = paused;
+		tick_queue_push(&game_time_pause_queue, &message);
+	}
+	else
+	{
+		game_time_set_paused(paused);
+	}
+
+	return;
+}
+
+boolean game_time_ui_get_paused(
+	void)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_PAUSE) && tick_queue_count(&game_time_pause_queue))
+		return game_time_pause_shadow;
+
+	return game_time_get_paused();
+}
+
+/* the messages made now, for a menu that goes on to change the clock itself */
+void game_time_ui_flush_paused(
+	void)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_PAUSE))
+		tick_queue_drain(&game_time_pause_queue);
+
+	return;
+}
+#endif
 
 /* how far the clock has run into the next tick, 0 to 1: the native ports
 draw frames between ticks (port/linux/game/render_interpolation.c) */
@@ -565,6 +630,10 @@ void game_time_update(
 						the main menu's scene, which a lobby's machines do not share) */
 						if (!game_time_menu_scene())
 							profile_scope(game_time_network_distributed_tick_section, network_distributed_tick();)
+#ifdef HALO_WIIU
+						/* port: the tick thread's safe point, between two ticks (tick_owners.h) */
+						tick_owners_safe_point();
+#endif
 					}
 				}
 

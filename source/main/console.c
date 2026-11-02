@@ -236,7 +236,13 @@ static boolean console_process_command(
 	console_globals.previous_command_count = MIN(console_globals.previous_command_count + 1, MAXIMUM_NUMBER_OF_PREVIOUS_COMMANDS);
 	console_globals.selected_previous_command_index = NONE;
 
+#ifdef HALO_WIIU
+	/* port: the hs runtime is the tick thread's (tick_owners.h); nothing here uses the answer */
+	hs_compile_and_evaluate_queued(command, NULL, 0);
+	return TRUE;
+#else
 	return hs_compile_and_evaluate(command);
+#endif
 }
 
 static char *console_get_text_to_autocomplete(

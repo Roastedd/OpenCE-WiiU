@@ -57,6 +57,9 @@ OBJECTS.C
 #include "sound/game_sound.h"
 #include "structures/structure_bsp_definitions.h"
 #include "units/units.h"
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#endif
 /* port: object_bounds_cache.c's */
 void object_bounds_cache_update(long object_index, real_point3d const *center, real radius);
 /* port: port/linux/game/first_person_legs.c's */
@@ -4272,6 +4275,26 @@ static boolean objects_garbage_active_due(
 	return garbage_active_retry_time == NONE || now >= garbage_active_retry_time;
 }
 
+/* port: the objects' memory pool compacted. With the tick owners' queues on (port/linux/game/tick_owners.h) it is only
+compacted at the hand-off, when the renderer is not inside a frame holding pointers into the blocks that move. */
+#ifdef HALO_WIIU
+static void objects_pool_compact_now(
+	void)
+{
+	memory_pool_compact(object_memory_pool);
+}
+#endif
+
+static void objects_pool_compact(
+	void)
+{
+#ifdef HALO_WIIU
+	tick_owners_object_pool_compact(objects_pool_compact_now);
+#else
+	memory_pool_compact(object_memory_pool);
+#endif
+}
+
 void objects_garbage_collection(
 	void)
 {
@@ -4283,7 +4306,7 @@ void objects_garbage_collection(
 	}
 	else if (memory_pool_get_contiguous_free_size(object_memory_pool)<=GARBAGE_LIMIT_FREE_MEMORY_CRITICAL)
 	{
-		memory_pool_compact(object_memory_pool);
+		objects_pool_compact();
 		
 		if (memory_pool_get_contiguous_free_size(object_memory_pool)<=GARBAGE_LIMIT_FREE_MEMORY_TRIGGER)
 		{
@@ -4423,7 +4446,7 @@ void objects_garbage_collection(
 			garbage_active_retry_time = should_collect ? NONE : game_time_get() + GARBAGE_ACTIVE_RETRY_TICKS;
 		if (!network_coop_active() || collected_count > 0 ||
 			garbage_collect_mode != _garbage_collect_active_objects)
-			memory_pool_compact(object_memory_pool);
+			objects_pool_compact();
 		
 		if (debug_object_garbage_collection)
 		{
@@ -4580,7 +4603,7 @@ void objects_garbage_collection(
 						}
 
 						garbage_collection_after_first_attempt = TRUE;
-						memory_pool_compact(object_memory_pool);
+						objects_pool_compact();
 					}
 					else
 					{
@@ -4734,7 +4757,7 @@ void objects_memory_compact(
 	void)
 {
 	objects_garbage_collection();
-	memory_pool_compact(object_memory_pool);
+	objects_pool_compact();
 	return;
 }
 

@@ -139,6 +139,9 @@ symbols in this file:
 
 #include "units/unit_definitions.h"
 #include "units/units.h"
+#ifdef HALO_WIIU
+#include "tick_input.h" /* port: port/linux/game/tick_input.c: the input this file reads is the frame's copy (tick_input.h) */
+#endif
 
 /* port: the player's movement and turn before the director's inhibit zeroes
 them (player_control.c), which move the debug camera */
