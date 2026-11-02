@@ -75,6 +75,14 @@ void tick_snapshot_timers_install(unsigned long long (*clock)(void), void (*add)
 	timer_add = add;
 }
 
+static unsigned long rotation_snapshots, rotation_nodes;
+
+void tick_snapshot_note_rotations(long nodes)
+{
+	rotation_snapshots++;
+	rotation_nodes += (unsigned long)nodes;
+}
+
 unsigned long long tick_snapshot_time(void)
 {
 	return timer_clock ? timer_clock() : 0ULL;
@@ -230,10 +238,13 @@ static void tick_snapshot_log(void)
 	const unsigned long captures = s.window_captures ? s.window_captures : 1;
 
 	platform_log("tick snapshot (%lu captures, %lu frames): per capture %lu objects, %lu bytes in all (%lu in %lu object copies, headers %lu, "
-		"cluster lists %lu); in the window: %lu misses, %lu catch-ups, %lu fallbacks, %lu reads, %lu camera copies",
+		"cluster lists %lu); rotations found per capture: %lu snapshots, %lu nodes; "
+		"in the window: %lu misses, %lu catch-ups, %lu fallbacks, %lu reads, %lu camera copies",
 		s.window_captures, s.views, s.objects_copied / captures,
 		(s.bytes_copied + s.header_bytes + s.partition_bytes) / captures, s.bytes_copied / captures, s.block_calls / captures,
-		s.header_bytes / captures, s.partition_bytes / captures, s.misses, s.catch_ups, s.fallbacks, s.reads, s.camera_copies);
+		s.header_bytes / captures, s.partition_bytes / captures, rotation_snapshots / captures, rotation_nodes / captures, s.misses,
+		s.catch_ups, s.fallbacks, s.reads, s.camera_copies);
+	rotation_snapshots = rotation_nodes = 0;
 	s.window_captures = 0;
 	s.objects_copied = s.bytes_copied = s.header_bytes = s.block_calls = s.partition_bytes = 0;
 	s.misses = s.catch_ups = s.fallbacks = s.reads = s.views = s.camera_copies = 0;

@@ -32,6 +32,8 @@ struct cluster_partition const *tick_snapshot_cluster_partition(struct cluster_p
 added to a part (tick_snapshot.c numbers them) */
 unsigned long long tick_snapshot_time(void);
 void tick_snapshot_time_add(int part, unsigned long long since);
+/* the snapshots' rotations found by a tick (render_interpolation.c): nodes of one object's snapshot, for the log's counts */
+void tick_snapshot_note_rotations(long nodes);
 void tick_snapshot_timers_install(unsigned long long (*clock)(void), void (*add)(int part, unsigned long long since));
 /* the cameras as of the frame's start, while a frame is drawn from the snapshot (the game state's if not; the others answer 0 if not) */
 struct observer_result const *tick_snapshot_camera(short local_player_index, struct observer_result const *live);

@@ -558,6 +558,7 @@ void render_interpolation_tick(void)
 				rotation_from_matrix(&snapshot_nodes[rotation_index], &snapshot_rotations[rotation_index]);
 			record->rotations_valid[record->latest] = TRUE;
 			tick_snapshot_time_add(SNAPSHOT_PART_ROTATIONS, rotations_started);
+			tick_snapshot_note_rotations(node_count);
 		}
 #endif
 		record->object_index = iterator.index;
