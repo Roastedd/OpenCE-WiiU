@@ -10,7 +10,8 @@ copies the tick does not touch. After each tick this takes one, of what the rend
 - the object header array (the objects' identifiers, flags, types and sizes), whole;
 - the object blocks of the objects drawn lately (about 190 in a fight; 3 captures is "lately"), each as the header gives it: object
   data, node matrices and every other block of it, which are reached by offset from the object's own address;
-- the objects' function inputs (objects.c), which the pictures' function values come from.
+- the objects' function inputs (objects.c), which the pictures' function values come from;
+- the object cluster partitions' lists (which objects are in which clusters: how a frame finds the objects to draw), whole.
 
 While a frame is drawn (tick_snapshot_view_begin to tick_snapshot_view_end), the game's accessors (object_header_get,
 object_header_try_and_get and the object iterator, objects.h and objects.c) give these copies instead of the game state's: so every
@@ -39,7 +40,7 @@ HALO_TICK_SNAPSHOT on the host. Bits:
  16  test: the cameras' positions are moved far away.
 
 The log (every 150 captures, about 5 s) says the copies' size and number per capture and the reads the snapshot served;
-port/wiiu/src/wiiu_tick_snapshot_timers.c, on the console, the milliseconds a frame (the timers here are weak references to it).
+port/wiiu/src/wiiu_tick_snapshot_timers.c, on the console, the milliseconds a frame (it installs the clock the timers here use).
 */
 
 #ifdef HALO_WIIU
@@ -51,6 +52,9 @@ port/wiiu/src/wiiu_tick_snapshot_timers.c, on the console, the milliseconds a fr
 #include "game/game.h"
 #include "game/players.h"
 #include "math/real_math.h"
+#include "objects/reference_lists.h"
+#include "structures/cluster_partitions.h"
+#include "structures/structures.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -128,6 +132,19 @@ static const struct
 #define RENDER_FIELD_COUNT ((int)(sizeof(RENDER_FIELDS) / sizeof(RENDER_FIELDS[0])))
 #define RENDER_FIELD_BYTES 16
 
+/* the object cluster partitions' lists as of the capture: which clusters an object is in is what a frame finds the objects to draw by */
+#define PARTITION_COUNT 2
+
+struct partition_copy
+{
+	struct cluster_partition const *live;
+	boolean valid;
+	struct cluster_partition view;
+	struct data_array references;
+	long first_references[MAXIMUM_CLUSTERS_PER_STRUCTURE];
+	struct data_reference entries[HALO_PORT_MAXIMUM_CLUSTER_REFERENCES];
+};
+
 struct camera_view
 {
 	boolean valid;
@@ -156,14 +173,16 @@ static struct
 	short field_identifier[MAXIMUM_OBJECTS_PER_MAP];
 	byte fields[MAXIMUM_OBJECTS_PER_MAP][RENDER_FIELD_BYTES];
 	struct camera_view cameras[MAXIMUM_LOCAL_PLAYERS];
+	struct partition_copy partitions[PARTITION_COUNT];
 	/* counts, for the log */
 	unsigned long captures, window_captures;
-	unsigned long objects_copied, bytes_copied, header_bytes, block_calls;
+	unsigned long objects_copied, bytes_copied, header_bytes, block_calls, partition_bytes;
 	unsigned long misses, catch_ups, fallbacks, reads, views, camera_copies;
 	/* verify */
 	unsigned long *verify_begin, *verify_end; /* [type][word]: blocks that differ from the game state's at the view's start and end */
 	unsigned long verify_objects_begin, verify_objects_end, verify_views;
 	unsigned long verify_size_differences;
+	unsigned long verify_partition_begin, verify_partition_end; /* lists' words that differ from the game state's, summed over the views */
 } s = { -1 };
 
 struct data_array *tick_snapshot_headers;
@@ -210,12 +229,13 @@ static void tick_snapshot_log(void)
 {
 	const unsigned long captures = s.window_captures ? s.window_captures : 1;
 
-	platform_log("tick snapshot (%lu captures, %lu frames): per capture %lu objects, %lu bytes in %lu copies, headers %lu bytes; "
-		"in the window: %lu misses, %lu catch-ups, %lu fallbacks, %lu reads, %lu camera copies",
-		s.window_captures, s.views, s.objects_copied / captures, (s.bytes_copied + s.header_bytes) / captures, s.block_calls / captures,
-		s.header_bytes / captures, s.misses, s.catch_ups, s.fallbacks, s.reads, s.camera_copies);
+	platform_log("tick snapshot (%lu captures, %lu frames): per capture %lu objects, %lu bytes in all (%lu in %lu object copies, headers %lu, "
+		"cluster lists %lu); in the window: %lu misses, %lu catch-ups, %lu fallbacks, %lu reads, %lu camera copies",
+		s.window_captures, s.views, s.objects_copied / captures,
+		(s.bytes_copied + s.header_bytes + s.partition_bytes) / captures, s.bytes_copied / captures, s.block_calls / captures,
+		s.header_bytes / captures, s.partition_bytes / captures, s.misses, s.catch_ups, s.fallbacks, s.reads, s.camera_copies);
 	s.window_captures = 0;
-	s.objects_copied = s.bytes_copied = s.header_bytes = s.block_calls = 0;
+	s.objects_copied = s.bytes_copied = s.header_bytes = s.block_calls = s.partition_bytes = 0;
 	s.misses = s.catch_ups = s.fallbacks = s.reads = s.views = s.camera_copies = 0;
 }
 
@@ -263,6 +283,50 @@ static void tick_snapshot_copy_block(long absolute_index, struct object_header_d
 	s.block_calls++;
 }
 
+/* the object partitions' lists (the clusters' first references and the references in use), as the ticks left them */
+static void tick_snapshot_capture_partitions(void)
+{
+	long partition_index;
+
+	s.partitions[0].live = &collideable_object_cluster_partition;
+	s.partitions[1].live = &noncollideable_object_cluster_partition;
+	for (partition_index = 0; partition_index < PARTITION_COUNT; partition_index++)
+	{
+		struct partition_copy *copy = &s.partitions[partition_index];
+		struct cluster_partition const *live = copy->live;
+		struct data_array const *references = live->data_reference_data;
+
+		copy->valid = FALSE;
+		if (!live->cluster_first_data_references || !references || !references->valid)
+			continue;
+		memcpy(copy->first_references, live->cluster_first_data_references, sizeof(copy->first_references));
+		copy->references = *references;
+		if (copy->references.count > HALO_PORT_MAXIMUM_CLUSTER_REFERENCES)
+			copy->references.count = HALO_PORT_MAXIMUM_CLUSTER_REFERENCES;
+		memcpy(copy->entries, references->data, (size_t)copy->references.count * sizeof(copy->entries[0]));
+		copy->references.data = copy->entries;
+		copy->view = *live;
+		copy->view.cluster_first_data_references = copy->first_references;
+		copy->view.data_reference_data = &copy->references;
+		copy->valid = TRUE;
+		s.partition_bytes += sizeof(copy->first_references) + (unsigned long)copy->references.count * sizeof(copy->entries[0]);
+	}
+}
+
+struct cluster_partition const *tick_snapshot_cluster_partition(struct cluster_partition const *live)
+{
+	long partition_index;
+
+	if (!tick_snapshot_headers)
+		return live;
+	for (partition_index = 0; partition_index < PARTITION_COUNT; partition_index++)
+	{
+		if (s.partitions[partition_index].live == live && s.partitions[partition_index].valid)
+			return &s.partitions[partition_index].view;
+	}
+	return live;
+}
+
 void tick_snapshot_capture(void)
 {
 	struct data_array const *live = object_header_data;
@@ -302,6 +366,7 @@ void tick_snapshot_capture(void)
 	for (; index < previous_count && index < MAXIMUM_OBJECTS_PER_MAP; index++)
 		s.copied[index] = FALSE;
 	(void)blocks_ticks;
+	tick_snapshot_capture_partitions();
 	ADD(PART_BLOCKS, headers_started);
 	s.valid = TRUE;
 	s.dirty = FALSE;
@@ -328,6 +393,8 @@ void tick_snapshot_reset(void)
 		s.field_identifier[index] = 0;
 	}
 	memset(s.cameras, 0, sizeof(s.cameras));
+	for (index = 0; index < PARTITION_COUNT; index++)
+		s.partitions[index].valid = FALSE;
 	tick_snapshot_headers = NULL;
 }
 
@@ -520,6 +587,30 @@ static void tick_snapshot_verify(boolean at_end)
 		s.verify_objects_end += objects;
 	else
 		s.verify_objects_begin += objects;
+	/* the cluster lists: the first references and the entries in use */
+	for (index = 0; index < PARTITION_COUNT; index++)
+	{
+		struct partition_copy const *copy = &s.partitions[index];
+		unsigned long differing = 0;
+		long word;
+
+		if (!copy->valid || !copy->live->cluster_first_data_references || !copy->live->data_reference_data->valid)
+			continue;
+		for (word = 0; word < MAXIMUM_CLUSTERS_PER_STRUCTURE; word++)
+			differing += copy->first_references[word] != copy->live->cluster_first_data_references[word];
+		if (copy->live->data_reference_data->count != copy->references.count)
+			differing++;
+		for (word = 0; word < copy->references.count && word < copy->live->data_reference_data->count; word++)
+		{
+			struct data_reference const *live_entry = (struct data_reference const *)copy->live->data_reference_data->data + word;
+
+			differing += memcmp(live_entry, &copy->entries[word], sizeof(*live_entry)) != 0;
+		}
+		if (at_end)
+			s.verify_partition_end += differing;
+		else
+			s.verify_partition_begin += differing;
+	}
 }
 
 /* the name of a word of an object's block, as far as the common part goes */
@@ -594,9 +685,10 @@ static void tick_snapshot_verify_log(void)
 	long type, word, lines = 0;
 
 	platform_log("tick snapshot verify (%lu views): differing objects a view at its start %lu (changed since the capture), at its end %lu "
-		"(written by the frame); blocks of another size %lu",
+		"(written by the frame); blocks of another size %lu; cluster list entries that differ, in all: %lu at the start, %lu at the end",
 		s.verify_views, s.verify_objects_begin / (s.verify_views ? s.verify_views : 1),
-		s.verify_objects_end / (s.verify_views ? s.verify_views : 1), s.verify_size_differences);
+		s.verify_objects_end / (s.verify_views ? s.verify_views : 1), s.verify_size_differences, s.verify_partition_begin,
+		s.verify_partition_end);
 	for (type = 0; type < VERIFY_TYPES; type++)
 	{
 		for (word = 0; word < VERIFY_WORDS && lines < 40; word++)

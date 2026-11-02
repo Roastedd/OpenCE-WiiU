@@ -370,6 +370,11 @@ long cluster_partition_get_next_datum(
 	struct cluster_partition const *partition,
 	long *reference_index)
 {
+#ifdef HALO_WIIU
+	/* port: the snapshot's copy of the partition while a frame is drawn from it (tick_snapshot.c) */
+	if (tick_snapshot_viewing())
+		partition = tick_snapshot_cluster_partition(partition);
+#endif
 	return reference_list_get_next_datum_index(partition->data_reference_data, reference_index);
 }
 
@@ -486,6 +491,10 @@ long cluster_partition_get_first_datum(
 	long *reference_index,
 	short cluster_index)
 {
+#ifdef HALO_WIIU
+	if (tick_snapshot_viewing())
+		partition = tick_snapshot_cluster_partition(partition);
+#endif
 	*reference_index = *cluster_partition_get_first_reference((struct cluster_partition *)partition, cluster_index);
 
 	return reference_list_get_next_datum_index(partition->data_reference_data, reference_index);

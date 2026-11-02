@@ -25,6 +25,9 @@ void tick_snapshot_objects_changed(void);
 void tick_snapshot_view_begin(void);
 void tick_snapshot_view_end(void);
 int tick_snapshot_viewing(void);
+struct cluster_partition;
+/* the snapshot's copy of the object cluster partitions (the others are not copied: the partition itself) */
+struct cluster_partition const *tick_snapshot_cluster_partition(struct cluster_partition const *live);
 /* the console's timers (port/wiiu/src/wiiu_tick_snapshot_timers.c installs them; none on the host): a time to start with, and the time since it
 added to a part (tick_snapshot.c numbers them) */
 unsigned long long tick_snapshot_time(void);
