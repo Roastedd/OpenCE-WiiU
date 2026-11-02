@@ -1170,6 +1170,25 @@ static void screenshot_record(
 	return;
 }
 
+#ifndef HALO_WEB
+#include <stdlib.h>
+static boolean main_study_setting_cached_no_camera_effect(
+	void)
+{
+	static int skip = -1;
+
+	if (skip < 0)
+	{
+		char const *value = getenv("HALO_STUDY_NO_CAMERA_EFFECT");
+
+		skip = value && *value && strtol(value, NULL, 10) > 0;
+	}
+	return skip != 0;
+}
+#else
+#define main_study_setting_cached_no_camera_effect() FALSE
+#endif
+
 void set_window_camera_values(
 	struct render_window *window,
 	struct observer_result const *observer)
@@ -1186,7 +1205,9 @@ void set_window_camera_values(
 					observer->field_of_view),
 				1.0f));
 
+		/* port: the study's HALO_STUDY_NO_CAMERA_EFFECT=1 leaves it out (main_render_repeat) */
 		if (window->local_player_index != NONE &&
+			!main_study_setting_cached_no_camera_effect() &&
 			!console_is_active() &&
 			!game_time_get_paused() &&
 			director_get_perspective(window->local_player_index) !=
@@ -3345,6 +3366,187 @@ void main_loop_of_death(
 	return;
 }
 
+/* port: the game's ticks on a thread of their own, overlapped with drawing in the end (the tools repository's
+reports/research/2026-11-01/ticks-off-thread.md, ticks-stage1.md). Switches, read once, from the environment (the Wii U has none: its one is
+halo/tick_thread.txt, wiiu_study.c):
+- HALO_RENDER_REPEAT=<n>: every frame drawn n times (0: not at all), to show
+  that what the ticks compute does not depend on how often the world is drawn
+  between them, which overlapping them with drawing needs;
+- HALO_TICK_THREAD=1: game_time_update run on a second thread while this one
+  waits for it. Nothing runs at the same time yet, so the ticks must come out
+  exactly as they do on one thread; on the Wii U it is core 0, whose cache is a
+  quarter of core 1's, to measure a tick's cost there beside the audio mixer.
+  What the thread does not share with the game's: the random seed's lock count,
+  the collision log's stack (and, on the Wii U, its counts), the frame's
+  interpolation and function-render modes, the profile, the diagnostics buffer;
+  and one lock covers the log's lines (error, terminal_printf). The renderer
+  finds its objects with a set of its own (render_objects.c). */
+#ifndef HALO_WEB
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef HALO_WIIU
+void wiiu_fpu_setup(void);
+void wiiu_thread_off_game_core(void);
+void wiiu_tag_thread(const char *name);
+int wiiu_tick_thread_priority(void);
+void wiiu_tick_thread_gate(void);
+void wiiu_study_tick_thread_report(void);
+#endif
+
+static long main_study_setting(
+	char const *name,
+	long fallback)
+{
+	char const *value = getenv(name);
+
+#ifdef HALO_WIIU
+	/* (the console has no environment: the ticks' thread is halo/tick_thread.txt's number, 1 for core 0; port/wiiu/src/wiiu_study.c
+	reads it, as this file's fopen takes the Xbox's paths) */
+	if (!strcmp(name, "HALO_TICK_THREAD"))
+	{
+		long wiiu_study_number(const char *name, long fallback);
+
+		return wiiu_study_number("tick_thread.txt", fallback);
+	}
+#endif
+	return value && *value ? strtol(value, NULL, 10) : fallback;
+}
+
+static long main_render_repeat(
+	void)
+{
+	static long repeat = -1;
+
+	if (repeat < 0)
+	{
+		repeat = main_study_setting("HALO_RENDER_REPEAT", 1);
+		if (repeat < 0)
+			repeat = 1;
+		if (repeat != 1)
+			error(_error_silent, "study: every frame drawn %ld times (HALO_RENDER_REPEAT)", repeat);
+	}
+	return repeat;
+}
+
+static boolean main_study_no_sound_render(
+	void)
+{
+	static long skip = -1;
+
+	if (skip < 0)
+		skip = main_study_setting("HALO_STUDY_NO_SOUND_RENDER", 0) > 0;
+	return skip != 0;
+}
+
+static boolean main_study_skip_frame(
+	void)
+{
+	static long skip = -1;
+
+	if (skip < 0)
+		skip = main_study_setting("HALO_RENDER_SKIP_FRAME", 0) > 0;
+	return skip != 0;
+}
+
+/* (the same 8 MiB as the game's own thread: port/wiiu/src/wiiu_shell.c) */
+#define MAIN_TICK_THREAD_STACK_BYTES (8 * 1024 * 1024)
+
+static struct
+{
+	int state; /* -1 not set up yet, 0 off, 1 running */
+	pthread_t thread;
+	pthread_mutex_t mutex;
+	pthread_cond_t posted;
+	pthread_cond_t done;
+	boolean pending;
+	real time_delta_sec;
+} main_tick_thread = { -1 };
+
+static void *main_tick_thread_run(
+	void *unused)
+{
+	(void)unused;
+#ifdef HALO_WIIU
+	/* (what every thread that runs game code needs: wiiu_shell.h) */
+	wiiu_fpu_setup();
+	wiiu_thread_off_game_core();
+	wiiu_tick_thread_priority();
+	wiiu_tag_thread("ticks");
+	wiiu_study_tick_thread_report();
+#endif
+	/* (no part in the profile: its stack of sections and the frame's record are the game thread's) */
+	profile_thread_disable();
+	pthread_mutex_lock(&main_tick_thread.mutex);
+	for (;;)
+	{
+		while (!main_tick_thread.pending)
+			pthread_cond_wait(&main_tick_thread.posted, &main_tick_thread.mutex);
+		pthread_mutex_unlock(&main_tick_thread.mutex);
+#ifdef HALO_WIIU
+		/* (HOME and closing hold this thread before a tick, as they hold the game thread at its safe points) */
+		wiiu_tick_thread_gate();
+#endif
+		game_time_update(main_tick_thread.time_delta_sec);
+		pthread_mutex_lock(&main_tick_thread.mutex);
+		main_tick_thread.pending = FALSE;
+		pthread_cond_signal(&main_tick_thread.done);
+	}
+	return NULL;
+}
+
+static void main_game_time_update(
+	real time_delta_sec)
+{
+	if (main_tick_thread.state < 0)
+	{
+		pthread_attr_t attributes;
+
+		main_tick_thread.state = 0;
+		if (main_study_setting("HALO_TICK_THREAD", 0) > 0 &&
+			pthread_mutex_init(&main_tick_thread.mutex, NULL) == 0 &&
+			pthread_cond_init(&main_tick_thread.posted, NULL) == 0 &&
+			pthread_cond_init(&main_tick_thread.done, NULL) == 0 &&
+			pthread_attr_init(&attributes) == 0)
+		{
+			pthread_attr_setstacksize(&attributes, MAIN_TICK_THREAD_STACK_BYTES);
+			if (pthread_create(&main_tick_thread.thread, &attributes, main_tick_thread_run, NULL) == 0)
+				main_tick_thread.state = 1;
+			pthread_attr_destroy(&attributes);
+			error(_error_silent, "study: the ticks on a thread of their own (HALO_TICK_THREAD): %s",
+				main_tick_thread.state ? "running" : "could not be started");
+#ifdef HALO_WIIU
+			{
+				void platform_log(const char *format, ...);
+
+				platform_log("study: the ticks on a thread of their own on core 0 (tick_thread.txt), the game thread waiting: %s",
+					main_tick_thread.state ? "running" : "could not be started");
+			}
+#endif
+		}
+	}
+	if (!main_tick_thread.state)
+	{
+		game_time_update(time_delta_sec);
+		return;
+	}
+	pthread_mutex_lock(&main_tick_thread.mutex);
+	main_tick_thread.time_delta_sec = time_delta_sec;
+	main_tick_thread.pending = TRUE;
+	pthread_cond_signal(&main_tick_thread.posted);
+	while (main_tick_thread.pending)
+		pthread_cond_wait(&main_tick_thread.done, &main_tick_thread.mutex);
+	pthread_mutex_unlock(&main_tick_thread.mutex);
+}
+#else
+#define main_render_repeat() 1L
+#define main_study_skip_frame() FALSE
+#define main_study_no_sound_render() FALSE
+#define main_game_time_update game_time_update
+#endif
+
 static void main_game_render(
 	double time_delta_since_tick_sec)
 {
@@ -3358,7 +3560,9 @@ static void main_game_render(
 
 	lock_global_random_seed();
 	collision_log_continue_period(TRUE);
-	sound_render();
+	/* port: the study's HALO_STUDY_NO_SOUND_RENDER=1 leaves it out */
+	if (!main_study_no_sound_render())
+		sound_render();
 	force_single_screen = game_engine_force_single_screen();
 	last_local_player_index = NONE;
 
@@ -3422,7 +3626,12 @@ static void main_game_render(
 	window->console_window = TRUE;
 	set_window_camera_values(window, NULL);
 
-	if (global_screenshot_count.count <= 0)
+	/* port: the study's HALO_RENDER_SKIP_FRAME=1: the frame's cameras and
+	sound done, its world not drawn (main_render_repeat) */
+	if (main_study_skip_frame())
+	{
+	}
+	else if (global_screenshot_count.count <= 0)
 	{
 		render_frame(
 			global_screenshot_count.windows,
@@ -3733,12 +3942,12 @@ static boolean main_loop_iteration(
 						void wiiu_frame_part(int part, int ticks);
 
 						wiiu_frame_part(0, 0);
-						game_time_update((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);
+						main_game_time_update((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);
 						wiiu_frame_part(1, game_time_get_elapsed());
 					}
 #else
 					profile_scope(main_game_time_update_section,
-						game_time_update((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);)
+						main_game_time_update((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);)
 #endif
 
 					render_frame = main_globals.main_menu_scenario_loaded ||
@@ -3771,12 +3980,20 @@ static boolean main_loop_iteration(
 					{
 						void wiiu_frame_part(int part, int ticks);
 
+						long repeat;
+
 						wiiu_frame_part(2, 0);
-						main_game_render((double)main_globals.seconds_elapsed);
+						for (repeat = 0; repeat < main_render_repeat(); repeat++)
+							main_game_render((double)main_globals.seconds_elapsed);
 						wiiu_frame_part(3, 0);
 					}
 #else
-					main_game_render((double)main_globals.seconds_elapsed);
+					{
+						long repeat;
+
+						for (repeat = 0; repeat < main_render_repeat(); repeat++)
+							main_game_render((double)main_globals.seconds_elapsed);
+					}
 #endif
 					render_interpolation_frame_end();
 					profile_render_end();

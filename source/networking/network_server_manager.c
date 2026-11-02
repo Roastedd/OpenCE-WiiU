@@ -4456,6 +4456,8 @@ void get_unique_random_color(
 	long attempt_count = 0;
 	long color_index;
 	boolean unique;
+	unsigned long kept_seed = *get_global_local_random_seed_address();
+	boolean test_seed = random_math_test_seed(get_global_local_random_seed_address());
 
 	do
 	{
@@ -4483,6 +4485,9 @@ void get_unique_random_color(
 	}
 	while (!unique && attempt_count < MAXIMUM_UNIQUE_COLOR_ATTEMPTS);
 
+	/* (a test run's colour came from a seed of its own: the game's local numbers go on as they were) */
+	if (test_seed)
+		*get_global_local_random_seed_address() = kept_seed;
 	player->primary_color_index = (short)color_index;
 
 	return;

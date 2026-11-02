@@ -98,8 +98,16 @@ index, which reads no function: 0 */
 #define OBJECT_FRAME_INDEX_GET(object_index) ((object_index) + game_time_get())
 
 /* port: set while a frame is drawn, so a function read for the picture is
-the tick's value moved into the frame */
-static int object_function_render_depth = 0;
+the tick's value moved into the frame. It is the drawing thread's own (a tick
+on a thread of its own, beside the drawing, must read the tick's values), and
+object_function_render_threads, which says whether any thread has it set, lets
+the tick's reads skip the thread's lookup when none has: on the Wii U a
+__thread variable is a call, and a function is read for every object a tick
+updates. */
+static __thread int object_function_render_depth = 0;
+static volatile long object_function_render_threads = 0;
+
+#define OBJECT_FUNCTION_RENDERING_HERE() (object_function_render_threads > 0 && object_function_render_depth > 0)
 
 static real object_function_addition(
 	struct object_datum *object,
@@ -1587,9 +1595,15 @@ void object_functions_set_for_render(
 	boolean for_render)
 {
 	if (for_render)
-		object_function_render_depth++;
+	{
+		if (!object_function_render_depth++)
+			__sync_fetch_and_add(&object_function_render_threads, 1);
+	}
 	else if (object_function_render_depth > 0)
-		object_function_render_depth--;
+	{
+		if (!--object_function_render_depth)
+			__sync_fetch_and_sub(&object_function_render_threads, 1);
+	}
 }
 
 void object_function_inputs_forget(
@@ -1696,7 +1710,7 @@ boolean object_get_function_value(
 		it reads as off */
 		if (VALID_INDEX(function_index, NUMBER_OF_OUTGOING_OBJECT_FUNCTIONS))
 		{
-			if (object_function_render_depth > 0)
+			if (OBJECT_FUNCTION_RENDERING_HERE())
 			{
 				real shown[NUMBER_OF_OUTGOING_OBJECT_FUNCTIONS];
 

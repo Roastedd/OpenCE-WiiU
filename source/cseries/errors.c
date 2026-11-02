@@ -360,6 +360,9 @@ void error(
 		0x61,
 		priority>=0 && priority<NUMBER_OF_ERROR_MESSAGE_PRIORITIES);
 
+	/* port: one thread at a time (a tick on a thread of its own notes errors too: the counts, the line buffers and the terminal are shared) */
+	halo_shared_lock_acquire(&halo_log_lock);
+
 	if (error_globals.overflow_suppression && priority == _error_silent)
 	{
 		long time = system_milliseconds();
@@ -478,6 +481,8 @@ void error(
 		}
 		error_globals.recursion_lock = FALSE;
 	}
+
+	halo_shared_lock_release(&halo_log_lock);
 
 	return;
 }

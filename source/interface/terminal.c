@@ -159,9 +159,11 @@ void terminal_clear(
 {
 	if (terminal_globals.initialized)
 	{
+		halo_shared_lock_acquire(&halo_log_lock);
 		terminal_globals.newest_output_line_index = NONE;
 		terminal_globals.oldest_output_line_index = NONE;
 		data_delete_all(terminal_globals.output_lines);
+		halo_shared_lock_release(&halo_log_lock);
 	}
 
 	return;
@@ -257,17 +259,32 @@ void terminal_draw(
 
 		if (terminal_render_enable)
 		{
-			struct output_line_datum *line;
+			/* port: the lines to draw are copied under the log's lock (a tick on a thread of its own adds lines through terminal_printf), and drawn
+			after it, so that a line is never waited for through the drawing */
+			struct output_line_datum lines[OUTPUT_MAXIMUM_LINES];
+			long line_count = 0;
 			long line_index;
 			short height = render.camera.window_bounds.y1 - line_height;
+			short count_height = height;
+			long copied;
 
+			halo_shared_lock_acquire(&halo_log_lock);
 			for (line_index = terminal_globals.newest_output_line_index;
-				line_index!=NONE && height - line_height > 0;
-				line_index = line->older_line_index)
+				line_index!=NONE && count_height - line_height > 0 && line_count < OUTPUT_MAXIMUM_LINES;)
 			{
+				struct output_line_datum *line = output_line_get(line_index);
+
+				lines[line_count++] = *line;
+				count_height -= line_height;
+				line_index = line->older_line_index;
+			}
+			halo_shared_lock_release(&halo_log_lock);
+
+			for (copied = 0; copied < line_count; copied++)
+			{
+				struct output_line_datum *line = &lines[copied];
 				real fade_progress;
 
-				line = output_line_get(line_index);
 				fade_progress = 4.f - line->timer * 0.033333335f;
 
 				color = line->color;
@@ -363,7 +380,12 @@ void terminal_printf(
 
 	if (terminal_globals.initialized)
 	{
-		long line_index = terminal_new_line();
+		long line_index;
+
+		/* port: one thread at a time (error() holds the same lock): a tick on a thread of its own prints lines while the game thread's frame
+		ages and draws them */
+		halo_shared_lock_acquire(&halo_log_lock);
+		line_index = terminal_new_line();
 		match_assert("c:\\halo\\SOURCE\\interface\\terminal.c", 397, format);
 
 		if (line_index!=NONE)
@@ -384,6 +406,7 @@ void terminal_printf(
 			(port/linux/src/server_console.c) */
 			server_console_output(line->buffer);
 		}
+		halo_shared_lock_release(&halo_log_lock);
 	}
 
 	va_end(arglist);
@@ -462,7 +485,7 @@ static void terminal_update_output(
 	void)
 {
 	struct output_line_datum *line;
-	long line_index = terminal_globals.newest_output_line_index;
+	long line_index;
 	/* This runs once a frame, several frames per tick on the native builds
 	(port/linux/game/render_interpolation.c): count the line timers in 30 Hz
 	ticks of real time, as they counted on the Xbox, not in frames. */
@@ -473,6 +496,8 @@ static void terminal_update_output(
 	ticks = (long)leftover_ticks;
 	leftover_ticks -= (real)ticks;
 
+	halo_shared_lock_acquire(&halo_log_lock);
+	line_index = terminal_globals.newest_output_line_index;
 	while (line_index!=NONE)
 	{
 		long older_line_index;
@@ -487,6 +512,7 @@ static void terminal_update_output(
 		}
 		line_index = older_line_index;
 	}
+	halo_shared_lock_release(&halo_log_lock);
 
 	return;
 }

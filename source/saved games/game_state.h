@@ -58,6 +58,10 @@ void game_state_save_core(
 	const char *name);
 boolean game_state_reverted(
 	void);
+/* port: HALO_TICK_HASH=<n> in the environment logs a hash of each CPU region every n-th tick (game_state.c) */
+void game_state_tick_hash(
+	long tick);
+
 void *game_state_malloc(
 	const char *name,
 	const char *type,

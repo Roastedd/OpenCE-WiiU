@@ -842,6 +842,9 @@ real_vector3d *matrix3x3_transform_vector(real_matrix3x3 const *matrix, real_vec
 
 unsigned long *get_global_random_seed_address(void);
 unsigned long *get_global_local_random_seed_address(void);
+/* port: sets *seed to debug.random_seed and returns TRUE when HALO_MAP_START_SEED=1 (a host test aid, random_math.c); else FALSE and *seed is left */
+boolean random_math_test_seed(
+	unsigned long *seed);
 void random_seed_debug_log(
 	boolean log);
 void random_math_initialize(

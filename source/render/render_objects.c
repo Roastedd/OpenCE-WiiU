@@ -417,10 +417,38 @@ static boolean object_is_first_person_camera(
 		scripted_camera_object_is_first_person_camera(object_index);
 }
 
+/* port: the objects this frame has found, a bit for each (by absolute index), the renderer's own. The game marks an object it has met in its
+magic_number (object_mark_function) and the ticks do the same in their searches (the AI's, the collision tests'), so the drawing marking at the
+same time as a tick that runs beside it would make a search skip an object the other had marked: a tick that depends on drawing. The set is
+cleared for every search of the frame and not written to anything the simulation reads. */
+static unsigned long render_object_visited[BIT_VECTOR_SIZE_IN_LONGS(MAXIMUM_OBJECTS_PER_MAP)];
+
+static boolean render_object_unvisited(
+	long object_index)
+{
+	long absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
+
+	return absolute_index >= MAXIMUM_OBJECTS_PER_MAP || !BIT_VECTOR_TEST_FLAG(render_object_visited, absolute_index);
+}
+
+static boolean render_object_visit(
+	long object_index)
+{
+	long absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
+	boolean first;
+
+	if (absolute_index >= MAXIMUM_OBJECTS_PER_MAP)
+		return TRUE;
+	first = !BIT_VECTOR_TEST_FLAG(render_object_visited, absolute_index);
+	BIT_VECTOR_SET_FLAG(render_object_visited, absolute_index, TRUE);
+
+	return first;
+}
+
 static void find_rendered_objects(
 	void)
 {
-	object_marker_begin();
+	csmemset(render_object_visited, 0, sizeof(render_object_visited));
 
 	render_object_globals.rendered_object_count = structure_visibility_find_objects(
 		render_object_globals.rendered_object_indices,
@@ -428,8 +456,8 @@ static void find_rendered_objects(
 		cluster_get_first_collideable_object,
 		cluster_get_next_collideable_object,
 		object_get_render_bounding_sphere,
-		object_unmarked_function,
-		object_mark_function);
+		render_object_unvisited,
+		render_object_visit);
 
 	render_object_globals.rendered_object_count += structure_visibility_find_objects(
 		&render_object_globals.rendered_object_indices[
@@ -438,10 +466,8 @@ static void find_rendered_objects(
 		cluster_get_first_noncollideable_object,
 		cluster_get_next_noncollideable_object,
 		object_get_render_bounding_sphere,
-		object_unmarked_function,
-		object_mark_function);
-
-	object_marker_end();
+		render_object_unvisited,
+		render_object_visit);
 
 	if (render_object_globals.rendered_object_count == MAXIMUM_RENDERED_OBJECTS &&
 		!reported_rendered_object_overflow)

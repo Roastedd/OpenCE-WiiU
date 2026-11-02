@@ -124,6 +124,7 @@ symbols in this file:
 #include "lruv_cache.h"
 #include "memory_pool.h"
 #include "cluster_partitions.h"
+#include <stdlib.h>
 /* port: object_bounds_cache.c's */
 void object_bounds_cache_invalidate(void);
 
@@ -552,6 +553,20 @@ static void game_state_allocation_record(
 	return;
 }
 
+/* port: the regions the game state's allocators handed out, kept for game_state_tick_hash */
+enum
+{
+	MAXIMUM_GAME_STATE_HASH_REGIONS = 128,
+};
+
+static struct
+{
+	char name[48]; /* (a copy: some callers format the name into a buffer they use again) */
+	byte const *address;
+	long size;
+} game_state_hash_regions[MAXIMUM_GAME_STATE_HASH_REGIONS];
+static long game_state_hash_region_count;
+
 static void game_state_set_revert_time(
 	void)
 {
@@ -576,10 +591,118 @@ void *game_state_malloc(
 
 	pointer = (byte *)game_state_globals.base_address+game_state_globals.cpu_allocation_size;
 	game_state_globals.cpu_allocation_size+= size;
+	if (game_state_hash_region_count < MAXIMUM_GAME_STATE_HASH_REGIONS)
+	{
+		strncpy(game_state_hash_regions[game_state_hash_region_count].name, name ? name : "", sizeof(game_state_hash_regions[0].name) - 1);
+		game_state_hash_regions[game_state_hash_region_count].name[sizeof(game_state_hash_regions[0].name) - 1] = 0;
+		game_state_hash_regions[game_state_hash_region_count].address = pointer;
+		game_state_hash_regions[game_state_hash_region_count].size = size;
+		game_state_hash_region_count++;
+	}
 
 	crc_checksum_buffer((unsigned long *)&game_state_globals.allocation_size_checksum, &size, sizeof(size));
 
 	return pointer;
+}
+
+/* port: HALO_TICK_HASH=<n> (the environment; the host builds and the digest harness) logs, every n-th tick, a hash of each of the game state's
+CPU regions (the arrays the simulation keeps, and the render-owned ones beside them), so that two runs of the ticks can be compared by what they
+leave in memory and not only by the players' states that tools/ppc-be/compare_network_tests.py reads (reports/research/2026-11-01/
+ticks-off-thread.md 8, check 2). Each line is "tick hash <tick> <region>:<hash> ..."; the first call says what the regions are. The hash is
+FNV-1a over the region's words, as the machine stores them (not comparable between a big-endian and a little-endian machine). */
+/* HALO_TICK_DUMP=<tick>:<region>,<region>... writes those regions as they are at that tick to d:\\tickdump-<tick>-<region>.bin (what two runs
+that differ in a region's hash differ by, byte for byte) */
+static void game_state_tick_dump(
+	long tick)
+{
+	static long dump_tick = -2;
+	static long regions[MAXIMUM_GAME_STATE_HASH_REGIONS];
+	static long region_count;
+
+	if (dump_tick == -2)
+	{
+		char const *setting = getenv("HALO_TICK_DUMP");
+		char *end;
+
+		dump_tick = -1;
+		if (setting && *setting)
+		{
+			dump_tick = strtol(setting, &end, 10);
+			while (*end == ':' || *end == ',')
+			{
+				if (region_count < MAXIMUM_GAME_STATE_HASH_REGIONS)
+					regions[region_count++] = strtol(end + 1, &end, 10);
+				else
+					break;
+			}
+		}
+	}
+	if (dump_tick == tick)
+	{
+		long index;
+
+		for (index = 0; index < region_count; index++)
+		{
+			if (regions[index] >= 0 && regions[index] < game_state_hash_region_count)
+			{
+				char path[64];
+				FILE *file;
+
+				sprintf(path, "d:\\tickdump-%ld-%ld.bin", tick, regions[index]);
+				file = fopen(path, "wb");
+				if (file)
+				{
+					fwrite(game_state_hash_regions[regions[index]].address, 1, (size_t)game_state_hash_regions[regions[index]].size, file);
+					fclose(file);
+				}
+			}
+		}
+	}
+}
+
+void game_state_tick_hash(
+	long tick)
+{
+	static long every = -1;
+	static boolean described;
+
+	game_state_tick_dump(tick);
+
+	if (every < 0)
+	{
+		char const *setting = getenv("HALO_TICK_HASH");
+
+		every = setting && *setting ? atol(setting) : 0;
+	}
+	if (every > 0 && tick % every == 0)
+	{
+		char line[2048];
+		long region_index;
+		long length = 0;
+
+		if (!described)
+		{
+			described = TRUE;
+			for (region_index = 0; region_index < game_state_hash_region_count; region_index++)
+				platform_log("tick hash region %ld: %s, %ld bytes at %08lx", region_index, game_state_hash_regions[region_index].name,
+					game_state_hash_regions[region_index].size, (unsigned long)(size_t)game_state_hash_regions[region_index].address);
+		}
+		length = sprintf(line, "tick hash %ld:", tick);
+		for (region_index = 0; region_index < game_state_hash_region_count; region_index++)
+		{
+			unsigned int const *words = (unsigned int const *)game_state_hash_regions[region_index].address;
+			long count = game_state_hash_regions[region_index].size / 4;
+			unsigned int hash = 2166136261U;
+			long word_index;
+
+			for (word_index = 0; word_index < count; word_index++)
+				hash = (hash ^ words[word_index]) * 16777619U;
+			length += sprintf(line + length, " %ld:%08x", region_index, hash);
+			if (length > (long)sizeof(line) - 32)
+				break;
+		}
+		platform_log("%s", line);
+	}
 }
 
 void *game_state_gpu_malloc(
