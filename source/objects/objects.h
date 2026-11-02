@@ -234,8 +234,15 @@ struct object_header_datum
 };
 
 #ifdef HALO_WIIU
-/* port: non-NULL only while this thread draws a frame from the tick snapshot (port/linux/game/tick_snapshot.c) */
-extern struct data_array *tick_snapshot_headers;
+/* the captures the tick snapshot keeps (tick_snapshot.c's ring) */
+#define TICK_SNAPSHOT_SLOTS 4
+/* port: non-NULL only while this thread draws a frame from the tick snapshot (port/linux/game/tick_snapshot.c). The view belongs to the thread that
+draws, found by the core it runs on (the ticks may run on another core, beside the drawing: they must read the game state): the plain
+flag says whether any thread has one, so that the ticks' reads, which are most of the game's, cost a load and a branch when none does. */
+extern volatile int tick_snapshot_view_any;
+extern struct data_array *volatile tick_snapshot_view_for_core[4];
+int wiiu_current_core(void);
+#define tick_snapshot_headers (tick_snapshot_view_any ? tick_snapshot_view_for_core[wiiu_current_core() & 3] : (struct data_array *)0)
 struct object_header_datum *tick_snapshot_object_header_get(long object_index);
 struct object_header_datum *tick_snapshot_object_header_try_and_get(long object_index);
 extern struct data_array *object_header_data;
@@ -469,7 +476,8 @@ void object_function_values_for_render(long object_index, real values[NUMBER_OF_
 object_function_inputs), when a load puts the objects back or a map starts */
 void object_function_inputs_forget(void);
 #ifdef HALO_WIIU
-void object_function_inputs_copy_to_snapshot(long absolute_index);
+void object_function_inputs_copy_to_snapshot(int slot, long absolute_index);
+void object_function_inputs_set_view(int slot);
 #endif
 short objects_in_clusters_by_indices(unsigned long class_flags, short cluster_count, short const *cluster_indices, short maximum_object_count, long *object_indices);
 long object_index_from_name_index(short name_index);

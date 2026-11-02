@@ -59,6 +59,7 @@ OBJECTS.C
 #include "units/units.h"
 #ifdef HALO_WIIU
 #include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
 #endif
 /* port: object_bounds_cache.c's */
 void object_bounds_cache_update(long object_index, real_point3d const *center, real radius);
@@ -246,8 +247,10 @@ static struct object_globals *object_globals = NULL;
 static struct object_function_inputs object_function_inputs[MAXIMUM_OBJECTS_PER_MAP];
 #ifdef HALO_WIIU
 /* port: the snapshot's copy of those inputs, one per object copied (port/linux/game/tick_snapshot.c), which a frame drawn from the snapshot reads */
-static struct object_function_inputs object_function_inputs_snapshot[MAXIMUM_OBJECTS_PER_MAP];
-#define OBJECT_FUNCTION_INPUTS(absolute_index) (tick_snapshot_headers ? &object_function_inputs_snapshot[absolute_index] : &object_function_inputs[absolute_index])
+static struct object_function_inputs object_function_inputs_snapshot[TICK_SNAPSHOT_SLOTS][MAXIMUM_OBJECTS_PER_MAP];
+/* (the slot the drawing thread's view is of; read only by that thread) */
+static int object_function_inputs_view_slot = 0;
+#define OBJECT_FUNCTION_INPUTS(absolute_index) (tick_snapshot_headers ? &object_function_inputs_snapshot[object_function_inputs_view_slot][absolute_index] : &object_function_inputs[absolute_index])
 #else
 #define OBJECT_FUNCTION_INPUTS(absolute_index) (&object_function_inputs[absolute_index])
 #endif
@@ -846,9 +849,28 @@ void object_scripting_set_collideable(
 	return;
 }
 
+#ifdef HALO_WIIU
+/* port: the object marker of the drawing thread, when the ticks run beside the drawing (tick_overlap.h): its tests (the HUD's lines of sight, the
+sound's obstruction) mark the copies of the objects it reads (tick_snapshot.c), with a counter of its own in a range the ticks' never reach, so that
+neither disturbs the other's search */
+#define RENDER_OBJECT_MARKER_FIRST 0x40000000L
+static long render_object_marker = RENDER_OBJECT_MARKER_FIRST;
+static boolean render_object_marker_initialized = FALSE;
+#define OBJECT_MARKER_RENDER() (tick_overlap_markers_split && tick_overlap_thread_is_render())
+#endif
+
 void object_marker_begin(
 	void)
 {
+#ifdef HALO_WIIU
+	if (OBJECT_MARKER_RENDER())
+	{
+		match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 3503, !render_object_marker_initialized);
+		++render_object_marker;
+		render_object_marker_initialized = TRUE;
+		return;
+	}
+#endif
 	match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 3503, !object_globals->object_marker_initialized);
 
 	++global_object_marker;
@@ -860,6 +882,14 @@ void object_marker_begin(
 void object_marker_end(
 	void)
 {
+#ifdef HALO_WIIU
+	if (OBJECT_MARKER_RENDER())
+	{
+		match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 3514, render_object_marker_initialized);
+		render_object_marker_initialized = FALSE;
+		return;
+	}
+#endif
 	match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 3514, object_globals->object_marker_initialized);
 
 	object_globals->object_marker_initialized = FALSE;
@@ -873,6 +903,13 @@ boolean object_unmarked_function(
 	struct object_datum *object = object_get(object_index);
 	boolean result;
 
+#ifdef HALO_WIIU
+	if (OBJECT_MARKER_RENDER())
+	{
+		match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 3526, render_object_marker_initialized);
+		return object->object.magic_number!=render_object_marker;
+	}
+#endif
 	match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 3526, object_globals->object_marker_initialized);
 
 	result = object->object.magic_number!=global_object_marker;
@@ -886,6 +923,18 @@ boolean object_mark_function(
 	boolean result;
 	struct object_datum *object = object_get(object_index);
 
+#ifdef HALO_WIIU
+	if (OBJECT_MARKER_RENDER())
+	{
+		match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 3543, render_object_marker_initialized);
+		if (object->object.magic_number!=render_object_marker)
+		{
+			object->object.magic_number = render_object_marker;
+			return TRUE;
+		}
+		return FALSE;
+	}
+#endif
 	match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 3543, object_globals->object_marker_initialized);
 
 	if (object->object.magic_number!=global_object_marker)
@@ -1649,10 +1698,19 @@ void object_function_inputs_forget(
 #ifdef HALO_WIIU
 /* port: an object's inputs copied into the snapshot (tick_snapshot.c, with its block) */
 void object_function_inputs_copy_to_snapshot(
+	int slot,
 	long absolute_index)
 {
-	if (absolute_index >= 0 && absolute_index < MAXIMUM_OBJECTS_PER_MAP)
-		object_function_inputs_snapshot[absolute_index] = object_function_inputs[absolute_index];
+	if (slot >= 0 && slot < TICK_SNAPSHOT_SLOTS && absolute_index >= 0 && absolute_index < MAXIMUM_OBJECTS_PER_MAP)
+		object_function_inputs_snapshot[slot][absolute_index] = object_function_inputs[absolute_index];
+}
+
+/* the slot the drawing thread's view is of (tick_snapshot_view_begin) */
+void object_function_inputs_set_view(
+	int slot)
+{
+	if (slot >= 0 && slot < TICK_SNAPSHOT_SLOTS)
+		object_function_inputs_view_slot = slot;
 }
 #endif
 
