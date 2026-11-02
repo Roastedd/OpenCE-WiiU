@@ -64,10 +64,26 @@ enum
 
 /* ---------- prototypes/COLLISION_USAGE.C */
 
+/* port: the log of the collision tests is compiled out on the Wii U (HALO_WIIU). Its counts and its periods were globals written by whatever
+thread made a test, which the ticks on a thread of their own would share with the frame's code, and only a debug display
+(collision_log_render_enable) read them. Each of the tests asks for a count and, with the time shown (collision_log_time, off unless a console command sets it), a clock:
+here that is nothing. The stack of users (global_current_collision_users) stays, as each thread's own. */
+#ifdef HALO_WIIU
+#define collision_log_render() ((void)0)
+#define collision_log_start_time(start_time) ((void)((start_time)->QuadPart = 0))
+#define collision_log_end_time(collision_function, end_time) ((void)0)
+#define collision_log_usage(collision_function) ((void)0)
+#define collision_log_display(buffer) ((void)0)
+#define collision_log_begin_period(time_period) ((void)0)
+#define collision_log_continue_period(time_period) ((void)0)
+#define collision_log_end_period() ((void)0)
+#endif
+
 void collision_log_initialize(
 	void);
 void collision_log_enable(
 	boolean enable);
+#ifndef HALO_WIIU
 void collision_log_render(
 	void);
 void collision_log_start_time(
@@ -85,11 +101,12 @@ void collision_log_continue_period(
 	short time_period);
 void collision_log_end_period(
 	void);
+#endif
 
 /* ---------- globals */
 
-extern short global_current_collision_user_depth;
-extern short global_current_collision_users[MAXIMUM_COLLISION_USER_STACK_DEPTH];
+extern __thread short global_current_collision_user_depth;
+extern __thread short global_current_collision_users[MAXIMUM_COLLISION_USER_STACK_DEPTH];
 
 /* ---------- public code */
 

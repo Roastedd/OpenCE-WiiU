@@ -213,15 +213,23 @@ boolean collision_log_extended = FALSE;
 boolean collision_log_totals_only = FALSE;
 boolean collision_log_time = FALSE;
 
-short global_current_collision_user_depth = 0;
+/* port: the stack of who is using the collision tests is each thread's own (the ticks may run on a thread of their own, and the frame's code on
+the game thread pushes and pops too: one stack, written by both, was lost updates past the end of the array). A thread begins with the bottom
+entry, "unknown", as collision_log_initialize leaves the game's. */
+__thread short global_current_collision_user_depth = 1;
 
-short global_current_collision_users[MAXIMUM_COLLISION_USER_STACK_DEPTH];
+__thread short global_current_collision_users[MAXIMUM_COLLISION_USER_STACK_DEPTH];
 
+#ifndef HALO_WIIU
 struct collision_period collision_usage_buffer[NUMBER_OF_COLLISION_TIME_PERIODS];
 struct collision_period collision_usage_current;
+#endif
 
 /* ---------- public code */
 
+#ifndef HALO_WIIU
+/* port: on the Wii U the log of the collision tests is compiled out (collision_usage.h): the counts and the periods were one set of globals,
+written by whatever thread tested a collision, and only the debug display (collision_log_render_enable) ever read them */
 static int collision_log_compare_overall_usage(
 	void const *left_pointer,
 	void const *right_pointer)
@@ -238,16 +246,18 @@ static int collision_log_compare_overall_usage(
 
 	return left_calls < right_calls;
 }
+#endif
 
 void collision_log_initialize(
 	void)
 {
+#ifndef HALO_WIIU
 	memset(&collision_usage_buffer, 0, sizeof(collision_usage_buffer));
+#endif
 
-	match_assert("c:\\halo\\SOURCE\\physics\\collision_usage.c", 150, global_current_collision_user_depth < MAXIMUM_COLLISION_USER_STACK_DEPTH);
-
-	global_current_collision_users[global_current_collision_user_depth] = 0;
-	global_current_collision_user_depth = global_current_collision_user_depth + 1;
+	/* (the calling thread's stack: the others begin with the same, __thread's initialiser) */
+	global_current_collision_users[0] = 0;
+	global_current_collision_user_depth = 1;
 
 	return;
 }
@@ -260,6 +270,7 @@ void collision_log_enable(
 	return;
 }
 
+#ifndef HALO_WIIU
 static void collision_log_store_period(
 	short time_period,
 	boolean unused)
@@ -662,5 +673,7 @@ void collision_log_display(
 
 	return;
 }
+
+#endif /* HALO_WIIU */
 
 /* ---------- private code */
