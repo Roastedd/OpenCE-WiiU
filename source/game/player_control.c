@@ -893,6 +893,15 @@ long player_control_get_unit_index(
 {
 	match_assert("c:\\halo\\SOURCE\\game\\player_control.c", 0xB1,
 		local_player_index>=0 && local_player_index<MAXIMUM_NUMBER_OF_LOCAL_PLAYERS);
+#ifdef HALO_WIIU
+	/* port: the frame's copy while a frame is drawn from the tick snapshot (tick_snapshot.c) */
+	{
+		long unit_index;
+
+		if (tick_snapshot_player_unit(local_player_index, &unit_index))
+			return unit_index;
+	}
+#endif
 	return player_control_globals->players[local_player_index].unit_index;
 }
 
@@ -1023,6 +1032,11 @@ real_vector3d *player_control_get_facing_direction(
 	short local_player_index,
 	real_vector3d *facing_direction)
 {
+#ifdef HALO_WIIU
+	/* port: the frame's copy while a frame is drawn from the tick snapshot (tick_snapshot.c) */
+	if (tick_snapshot_player_facing(local_player_index, facing_direction))
+		return facing_direction;
+#endif
 	player_aiming_vector_from_facing(
 		local_player_get_player_index(local_player_index),
 		facing_direction,

@@ -190,8 +190,16 @@ enum
 
 /* ---------- macros */
 
+#ifdef HALO_WIIU
+/* port: while a frame is drawn from the tick snapshot (port/linux/game/tick_snapshot.c), the header and its object are the
+snapshot's copies, which the ticks do not change; every other time they are the game state's. The snapshot's functions are
+declared after the header's structure (object_header_get_view). */
+#define object_header_get(index)			object_header_get_view(index)
+#define object_header_try_and_get(index)	object_header_try_and_get_view(index)
+#else
 #define object_header_get(index)			((struct object_header_datum*)datum_get(object_header_data, (index)))
 #define object_header_try_and_get(index)	((struct object_header_datum*)datum_try_and_get(object_header_data, (index)))
+#endif
 
 #define object_get(index)			((struct object_datum*)object_get_and_verify_type(index, _object_mask_all))
 #define object_try_and_get(index)	((struct object_datum*)object_try_and_get_and_verify_type(index, _object_mask_all))
@@ -224,6 +232,28 @@ struct object_header_datum
 	short data_size;
 	struct object_datum *datum;
 };
+
+#ifdef HALO_WIIU
+/* port: non-NULL only while this thread draws a frame from the tick snapshot (port/linux/game/tick_snapshot.c) */
+extern struct data_array *tick_snapshot_headers;
+struct object_header_datum *tick_snapshot_object_header_get(long object_index);
+struct object_header_datum *tick_snapshot_object_header_try_and_get(long object_index);
+extern struct data_array *object_header_data;
+
+__inline struct object_header_datum *object_header_get_view(long object_index)
+{
+	if (tick_snapshot_headers)
+		return tick_snapshot_object_header_get(object_index);
+	return (struct object_header_datum *)datum_get(object_header_data, object_index);
+}
+
+__inline struct object_header_datum *object_header_try_and_get_view(long object_index)
+{
+	if (tick_snapshot_headers)
+		return tick_snapshot_object_header_try_and_get(object_index);
+	return (struct object_header_datum *)datum_try_and_get(object_header_data, object_index);
+}
+#endif
 
 struct location
 {
@@ -438,6 +468,9 @@ void object_function_values_for_render(long object_index, real values[NUMBER_OF_
 /* port: forgets the inputs kept for the objects' pictures (objects.c's
 object_function_inputs), when a load puts the objects back or a map starts */
 void object_function_inputs_forget(void);
+#ifdef HALO_WIIU
+void object_function_inputs_copy_to_snapshot(long absolute_index);
+#endif
 short objects_in_clusters_by_indices(unsigned long class_flags, short cluster_count, short const *cluster_indices, short maximum_object_count, long *object_indices);
 long object_index_from_name_index(short name_index);
 /* port: this object takes a scenario name nobody holds, the way a placed

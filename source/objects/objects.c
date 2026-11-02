@@ -244,6 +244,13 @@ static struct memory_pool *object_memory_pool = NULL;
 static struct object_globals *object_globals = NULL;
 /* port: (by the object's absolute index) */
 static struct object_function_inputs object_function_inputs[MAXIMUM_OBJECTS_PER_MAP];
+#ifdef HALO_WIIU
+/* port: the snapshot's copy of those inputs, one per object copied (port/linux/game/tick_snapshot.c), which a frame drawn from the snapshot reads */
+static struct object_function_inputs object_function_inputs_snapshot[MAXIMUM_OBJECTS_PER_MAP];
+#define OBJECT_FUNCTION_INPUTS(absolute_index) (tick_snapshot_headers ? &object_function_inputs_snapshot[absolute_index] : &object_function_inputs[absolute_index])
+#else
+#define OBJECT_FUNCTION_INPUTS(absolute_index) (&object_function_inputs[absolute_index])
+#endif
 
 boolean debug_objects_names;
 boolean debug_objects_pathfinding_spheres;
@@ -376,14 +383,21 @@ void *object_iterator_next(
 		iterator->signature==OBJECT_ITERATOR_SIGNATURE,
 		"uninitialized iterator passed to object_iterator_next()");
 
+#ifdef HALO_WIIU
+	/* port: while a frame is drawn from the tick snapshot, the snapshot's headers (and an object's copy made if it had none) */
+	struct data_array *headers = tick_snapshot_headers ? tick_snapshot_headers : object_header_data;
+#else
+	struct data_array *headers = object_header_data;
+#endif
+
 	data_verify(object_header_data);
 	
 	abs_index = iterator->absolute_index;
 
 	// The operation to get this header is inlined in the original code?
-	header = (struct object_header_datum *)((char*)object_header_data->data + sizeof(struct object_header_datum) * abs_index);
+	header = (struct object_header_datum *)((char*)headers->data + sizeof(struct object_header_datum) * abs_index);
 
-	while (abs_index<object_header_data->count)
+	while (abs_index<headers->count)
 	{
 		long index = DATUM_INDEX_NEW(abs_index++, header->identifier);
 		if (header->identifier)
@@ -392,6 +406,10 @@ void *object_iterator_next(
 				TEST_FLAG(iterator->type_flags, header->type))
 			{
 				iterator->index = index;
+#ifdef HALO_WIIU
+				if (tick_snapshot_headers)
+					header = tick_snapshot_object_header_get(index);
+#endif
 				result = header->datum;
 				break;
 			}
@@ -737,6 +755,9 @@ static long object_header_new(
 	if (index!=NONE)
 	{
 		struct object_header_datum *header = (struct object_header_datum *)datum_get(data, index);
+#ifdef HALO_WIIU
+		tick_snapshot_objects_changed();
+#endif
 		if (memory_pool_block_allocate(object_memory_pool, (void**)&header->datum, size))
 		{
 			header->data_size = size;
@@ -758,6 +779,9 @@ static void object_header_delete(
 {
 	struct object_header_datum *object_header = (struct object_header_datum *)datum_get(data, object_index);
 
+#ifdef HALO_WIIU
+	tick_snapshot_objects_changed();
+#endif
 	if (object_header->datum)
 	{
 		memory_pool_block_free(object_memory_pool, (void**)&object_header->datum);
@@ -1616,7 +1640,21 @@ void object_function_inputs_forget(
 
 	for (index = 0; index < MAXIMUM_OBJECTS_PER_MAP; index++)
 		object_function_inputs[index].object_index = NONE;
+#ifdef HALO_WIIU
+	/* (a game state loaded or a map started: the snapshot's copies are of what was) */
+	tick_snapshot_reset();
+#endif
 }
+
+#ifdef HALO_WIIU
+/* port: an object's inputs copied into the snapshot (tick_snapshot.c, with its block) */
+void object_function_inputs_copy_to_snapshot(
+	long absolute_index)
+{
+	if (absolute_index >= 0 && absolute_index < MAXIMUM_OBJECTS_PER_MAP)
+		object_function_inputs_snapshot[absolute_index] = object_function_inputs[absolute_index];
+}
+#endif
 
 void object_function_values_for_render(
 	long object_index,
@@ -1625,7 +1663,7 @@ void object_function_values_for_render(
 	struct object_datum *object = object_get(object_index);
 	struct object_definition *definition = object_definition_get(object->definition_index);
 	struct object_function_inputs const *inputs =
-		&object_function_inputs[DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index)];
+		OBJECT_FUNCTION_INPUTS(DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index));
 	/* port: the inputs the tick's values came from (object_function_inputs) */
 	real const *incoming = inputs->values;
 	/* port: where the picture is, between the previous tick (0) and this one

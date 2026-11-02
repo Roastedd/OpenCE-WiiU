@@ -3577,6 +3577,11 @@ static void main_game_render(
 	/* port: the study's HALO_STUDY_NO_SOUND_RENDER=1 leaves it out */
 	if (!main_study_no_sound_render())
 		sound_render();
+#ifdef HALO_WIIU
+	/* port: from here the frame reads the tick snapshot, if halo/tick_snapshot.txt says so (port/linux/game/tick_snapshot.c): the sound
+	above writes game state (mouth apertures) and reads what the tick sends it, and stays on the game state */
+	tick_snapshot_view_begin();
+#endif
 	force_single_screen = game_engine_force_single_screen();
 	last_local_player_index = NONE;
 
@@ -3623,6 +3628,9 @@ static void main_game_render(
 			observer = observer_get_published_camera(window->local_player_index);
 #else
 			observer = observer_get_camera(window->local_player_index);
+#ifdef HALO_WIIU
+			observer = tick_snapshot_camera(window->local_player_index, observer);
+#endif
 #endif
 			observer = render_interpolation_camera(window->local_player_index, observer);
 		}
@@ -3665,6 +3673,9 @@ static void main_game_render(
 		screenshot_render(global_screenshot_count.windows);
 	}
 
+#ifdef HALO_WIIU
+	tick_snapshot_view_end();
+#endif
 	collision_log_end_period();
 	unlock_global_random_seed();
 #ifdef HALO_WIIU
@@ -4022,6 +4033,7 @@ static boolean main_loop_iteration(
 #ifdef HALO_WIIU
 					{
 						void wiiu_frame_part(int part, int ticks);
+						long repeat;
 
 						long repeat;
 
