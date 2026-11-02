@@ -110,6 +110,8 @@ struct tick_queue
 	long capacity;
 	/* the owner's step for one record */
 	void (*apply)(void const *record);
+	/* the tick overlap's tag of each record (tick_overlap.h): which jobs the game thread had posted when it pushed it */
+	unsigned long *tags;
 	pthread_mutex_t lock;
 	/* counts that only ever go up (head: the next record to take, tail: the next place to put one) */
 	unsigned long head;
@@ -122,10 +124,13 @@ struct tick_queue
 	unsigned long pushed_at_report;
 	unsigned long forced_at_report;
 	struct tick_queue *next;
+	/* producers waiting for room (the overlap's owner serves a queue that has any, even while it defers the others) */
+	volatile long waiters;
 };
 
 #define TICK_QUEUE_DEFINE(variable, queue_name, queue_owner, record_type, queue_capacity, apply_function) \
 	static record_type variable##_records[queue_capacity]; \
+	static unsigned long variable##_tags[queue_capacity]; \
 	static struct tick_queue variable = \
 	{ \
 		queue_name, \
@@ -134,6 +139,7 @@ struct tick_queue
 		sizeof(record_type), \
 		queue_capacity, \
 		apply_function, \
+		variable##_tags, \
 		PTHREAD_MUTEX_INITIALIZER \
 	}
 
@@ -143,6 +149,8 @@ void tick_queue_push(struct tick_queue *queue, void const *record);
 /* The owner applies every record there is, oldest first, including those its own steps add; returns how many.
 A drain inside a drain does nothing: the outer one takes what was added. */
 long tick_queue_drain(struct tick_queue *queue);
+/* The queues that producers are waiting for room in, drained whoever owns them (the game thread's wait for the tick thread: nothing else would) */
+long tick_owners_drain_waited(void);
 /* Every queue of an owner drained, at that owner's point (modes 1 and 2: in mode 1 nothing waits). Returns the requests applied. */
 long tick_owners_drain(long owner);
 /* Records dropped unapplied (a map's end: nothing they name is there any more) */

@@ -51,7 +51,10 @@ GAME_ENVIRONMENT = {
     "HALO_HIDDEN_WINDOW": "1", "SDL_VIDEO_DRIVER": "offscreen", "SDL_AUDIO_DRIVER": "dummy",
 }
 # host: b30 hosted as network co-op, no one joining (the host runs'); local: the same as a local game of one player
-MODES = {"host": "host:levels\\b30\\b30:coop", "local": "local:levels\\b30\\b30:coop"}
+MODES = {"host": "host:levels\\b30\\b30:coop", "local": "local:levels\\b30\\b30:coop", "solo": "log", "solo-bloodgulch": "log"}
+# solo: a campaign game of one player on this machine, which init.txt starts as the console's map_name does (the tick overlap's, which a network game
+# or a split screen game never is); network_test.c's "log" mode logs it as it logs the others
+SOLO_INIT = {"solo": "map_name levels\\b30\\b30\n", "solo-bloodgulch": "map_name levels\\test\\bloodgulch\\bloodgulch\n"}
 # a broken key: the told draw facts compared by whether any were told, not by what they are (the D3D8 replay's own control of the same), so a
 # draw whose textures' facts change is drawn with the last ones sent
 BROKEN_KEY = ("port/wiiu/src/d3d8_gx2.c", "|| !facts_known) && (!facts_known || !words_equal(&facts_now, &facts_told, sizeof(facts_now))))",
@@ -134,6 +137,8 @@ def start(program: Path, run: str, ticks: int, trace: str = None, detail: str = 
     (folder / "data").mkdir(parents=True)
     (folder / "out").mkdir()
     (folder / "data" / "empty-brokers.txt").write_text("")
+    if mode in SOLO_INIT:
+        (folder / "data" / "init.txt").write_text(SOLO_INIT[mode])
     environment = dict(GAME_ENVIRONMENT, HALO_NETWORK_TEST=MODES[mode], GAME_DIGEST_DIR="/out", GAME_DIGEST_TICKS=str(ticks),
                        GAME_DIGEST_TRACE={None: "0", "all": "1"}.get(trace, trace), GAME_DIGEST_DETAIL=detail or "",
                        GAME_DIGEST_RANDOM="1" if random else "0")

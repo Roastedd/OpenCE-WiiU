@@ -118,6 +118,10 @@ symbols in this file:
 #include "structures/structure_bsp_definitions.h"
 #include "structures/structures.h"
 #include "units/units.h"
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
+#endif
 
 /* ---------- constants */
 
@@ -916,6 +920,32 @@ void game_sound_update(
 /* port: port/linux/src/port_config.c */
 int config_boolean(const char *name);
 
+#ifdef HALO_WIIU
+/* port: a mouth's opening, from sound_render in a frame the tick thread runs beside (tick_overlap.h): the frame reads copies of the objects, and the
+unit's own mouth is the tick thread's to change, so it is asked to (at the start of its next job) */
+struct game_sound_mouth_request
+{
+	long object_index;
+	real aperture;
+};
+
+static void game_sound_mouth_request_apply(
+	void const *record);
+
+TICK_QUEUE_DEFINE(game_sound_mouth_queue, "mouth", TICK_OWNER_TICK, struct game_sound_mouth_request, 256, game_sound_mouth_request_apply);
+
+static void game_sound_mouth_request_apply(
+	void const *record)
+{
+	struct game_sound_mouth_request const *request = (struct game_sound_mouth_request const *)record;
+
+	if (object_try_and_get_and_verify_type(request->object_index, _object_mask_unit))
+		unit_set_mouth_aperture(request->object_index, request->aperture);
+
+	return;
+}
+#endif
+
 void game_sound_set_mouth_aperture(
 	long object_index,
 	real mouth_aperture)
@@ -931,6 +961,17 @@ void game_sound_set_mouth_aperture(
 		fixed_step = config_boolean("debug.fixed_step") != 0;
 	if (fixed_step)
 		return;
+#ifdef HALO_WIIU
+	if (tick_overlap_frame_active() && tick_overlap_thread_is_render())
+	{
+		struct game_sound_mouth_request request;
+
+		request.object_index = object_index;
+		request.aperture = mouth_aperture;
+		tick_queue_push(&game_sound_mouth_queue, &request);
+		return;
+	}
+#endif
 	if (game_looping_sound_data->valid)
 	{
 		if (object_try_and_get_and_verify_type(object_index, _object_mask_unit))

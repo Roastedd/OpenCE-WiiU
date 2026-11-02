@@ -185,6 +185,7 @@ struct game_options;
 #include "network_coop.h" /* port: port/linux/game/network_coop.c */
 #ifdef HALO_WIIU
 #include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
 #endif
 #ifdef HALO_PROFILE
 #include "profile_console.h" /* port: port/linux/game/profile_console.c */
@@ -698,6 +699,8 @@ void game_initialize_for_new_map(
 	network_distributed_new_game();
 	render_interpolation_reset();
 #ifdef HALO_WIIU
+	/* port: the tick thread idle (the main loop's map changes are made at its sync point), the ring of the snapshot and the overlap's views forgotten */
+	tick_overlap_map_reset();
 	tick_snapshot_reset();
 #endif
 	render_initialize_for_new_map();
@@ -938,6 +941,7 @@ void game_dispose_from_old_map(
 #ifdef HALO_WIIU
 	/* port: the tick owners' queues (tick_owners.h): what they carried this map, and what is still waiting names
 	nothing that stays */
+	tick_overlap_map_reset();
 	tick_owners_report();
 	tick_owners_discard_all();
 #endif

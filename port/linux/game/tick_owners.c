@@ -6,6 +6,7 @@ The mode and the queues of tick_owners.h.
 
 #include "cseries.h"
 #include "tick_owners.h"
+#include "tick_overlap.h"
 
 #ifdef HALO_WIIU
 
@@ -41,6 +42,13 @@ long tick_owners_mode(
 
 		if (mode < 0 || mode > 2)
 			mode = 0;
+		/* the overlap runs the tick side on a thread of its own: the queues are how the threads hand each other work, in mode 2, at their points
+		(halo/tick_overlap.txt) */
+		if (mode < 2 && tick_overlap_requested())
+		{
+			platform_log("tick owners: mode %ld raised to 2 (the tick overlap is on)", mode);
+			mode = 2;
+		}
 		tick_owners_mode_value = mode;
 		if (mode)
 		{
@@ -98,7 +106,8 @@ static void tick_queue_register(
 		}
 	}
 	queue->next = tick_owners_queues;
-	tick_owners_queues = queue;
+	/* (published for the readers that walk the list without the lock: a queue's own fields are in place before it is the head) */
+	__atomic_store_n(&tick_owners_queues, queue, __ATOMIC_RELEASE);
 	pthread_mutex_unlock(&tick_owners_queues_lock);
 }
 
@@ -125,6 +134,7 @@ void tick_queue_push(
 		{
 			memcpy(queue->records + (queue->tail % (unsigned long)queue->capacity) * (unsigned long)queue->record_size, record,
 				(size_t)queue->record_size);
+			queue->tags[queue->tail % (unsigned long)queue->capacity] = tick_overlap_push_tag();
 			queue->tail++;
 			queue->pushed_total++;
 			if (queue->tail - queue->head > queue->high_water)
@@ -134,7 +144,7 @@ void tick_queue_push(
 		}
 		pthread_mutex_unlock(&queue->lock);
 		/* (full: one thread doing both jobs makes room itself; with two, the owner will) */
-		if (!tick_owners_threaded())
+		if (!tick_owners_threaded() || tick_overlap_owner_is_caller(queue->owner))
 		{
 			/* (a request made by the queue's own drain, with no room: it cannot wait for the drain it is in) */
 			if (queue->draining)
@@ -142,14 +152,25 @@ void tick_queue_push(
 				platform_log("tick owners: the %s queue is full inside its own drain: a request is dropped", queue->name);
 				return;
 			}
-			queue->forced_drains++;
+			__atomic_add_fetch(&queue->forced_drains, 1, __ATOMIC_RELAXED);
+			tick_queue_drain(queue);
+		}
+		else if (tick_overlap_owner_blocked(queue->owner))
+		{
+			/* (the owner is waiting for this thread, or has nothing to run: it cannot take the record, so this thread does) */
+			__atomic_add_fetch(&queue->forced_drains, 1, __ATOMIC_RELAXED);
 			tick_queue_drain(queue);
 		}
 		else
 		{
 			struct timespec pause = { 0, 100000 };
 
+			/* (the owner is running and will drain it, or is held at the HOME gate and the gate is this thread's too) */
+			__sync_fetch_and_add(&queue->waiters, 1);
+			tick_overlap_note_push_wait();
 			nanosleep(&pause, NULL);
+			tick_owners_safe_point();
+			__sync_fetch_and_sub(&queue->waiters, 1);
 		}
 	}
 
@@ -163,14 +184,20 @@ long tick_queue_drain(
 	/* (8-byte units, for the alignment of the records' structs) */
 	unsigned long long record[HALO_TICK_QUEUE_RECORD_MAXIMUM / 8];
 	long applied = 0;
+	unsigned long limit;
 
 	if (queue->draining)
 		return 0;
+	/* (the overlap: the game thread leaves its queues to the sync point while the tick thread runs a job, which pushes to them) */
+	if (tick_overlap_defer_drain(queue))
+		return 0;
+	limit = tick_overlap_drain_limit();
 	queue->draining = TRUE;
 	for (;;)
 	{
 		pthread_mutex_lock(&queue->lock);
-		if (queue->head == queue->tail)
+		/* (the tick thread takes what the game thread pushed before its job was posted, not what it pushes beside it) */
+		if (queue->head == queue->tail || queue->tags[queue->head % (unsigned long)queue->capacity] > limit)
 		{
 			pthread_mutex_unlock(&queue->lock);
 			break;
@@ -198,9 +225,26 @@ long tick_owners_drain(
 	/* (and the log says what the queues carried every 600 frames, a map's end not coming in a short run) */
 	if (owner == TICK_OWNER_GAME && ++tick_owners_frames % 600 == 0)
 		tick_owners_report();
-	for (queue = tick_owners_queues; queue; queue = queue->next)
+	for (queue = __atomic_load_n(&tick_owners_queues, __ATOMIC_ACQUIRE); queue; queue = queue->next)
 	{
 		if (queue->owner == owner)
+			applied += tick_queue_drain(queue);
+	}
+
+	return applied;
+}
+
+long tick_owners_drain_waited(
+	void)
+{
+	struct tick_queue *queue;
+	long applied = 0;
+
+	if (!TICK_OWNERS_ON())
+		return 0;
+	for (queue = __atomic_load_n(&tick_owners_queues, __ATOMIC_ACQUIRE); queue; queue = queue->next)
+	{
+		if (__atomic_load_n(&queue->waiters, __ATOMIC_RELAXED) && queue->owner != TICK_OWNER_TICK)
 			applied += tick_queue_drain(queue);
 	}
 
@@ -212,7 +256,7 @@ void tick_owners_discard_all(
 {
 	struct tick_queue *queue;
 
-	for (queue = tick_owners_queues; queue; queue = queue->next)
+	for (queue = __atomic_load_n(&tick_owners_queues, __ATOMIC_ACQUIRE); queue; queue = queue->next)
 		tick_queue_discard(queue);
 }
 
@@ -307,19 +351,25 @@ void tick_owners_report(
 {
 	struct tick_queue *queue;
 
-	for (queue = tick_owners_queues; queue; queue = queue->next)
+	for (queue = __atomic_load_n(&tick_owners_queues, __ATOMIC_ACQUIRE); queue; queue = queue->next)
 	{
-		unsigned long pushed = queue->pushed_total - queue->pushed_at_report;
-		unsigned long forced = queue->forced_drains - queue->forced_at_report;
+		unsigned long pushed, forced, high_water, left;
 
+		/* (the producers change the counts under the queue's lock) */
+		pthread_mutex_lock(&queue->lock);
+		pushed = queue->pushed_total - queue->pushed_at_report;
+		forced = __atomic_load_n(&queue->forced_drains, __ATOMIC_RELAXED) - queue->forced_at_report;
+		high_water = queue->high_water;
+		left = queue->tail - queue->head;
+		queue->pushed_at_report = queue->pushed_total;
+		queue->forced_at_report += forced;
+		queue->high_water = 0;
+		pthread_mutex_unlock(&queue->lock);
 		if (pushed || forced)
 		{
-			platform_log("tick owners: the %s queue took %lu requests since the last report (most waiting at once %lu of %ld, drained to make room %lu times, %ld left)",
-				queue->name, pushed, queue->high_water, queue->capacity, forced, tick_queue_count(queue));
+			platform_log("tick owners: the %s queue took %lu requests since the last report (most waiting at once %lu of %ld, drained to make room %lu times, %lu left)",
+				queue->name, pushed, high_water, queue->capacity, forced, left);
 		}
-		queue->pushed_at_report = queue->pushed_total;
-		queue->forced_at_report = queue->forced_drains;
-		queue->high_water = 0;
 	}
 	if (tick_owners_pool_compactions != tick_owners_pool_reported_compactions)
 	{

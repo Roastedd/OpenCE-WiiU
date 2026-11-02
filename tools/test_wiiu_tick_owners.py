@@ -13,11 +13,12 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / 'port/wiiu/tests/test_tick_owners.c'
-CASES = ['mode0', 'mode1', 'mode2', 'full', 'nested', 'owners', 'discard', 'threads', 'pool']
+CASES = ['mode0', 'mode1', 'mode2', 'full', 'nested', 'owners', 'discard', 'threads', 'pool', 'tags', 'defer', 'waited', 'blocked']
+THREAD_CASES = ['threads', 'waited', 'pool']
 
 
 class TickOwnersTests(unittest.TestCase):
-    def fixture(self, case, sanitizer=False, fault=None):
+    def fixture(self, case, sanitizer=False, fault=None, thread_sanitizer=False):
         with tempfile.TemporaryDirectory(prefix='halo-tick-owners-') as directory:
             directory = Path(directory)
             source = ROOT / 'port/linux/game/tick_owners.c'
@@ -34,6 +35,8 @@ class TickOwnersTests(unittest.TestCase):
                        '-Wno-unused-function', '-ffp-contract=off', '-pthread', *include, str(FIXTURE), '-o', str(directory / 'test')]
             if sanitizer:
                 command[1:1] = ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
+            if thread_sanitizer:
+                command[1:1] = ['-fsanitize=thread', '-fno-omit-frame-pointer']
             result = subprocess.run(command, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             return subprocess.run([*shlex.split(os.environ.get('TICK_OWNERS_RUNNER', '')), str(directory / 'test'), case],
@@ -50,6 +53,14 @@ class TickOwnersTests(unittest.TestCase):
         for case in CASES:
             with self.subTest(case=case):
                 result = self.fixture(case, sanitizer=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    @unittest.skipIf(bool(os.environ.get('TICK_OWNERS_TARGET')), 'The thread sanitizer runs on the host')
+    def test_thread_sanitizer(self):
+        # the cases with more than one thread, under the thread sanitizer: a data race in the queues' plumbing is a failure
+        for case in THREAD_CASES:
+            with self.subTest(case=case):
+                result = self.fixture(case, thread_sanitizer=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_a_queue_that_forgets_its_order_is_detected(self):

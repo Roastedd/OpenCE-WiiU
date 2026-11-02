@@ -74,6 +74,9 @@ symbols in this file:
 #include "structure_bsp_definitions.h"
 #include "structure_vector_tests.h"
 #include "structures.h"
+#ifdef HALO_WIIU
+#include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
+#endif
 
 /* ---------- constants */
 
@@ -266,9 +269,36 @@ void structures_dispose(
 	return;
 }
 
+#ifdef HALO_WIIU
+/* port: the cluster marker of the drawing thread, when the ticks run beside the drawing (tick_overlap.h): its collision tests (the HUD's lines of
+sight, the sound's obstruction) mark clusters in a set of their own, so that neither thread disturbs the other's search. Not in the game state. */
+static struct
+{
+	boolean initialized;
+	long marker;
+	long magic_numbers[MAXIMUM_CLUSTERS_PER_STRUCTURE];
+} structure_render_markers;
+#define STRUCTURE_MARKER_RENDER() (tick_overlap_markers_split && tick_overlap_thread_is_render())
+#define STRUCTURE_MARKER_INITIALIZED() (STRUCTURE_MARKER_RENDER() ? structure_render_markers.initialized : structure_globals.cluster_marker_initialized)
+#else
+#define STRUCTURE_MARKER_INITIALIZED() (structure_globals.cluster_marker_initialized)
+#endif
+
 void structure_cluster_marker_begin(
 	void)
 {
+#ifdef HALO_WIIU
+	if (STRUCTURE_MARKER_RENDER())
+	{
+		match_assert(
+			"c:\\halo\\SOURCE\\structures\\structures.c",
+			0x103,
+			!structure_render_markers.initialized);
+		structure_render_markers.marker++;
+		structure_render_markers.initialized = TRUE;
+		return;
+	}
+#endif
 	match_assert(
 		"c:\\halo\\SOURCE\\structures\\structures.c",
 		0x103,
@@ -282,6 +312,17 @@ void structure_cluster_marker_begin(
 void structure_cluster_marker_end(
 	void)
 {
+#ifdef HALO_WIIU
+	if (STRUCTURE_MARKER_RENDER())
+	{
+		match_assert(
+			"c:\\halo\\SOURCE\\structures\\structures.c",
+			0x130,
+			structure_render_markers.initialized);
+		structure_render_markers.initialized = FALSE;
+		return;
+	}
+#endif
 	match_assert(
 		"c:\\halo\\SOURCE\\structures\\structures.c",
 		0x130,
@@ -297,7 +338,7 @@ boolean structure_cluster_unmarked(
 	match_assert(
 		"c:\\halo\\SOURCE\\structures\\structures.c",
 		0x10e,
-		structure_globals.cluster_marker_initialized);
+		STRUCTURE_MARKER_INITIALIZED());
 	match_assert(
 		"c:\\halo\\SOURCE\\structures\\structures.c",
 		0x10f,
@@ -311,6 +352,10 @@ boolean structure_cluster_unmarked(
 		return FALSE;
 	}
 
+#ifdef HALO_WIIU
+	if (STRUCTURE_MARKER_RENDER())
+		return (boolean)(structure_render_markers.magic_numbers[cluster_index]!=structure_render_markers.marker);
+#endif
 	return (boolean)(structure_globals.cluster_magic_numbers[cluster_index]!=structure_globals.cluster_marker);
 }
 
@@ -320,7 +365,7 @@ boolean structure_cluster_mark(
 	match_assert(
 		"c:\\halo\\SOURCE\\structures\\structures.c",
 		0x11e,
-		structure_globals.cluster_marker_initialized);
+		STRUCTURE_MARKER_INITIALIZED());
 	match_assert(
 		"c:\\halo\\SOURCE\\structures\\structures.c",
 		0x11f,
@@ -332,6 +377,17 @@ boolean structure_cluster_mark(
 		return FALSE;
 	}
 
+#ifdef HALO_WIIU
+	if (STRUCTURE_MARKER_RENDER())
+	{
+		if (structure_render_markers.magic_numbers[cluster_index]!=structure_render_markers.marker)
+		{
+			structure_render_markers.magic_numbers[cluster_index]= structure_render_markers.marker;
+			return TRUE;
+		}
+		return FALSE;
+	}
+#endif
 	if (structure_globals.cluster_magic_numbers[cluster_index]!=structure_globals.cluster_marker)
 	{
 		structure_globals.cluster_magic_numbers[cluster_index]= structure_globals.cluster_marker;

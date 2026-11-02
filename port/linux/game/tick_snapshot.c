@@ -120,6 +120,10 @@ enum
 
 #define SNAPSHOT_PATH "/vol/external01/wiiu/apps/halo/tick_snapshot.txt"
 
+/* object_lights.c's */
+extern struct data_array *light_data;
+extern struct cluster_partition light_cluster_partition;
+
 enum
 {
 	MODE_ON = 1,
@@ -151,7 +155,7 @@ static const struct
 #define RENDER_FIELD_BYTES 16
 
 /* the object cluster partitions' lists as of the capture: which clusters an object is in is what a frame finds the objects to draw by */
-#define PARTITION_COUNT 2
+#define PARTITION_COUNT 3
 
 struct partition_copy
 {
@@ -161,6 +165,9 @@ struct partition_copy
 	struct data_array references;
 	long first_references[MAXIMUM_CLUSTERS_PER_STRUCTURE];
 	struct data_reference entries[HALO_PORT_MAXIMUM_CLUSTER_REFERENCES];
+	/* and the other way round: the clusters each object is in (an object's first_cluster_reference_index is the first of its list) */
+	struct data_array cluster_references;
+	struct data_reference cluster_entries[HALO_PORT_MAXIMUM_CLUSTER_REFERENCES];
 };
 
 struct camera_view
@@ -191,6 +198,11 @@ struct slot
 	boolean copied[MAXIMUM_OBJECTS_PER_MAP]; /* this capture has a copy for the slot */
 	struct camera_view cameras[MAXIMUM_LOCAL_PLAYERS];
 	struct partition_copy partitions[PARTITION_COUNT];
+	/* the lights as of the capture: the light array (header and the used part of its data) the frame reads them through (object_lights.c's LIGHT_DATA) */
+	boolean lights_valid;
+	struct data_array lights;
+	byte *light_bytes;
+	long light_bytes_capacity;
 };
 
 static struct slot slots[TICK_SNAPSHOT_SLOTS];
@@ -220,7 +232,7 @@ static struct
 	long view_serial;
 	/* counts, for the log */
 	unsigned long captures, window_captures;
-	unsigned long objects_copied, bytes_copied, header_bytes, block_calls, partition_bytes;
+	unsigned long objects_copied, bytes_copied, header_bytes, block_calls, partition_bytes, light_bytes;
 	unsigned long misses, catch_ups, fallbacks, reads, views, camera_copies, ring_full;
 	/* verify */
 	unsigned long *verify_begin, *verify_end; /* [type][word]: blocks that differ from the game state's at the view's start and end */
@@ -311,7 +323,7 @@ static void tick_snapshot_log(void)
 		s.catch_ups, s.fallbacks, s.reads, s.camera_copies, s.ring_full);
 	rotation_snapshots = rotation_nodes = 0;
 	s.window_captures = 0;
-	s.objects_copied = s.bytes_copied = s.header_bytes = s.block_calls = s.partition_bytes = 0;
+	s.objects_copied = s.bytes_copied = s.header_bytes = s.block_calls = s.partition_bytes = s.light_bytes = 0;
 	s.misses = s.catch_ups = s.fallbacks = s.reads = s.views = s.camera_copies = s.ring_full = 0;
 }
 
@@ -367,6 +379,7 @@ static void tick_snapshot_capture_partitions(struct slot *slot)
 
 	slot->partitions[0].live = &collideable_object_cluster_partition;
 	slot->partitions[1].live = &noncollideable_object_cluster_partition;
+	slot->partitions[2].live = &light_cluster_partition;
 	for (partition_index = 0; partition_index < PARTITION_COUNT; partition_index++)
 	{
 		struct partition_copy *copy = &slot->partitions[partition_index];
@@ -385,9 +398,56 @@ static void tick_snapshot_capture_partitions(struct slot *slot)
 		copy->view = *live;
 		copy->view.cluster_first_data_references = copy->first_references;
 		copy->view.data_reference_data = &copy->references;
-		copy->valid = TRUE;
 		s.partition_bytes += sizeof(copy->first_references) + (unsigned long)copy->references.count * sizeof(copy->entries[0]);
+		if (live->cluster_reference_data && live->cluster_reference_data->valid)
+		{
+			copy->cluster_references = *live->cluster_reference_data;
+			if (copy->cluster_references.count > HALO_PORT_MAXIMUM_CLUSTER_REFERENCES)
+				copy->cluster_references.count = HALO_PORT_MAXIMUM_CLUSTER_REFERENCES;
+			memcpy(copy->cluster_entries, live->cluster_reference_data->data,
+				(size_t)copy->cluster_references.count * sizeof(copy->cluster_entries[0]));
+			copy->cluster_references.data = copy->cluster_entries;
+			copy->view.cluster_reference_data = &copy->cluster_references;
+			s.partition_bytes += (unsigned long)copy->cluster_references.count * sizeof(copy->cluster_entries[0]);
+		}
+		copy->valid = TRUE;
 	}
+}
+
+/* the light array, header and the used part of its data (the lights themselves are small: the game's light datum is 0x7C bytes, about a hundred of them at once) */
+static void tick_snapshot_capture_lights(struct slot *slot)
+{
+	long needed;
+
+	slot->lights_valid = FALSE;
+	if (!light_data || !light_data->valid)
+		return;
+	needed = (long)light_data->count * (long)light_data->size;
+	if (slot->light_bytes_capacity < needed)
+	{
+		byte *grown = slot->light_bytes ? (byte *)realloc(slot->light_bytes, (size_t)needed) : (byte *)malloc((size_t)needed);
+
+		if (!grown)
+			return;
+		slot->light_bytes = grown;
+		slot->light_bytes_capacity = needed;
+	}
+	slot->lights = *light_data;
+	if (needed > 0)
+		memcpy(slot->light_bytes, light_data->data, (size_t)needed);
+	slot->lights.data = slot->light_bytes;
+	slot->lights_valid = TRUE;
+	s.light_bytes += (unsigned long)needed;
+}
+
+/* the lights a frame reads: the view's copy (the game state's if the capture has none) */
+struct data_array *tick_snapshot_light_array(void)
+{
+	struct slot *view = s.view;
+
+	if (view && view->lights_valid)
+		return &view->lights;
+	return light_data;
 }
 
 struct cluster_partition const *tick_snapshot_cluster_partition(struct cluster_partition const *live)
@@ -440,11 +500,12 @@ void tick_snapshot_capture_tick(long tick, boolean commit)
 	struct object_header_datum const *live_headers;
 	struct slot *slot;
 	long count, previous_count, index;
-	unsigned long long started, headers_started;
+	unsigned long long started, headers_started, started_us;
 
 	if (!tick_snapshot_mode() || !live || !live->valid)
 		return;
 	started = CLOCK();
+	started_us = tick_overlap_now_us();
 	slot = tick_snapshot_slot_for(tick);
 	if (!slot)
 	{
@@ -483,6 +544,7 @@ void tick_snapshot_capture_tick(long tick, boolean commit)
 	for (; index < previous_count && index < MAXIMUM_OBJECTS_PER_MAP; index++)
 		slot->copied[index] = FALSE;
 	tick_snapshot_capture_partitions(slot);
+	tick_snapshot_capture_lights(slot);
 	memset(slot->cameras, 0, sizeof(slot->cameras));
 	ADD(PART_BLOCKS, headers_started);
 	slot->ready = TRUE;
@@ -493,6 +555,7 @@ void tick_snapshot_capture_tick(long tick, boolean commit)
 	if (commit)
 		s.published_tick = tick;
 	ADD(PART_CAPTURE, started);
+	tick_overlap_note_capture(tick_overlap_now_us() - started_us);
 	if (s.window_captures >= LOG_CAPTURES)
 		tick_snapshot_log();
 }
@@ -536,6 +599,7 @@ void tick_snapshot_reset(void)
 		memset(slot->cameras, 0, sizeof(slot->cameras));
 		for (index = 0; index < PARTITION_COUNT; index++)
 			slot->partitions[index].valid = FALSE;
+		slot->lights_valid = FALSE;
 	}
 	for (index = 0; index < MAXIMUM_OBJECTS_PER_MAP; index++)
 	{
@@ -732,6 +796,7 @@ void tick_snapshot_job_end(long tick, long ticks_in_job, long previous_job_tick)
 	struct slot *before;
 	struct slot *earlier;
 	short local_player_index;
+	const unsigned long long started_us = tick_overlap_now_us();
 
 	if (!newest || ticks_in_job <= 0)
 		return;
@@ -761,6 +826,7 @@ void tick_snapshot_job_end(long tick, long ticks_in_job, long previous_job_tick)
 		}
 	}
 	tick_snapshot_commit();
+	tick_overlap_note_publish(tick_overlap_now_us() - started_us);
 }
 
 struct observer_result const *tick_snapshot_camera(short local_player_index, struct observer_result const *live)

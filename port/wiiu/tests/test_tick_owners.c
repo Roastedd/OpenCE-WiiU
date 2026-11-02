@@ -4,11 +4,14 @@ of requests, what a full queue does, a request made by an apply, the owners' dra
 and the pool's compaction waiting for a frame to end. Built for the desktop, for 32-bit x86 and for 32-bit big-endian PowerPC
 (run under qemu-ppc), with the sanitizers where there are any: tools/test_wiiu_tick_owners.py.
 
-    test_tick_owners mode0 | mode1 | mode2 | full | nested | owners | discard | threads | pool
+    test_tick_owners mode0 | mode1 | mode2 | full | nested | owners | discard | threads | pool | tags | defer | waited | blocked
 Exit status 0 when everything holds; a failing check says which and exits 1.
 */
 
 #define HALO_WIIU 1
+/* (the stub of tick_overlap.h first: its guard keeps the real header, which tick_owners.c names and the game's tree has beside it, out) */
+#include "cseries.h"
+#include "tick_overlap.h"
 #include "tick_owners.c"
 
 #include <stdarg.h>
@@ -36,6 +39,52 @@ void platform_log(char const *format, ...)
 	errors_logged++;
 }
 
+/* the tick overlap's (port/linux/game/tick_overlap.c): what the queues ask it, answered as the case sets */
+static volatile unsigned long overlap_tag;
+static volatile unsigned long overlap_limit = (unsigned long)-1;
+static volatile int overlap_defer;
+static volatile int overlap_blocked;
+static volatile int overlap_is_caller;
+
+boolean tick_overlap_requested(void)
+{
+	return FALSE;
+}
+
+unsigned long tick_overlap_push_tag(void)
+{
+	return overlap_tag;
+}
+
+unsigned long tick_overlap_drain_limit(void)
+{
+	return overlap_limit;
+}
+
+boolean tick_overlap_defer_drain(struct tick_queue const *queue)
+{
+	return overlap_defer && __atomic_load_n(&queue->waiters, __ATOMIC_RELAXED) == 0;
+}
+
+boolean tick_overlap_owner_blocked(long owner)
+{
+	(void)owner;
+	return overlap_blocked != 0;
+}
+
+static long push_waits;
+
+void tick_overlap_note_push_wait(void)
+{
+	__atomic_add_fetch(&push_waits, 1, __ATOMIC_RELAXED);
+}
+
+boolean tick_overlap_owner_is_caller(long owner)
+{
+	(void)owner;
+	return overlap_is_caller != 0;
+}
+
 /* the shell's gate (port/wiiu/src/wiiu_shell.c): counts */
 static int gate_registered, gate_calls;
 
@@ -46,7 +95,7 @@ void wiiu_tick_gate_register(int registered)
 
 void wiiu_tick_gate(void)
 {
-	gate_calls++;
+	__atomic_add_fetch(&gate_calls, 1, __ATOMIC_RELAXED);
 }
 
 /* ---------- a queue of numbers */
@@ -219,11 +268,12 @@ static void test_threads(void)
 	CHECK(gate_registered == 1);
 	tick_owners_safe_point();
 	CHECK(gate_calls == 1);
+	gate_calls = 0;
 	producing = PRODUCERS;
 	for (producer = 0; producer < PRODUCERS; producer++)
 		pthread_create(&threads[producer], NULL, producer_main, (void *)producer);
 	/* (this thread is the owner: it drains while they produce, and once more when they are done) */
-	while (producing || tick_queue_count(&small_queue))
+	while (__atomic_load_n(&producing, __ATOMIC_SEQ_CST) || tick_queue_count(&small_queue))
 		tick_owners_drain(TICK_OWNER_GAME);
 	for (producer = 0; producer < PRODUCERS; producer++)
 		pthread_join(threads[producer], NULL);
@@ -245,8 +295,145 @@ static void test_threads(void)
 	CHECK(small_queue.forced_drains == 0); /* (two threads: a full queue is waited on, not drained by the producer) */
 	tick_owners_set_threaded(FALSE);
 	CHECK(gate_registered == 0);
-	tick_owners_safe_point();
-	CHECK(gate_calls == 1);
+	/* (a producer that waits for room passes the tick gate each time it looks: HOME holds it there) */
+	{
+		const int gate_calls_before = gate_calls;
+
+		tick_owners_safe_point();
+		CHECK(gate_calls == gate_calls_before);
+	}
+}
+
+/* ---------- the overlap's: tags, a deferred drain, waiting producers */
+
+/* a drain by the tick thread stops at the first record pushed after its job was posted (its tag is over the limit), and takes the rest next time */
+static void test_tags(void)
+{
+	long index;
+
+	applied_count = 0;
+	overlap_tag = 1;
+	push(&small_queue, 0, 0);
+	push(&small_queue, 0, 1);
+	overlap_tag = 2;
+	push(&small_queue, 0, 2);
+	overlap_tag = 3;
+	push(&small_queue, 0, 3);
+	overlap_limit = 2;
+	CHECK(tick_queue_drain(&small_queue) == 3);
+	CHECK(applied_count == 3);
+	CHECK(tick_queue_count(&small_queue) == 1);
+	overlap_limit = 0;
+	CHECK(tick_queue_drain(&small_queue) == 0);
+	overlap_limit = (unsigned long)-1;
+	CHECK(tick_queue_drain(&small_queue) == 1);
+	for (index = 0; index < 4; index++)
+		CHECK(applied[index].value == index);
+	/* a ring that wraps keeps each record's own tag */
+	applied_count = 0;
+	for (index = 0; index < 10; index++)
+	{
+		overlap_tag = (unsigned long)(index / 2 + 1);
+		push(&small_queue, 0, index);
+		if (index % 3 == 2)
+		{
+			overlap_limit = (unsigned long)(index / 2 + 1);
+			tick_queue_drain(&small_queue);
+			overlap_limit = (unsigned long)-1;
+		}
+	}
+	tick_queue_drain(&small_queue);
+	CHECK(applied_count == 10);
+	for (index = 0; index < 10; index++)
+		CHECK(applied[index].value == index);
+	overlap_tag = 0;
+}
+
+/* the game thread leaves its queues alone while the tick thread runs a job, unless a producer waits for room in one */
+static void test_defer(void)
+{
+	applied_count = 0;
+	push(&small_queue, 0, 0);
+	overlap_defer = 1;
+	CHECK(tick_owners_drain(TICK_OWNER_GAME) == 0);
+	CHECK(applied_count == 0);
+	small_queue.waiters = 1;
+	CHECK(tick_owners_drain(TICK_OWNER_GAME) == 1);
+	small_queue.waiters = 0;
+	overlap_defer = 0;
+	CHECK(applied_count == 1);
+	push(&small_queue, 0, 1);
+	CHECK(tick_owners_drain(TICK_OWNER_GAME) == 1);
+	CHECK(applied_count == 2);
+}
+
+/* a producer on another thread, the queue full, the owner serving the queues that have waiters (the game thread's wait for the tick thread):
+nothing lost, in order, no deadlock, and the waiters back to nothing */
+static int waiter_done;
+
+static void *waiter_main(void *unused)
+{
+	long index;
+
+	(void)unused;
+	for (index = 0; index < 400; index++)
+		push(&small_queue, 0, index);
+	__atomic_store_n(&waiter_done, 1, __ATOMIC_SEQ_CST);
+	return NULL;
+}
+
+static void test_waited(void)
+{
+	pthread_t thread;
+	long index;
+
+	applied_count = 0;
+	tick_owners_set_threaded(TRUE);
+	overlap_defer = 1;
+	pthread_create(&thread, NULL, waiter_main, NULL);
+	while (!__atomic_load_n(&waiter_done, __ATOMIC_SEQ_CST))
+		tick_owners_drain_waited();
+	pthread_join(thread, NULL);
+	tick_owners_drain_waited();
+	overlap_defer = 0;
+	tick_owners_drain(TICK_OWNER_GAME);
+	CHECK(applied_count == 400);
+	for (index = 0; index < applied_count; index++)
+	{
+		if (applied[index].value != index)
+		{
+			CHECK(0);
+			break;
+		}
+	}
+	CHECK(small_queue.waiters == 0);
+	tick_owners_set_threaded(FALSE);
+}
+
+/* the owner is not running (the tick thread idle, the game thread the producer): a full queue is drained by its producer, and a queue that the
+producer owns itself as well */
+static void test_blocked(void)
+{
+	long index;
+
+	applied_count = 0;
+	tick_owners_set_threaded(TRUE);
+	overlap_blocked = 1;
+	for (index = 0; index < 10; index++)
+		push(&small_queue, 0, index);
+	CHECK(small_queue.forced_drains > 0);
+	overlap_blocked = 0;
+	small_queue.forced_drains = 0;
+	overlap_is_caller = 1;
+	for (index = 10; index < 20; index++)
+		push(&small_queue, 0, index);
+	CHECK(small_queue.forced_drains > 0);
+	overlap_is_caller = 0;
+	tick_owners_drain(TICK_OWNER_GAME);
+	CHECK(applied_count == 20);
+	for (index = 0; index < applied_count; index++)
+		CHECK(applied[index].value == index);
+	tick_owners_set_threaded(FALSE);
 }
 
 /* ---------- the object pool's hand-off */
@@ -363,6 +550,20 @@ int main(int count, char **arguments)
 		tick_owners_mode();
 		errors_logged = 0;
 		test_threads();
+	}
+	else if (!strcmp(which, "tags") || !strcmp(which, "defer") || !strcmp(which, "waited") || !strcmp(which, "blocked"))
+	{
+		setenv("HALO_TICK_OWNERS", "2", 1);
+		tick_owners_mode();
+		errors_logged = 0;
+		if (!strcmp(which, "tags"))
+			test_tags();
+		else if (!strcmp(which, "defer"))
+			test_defer();
+		else if (!strcmp(which, "waited"))
+			test_waited();
+		else
+			test_blocked();
 	}
 	else if (!strcmp(which, "pool"))
 	{

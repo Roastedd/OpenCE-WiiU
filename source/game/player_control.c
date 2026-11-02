@@ -216,6 +216,7 @@ symbols in this file:
 #ifdef HALO_WIIU
 #include "tick_input.h" /* port: port/linux/game/tick_input.c: the input this file reads is the frame's copy (tick_input.h) */
 #include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
 #endif
 
 /* ---------- constants */
@@ -1010,18 +1011,41 @@ void player_control_publish_display_facing(
 	return;
 }
 
+/* the overlap's (tick_overlap.h): the game thread's copy of the facing, taken at the sync point when the tick thread is idle, which it reads while the
+tick thread's next job publishes a new one */
+static real_euler_angles2d player_control_display_facing_view[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
+static boolean player_control_display_facing_view_valid[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
+
+void player_control_sync_display_facing(
+	void)
+{
+	short local_player_index;
+
+	for (local_player_index = 0; local_player_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS; local_player_index++)
+	{
+		player_control_display_facing_view_valid[local_player_index] = player_control_display_facing_valid[local_player_index];
+		player_control_display_facing_view[local_player_index] = player_control_display_facing[local_player_index];
+	}
+
+	return;
+}
+
 real_vector3d *player_control_get_display_facing_direction(
 	short local_player_index,
 	real_vector3d *facing_direction)
 {
-	if (TICK_OWNERS_FEATURE(TICK_FEATURE_FACING) && local_player_index >= 0 && local_player_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS &&
-		player_control_display_facing_valid[local_player_index])
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_FACING) && local_player_index >= 0 && local_player_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS)
 	{
-		player_aiming_vector_from_facing(
-			local_player_get_player_index(local_player_index),
-			facing_direction,
-			&player_control_display_facing[local_player_index]);
-		return facing_direction;
+		const boolean from_view = tick_overlap_reading_published();
+
+		if (from_view ? player_control_display_facing_view_valid[local_player_index] : player_control_display_facing_valid[local_player_index])
+		{
+			player_aiming_vector_from_facing(
+				local_player_get_player_index(local_player_index),
+				facing_direction,
+				from_view ? &player_control_display_facing_view[local_player_index] : &player_control_display_facing[local_player_index]);
+			return facing_direction;
+		}
 	}
 
 	return player_control_get_facing_direction(local_player_index, facing_direction);

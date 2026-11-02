@@ -918,6 +918,40 @@ long wiiu_study_number(const char *name, long fallback)
 	return value && *value ? strtol(value, NULL, 10) : fallback;
 }
 
+/* wiiu_shell.c's: whether the tick thread waits for a job and whether the game thread waits for it (the HOME gate; none here), the core a thread runs
+on (the game thread, the process's first, is "core 1" and any other "core 0": the tick snapshot's view belongs to the game thread's), and the time */
+void wiiu_tick_idle_set(int idle)
+{
+	(void)idle;
+}
+
+void wiiu_game_waiting_set(int waiting)
+{
+	(void)waiting;
+}
+
+static pthread_t game_digest_first_thread;
+static int game_digest_first_thread_known;
+
+__attribute__((constructor)) static void game_digest_note_first_thread(void)
+{
+	game_digest_first_thread = pthread_self();
+	game_digest_first_thread_known = 1;
+}
+
+int wiiu_current_core(void)
+{
+	return game_digest_first_thread_known && pthread_equal(pthread_self(), game_digest_first_thread) ? 1 : 0;
+}
+
+unsigned long long wiiu_now_us(void)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (unsigned long long)now.tv_sec * 1000000ULL + (unsigned long long)now.tv_nsec / 1000ULL;
+}
+
 /* wiiu_tick_parts.c: the console's timing of the parts of a tick */
 long long wiiu_tick_part_now(void)
 {

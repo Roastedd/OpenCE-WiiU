@@ -437,6 +437,11 @@ long cluster_partition_get_first_cluster(
 	long *reference_index,
 	long first_cluster_reference)
 {
+#ifdef HALO_WIIU
+	/* port: the snapshot's copy of the partition while a frame is drawn from it (tick_snapshot.c): the object's cluster list is the capture's too */
+	if (tick_snapshot_viewing())
+		partition = tick_snapshot_cluster_partition(partition);
+#endif
 	*reference_index = first_cluster_reference;
 
 	return reference_list_get_next_datum_index(partition->cluster_reference_data, reference_index);
@@ -446,6 +451,10 @@ long cluster_partition_get_next_cluster(
 	struct cluster_partition const *partition,
 	long *reference_index)
 {
+#ifdef HALO_WIIU
+	if (tick_snapshot_viewing())
+		partition = tick_snapshot_cluster_partition(partition);
+#endif
 	return reference_list_get_next_datum_index(partition->cluster_reference_data, reference_index);
 }
 

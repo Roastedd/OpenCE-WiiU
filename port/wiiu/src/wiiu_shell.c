@@ -301,8 +301,17 @@ waits for it (nothing runs at the same time yet), so either being held is the ga
 the tick thread is not in a GX2 call (the ticks make none). When the ticks run beside the drawing this becomes both, in game_threads_held. */
 static volatile uint32_t tick_gate_held;
 
+/* The tick thread beside the drawing (the tick overlap, port/linux/game/tick_overlap.h): both threads run game code, so the game is held when both are quiet.
+The game thread is quiet at its gate, or waiting for the tick thread (which cannot be drawing then); the tick thread at its gate, or idle, waiting for a job
+the game thread has not given it. */
+static volatile uint32_t tick_overlap_registered;
+static volatile uint32_t tick_thread_idle;
+static volatile uint32_t game_thread_waiting;
+
 static int game_threads_held(void)
 {
+	if (tick_overlap_registered)
+		return (game_gate_held != 0 || game_thread_waiting != 0) && (tick_gate_held != 0 || tick_thread_idle != 0);
 	return game_gate_held != 0 || tick_gate_held != 0;
 }
 
@@ -366,7 +375,35 @@ void wiiu_tick_gate(void);
 
 void wiiu_tick_gate_register(int registered)
 {
-	(void)registered;
+	tick_overlap_registered = registered != 0;
+}
+
+/* the tick thread waits for a job (1) or runs one (0), and the game thread waits for it to end (1) or does not (0) (tick_overlap.c) */
+void wiiu_tick_idle_set(int idle);
+void wiiu_game_waiting_set(int waiting);
+
+void wiiu_tick_idle_set(int idle)
+{
+	tick_thread_idle = idle != 0;
+}
+
+void wiiu_game_waiting_set(int waiting)
+{
+	game_thread_waiting = waiting != 0;
+}
+
+/* the core the calling thread runs on (the tick snapshot's view belongs to the game thread's: objects.h), and the time in microseconds (tick_overlap.c's numbers) */
+int wiiu_current_core(void);
+unsigned long long wiiu_now_us(void);
+
+int wiiu_current_core(void)
+{
+	return (int)OSGetCoreId();
+}
+
+unsigned long long wiiu_now_us(void)
+{
+	return (unsigned long long)OSTicksToMicroseconds(OSGetSystemTime());
 }
 
 void wiiu_tick_gate(void)
