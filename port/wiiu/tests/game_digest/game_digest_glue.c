@@ -885,6 +885,56 @@ void wiiu_tick_gate(void)
 {
 }
 
+/* the tick thread's calls (source/main/main.c): the FPU, the black box, the HOME gate and the log line are the console's */
+void wiiu_fpu_setup(void)
+{
+}
+
+void wiiu_tag_thread(const char *name)
+{
+	(void)name;
+}
+
+int wiiu_tick_thread_priority(void)
+{
+	return 16;
+}
+
+void wiiu_tick_thread_gate(void)
+{
+}
+
+void wiiu_study_tick_thread_report(void)
+{
+}
+
+/* wiiu_study.c: a study switch's number from a file on the card; here from the environment (tick_thread.txt: HALO_TICK_THREAD,
+tick_overlap.txt: HALO_TICK_OVERLAP), so that a run can have the ticks on a thread of their own, and overlapped */
+long wiiu_study_number(const char *name, long fallback)
+{
+	const char *variable = !strcmp(name, "tick_thread.txt") ? "HALO_TICK_THREAD" : !strcmp(name, "tick_overlap.txt") ? "HALO_TICK_OVERLAP" : NULL;
+	const char *value = variable ? getenv(variable) : NULL;
+
+	return value && *value ? strtol(value, NULL, 10) : fallback;
+}
+
+/* wiiu_tick_parts.c: the console's timing of the parts of a tick */
+long long wiiu_tick_part_now(void)
+{
+	return 0;
+}
+
+void wiiu_tick_part(const char *name, long long started)
+{
+	(void)name;
+	(void)started;
+}
+
+void wiiu_tick_done(long long started)
+{
+	(void)started;
+}
+
 /* wiiu_render_passes.c and d3d8_gx2.c's frame parts: the console's timing log */
 void wiiu_render_pass(int pass)
 {
