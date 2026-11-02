@@ -483,6 +483,21 @@ static void tick_overlap_job_work(
 	struct tick_overlap_job *job = (struct tick_overlap_job *)argument;
 
 	job->started_us = tick_overlap_now_us();
+	/* (a test aid: halo/tick_overlap_stall.txt, in milliseconds, holds each job back by up to that and a third of it again, so that the tick thread is late
+	for the frame drawn beside it, as a long tick makes it) */
+	{
+		static long stall = -1;
+
+		if (stall < 0)
+			stall = wiiu_study_number("tick_overlap_stall.txt", 0);
+		if (stall > 0)
+		{
+			const long milliseconds = stall + (long)(job->sequence % 3) * stall / 3;
+			struct timespec pause = { milliseconds / 1000, (milliseconds % 1000) * 1000000L };
+
+			nanosleep(&pause, NULL);
+		}
+	}
 	STORE(o.running_sequence, job->sequence);
 	STORE(o.in_overlap_job, 1);
 	job->ticks_run = main_overlap_tick_side(job->dt, job->ticks_elapsed, job->leftover_after, job->previous_job_tick);

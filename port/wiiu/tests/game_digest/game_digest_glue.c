@@ -912,7 +912,8 @@ void wiiu_study_tick_thread_report(void)
 tick_overlap.txt: HALO_TICK_OVERLAP), so that a run can have the ticks on a thread of their own, and overlapped */
 long wiiu_study_number(const char *name, long fallback)
 {
-	const char *variable = !strcmp(name, "tick_thread.txt") ? "HALO_TICK_THREAD" : !strcmp(name, "tick_overlap.txt") ? "HALO_TICK_OVERLAP" : NULL;
+	const char *variable = !strcmp(name, "tick_thread.txt") ? "HALO_TICK_THREAD" : !strcmp(name, "tick_overlap.txt") ? "HALO_TICK_OVERLAP" :
+		!strcmp(name, "tick_overlap_stall.txt") ? "HALO_TICK_OVERLAP_STALL" : NULL;
 	const char *value = variable ? getenv(variable) : NULL;
 
 	return value && *value ? strtol(value, NULL, 10) : fallback;
