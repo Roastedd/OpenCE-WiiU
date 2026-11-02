@@ -124,6 +124,10 @@ void profile_tick_start(
 void profile_tick_end(
 	void);
 
+/* port: the calling thread takes no part in the profile from now on (see profile.c) */
+void profile_thread_disable(
+	void);
+
 void profile_enter_private(
 	struct profile_section *section);
 void profile_exit_private(

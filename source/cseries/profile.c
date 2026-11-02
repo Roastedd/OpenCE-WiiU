@@ -451,6 +451,8 @@ const char *format_strings[NUMBER_OF_PROFILE_DUMP_FORMAT_MODES] =
 static struct profile_globals profile_globals = {0};
 boolean profile_timebase_ticks = FALSE;
 boolean profile_global_enable = FALSE;
+/* port: set on a thread that takes no part in the profile (profile_thread_disable) */
+static __thread boolean profile_thread_off = FALSE;
 boolean profile_dump_frames = FALSE;
 boolean profile_dump_lost_frames = FALSE;
 
@@ -1172,6 +1174,11 @@ void profile_tick_start(
 {
 	struct profile_timer *timer;
 
+	if (profile_thread_off)
+	{
+		return;
+	}
+
 	if (profile_timebase_ticks)
 	{
 		profile_internal_step();
@@ -1201,6 +1208,11 @@ void profile_tick_end(
 	void)
 {
 	struct profile_timer *timer;
+
+	if (profile_thread_off)
+	{
+		return;
+	}
 
 	match_assert("c:\\halo\\SOURCE\\cseries\\profile.c", 320,
 		(profile_globals.current_frame.game_tick_count > 0) && (profile_globals.current_frame.game_tick_count <= MAXIMUM_GAME_TICKS_PER_FRAME));
@@ -1334,10 +1346,27 @@ void profile_idle_end(
 	return;
 }
 
+/* port: the profile's sections and the frame's tick timers are one set of globals (the stack of open sections, the frame's record) for the frame's
+thread. A thread that runs ticks of its own (main.c, the tick thread) calls this once, and takes no part in the profile: what it would enter and
+exit, and the ticks' begin and end, interleave with the frame's and the stack goes wrong. The frame's section around the ticks (game_time_update)
+still times them. */
+void profile_thread_disable(
+	void)
+{
+	profile_thread_off = TRUE;
+
+	return;
+}
+
 void profile_enter_private(
 	struct profile_section *section)
 {
 	__int64 timebase;
+
+	if (profile_thread_off)
+	{
+		return;
+	}
 
 	find_profile_section(section);
 
@@ -1362,6 +1391,11 @@ void profile_exit_private(
 	struct profile_section *section)
 {
 	__int64 timebase;
+
+	if (profile_thread_off)
+	{
+		return;
+	}
 
 	if (!profile_globals.initialization_pending)
 	{
