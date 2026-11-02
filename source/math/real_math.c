@@ -408,21 +408,35 @@ void vectors3d_from_euler_angles3d(
 	return;
 }
 
+#ifdef HALO_BW_KERNELS
+/* port: the Broadway kernel (port/wiiu/src/bw/halo_bw_sphere.S) gives the same answer as the C below for every input. The function that asks
+for it is small, so that the kernel's path has none of the C's frame; the C is halo_bw_c_fast_vector_intersects_sphere, the function below
+under another name. */
+__attribute__((noinline)) boolean halo_bw_c_fast_vector_intersects_sphere(real_point3d const *point, real_vector3d const *vector, real_point3d const *center, real radius);
+
 boolean fast_vector_intersects_sphere(
 	real_point3d const *point,
 	real_vector3d const *vector,
 	real_point3d const *center,
 	real radius)
 {
-#ifdef HALO_BW_KERNELS
-	/* port: the Broadway kernel (port/wiiu/src/bw/halo_bw_sphere.S), the same answer as the C below for every input */
 	HALO_BW_COUNT(HALO_BW_K_SPHERE);
 	if (halo_bw_flags & HALO_BW_BIT(HALO_BW_K_SPHERE))
 	{
 		HALO_BW_USED(HALO_BW_K_SPHERE);
 		return halo_bw_ray_sphere((float const *)point, (float const *)vector, (float const *)center, radius) != 0;
 	}
+	return halo_bw_c_fast_vector_intersects_sphere(point, vector, center, radius);
+}
+
+#define fast_vector_intersects_sphere halo_bw_c_fast_vector_intersects_sphere
 #endif
+boolean fast_vector_intersects_sphere(
+	real_point3d const *point,
+	real_vector3d const *vector,
+	real_point3d const *center,
+	real radius)
+{
 	real_point3d p = {point->x-center->x, point->y-center->y, point->z - center->z};
 	real c = (p.x*p.x) + (p.y*p.y) + (p.z*p.z) - (radius*radius);
 	real_vector3d direction;
@@ -470,6 +484,9 @@ boolean fast_vector_intersects_sphere(
 		}
 	}
 }
+#ifdef HALO_BW_KERNELS
+#undef fast_vector_intersects_sphere
+#endif
 
 real fast_vector_intersection_with_sphere(
 	real_point3d const *point,

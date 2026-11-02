@@ -276,6 +276,7 @@ struct bw_tree
 	float point[3] __attribute__((aligned(16)));
 	float vector[3] __attribute__((aligned(16)));
 	unsigned node_count, plane_count;
+	unsigned shape;	/* under 3: axis planes and a point on a grid, for distances that are exactly zero or the radius */
 };
 
 /* a random BSP of the class: mostly nodes that lead on, some leaves (the high bit), some designators and children out of range */
@@ -284,6 +285,7 @@ static void bw_make_tree(struct bw_rng *rng, int cls, unsigned payload, struct b
 	unsigned i;
 	const unsigned shape = bw_next(rng) % 8;
 
+	tree->shape = shape;
 	tree->node_count = 1 + bw_next(rng) % BW_NODES;
 	tree->plane_count = 1 + bw_next(rng) % BW_PLANES;
 	for (i = 0; i < tree->node_count; i++)
@@ -328,30 +330,46 @@ static void bw_make_tree(struct bw_rng *rng, int cls, unsigned payload, struct b
 				tree->planes[4 * i + 3] = (float)((int)(bw_next(rng) % 9) - 4) * 0.5f;
 		}
 	}
+}
+
+/* a random ray (or center) for the tree */
+static void bw_make_ray(struct bw_rng *rng, int cls, unsigned payload, struct bw_tree *tree)
+{
+	unsigned i;
+
 	for (i = 0; i < 3; i++)
 	{
 		tree->point[i] = bw_float(rng, cls, payload);
 		tree->vector[i] = bw_float(rng, cls, payload);
-		if (shape < 3 && cls != BW_NAN)
+		if (tree->shape < 3 && cls != BW_NAN)
 			tree->point[i] = (float)((int)(bw_next(rng) % 9) - 4) * 0.5f;
 	}
 }
+
+#define BW_WALKS_PER_TREE 8
 
 static void bw_test_ray_walk(bw_ray_walk_fn kernel, int cls, unsigned long cases, unsigned seed, struct bw_stats *stats)
 {
 	struct bw_rng rng = { seed * 2654435761u + 13u };
 	unsigned long index;
+	struct bw_tree tree;
+	unsigned payload = 0;
+	int lenient = 0;
 
 	for (index = 0; index < cases; index++)
 	{
-		struct bw_tree tree;
 		struct halo_bw_bsp_walk reference_walk, kernel_walk;
-		const unsigned payload = (bw_next(&rng) & 0x3fffffu) | (bw_next(&rng) & 0x80000000u);
-		const int lenient = cls == BW_NAN && (bw_next(&rng) & 3u) == 0;
 		float t0, t1;
 		int start, expect, got;
 
-		bw_make_tree(&rng, cls, lenient ? payload ^ 0x155u : payload, &tree);
+		if (index % BW_WALKS_PER_TREE == 0)
+		{
+			/* (a tree for several rays: building one costs more than walking it) */
+			payload = (bw_next(&rng) & 0x3fffffu) | (bw_next(&rng) & 0x80000000u);
+			lenient = cls == BW_NAN && (bw_next(&rng) & 3u) == 0;
+			bw_make_tree(&rng, cls, lenient ? payload ^ 0x155u : payload, &tree);
+		}
+		bw_make_ray(&rng, cls, payload, &tree);
 		t0 = (float)(bw_next(&rng) % 1025) * 0.0009765625f;
 		t1 = t0 + (float)(bw_next(&rng) % 1025) * 0.0009765625f;
 		if (cls != BW_NORMAL && cls != BW_TIES && (bw_next(&rng) & 3u) == 0)
@@ -390,17 +408,23 @@ static void bw_test_sphere_walk(bw_sphere_walk_fn kernel, int cls, unsigned long
 {
 	struct bw_rng rng = { seed * 2654435761u + 29u };
 	unsigned long index;
+	struct bw_tree tree;
+	unsigned payload = 0;
+	int lenient = 0;
 
 	for (index = 0; index < cases; index++)
 	{
-		struct bw_tree tree;
 		struct halo_bw_bsp_walk reference_walk, kernel_walk;
-		const unsigned payload = (bw_next(&rng) & 0x3fffffu) | (bw_next(&rng) & 0x80000000u);
-		const int lenient = cls == BW_NAN && (bw_next(&rng) & 3u) == 0;
 		float radius;
 		int start, expect, got;
 
-		bw_make_tree(&rng, cls, lenient ? payload ^ 0x155u : payload, &tree);
+		if (index % BW_WALKS_PER_TREE == 0)
+		{
+			payload = (bw_next(&rng) & 0x3fffffu) | (bw_next(&rng) & 0x80000000u);
+			lenient = cls == BW_NAN && (bw_next(&rng) & 3u) == 0;
+			bw_make_tree(&rng, cls, lenient ? payload ^ 0x155u : payload, &tree);
+		}
+		bw_make_ray(&rng, cls, payload, &tree);
 		radius = (bw_next(&rng) & 1u) ? (float)(bw_next(&rng) % 9) * 0.25f : bw_float(&rng, cls, payload);
 		start = (bw_next(&rng) % 10) ? (int)(bw_next(&rng) % tree.node_count) : (int)(bw_next(&rng) % (tree.node_count + 3));
 		reference_walk.nodes = tree.nodes;

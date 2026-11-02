@@ -36,10 +36,11 @@ def without_kernel_code(text: str) -> str:
 def body(text: str, signature: str) -> str:
     """the function's braces and what is between them (it starts at the signature, the braces at the start of a line), without the
     kernels' call sites"""
+    text = without_kernel_code(text)
     start = text.index(signature)
     open_brace = text.index("\n{\n", start)
     close_brace = text.index("\n}\n", open_brace)
-    return without_kernel_code(text[open_brace + 1:close_brace + 3])
+    return text[open_brace + 1:close_brace + 3]
 
 
 def mismatches():

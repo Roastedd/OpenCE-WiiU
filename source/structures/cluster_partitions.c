@@ -136,18 +136,18 @@ static struct
 
 /* ---------- public code */
 
+#ifdef HALO_BW_KERNELS
+/* port: the Broadway kernel (port/wiiu/src/bw/halo_bw_reference.S) finds the link that holds the datum's reference, checking each reference
+on the way as datum_get does; where it finds none (the datum is not on the list, or a reference on the way is not one datum_get returns) the
+C below runs and does what it does, errors included. The function that asks for it is small, so that the kernel's path has none of the C's
+frame; the C is halo_bw_c_reference_list_remove, the function below under another name. */
+__attribute__((noinline)) void halo_bw_c_reference_list_remove(struct data_array *array, long *first_reference_index, long datum_index);
+
 void reference_list_remove(
 	struct data_array *array,
 	long *first_reference_index,
 	long datum_index)
 {
-	long *reference_index = first_reference_index;
-	struct data_reference *reference;
-
-#ifdef HALO_BW_KERNELS
-	/* port: the Broadway kernel (port/wiiu/src/bw/halo_bw_reference.S) finds the link that holds the datum's reference, checking each
-	reference on the way as datum_get does; where it finds none (it is not on the list, or a reference is not one datum_get returns) the
-	C below runs and does what it does, errors included */
 	HALO_BW_COUNT(HALO_BW_K_REFERENCE);
 	if ((halo_bw_flags & HALO_BW_BIT(HALO_BW_K_REFERENCE)) && array->valid && array->count >= 0 && array->size == sizeof(struct data_reference) &&
 		array->data)
@@ -157,15 +157,27 @@ void reference_list_remove(
 
 		if (found)
 		{
+			struct data_reference *reference = (struct data_reference *)datum_get(array, *found);
+
 			HALO_BW_USED(HALO_BW_K_REFERENCE);
-			reference = (struct data_reference *)datum_get(array, *found);
 			datum_delete(array, *found);
 			*found = reference->next_reference_index;
 
 			return;
 		}
 	}
+	halo_bw_c_reference_list_remove(array, first_reference_index, datum_index);
+}
+
+#define reference_list_remove halo_bw_c_reference_list_remove
 #endif
+void reference_list_remove(
+	struct data_array *array,
+	long *first_reference_index,
+	long datum_index)
+{
+	long *reference_index = first_reference_index;
+	struct data_reference *reference;
 
 	while (*reference_index != NONE)
 	{
@@ -189,6 +201,9 @@ void reference_list_remove(
 
 	return;
 }
+#ifdef HALO_BW_KERNELS
+#undef reference_list_remove
+#endif
 
 /* The initialization and cursor-advance order preserve January's coalescing
  * of the source cursor into EBX and the loop index into ESI. */

@@ -1975,22 +1975,33 @@ void aiming_screen_apply(
 	return;
 }
 
+#ifdef HALO_BW_KERNELS
+/* port: the Broadway kernel (port/wiiu/src/bw/halo_bw_quaternion.S) does the same four products; it returns 0, with nothing written, where the
+thread's quantization register is not the signed 16-bit load it needs, and the C runs. The function that asks for it is small, so that the
+kernel's path has none of the C's frame; the C is halo_bw_c_quaternion_decompress_8byte, the function below under another name. */
+typedef char halo_bw_quaternion_layout_assert[sizeof(struct compressed_quaternion_8byte) == 8 && sizeof(real_quaternion) == 16 ? 1 : -1];
+
+__attribute__((noinline)) void halo_bw_c_quaternion_decompress_8byte(struct compressed_quaternion_8byte const *compressed, real_quaternion *quaternion);
+
 void quaternion_decompress_8byte(
 	struct compressed_quaternion_8byte const *compressed,
 	real_quaternion *quaternion)
 {
-#ifdef HALO_BW_KERNELS
-	/* port: the Broadway kernel (port/wiiu/src/bw/halo_bw_quaternion.S): the same four products; it returns 0, with nothing written,
-	where the thread's quantization register is not the signed 16-bit load it needs */
-	typedef char halo_bw_quaternion_layout_assert[sizeof(struct compressed_quaternion_8byte) == 8 && sizeof(real_quaternion) == 16 ? 1 : -1];
-
 	HALO_BW_COUNT(HALO_BW_K_QUATERNION);
 	if ((halo_bw_flags & HALO_BW_BIT(HALO_BW_K_QUATERNION)) && halo_bw_quaternion_load(compressed, (float *)quaternion))
 	{
 		HALO_BW_USED(HALO_BW_K_QUATERNION);
 		return;
 	}
+	halo_bw_c_quaternion_decompress_8byte(compressed, quaternion);
+}
+
+#define quaternion_decompress_8byte halo_bw_c_quaternion_decompress_8byte
 #endif
+void quaternion_decompress_8byte(
+	struct compressed_quaternion_8byte const *compressed,
+	real_quaternion *quaternion)
+{
 	real const scale = 1.f / COMPRESSED_QUATERNION_COMPONENT_MAXIMUM;
 
 	quaternion->v.i = compressed->i * scale;
@@ -2000,6 +2011,9 @@ void quaternion_decompress_8byte(
 
 	return;
 }
+#ifdef HALO_BW_KERNELS
+#undef quaternion_decompress_8byte
+#endif
 
 void quaternion_decompress_6byte(
 	struct compressed_quaternion_6byte const *compressed,
