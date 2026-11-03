@@ -674,11 +674,6 @@ static unsigned long long overlapped_offset(LPOVERLAPPED overlapped)
 
 /* port: the time the game's file reads and writes take, for the frame pacing notes: a frame that took long (a checkpoint's 20 MB, a map's data) says it was the card. An
 operation of 30 ms or more is logged with its file (the first 200 of a run); the totals are read by platform_file_io_snapshot and counted from the start. */
-struct platform_file_io
-{
-	double read_ms, write_ms, longest_ms;
-	unsigned long reads, writes, bytes_read, bytes_written;
-};
 
 static struct platform_file_io file_io;
 static pthread_mutex_t file_io_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -724,8 +719,6 @@ static void file_io_note(const struct platform_file *file, int write, DWORD byte
 			file->path + (length > 70 ? length - 70 : 0), ms);
 	}
 }
-
-void platform_file_io_snapshot(struct platform_file_io *out);
 
 void platform_file_io_snapshot(struct platform_file_io *out)
 {
