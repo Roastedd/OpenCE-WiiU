@@ -3735,7 +3735,7 @@ boolean main_overlap_eligible(
 	else if (!halo_interpolation_enabled())
 		reason = "no interpolation";
 	else if (local_player_count() != 1)
-		reason = "split screen";
+		reason = local_player_count() ? "split screen" : "no local player yet";
 	else if (cinematic_in_progress())
 		reason = "a cinematic";
 	else if (game_engine_running())
