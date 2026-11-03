@@ -684,7 +684,7 @@ void game_initialize_for_new_map(
 
 	set_random_seed(game_globals->options.random_seed);
 	/* port: and the local random seed again (HALO_MAP_START_SEED, random_math.c) */
-	random_math_test_seed(get_global_local_random_seed_address());
+	random_math_test_seed_at_map_start(get_global_local_random_seed_address());
 	game_engine_dispose();
 	game_engine_initialize(&game_variant_global);
 	real_math_reset_precision();

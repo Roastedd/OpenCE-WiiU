@@ -47,6 +47,7 @@ while no menu has the screen.
 #include "wiiu_input.h"
 #include "wiiu_pad_players.h"
 #include "wiiu_update.h"
+#include "test_input_bot.h"
 
 #include <coreinit/time.h>
 #include <string.h>
@@ -224,6 +225,61 @@ mouse; the bullets' autoaim stays */
 int halo_linux_mouse_aiming(short gamepad_index)
 {
 	return gamepad_index == 0 && gyro_aimed_at != 0 && gyro_aimed_at >= stick_aimed_at;
+}
+
+/* debug.test_input "bot:<seed>", "tickbot:<seed>" or "look:<seed>" (config.toml's [debug]; HALO_TEST_INPUT does not exist on the console): the first
+player's controller (port 0, the GamePad's) is played by the scripted player of test_input_bot.h, as the desktop build's is (xinput_sdl.c), so that a console
+run and a host run are the same fight. It is timed by the game's ticks (network_test_game_seconds: the game's time while a game runs), so it plays alike at
+any frame rate, each frame's reads taking the pattern at the time of the frame's first tick; with debug.fixed_step (a tick a frame) it is tick for tick.
+Only while a game runs, never in the menus (the desktop's runs on in them, on the clock; the network test's own menu steps need no input). Its sticks and
+triggers replace the controller's, its buttons are added to them, and it comes before hold_to_skip, which keeps a short press of A from a cinematic. With
+the setting empty, or one it does not play ("menu:" is the desktop's), nothing changes. */
+double network_test_game_seconds(void);
+/* (and where the nearest enemy is from the first player, for "tickhunt:") */
+unsigned char network_test_hunt_target(double *distance, double *yaw_error, double *pitch_error);
+
+static void test_input_gamepad(XINPUT_GAMEPAD *state)
+{
+	static unsigned long read_at = (unsigned long)-1;
+	static int seed = -1, mode = TEST_INPUT_BOT;
+	double seconds;
+
+	if (read_at != config_changes())
+	{
+		const char *setting = config_string("debug.test_input");
+		int new_seed = -1, new_mode = TEST_INPUT_BOT;
+
+		read_at = config_changes();
+		if (!test_input_bot_parse(setting, &new_seed, &new_mode))
+		{
+			new_seed = -1;
+			if (setting[0])
+				wiiu_log("Input: debug.test_input \"%s\" is not a scripted player the console plays (bot:, tickbot:, tickhunt: and look: are)", setting);
+		}
+		if (new_seed != seed || new_mode != mode)
+		{
+			seed = new_seed;
+			mode = new_mode;
+			if (seed >= 0)
+				wiiu_log("Input: the first player is the scripted player (seed %d, %s), by the game's ticks, while a game runs", seed,
+					mode == TEST_INPUT_LOOK ? "standing still, only looking" : mode == TEST_INPUT_HUNT ? "hunting the nearest enemy" :
+					"walking, turning and firing");
+		}
+	}
+	if (seed < 0)
+		return;
+	seconds = network_test_game_seconds();
+	if (seconds < 0.0)
+		return;
+	if (mode == TEST_INPUT_HUNT)
+	{
+		struct test_input_target target;
+
+		target.valid = network_test_hunt_target(&target.distance, &target.yaw_error, &target.pitch_error);
+		test_input_bot_pad(state, seconds, seed, mode, &target);
+		return;
+	}
+	test_input_bot_pad(state, seconds, seed, mode, NULL);
 }
 
 /* Hold to skip: while the game says a cinematic can be skipped (touch_game.c: the game's own question) and no menu has the screen, A, Start and a finger on the
@@ -446,6 +502,8 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 	}
 	if (have_pad)
 		pad_state(&pad, &state->Gamepad);
+	if (port == 0)
+		test_input_gamepad(&state->Gamepad);
 	hold_to_skip((unsigned int)port, &state->Gamepad);
 	if (port == 0)
 	{

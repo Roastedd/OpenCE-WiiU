@@ -10,7 +10,7 @@ build draw every frame of the game the same. A change to the rendering that keep
 the first tick it changes (tools/wiiu/digest_compare.py, which also compares the traces' lines, and in any order within a frame or a span).
 
     tools/test_wiiu_game_digest.py build [--name NAME] [--rev REV] [--mutate PATH BEFORE AFTER]... [--poison]
-    tools/test_wiiu_game_digest.py run RUN [--name NAME] [--poison] [--ticks N] [--trace FIRST-LAST|all] [--detail TICK] [--random] [--mode host|local|solo|solo-bloodgulch|solo-deathless|menu|menu-cycle|menu-campaign]
+    tools/test_wiiu_game_digest.py run RUN [--name NAME] [--poison] [--ticks N] [--trace FIRST-LAST|all] [--detail TICK] [--random] [--mode host|local|solo|solo-bloodgulch|solo-deathless|menu|menu-cycle|menu-campaign|menu-solo]
     tools/test_wiiu_game_digest.py compare RUN_A RUN_B [digest_compare.py's options]
     GAME_DIGEST=1 python3 -m unittest tools.test_wiiu_game_digest      (GAME_DIGEST_TICKS: the ticks each run plays, 300 by default)
 
@@ -62,15 +62,19 @@ MODES = {"host": "host:levels\\b30\\b30:coop", "local": "local:levels\\b30\\b30:
 # the main menu and back: menu (the main menu alone, no network test), menu-cycle (from the main menu a game of one player on bloodgulch, the main menu
 # again 20 s in, as the pause menu's Quit goes, and so on: network_test.c's "solo:"), menu-campaign (the same with b30, 50 s in, past its opening
 # cinematic). Their --ticks is a count of frames (the menu has no game ticks), and their frames are not compared
-MODES.update({"menu": "", "menu-cycle": "solo:levels\\test\\bloodgulch\\bloodgulch", "menu-campaign": "solo:levels\\b30\\b30"})
+MODES.update({"menu": "", "menu-cycle": "solo:levels\\test\\bloodgulch\\bloodgulch", "menu-campaign": "solo:levels\\b30\\b30",
+              "menu-solo": "solo:levels\\b30\\b30"})
 MENU_CUES = {"menu-cycle": "20 main_menu", "menu-campaign": "50 main_menu"}
-MENU_MODES = ("menu", "menu-cycle", "menu-campaign")
+MENU_MODES = ("menu", "menu-cycle", "menu-campaign", "menu-solo")
 # solo: a campaign game of one player on this machine, which init.txt starts as the console's map_name does (the tick overlap's, which a network game
 # or a split screen game never is); network_test.c's "log" mode logs it as it logs the others
 SOLO_INIT = {"solo": "map_name levels\\b30\\b30\n", "solo-bloodgulch": "map_name levels\\test\\bloodgulch\\bloodgulch\n",
              "solo-deathless": "cheat_deathless_player 1\ncheat_infinite_ammo 1\nmap_name levels\\b30\\b30\n"}
 # (menu-campaign: the player deathless, so that no revert to a checkpoint starts the cues' clock again; init.txt runs at the start, before the main menu)
 SOLO_INIT["menu-campaign"] = "cheat_deathless_player 1\ncheat_infinite_ammo 1\n"
+# menu-solo: the console's start (debug.network_test "solo:", config.toml only) with nothing in init.txt, and no cue to go back to the menu: what the cheats and the
+# scripted player do is the cues' (GAME_DIGEST_ENV="HALO_NETWORK_TEST_CUES=0 cheat_deathless_player 1|0 cheat_infinite_ammo 1")
+SOLO_INIT["menu-solo"] = ""
 # a broken key: the told draw facts compared by whether any were told, not by what they are (the D3D8 replay's own control of the same), so a
 # draw whose textures' facts change is drawn with the last ones sent
 BROKEN_KEY = ("port/wiiu/src/d3d8_gx2.c", "|| !facts_known) && (!facts_known || !words_equal(&facts_now, &facts_told, sizeof(facts_now))))",

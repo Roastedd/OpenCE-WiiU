@@ -46,6 +46,7 @@ extern unsigned char network_aim_assist_block_mouse(void);
 #include "halo_keyboard.h"
 #include "controller_buttons.h"
 #include "controller_remap.h"
+#include "test_input_bot.h"
 
 #include <SDL3/SDL.h>
 #include <math.h>
@@ -74,6 +75,8 @@ extern unsigned char pc_menu_split_players(void);
 /* port/linux/game/network_test.c: the game's time in seconds while one runs,
 else -1 */
 extern double network_test_game_seconds(void);
+/* ... and where the nearest enemy is from the first player (debug.test_input "tickhunt:") */
+extern unsigned char network_test_hunt_target(double *distance, double *yaw_error, double *pitch_error);
 
 /* ---------- device tables */
 
@@ -977,8 +980,7 @@ static void test_input_gamepad(XINPUT_GAMEPAD *pad)
 	static const int analog[] = { XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_X, XINPUT_GAMEPAD_Y };
 	static int checked;
 	static int seed = -1;
-	static int looking;
-	double t;
+	static int mode = TEST_INPUT_BOT;
 	int index;
 
 	for (index = 0; index < 4; index++)
@@ -1011,17 +1013,8 @@ static void test_input_gamepad(XINPUT_GAMEPAD *pad)
 			snprintf(test_input_menu, sizeof(test_input_menu), "%s", setting + 5);
 			test_input_menu_since = SDL_GetTicks();
 		}
-		else if (!strncmp(setting, "bot:", 4))
-			seed = atoi(setting + 4);
-		else if (!strncmp(setting, "tickbot:", 8))
-			seed = atoi(setting + 8);
-		else if (!strcmp(setting, "bot"))
-			seed = 0;
-		else if (!strncmp(setting, "look:", 5))
-		{
-			seed = atoi(setting + 5);
-			looking = 1;
-		}
+		else
+			test_input_bot_parse(setting, &seed, &mode);
 	}
 	if (test_input_menu[0])
 	{
@@ -1037,22 +1030,16 @@ static void test_input_gamepad(XINPUT_GAMEPAD *pad)
 			pad->bAnalogButtons[XINPUT_GAMEPAD_X] = 255;
 		return;
 	}
-	t = test_input_seconds() + seed * 1.7;
-	if (looking)
+	/* (the pattern is test_input_bot.h's, the console's too) */
+	if (mode == TEST_INPUT_HUNT)
 	{
-		pad->sThumbRX = (SHORT)(sin(t * 0.5) * 14000.0);
-		pad->sThumbRY = (SHORT)(sin(t * 0.3) * 32000.0);
+		struct test_input_target target;
+
+		target.valid = network_test_hunt_target(&target.distance, &target.yaw_error, &target.pitch_error);
+		test_input_bot_pad(pad, test_input_seconds(), seed, mode, &target);
 		return;
 	}
-	pad->sThumbLY = (SHORT)(sin(t * 0.9) * 32000.0);
-	pad->sThumbLX = (SHORT)(cos(t * 0.6 + seed) * 20000.0);
-	pad->sThumbRX = (SHORT)(sin(t * 0.4) * 14000.0);
-	if (fmod(t, 3.0) < 0.3)
-		pad->bAnalogButtons[XINPUT_GAMEPAD_RIGHT_TRIGGER] = 255;
-	if (fmod(t, 5.0) < 0.1)
-		pad->bAnalogButtons[XINPUT_GAMEPAD_A] = 255;
-	if (fmod(t, 7.0) < 0.2)
-		pad->bAnalogButtons[XINPUT_GAMEPAD_LEFT_TRIGGER] = 255;
+	test_input_bot_pad(pad, test_input_seconds(), seed, mode, NULL);
 }
 
 static void wheel_update(void)

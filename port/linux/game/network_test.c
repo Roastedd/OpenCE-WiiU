@@ -87,6 +87,7 @@ Called from the main loop every frame (main.c).
 #include "tag_files/tag_files.h"
 #include "camera/observer.h"
 #include "hs/hs.h"
+#include "ai/actors.h"
 
 #include "../src/p2p.h" /* port: port/linux/src/p2p.c, p2p_lobby.c */
 #include "network_chat.h"
@@ -480,6 +481,138 @@ static void network_test_log_players(
 			local_player_index == NONE ? 0L : (long)player_get(local_player_index)->respawn_timer,
 			divergence_samples, divergence_apart, divergence_mean, divergence_largest);
 	}
+}
+
+/* a living biped of the Covenant, the Flood or the sentinels: the scripted player's enemy */
+static boolean network_test_enemy(
+	struct object_datum *object)
+{
+	return object->object.type == _object_type_biped && object->object.body_vitality > 0.0f &&
+		(object->object.owner_team_index == _game_team_covenant || object->object.owner_team_index == _game_team_flood ||
+			object->object.owner_team_index == _game_team_sentinel);
+}
+
+/* debug.test_input "tickhunt:<seed>" (port/linux/include/test_input_bot.h): where the nearest living enemy is from the first local player's unit, for the scripted
+player to turn to, walk up to and fire at: the distance in world units, the turn to face it in radians (positive: to the left) and the tilt (positive: up), from
+where the unit aims. FALSE with no unit or no enemy. It reads the game, at the frame's input (the tick thread is idle then: tick_overlap_sync_point), and
+changes nothing. */
+boolean network_test_hunt_target(
+	double *distance,
+	double *yaw_error,
+	double *pitch_error)
+{
+	long local_player_index;
+	struct object_iterator objects;
+	struct object_datum *own, *nearest = NULL;
+	struct unit_datum *unit;
+	double nearest_distance = 0.0;
+	double dx, dy, dz, flat, error;
+
+	/* (the input is read from the program's first frames, before there are players) */
+	if (!game_time_initialized() || !game_in_progress())
+		return FALSE;
+	local_player_index = local_player_get_player_index(0);
+	if (local_player_index == NONE || player_get(local_player_index)->unit_index == NONE)
+		return FALSE;
+	own = object_get(player_get(local_player_index)->unit_index);
+	unit = unit_get(player_get(local_player_index)->unit_index);
+	object_iterator_new(&objects, _object_mask_biped, 0);
+	while (object_iterator_next(&objects))
+	{
+		struct object_datum *object = object_get(objects.index);
+		double apart_x, apart_y, apart_z, apart;
+
+		if (object == own || !network_test_enemy(object))
+			continue;
+		apart_x = object->object.position.x - own->object.position.x;
+		apart_y = object->object.position.y - own->object.position.y;
+		apart_z = object->object.position.z - own->object.position.z;
+		apart = apart_x * apart_x + apart_y * apart_y + apart_z * apart_z;
+		if (!nearest || apart < nearest_distance)
+		{
+			nearest = object;
+			nearest_distance = apart;
+		}
+	}
+	if (!nearest)
+		return FALSE;
+	/* (at the unit's eye, about 0.6 above its feet, the target's middle) */
+	dx = nearest->object.bounding_sphere_center.x - own->object.position.x;
+	dy = nearest->object.bounding_sphere_center.y - own->object.position.y;
+	dz = nearest->object.bounding_sphere_center.z - (own->object.position.z + 0.6);
+	flat = sqrt(dx * dx + dy * dy);
+	*distance = sqrt(nearest_distance);
+	error = atan2(dy, dx) - atan2(unit->unit.aiming_vector.j, unit->unit.aiming_vector.i);
+	while (error > 3.14159265358979)
+		error -= 6.28318530717959;
+	while (error < -3.14159265358979)
+		error += 6.28318530717959;
+	*yaw_error = error;
+	*pitch_error = atan2(dz, flat) - asin(PIN(unit->unit.aiming_vector.k, -1.0f, 1.0f));
+	return TRUE;
+}
+
+/* A scripted run's scene, once a game second ("log" and "solo:" games with debug.test_input, so that the other tests' logs are what they were): how
+heavy the ticks are where the scripted player is (reports/research/2026-11-01/wiiu-scripted-input.md). The objects in the world by kind, the enemies
+(a living biped of the Covenant, the Flood or the sentinels) and how near the nearest is to the first local player, and the AI's actors. It reads the game and changes nothing. */
+static void network_test_log_scene(
+	void)
+{
+	static long logged_time = -1;
+	struct object_iterator objects;
+	struct objects_information information;
+	struct data_iterator actors;
+	struct actor_datum *actor;
+	long counts[NUMBER_OF_OBJECT_TYPES];
+	long enemies = 0, near_15 = 0, near_30 = 0, actors_active = 0;
+	real nearest = -1.0f;
+	long local_player_index = local_player_get_player_index(0);
+	struct object_datum *own = NULL;
+
+	if (game_time_get() < logged_time)
+		logged_time = -1;
+	if (logged_time >= 0 && game_time_get() - logged_time < TICKS_PER_SECOND)
+		return;
+	logged_time = game_time_get();
+	if (local_player_index != NONE && player_get(local_player_index)->unit_index != NONE)
+		own = object_get(player_get(local_player_index)->unit_index);
+	memset(counts, 0, sizeof(counts));
+	object_iterator_new(&objects, _object_mask_all, 0);
+	while (object_iterator_next(&objects))
+	{
+		struct object_datum *object = object_get(objects.index);
+
+		if (object->object.type >= 0 && object->object.type < NUMBER_OF_OBJECT_TYPES)
+			counts[object->object.type]++;
+		if (object != own && network_test_enemy(object))
+		{
+			real_vector3d apart;
+			real distance;
+
+			enemies++;
+			if (!own)
+				continue;
+			apart.i = object->object.position.x - own->object.position.x;
+			apart.j = object->object.position.y - own->object.position.y;
+			apart.k = object->object.position.z - own->object.position.z;
+			distance = (real)sqrt(apart.i * apart.i + apart.j * apart.j + apart.k * apart.k);
+			near_15 += distance < 15.0f;
+			near_30 += distance < 30.0f;
+			if (nearest < 0.0f || distance < nearest)
+				nearest = distance;
+		}
+	}
+	objects_information_get(&information);
+	data_iterator_new(&actors, actor_data);
+	while ((actor = (struct actor_datum *)data_iterator_next(&actors)) != NULL)
+		actors_active += actor->meta.active != 0;
+	platform_log("network test: scene tick %ld | objects %d (%d active): biped %ld vehicle %ld weapon %ld projectile %ld item %ld other %ld"
+		" | enemies alive %ld, nearest %.1f, within 15 %ld, within 30 %ld | actors %d (%ld active)",
+		game_time_get(), information.object_count, information.active_object_count, counts[_object_type_biped], counts[_object_type_vehicle],
+		counts[_object_type_weapon], counts[_object_type_projectile], counts[_object_type_equipment] + counts[_object_type_garbage],
+		(long)information.object_count - counts[_object_type_biped] - counts[_object_type_vehicle] - counts[_object_type_weapon] -
+			counts[_object_type_projectile] - counts[_object_type_equipment] - counts[_object_type_garbage],
+		enemies, nearest, near_15, near_30, actor_data ? actor_data->actual_count : 0, actors_active);
 }
 
 /* each of this machine's players hits the next player with their weapon's
@@ -1198,6 +1331,8 @@ void network_test_update(
 	{
 		network_test.logged_time = game_time_get();
 		network_test_log_players();
+		if ((network_test.mode == _network_test_log || network_test.mode == _network_test_solo) && config_string("debug.test_input")[0])
+			network_test_log_scene();
 		if (network_test.shoot_interval > 0.0f &&
 			game_time_get() % MAX(1, (long)(network_test.shoot_interval * TICKS_PER_SECOND)) < TICKS_PER_SECOND)
 		{

@@ -177,7 +177,8 @@ int halo_linux_touch_move(short controller_index, real *forward, real *strafe)
 	return 0;
 }
 
-/* ---------- the network test's input hooks (port/linux/game/network_test.c): there is no scripted input on the console */
+/* ---------- the network test's input hooks (port/linux/game/network_test.c): its held action button and chat keys are the desktop's alone; the scripted player
+(debug.test_input "bot:", "tickbot:") is xinput_wiiu.c's */
 
 void test_input_hold_action(int hold)
 {

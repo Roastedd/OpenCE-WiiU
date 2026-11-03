@@ -1318,9 +1318,11 @@ static const struct config_setting config_settings[] =
 		"network tests), timed by the clock; \"tickbot:<seed>\" the same pattern\n"
 		"timed by the game's ticks (with debug.fixed_step, the same game on any\n"
 		"machine, for comparing runs); \"look:<seed>\" stands still, only turning\n"
-		"and looking up and down; \"menu:<buttons>\" presses menu buttons one a\n"
+		"and looking up and down; \"tickhunt:<seed>\" turns to the nearest enemy,\n"
+		"walks up to it and fires; \"menu:<buttons>\" presses menu buttons one a\n"
 		"second (a, b, x, y, up, down, left, right, start, back or wait, separated\n"
-		"by spaces or commas), for testing the menus; empty for none." },
+		"by spaces or commas), for testing the menus; empty for none. The Wii U\n"
+		"plays the bots (not menu:) as the GamePad's player while a game runs." },
 	{ "debug.virtual_gamepads", _config_integer, "0", "HALO_VIRTUAL_GAMEPADS", _environment_value, _platform_desktop,
 		"Attach this many SDL virtual gamepads (0 to 4), which the game takes for\n"
 		"gamepads plugged in, for testing split screen; debug.virtual_gamepad_script\n"
