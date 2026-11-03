@@ -662,7 +662,7 @@ sharing sends its bytes, so the file stays as Halo PC wrote it, little-endian, a
   does (the Xbox's 22 MB texture cache and 4 MB sound cache: Custom Edition maps can draw more texture than that, and the rest is drawn as the
   default texture) plus its models' and BSP's compressed geometry, up to about 15 MB for the largest maps; geometry that does not fit is drawn
   from the heap (slower, and logged). Ogg Vorbis sounds are decoded at load into a buffer of the heap.
-- **Shaders.** What a draw's shader key is not in `shaders.pack` draws is skipped (`halo/shaders_missing.txt`), so a map's new keys must be
+- **Shaders.** What a draw's shader key is not in `shaders.pack` draws is skipped (`halo/shader-misses-*.txt`), so a map's new keys must be
   captured on the console and the pack remade.
 
 Checked on the Mac (no Custom Edition map is on it, so the repository's test maps stood in: StageKit's, `tools/stagekit`, written little-endian
@@ -699,7 +699,7 @@ With the owner at the console and the card on the safe settings, one driver at a
    (79 BSP materials, 21 shaders renumbered, 10 chicago extended, 676 bitmaps, 32 HUD placements), the Ogg Vorbis sounds converted to ADPCM,
    `model parts converted`, `the structure BSP ... has its vertices compressed`; no `cannot be turned` or `refused`. On screen: the level, its
    models and its HUD drawn (the HUD meters' fill, the multipurpose maps' shine on the vehicles); sounds and the announcer play.
-4. **Shader keys**: `halo/shaders_missing.txt` after a few minutes of play (and of each later map): the keys go into the pack
+4. **Shader keys**: `halo/shader-misses-*.txt` after a few minutes of play (and of each later map): the keys go into the pack
    (`tools/wiiu/shader_pack.sh`), and the next run's log shows no draw skipped for a missing key.
 5. **Times and memory**: from `loading` to the first frame, and the swap's share of it (the log's timestamps around `turned to
    big-endian`); the MEM2 heap's free bytes in the game; `YOU GOT STABBED` (the texture cache full) or `SOUND CACHE BLOWN` in `debug.txt`;
@@ -719,7 +719,7 @@ Overpass at the display's resolution; `tools/wiiu/shell_tests.sh` rasterizes gly
 `include/wiiu_net_compat.h`; a router's port forwarding for internet play, and `posix_upnp.c`'s port and address byte order fixed for big-endian), the GamePad's
 gyro aim (`input.wiiu_gyro_aim`), tap-to-skip, Classic Controllers, and voice chat (above: its queues, rings, resampler and microphone readings
 tested on three machines, the rest built). The high-res HUD and menu pictures (`hud_hires.c`, `menu_files.c`) are not ported: they
-draw meters through shader variants that are not in the shader pack, which is made from what a console run asked for (`halo/shaders_missing.txt`).
+draw meters through shader variants that are not in the shader pack, which is made from what a console run asked for (`halo/shader-misses-*.txt`).
 
 ## What it takes to run
 
