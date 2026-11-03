@@ -384,6 +384,12 @@ struct sweep_cluster
 	struct tag_block portal_indices;
 };
 
+struct sweep_subcluster
+{
+	real_rectangle3d world_bounds;
+	struct tag_block surface_indices;
+};
+
 static int point_in_cluster(struct structure_bsp const *bsp, real_point3d const *p)
 {
 	return cluster_index_from_point(bsp, (union real_point3d const *)p) != NONE;
@@ -469,6 +475,7 @@ static void bsp_stops_make(void)
 	long lightmap_index, material_index, cluster_index;
 	long considered = 0, placed = 0, no_place = 0;
 	long seen_keys[1024], seen_stops[1024];
+	long clusters_seen = 0, clusters_placed = 0;
 	long seen_count = 0;
 
 	sweep.stop_count = 0;
@@ -531,86 +538,97 @@ static void bsp_stops_make(void)
 			}
 		}
 	}
-	/* every cluster: the first surface of its surface list gives a point inside it, where the camera looks up (the sky, the weather) and along the
-	surface (the fog) */
+	/* every cluster: a surface of one of its subclusters gives a point inside it (the retail clusters have no surface lists of their own: their subclusters
+	have the surfaces), where the camera looks up (the sky, the weather) and along the room (the fog) */
 	for (cluster_index = 0; cluster_index < bsp->clusters.count && sweep.stop_count < MAXIMUM_STOPS - 2; cluster_index++)
 	{
 		struct sweep_cluster *cluster = TAG_BLOCK_GET_ELEMENT(&bsp->clusters, cluster_index, struct sweep_cluster);
-		long const *list = cluster ? (long const *)cluster->surface_indices.address : NULL;
-		long consumed = 0, found = 0;
+		long subcluster_index, found = 0, tried = 0;
 
-		while (list && !found && consumed + 3 < cluster->surface_indices.count)
+		for (subcluster_index = 0; cluster && !found && subcluster_index < cluster->subclusters.count && tried < 16; subcluster_index++)
 		{
-			long lightmap_i = list[0], material_i = list[1], group = list[2], first_surface = list[3];
-			struct structure_lightmap *lightmap = TAG_BLOCK_GET_ELEMENT(&bsp->lightmaps, lightmap_i, struct structure_lightmap);
-			struct structure_material *material = lightmap ? TAG_BLOCK_GET_ELEMENT(&lightmap->materials, material_i, struct structure_material) : NULL;
-			struct structure_surface const *surface = group > 0 ? TAG_BLOCK_GET_ELEMENT(&bsp->surfaces, first_surface, struct structure_surface) : NULL;
+			struct sweep_subcluster *subcluster = TAG_BLOCK_GET_ELEMENT(&cluster->subclusters, subcluster_index, struct sweep_subcluster);
+			long const *list = subcluster ? (long const *)subcluster->surface_indices.address : NULL;
+			long entry;
 
-			if (material && surface && material->compressed_vertex_data.address)
+			for (entry = 0; list && !found && entry < subcluster->surface_indices.count && tried < 16; entry += 1 + subcluster->surface_indices.count / 3, tried++)
 			{
-				real_point3d points[3];
-				long corner, vertex_limit = material->compressed_vertex_data.size / COMPRESSED_STRUCTURE_VERTEX_SIZE;
-				int usable = 1;
+				short lightmap_i, material_i;
+				struct structure_lightmap *lightmap;
+				struct structure_material *material;
+				struct structure_surface const *surface;
 
-				for (corner = 0; corner < 3; corner++)
+				if ((unsigned long)list[entry] >= (unsigned long)bsp->surfaces.count)
+					continue;
+				if (!structure_bsp_find_material_for_surface(bsp, list[entry], &lightmap_i, &material_i))
+					continue;
+				lightmap = TAG_BLOCK_GET_ELEMENT(&bsp->lightmaps, lightmap_i, struct structure_lightmap);
+				material = lightmap ? TAG_BLOCK_GET_ELEMENT(&lightmap->materials, material_i, struct structure_material) : NULL;
+				surface = TAG_BLOCK_GET_ELEMENT(&bsp->surfaces, list[entry], struct structure_surface);
+				if (material && surface && material->compressed_vertex_data.address)
 				{
-					if (surface->vertex_indices[corner] >= vertex_limit)
-						usable = 0;
-					else
-						points[corner] = *(real_point3d const *)((byte const *)material->compressed_vertex_data.address +
-							surface->vertex_indices[corner] * COMPRESSED_STRUCTURE_VERTEX_SIZE);
-				}
-				if (usable)
-				{
-					struct stop stop;
-					real_point3d centroid;
-					real_vector3d normal;
+					real_point3d points[3];
+					long corner, vertex_limit = material->compressed_vertex_data.size / COMPRESSED_STRUCTURE_VERTEX_SIZE;
+					int usable = 1;
 
-					memset(&stop, 0, sizeof(stop));
-					if (triangle_view(bsp, points, 0.8f, &stop, &centroid, &normal) &&
-						cluster_index_from_point(bsp, (union real_point3d const *)&stop.position) == cluster_index)
+					for (corner = 0; corner < 3; corner++)
 					{
-						struct stop up = stop;
+						if (surface->vertex_indices[corner] >= vertex_limit)
+							usable = 0;
+						else
+							points[corner] = *(real_point3d const *)((byte const *)material->compressed_vertex_data.address +
+								surface->vertex_indices[corner] * COMPRESSED_STRUCTURE_VERTEX_SIZE);
+					}
+					if (usable)
+					{
+						struct stop stop;
+						real_point3d centroid;
+						real_vector3d normal;
 
-						up.kind = 1;
-						up.detail = cluster_index;
-						up.bsp_index = global_structure_bsp_index_get();
-						up.forward.i = 0.12f;
-						up.forward.j = 0.07f;
-						up.forward.k = 1.0f;
-						sweep.stops[sweep.stop_count++] = up;
-						/* (and along the surface, a view of the room: the surface's normal turned flat) */
-						stop.kind = 1;
-						stop.detail = cluster_index;
-						stop.bsp_index = global_structure_bsp_index_get();
-						stop.forward = normal;
-						stop.forward.k = 0.0f;
-						if (stop.forward.i * stop.forward.i + stop.forward.j * stop.forward.j < 1e-6f)
+						memset(&stop, 0, sizeof(stop));
+						if (triangle_view(bsp, points, 0.8f, &stop, &centroid, &normal) &&
+							cluster_index_from_point(bsp, (union real_point3d const *)&stop.position) == cluster_index)
 						{
-							stop.forward.i = 1.0f;
-							stop.forward.j = 0.0f;
+							struct stop up = stop;
+
+							up.kind = 1;
+							up.detail = cluster_index;
+							up.bsp_index = global_structure_bsp_index_get();
+							up.forward.i = 0.12f;
+							up.forward.j = 0.07f;
+							up.forward.k = 1.0f;
+							sweep.stops[sweep.stop_count++] = up;
+							/* (and along the room: the surface's normal turned flat) */
+							stop.kind = 1;
+							stop.detail = cluster_index;
+							stop.bsp_index = global_structure_bsp_index_get();
+							stop.forward = normal;
+							stop.forward.k = 0.0f;
+							if (stop.forward.i * stop.forward.i + stop.forward.j * stop.forward.j < 1e-6f)
+							{
+								stop.forward.i = 1.0f;
+								stop.forward.j = 0.0f;
+							}
+							sweep.stops[sweep.stop_count++] = stop;
+							if (global_structure_bsp_index_get() == 0 && sweep.candidate_count < 64)
+							{
+								sweep.candidates[sweep.candidate_count].position = stop.position;
+								sweep.candidates[sweep.candidate_count].forward = stop.forward;
+								sweep.candidates[sweep.candidate_count].floor = normal.k;
+								sweep.candidates[sweep.candidate_count].fogged = cluster->fog_designator != NONE;
+								sweep.candidate_count++;
+							}
+							found = 1;
 						}
-						sweep.stops[sweep.stop_count++] = stop;
-						if (global_structure_bsp_index_get() == 0 && sweep.candidate_count < 64)
-						{
-							sweep.candidates[sweep.candidate_count].position = stop.position;
-							sweep.candidates[sweep.candidate_count].forward = stop.forward;
-							sweep.candidates[sweep.candidate_count].floor = normal.k;
-							sweep.candidates[sweep.candidate_count].fogged = cluster->fog_designator != NONE;
-							sweep.candidate_count++;
-						}
-						found = 1;
 					}
 				}
 			}
-			if (group < 0)
-				break;
-			consumed += group + 3;
-			list += group + 3;
 		}
+		clusters_seen++;
+		clusters_placed += found;
 	}
-	note("bsp %d: %ld materials, %ld stops for %ld shaders (%ld surfaces had no place), %ld stops in all with the clusters' views", (int)global_structure_bsp_index_get(),
-		considered, placed, seen_count, no_place, sweep.stop_count);
+	note("bsp %d: %ld materials, %ld stops for %ld shaders (%ld surfaces had no place), %ld stops in all with the views of %ld of %ld clusters", (int)global_structure_bsp_index_get(),
+		considered, placed, seen_count, no_place, sweep.stop_count, clusters_placed, clusters_seen);
 }
 
 /* ---------- the objects', effects' and damage phases */
