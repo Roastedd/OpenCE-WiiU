@@ -31,6 +31,7 @@ extern volatile int startup_timeline_finished;
 void startup_timeline_mark(const char *name);
 void startup_timeline_note(const char *name);
 long long startup_timeline_now(void);
+unsigned long startup_timeline_since_ms(long long started);
 void startup_timeline_add(const char *name, long long started, unsigned long items, unsigned long bytes);
 void startup_timeline_frame(void);
 int startup_timeline_running(void);
@@ -46,6 +47,8 @@ int startup_option(unsigned long bit);
 #define STARTUP_ADD(name, variable, items, bytes) do { if (variable) startup_timeline_add((name), (variable), (unsigned long)(items), (unsigned long)(bytes)); } while (0)
 #define STARTUP_FRAME() startup_timeline_frame()
 #define STARTUP_OPTION(bit) startup_option(bit)
+/* the milliseconds since a timer was started (0 when it was not: the report is made) */
+#define STARTUP_SINCE_MS(variable) ((variable) ? startup_timeline_since_ms(variable) : 0ul)
 
 #else
 
@@ -55,6 +58,7 @@ int startup_option(unsigned long bit);
 #define STARTUP_ADD(name, variable, items, bytes) ((void)(variable))
 #define STARTUP_FRAME() ((void)0)
 #define STARTUP_OPTION(bit) 0
+#define STARTUP_SINCE_MS(variable) 0ul
 
 #endif
 

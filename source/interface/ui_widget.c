@@ -8621,6 +8621,7 @@ void process_ui_widgets(
 	boolean pause_pressed;
 	boolean modal_widget_active[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
 	long widget_index;
+	STARTUP_TIMER(entered);
 
 	match_assert(
 		"c:\\halo\\SOURCE\\interface\\ui_widget.c",
@@ -8636,7 +8637,11 @@ void process_ui_widgets(
 	if (widget_globals.initialization_thread)
 	{
 		if (!thread_has_exited(widget_globals.initialization_thread))
+		{
+			/* port: (the start-up's timeline: the frames the menu's widgets were not processed for, by what stopped them) */
+			STARTUP_ADD("ui_wait_checks", entered, 1, 0);
 			return;
+		}
 		dispose_thread(widget_globals.initialization_thread);
 		widget_globals.initialization_thread = NULL;
 		ui_widgets_inhibit_processing(FALSE);
@@ -8661,7 +8666,10 @@ void process_ui_widgets(
 		return;
 	}
 	if (progress_bar_is_active())
+	{
+		STARTUP_ADD("ui_wait_progress", entered, 1, 0);
 		return;
+	}
 	if (virtual_keyboard_active())
 	{
 		virtual_keyboard_process();
@@ -8671,6 +8679,7 @@ void process_ui_widgets(
 	}
 	if (attract_mode_should_start())
 	{
+		STARTUP_ADD("ui_wait_attract", entered, 1, 0);
 		attract_mode_start();
 
 		return;

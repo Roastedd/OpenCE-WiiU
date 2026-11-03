@@ -132,6 +132,13 @@ long long startup_timeline_now(void)
 	return startup_timeline_running() ? (long long)wiiu_now_ticks() : 0;
 }
 
+unsigned long startup_timeline_since_ms(long long started)
+{
+	const unsigned long long per_second = wiiu_ticks_per_second();
+
+	return per_second ? (unsigned long)((wiiu_now_ticks() - (unsigned long long)started) * 1000u / per_second) : 0ul;
+}
+
 void startup_timeline_add(const char *name, long long started, unsigned long items, unsigned long bytes)
 {
 	unsigned long spent;
