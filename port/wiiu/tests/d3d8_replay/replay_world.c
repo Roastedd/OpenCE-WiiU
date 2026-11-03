@@ -217,10 +217,13 @@ short gamepad_window_bounds(short bounds[4])
 	return 1;
 }
 
-/* wiiu_gx2.c's: dynamic resolution asks no step, so the frames are drawn at the most lines, as they were before it */
+/* wiiu_gx2.c's: dynamic resolution asks no step, so the frames are drawn at the most lines, as they were before it; REPLAY_DRS_LINES, a number of lines
+for tools/test_wiiu_d3d8_replay.py's test of a lowered step, asks for that many throughout */
 unsigned int host_gx2_drs_lines(void)
 {
-	return 0;
+	const char *lines = getenv("REPLAY_DRS_LINES");
+
+	return lines ? (unsigned int)strtoul(lines, NULL, 0) : 0u;
 }
 
 int posix_make_directory(const char *path)

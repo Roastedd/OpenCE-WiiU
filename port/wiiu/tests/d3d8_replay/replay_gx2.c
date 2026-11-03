@@ -63,6 +63,34 @@ static void line(const char *format, ...)
 		fprintf(gx.trace, "%s\n", text);
 }
 
+/* a line for the trace only, not the digest (REPLAY_VIEWS: where each draw and clear lands in its targets, which the test of a lowered step of dynamic
+resolution reads; the digest of a run is the same with or without it) */
+static void view_line(const char *format, ...) __attribute__((format(printf, 1, 2)));
+
+static void view_line(const char *format, ...)
+{
+	va_list arguments;
+
+	if (!gx.trace || !getenv("REPLAY_VIEWS"))
+		return;
+	va_start(arguments, format);
+	vfprintf(gx.trace, format, arguments);
+	va_end(arguments);
+	fputc('\n', gx.trace);
+}
+
+static void view_targets(const char *what, const int32_t rectangle[4])
+{
+	const struct dk_surface *surfaces[2] = { &gx.color, &gx.depth };
+	unsigned i;
+
+	for (i = 0; i < 2; i++)
+		if (surfaces[i]->kind != DK_SURFACE_NONE)
+			view_line("view %s frame %lu kind %u pixels %ux%u active %ux%u rectangle %d %d %d %d", what, gx.frame, (unsigned)surfaces[i]->kind, (unsigned)surfaces[i]->pixel_width,
+				(unsigned)surfaces[i]->pixel_height, (unsigned)surfaces[i]->active_width, (unsigned)surfaces[i]->active_height, (int)rectangle[0],
+				(int)rectangle[1], (int)rectangle[2], (int)rectangle[3]);
+}
+
 static uint64_t hash_of(const void *data, unsigned long size)
 {
 	return replay_hash(REPLAY_HASH_INIT, data, size);
@@ -200,6 +228,7 @@ static void draw(const struct dk_command_draw *command)
 	}
 	surface_text(color, sizeof(color), &gx.color);
 	surface_text(depth, sizeof(depth), &gx.depth);
+	view_targets("draw", dk_derive_state(derive)->viewport);
 	for (stage = 0; stage < 4; stage++)
 		stage_text(stages[stage], sizeof(stages[stage]), &dk_derive_textures(derive)->stages[stage]);
 	line("draw %lu.%lu: prim %u count %u offset %d indices %016llx%s; targets %s %s; state %016llx vertex key %016llx pixel key %016llx; textures %s %s %s %s; "
@@ -221,6 +250,12 @@ static void clear(const struct dk_command_clear *command)
 
 	surface_text(color, sizeof(color), &gx.color);
 	surface_text(depth, sizeof(depth), &gx.depth);
+	{
+		unsigned rectangle;
+
+		for (rectangle = 0; rectangle < command->rectangle_count; rectangle++)
+			view_targets("clear", (const int32_t *)(const void *)command->rectangles[rectangle]);
+	}
 	line("clear %lu.%lu: flags %x color %g %g %g %g depth %g stencil %u, %u rectangles %016llx; targets %s %s", gx.frame, gx.draw, (unsigned)command->flags,
 		(double)command->color[0], (double)command->color[1], (double)command->color[2], (double)command->color[3], (double)command->depth, (unsigned)command->stencil,
 		(unsigned)command->rectangle_count, (unsigned long long)rectangles, color, depth);

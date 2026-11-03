@@ -30,11 +30,13 @@ leaves out: the blits to the TV and the GamePad, and the swap. */
 /* A time predicted at the step above within this share of the budget raises a step. It is well under DROP_SHARE, so that the step it
 rises to is not dropped again at once. */
 #define RISE_SHARE 0.75f
-/* The share of the budget that the GPU must have been behind by when the frame was handed over, in the median, to drop a step. It is the
-share of the GPU's time that the game thread's own pace cannot explain; 1.7 ms at 60 frames a second is above the jitter of the hand-over
-(the GPU starts a frame at the game thread's first hand-over of its draws, a stream's worth after the frame's first draw, which the measure
-counts as time the GPU had) and far under what a GPU that is behind has (the whole of its lateness). */
-#define BACKLOG_SHARE 0.1f
+/* The share of the budget that the GPU must have been behind by when the frame was handed over, in the median, to drop a step: 2.5 ms at 60 frames a
+second. Chosen from the console's logs, with the game thread's rendering time standing in for the time to hand a frame over: a GPU-bound view
+(c10, b40, the a30 shore; 45 to 50 frames a second, waits of 8 to 15 ms) had 3 to 8 ms, and the views the game thread limits had 0 in the median
+(the b30 fight, 60 frames a second out of combat) with the a30 fight at 0 to 2.6. The real measure runs a stream's worth (about a millisecond)
+under that stand-in: the first flush after the frame's first draw is when the GPU starts it, not the draw. The console's 5 s lines give the real
+figures to tune this by. */
+#define BACKLOG_SHARE 0.15f
 /* A wait for the flip longer than this counts. A few turns of the wait's loop (200 us each) are the flip arriving as the frame is handed
 over, not the GPU behind. */
 #define FLIP_WAIT_MS 1.0f

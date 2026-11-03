@@ -455,7 +455,7 @@ Written and tested on the build machine (branch `wiiu-drs`), not run on a consol
   `halo/drs_lines.txt` (a number of lines, 240 to the ceiling) fixes one for the whole run, with the controller off whatever
   `display.dynamic_resolution` says.
 - **The controller** (`src/wiiu_drs.c`, run in `present()` on the GX2 thread) drops a step when the median of the last 8 frames' GPU time
-  is over 0.9 of the budget (16.7 ms, 33.3 at 30 frames a second), the median of their backlogs is over 0.1 of it, and the frame waited more
+  is over 0.9 of the budget (16.7 ms, 33.3 at 30 frames a second), the median of their backlogs is over 0.15 of it, and the frame waited more
   than 1 ms for the flip. The backlog is the part of a frame's GPU time still to run when the game thread had handed over its last draw: the
   GPU's time (bottom-of-pipe samples) includes the moments it waited for a late game thread, and the display holds nearly every early frame
   (11 to 16 ms a frame at 60 in the console's logs), so neither says by itself that the GPU is behind. It raises a step when the median

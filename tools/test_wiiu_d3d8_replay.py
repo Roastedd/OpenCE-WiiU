@@ -86,12 +86,12 @@ def build(folder, mutations=None):
     return executable
 
 
-def replay(executable, mode, schedule, seed, frames=FRAMES, trace=None):
+def replay(executable, mode, schedule, seed, frames=FRAMES, trace=None, environment=None):
     """one run: its digest, its Lock fields' digest and what it counted"""
     command = [*shlex.split(os.environ.get("D3D8_REPLAY_RUNNER", "")), str(executable), mode, schedule, str(seed), str(frames)]
     if trace:
         command.append(str(trace))
-    result = run_command(command, timeout=600)
+    result = run_command(command, timeout=600, env={**os.environ, **(environment or {})})
     values = {}
     for line in result.stdout.split("\n"):
         words = line.split()
@@ -132,6 +132,53 @@ class D3D8ReplayTest(unittest.TestCase):
         runs = [("sync", "lag", 1), ("async", "lag", 1)]
         for reference, mutated in zip(self.mutated_digests([], runs), self.mutated_digests([mutation], runs)):
             self.assertNotEqual(reference, mutated)
+
+    def lowered_step_violations(self, mutations, lines, frames=240):
+        """the draws and clears of a run at `lines` of the screen's targets (dynamic resolution's lowered step, REPLAY_DRS_LINES),
+        read from the trace's view lines; what they do wrong: (what, why) of each, and how many landed in the screen's targets"""
+        wrong, screen = [], 0
+        with tempfile.TemporaryDirectory(prefix="opence-d3d8-replay-") as folder:
+            executable = self.build_in(folder, mutations)
+            trace = Path(folder) / "trace.txt"
+            replay(executable, "sync", "lag", 1, frames=frames, trace=trace, environment={"REPLAY_DRS_LINES": str(lines), "REPLAY_VIEWS": "1"})
+            for text in trace.read_text().splitlines():
+                words = text.split()
+                if words[:1] != ["view"]:
+                    continue
+                what, frame, pixels, active = words[1], int(words[3]), words[7], words[9]
+                x, y, width, height = map(int, words[11:15])
+                if frame < 2:
+                    continue  # (the first frames are drawn before the layer first takes the screen's size and the share up, between frames)
+                pixel_width, pixel_height = map(int, pixels.split("x"))
+                active_width, active_height = map(int, active.split("x"))
+                if pixel_height < 720 or pixel_width * 9 != pixel_height * 16:
+                    if (active_width, active_height) != (pixel_width, pixel_height):
+                        wrong.append((text, "a target that is not the screen's has its part cut"))
+                    continue
+                # (the screen's targets: 16:9 of 720 lines or more; the replay's game changes the TV's mode from 720 to 1080 lines part way)
+                screen += 1
+                columns = (pixel_width * lines + pixel_height // 2) // pixel_height if lines < pixel_height else pixel_width
+                if (active_width, active_height) != (columns, min(lines, pixel_height)):
+                    wrong.append((text, f"the screen's targets draw {columns}x{min(lines, pixel_height)}"))
+                if what == "draw" and (x < 0 or y < 0 or width < 0 or height < 0 or x + width > active_width or y + height > active_height):
+                    wrong.append((text, "a viewport outside the part drawn"))
+                if what == "clear" and (x + width > active_width or y + height > active_height):
+                    wrong.append((text, "a cleared rectangle outside the part drawn"))
+        return wrong, screen
+
+    def test_a_lowered_step_draws_and_clears_only_the_part_it_asks_for(self):
+        # (dynamic resolution at 648, 576 and 540 lines of 720: the screen's targets draw columns x lines, viewports and cleared rectangles stay inside, and
+        # no other target is cut; the digest of the run without a step is the one recorded above, as the env variable is not set there)
+        for lines in (648, 576, 540):
+            with self.subTest(lines=lines):
+                wrong, screen = self.lowered_step_violations([], lines)
+                self.assertGreater(screen, 200)
+                self.assertEqual(wrong[:3], [])
+
+    def test_a_lowered_step_that_ignores_the_share_is_seen(self):
+        # (viewports and clears scaled by the screen's targets' whole size, not the part drawn: they run past it)
+        wrong, _ = self.lowered_step_violations([("port/wiiu/src/d3d8_gx2.c", "share[0] = screen ? drs_fraction[0] : 1.0f;", "share[0] = 1.0f;")], 576)
+        self.assertTrue(wrong)
 
     def test_a_missed_stream_read_is_seen(self):
         # (the draws' vertex streams not noted as read: the dynamic vertices written after a draw reach it)
