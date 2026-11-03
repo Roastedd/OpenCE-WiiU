@@ -428,8 +428,10 @@ static void tick_overlap_late_judge(
 	o.late_window_start = 0;
 }
 
-/* halo/tick_overlap_late.txt: 0 keeps the overlap whatever the tick thread does (the default is 1: the fall back; a number above 1 is the fewest frames a window judged late
+/* halo/tick_overlap_late.txt: 0 keeps the overlap whatever the tick thread does (absent: TICK_OVERLAP_LATE_DEFAULT; 1 is the fall back; a number above 1 is the fewest frames a window judged late
 needs, 20 otherwise: the host's qemu draws a few frames a second, and a test of the fall back has to judge a window of a few) */
+/* (what the card's file means when it is absent: on in the build that has the overlap's changes, off in the timers build, whose run is to see the tick thread as it is) */
+#define TICK_OVERLAP_LATE_DEFAULT 1
 static long tick_overlap_late_setting = -1;
 
 static boolean tick_overlap_late_enabled(
