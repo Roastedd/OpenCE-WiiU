@@ -703,6 +703,25 @@ def test_a_protected_scenario_is_given_the_scenario_group(report_tool, tmp_path)
     assert report["scenario_regrouped"] == "1"
 
 
+def test_a_protected_maps_tag_name_outside_the_tag_data_is_let_go(report_tool, tmp_path):
+    """Map protection scrambles the names of tags, which Halo PC never needed: only a tag held by a resource map needs its name (to find its entry), so
+    a name outside the tag data (or not terminated) is given an empty one and the map loads (29426d53, 'Fix custom edition protected map loading');
+    the loader used to refuse it. A resource-held tag's name is still checked (the 'bitmap resource name' case)."""
+    cache = Map()
+    path = instance_case(2, 0x10, "<I", 0x3FFFFFFF)(cache, cache.write(tmp_path))
+    returncode, report = report_one(report_tool, path)
+    assert returncode == 0 and report["load"] == "ok", report
+
+
+def test_a_protected_maps_tag_without_data_loads(report_tool, tmp_path):
+    """A protected map may leave a tag without data (address 0), which Halo PC tolerates while nothing reads it; the validator refuses any reference to
+    such a tag (tag_validate.c). The loader used to refuse the map."""
+    cache = Map()
+    path = instance_case(8, 0x14, "<I", 0)(cache, cache.write(tmp_path))
+    returncode, report = report_one(report_tool, path)
+    assert returncode == 0 and report["load"] == "ok", report
+
+
 def test_a_structure_bsp_instance_with_its_load_address_loads(report_tool, tmp_path):
     """Invader writes the address a structure BSP loads at in its tag
     instance (cursed-damnation); it has none until it is loaded."""
@@ -1201,11 +1220,8 @@ MALFORMED_CACHES = {
                              "the model vertex and index data do not fit in the file"),
     "handle": (instance_case(3, 0x0C, "<I", 0xE1770009), "load",
                "a tag handle does not match its position in the index"),
-    "name outside": (instance_case(2, 0x10, "<I", 0x3FFFFFFF), "load",
-                     "a tag name lies outside the tag data or is not terminated"),
     "tag address outside": (instance_case(8, 0x14, "<I", BASE + 0x1000000), "load",
                             "a tag's address lies outside the tag data"),
-    "null tag address": (instance_case(8, 0x14, "<I", 0), "load", "a tag's address lies outside the tag data"),
     "external weapon": (instance_case(8, 0x18, "<I", 1), "load",
                         "a tag of a group that resource maps never hold is marked as held by one"),
     "external sound header outside": (instance_case(4, 0x14, "<I", BASE - 0x100), "load",
