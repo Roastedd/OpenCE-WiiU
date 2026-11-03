@@ -155,6 +155,7 @@ void render_interpolation_overlap_set(boolean on, long tick);
 /* the fine timers of the copies (tick_snapshot.c, render_interpolation.c): the game thread's reads, and the blends' numbers, said by the overlap's log */
 void tick_snapshot_reads_total(unsigned long *reads, unsigned long *fallbacks, unsigned long *applied);
 void render_interpolation_blend_log(double ticks_per_ms, unsigned long frames);
+void tick_snapshot_view_log(double ticks_per_ms);
 
 /* the lights that fade (object_lights.c), once after the ticks of each job */
 void lights_fade_update(void);

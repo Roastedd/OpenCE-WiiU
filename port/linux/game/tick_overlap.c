@@ -967,6 +967,7 @@ void tick_overlap_log(
 	o.wait_ticks = o.wait_max_ticks = o.frame_ticks = o.frame_max_ticks = o.sync_ticks = o.sync_wait_ticks = o.post_ticks = o.draw_ticks = o.draw_max_ticks = 0;
 	o.serial_wait_ticks = 0;
 	o.waits_long = o.serial_waits = o.active_frames = 0;
+	tick_snapshot_view_log(per_ms);
 	o.jobs = o.ticks = 0;
 	o.job_ticks = o.job_max_ticks = o.tick_work_ticks = 0;
 	o.ahead_sum = 0;

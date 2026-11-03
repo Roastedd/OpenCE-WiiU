@@ -50,6 +50,7 @@ tick, such as a nav marker, is moved as far as the object is drawn from there
 #include "units/units.h"
 #ifdef HALO_WIIU
 #include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
+#include "tick_perf.h"
 #endif
 
 /* port/linux/src/port_config.c */
@@ -214,6 +215,7 @@ static struct
 {
 	unsigned long long lookup, snap, rotations, blend, copy;
 	unsigned long asked, repeated, no_object, no_previous, blended, snapped, nodes, rotation_nodes, rotations_kept, fixups;
+	struct tick_perf perf; /* the counters of the core over the calls that made a blend or looked for one (tick_perf.h) */
 } blend_stats;
 
 uint32_t wiiu_crash_fixups_here(void);
@@ -639,7 +641,7 @@ static struct interpolation_rotation const *overlap_rotations_kept(struct overla
 
 /* the blend a frame of the overlap draws an object with (render_interpolation_object_node_matrices): NULL if the object has no pose of the tick before
 (it is the tick's own) */
-static real_matrix4x3 *overlap_object_node_matrices(long object_index)
+static real_matrix4x3 *overlap_object_node_matrices_inner(long object_index)
 {
 	struct overlap_object *record;
 	struct object_datum *object;
@@ -780,6 +782,17 @@ static real_matrix4x3 *overlap_object_node_matrices(long object_index)
 	return blended;
 }
 
+static real_matrix4x3 *overlap_object_node_matrices(long object_index)
+{
+	unsigned long perf_before[4];
+	real_matrix4x3 *result;
+
+	tick_perf_begin(perf_before);
+	result = overlap_object_node_matrices_inner(object_index);
+	tick_perf_end(&blend_stats.perf, perf_before);
+	return result;
+}
+
 /* the blends' numbers, said with the overlap's log (the game thread's); frames is the frames of the window */
 void render_interpolation_blend_log(
 	double ticks_per_ms,
@@ -796,6 +809,13 @@ void render_interpolation_blend_log(
 		(double)blend_stats.asked / f, (double)blend_stats.repeated / f, (double)blend_stats.blended / f, (double)blend_stats.snapped / f,
 		(double)blend_stats.no_previous / f, (double)blend_stats.no_object / f, (double)blend_stats.nodes / f, (double)blend_stats.rotation_nodes / f,
 		(double)blend_stats.rotations_kept / f, (double)blend_stats.fixups / f);
+	if (blend_stats.perf.stretches)
+	{
+		unsigned long long const *v = blend_stats.perf.sum;
+
+		tick_snapshot_say("tick snapshot, blends, counters of core %u, a frame: %s %.3f M, %s %.3f M, %s %.2f K, %s %.2f K", wiiu_perfmon_core(), wiiu_perfmon_name(0), v[0] / f / 1e6,
+			wiiu_perfmon_name(1), v[1] / f / 1e6, wiiu_perfmon_name(2), v[2] / f / 1e3, wiiu_perfmon_name(3), v[3] / f / 1e3);
+	}
 	{
 		static unsigned long reads_before, fallbacks_before, applied_before;
 		unsigned long reads, fallbacks, applied;

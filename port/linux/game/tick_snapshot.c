@@ -193,6 +193,8 @@ enum
 	MODE_NO_PREFETCH = 1024, /* the next block's cache lines are not asked for while one is copied */
 	MODE_NO_ROTATION_CACHE = 2048, /* the blends find the rotations of both poses every frame (off: each pose's are found once and kept) */
 	MODE_POISON_LEFT_OUT = 4096, /* test: what the copies leave out is filled with 0xCD, so that a read of it changes the frames */
+	MODE_NO_FLUSH = 16384, /* the tick thread's copies are not written back to memory after a capture (off: they are, so that the game thread's reads find them in memory, not in the tick core's cache) */
+	MODE_NO_VIEW_PREFETCH = 32768, /* the game thread does not ask for the cache lines of the newest capture's copies when a frame begins */
 };
 
 /* an object copied at a capture if it was asked for within this many captures */
@@ -260,6 +262,8 @@ struct slot
 	long copy_serial[MAXIMUM_OBJECTS_PER_MAP]; /* the capture the buffer was filled in */
 	signed char ref[MAXIMUM_OBJECTS_PER_MAP]; /* (the overlap's) the version of the object the slot refers to, plus one (0: none) */
 	long capture_serial; /* the capture that last wrote the slot, counted from 1 over the whole run: the same number is the same pose of every object in it */
+	unsigned short changed[MAXIMUM_OBJECTS_PER_MAP]; /* the objects this capture copied afresh (a frame asks for the cache lines of those when it begins) */
+	long changed_count;
 	struct camera_view cameras[MAXIMUM_LOCAL_PLAYERS];
 	struct partition_copy partitions[PARTITION_COUNT];
 	/* the lights as of the capture: the light array (header and the used part of its data) the frame reads them through (object_lights.c's LIGHT_DATA) */
@@ -278,6 +282,8 @@ static struct
 	boolean skip_unchanged; /* the objects nothing has accessed since a slot's copy are left out of the capture into it */
 	boolean rotation_cache; /* the blends keep the rotations found for a capture's pose of an object */
 	boolean prefetch; /* the cache lines of the next block are asked for ahead */
+	boolean flush; /* the copies are written back to memory after the capture (dcbst) */
+	boolean view_prefetch; /* the frame's begin asks for the cache lines of the newest capture's new copies */
 	boolean skip_orientations; /* the orientation blocks of an object are not copied: only the ticks' animation reads them */
 	boolean overlap_requested; /* halo/tick_overlap.txt is on: the ring is drawn from beside the tick thread, the copies hold the tick's fields */
 	struct tick_ring ring; /* which slot holds which tick, what is committed, what is pinned (tick_ring.h) */
@@ -397,6 +403,8 @@ static int tick_snapshot_mode(void)
 		s.skip_orientations = (s.mode & MODE_ON) != 0 && !(s.mode & MODE_KEEP_ORIENTATIONS);
 		s.skip_unchanged = s.overlap_requested && !(s.mode & MODE_COPY_ALL);
 		s.prefetch = (s.mode & MODE_ON) != 0 && !(s.mode & MODE_NO_PREFETCH);
+		s.flush = s.overlap_requested && !(s.mode & MODE_NO_FLUSH);
+		s.view_prefetch = s.overlap_requested && !(s.mode & MODE_NO_VIEW_PREFETCH);
 		s.rotation_cache = s.overlap_requested && !(s.mode & MODE_NO_ROTATION_CACHE);
 		if (s.skip_unchanged)
 		{
@@ -555,6 +563,22 @@ static void tick_snapshot_prefetch(void const *address, long size)
 		__builtin_prefetch(line);
 #endif
 	}
+}
+
+/* the cache lines of a range written back to memory (dcbst: the lines stay in the cache, clean). The tick thread's copies are read by the game thread on another core, which finds a
+line another core holds modified (its L2 on core 2, 512 KB) slower than one in memory; the tick thread has the time. */
+static void tick_snapshot_flush(void const *address, long size)
+{
+#if defined(__powerpc__)
+	byte const *line = (byte const *)((uintptr_t)address & ~(uintptr_t)31);
+	byte const *end = (byte const *)address + size;
+
+	for (; line < end; line += 32)
+		__asm__ volatile("dcbst 0,%0" : : "r"(line) : "memory");
+#else
+	(void)address;
+	(void)size;
+#endif
 }
 
 /* whether the orientation blocks are left out of the copies */
@@ -845,6 +869,24 @@ static void tick_snapshot_capture_block(struct slot *slot, long absolute_index, 
 		version->serial = slot->capture_serial;
 		vs->latest = (short)chosen;
 		slot->copy_serial[absolute_index] = version->serial;
+		if (slot->changed_count < MAXIMUM_OBJECTS_PER_MAP)
+			slot->changed[slot->changed_count++] = (unsigned short)absolute_index;
+		if (s.flush)
+		{
+			struct block_parts parts;
+			long at = 0;
+			int which;
+
+			tick_snapshot_block_parts((struct object_datum const *)version->data, size, &parts);
+			for (which = 0; which < (s.skip_orientations ? parts.skips : 0); which++)
+			{
+				if (parts.skip_offset[which] > at)
+					tick_snapshot_flush(version->data + at, parts.skip_offset[which] - at);
+				at = parts.skip_offset[which] + parts.skip_size[which];
+			}
+			if (at < size)
+				tick_snapshot_flush(version->data + at, size - at);
+		}
 	}
 	else if (vs->latest == chosen)
 	{
@@ -1342,6 +1384,7 @@ void tick_snapshot_capture_tick(long tick, boolean commit)
 			measure_previous = before;
 	}
 	tick_ring_begin_write(&s.ring, (int)(slot - slots), tick);
+	slot->changed_count = 0;
 	s.serial++;
 	slot->capture_serial = s.serial;
 	tick_snapshot_dirty_next = (unsigned long)s.serial + 1;
@@ -2026,8 +2069,49 @@ void tick_snapshot_unpin(void)
 	tick_ring_unpin(&s.ring);
 }
 
+/* the game thread's, what a frame's begin and end cost (and the cache lines asked for): said by tick_snapshot_view_log with the blends */
+static struct
+{
+	unsigned long frames, lines, objects;
+	unsigned long long begin, end, prefetch;
+	struct tick_perf perf_begin, perf_end;
+} vs_stats;
+
+/* the cache lines of the objects the newest capture copied afresh, asked for when a frame begins: the tick thread (another core) wrote them, so they are in no cache of this core, and the frame
+reads them in the order it draws, one miss at a time; asked for together, the misses overlap. The orientation blocks, which are not copied, are left out. */
+static void tick_snapshot_view_prefetch(struct slot const *slot)
+{
+	long entry;
+
+	for (entry = 0; entry < slot->changed_count; entry++)
+	{
+		const long index = slot->changed[entry];
+		struct object_header_datum const *header = &slot->headers[index];
+		struct block_parts parts;
+		long at = 0;
+		int which;
+
+		if (!slot->copied[index] || !header->datum || header->data_size <= 0)
+			continue;
+		tick_snapshot_block_parts(header->datum, header->data_size, &parts);
+		for (which = 0; which < (s.skip_orientations ? parts.skips : 0); which++)
+		{
+			if (parts.skip_offset[which] > at)
+				tick_snapshot_prefetch((byte const *)header->datum + at, parts.skip_offset[which] - at);
+			at = parts.skip_offset[which] + parts.skip_size[which];
+		}
+		if (at < header->data_size)
+			tick_snapshot_prefetch((byte const *)header->datum + at, header->data_size - at);
+		vs_stats.lines += (unsigned long)((header->data_size + 31) / 32);
+		vs_stats.objects++;
+	}
+}
+
 void tick_snapshot_view_begin(void)
 {
+	unsigned long perf_before[4];
+	unsigned long long entered = 0;
+
 	unsigned long long started;
 	struct slot *latest = NULL;
 	struct slot *before = NULL;
@@ -2035,6 +2119,8 @@ void tick_snapshot_view_begin(void)
 	if (!tick_snapshot_mode() || !object_header_data || !object_header_data->valid)
 		return;
 	started = CLOCK();
+	entered = tick_overlap_now();
+	tick_perf_begin(perf_before);
 	if (s.ring.pinned[0] >= 0)
 	{
 		/* the overlap's: the tick pinned (tick_snapshot_pin) */
@@ -2073,15 +2159,27 @@ void tick_snapshot_view_begin(void)
 	}
 	if (s.verify_begin && s.ring.pinned[0] < 0)
 		tick_snapshot_verify(FALSE);
+	if (s.view_prefetch && s.pair_view)
+	{
+		const unsigned long long prefetch_started = tick_overlap_now();
+
+		tick_snapshot_view_prefetch(latest);
+		vs_stats.prefetch += tick_overlap_now() - prefetch_started;
+	}
 	/* (the headers last: from here the accessors on this core give the copies) */
 	tick_snapshot_view_array = &latest->array;
 	tick_snapshot_view_any = 1;
 	s.views++;
+	vs_stats.frames++;
+	vs_stats.begin += tick_overlap_now() - entered;
+	tick_perf_end(&vs_stats.perf_begin, perf_before);
 	ADD(PART_VIEW_BEGIN, started);
 }
 
 void tick_snapshot_view_end(void)
 {
+	unsigned long perf_before[4];
+	unsigned long long entered;
 	unsigned long long started;
 	struct slot *view = s.view;
 	long index, field, entry;
@@ -2089,6 +2187,8 @@ void tick_snapshot_view_end(void)
 	if (!tick_snapshot_headers || !view)
 		return;
 	started = CLOCK();
+	entered = tick_overlap_now();
+	tick_perf_begin(perf_before);
 	if (s.verify_end && s.ring.pinned[0] < 0)
 	{
 		tick_snapshot_verify(TRUE);
@@ -2120,8 +2220,31 @@ void tick_snapshot_view_end(void)
 	s.view = NULL;
 	s.previous = NULL;
 	s.pair_view = FALSE;
+	vs_stats.end += tick_overlap_now() - entered;
+	tick_perf_end(&vs_stats.perf_end, perf_before);
 	ADD(PART_VIEW_END, started);
 	ADD(PART_FRAME, 0);
+}
+
+/* the frame's begin and end, a frame (the overlap's log, with the blends') */
+void tick_snapshot_view_log(double ticks_per_ms)
+{
+	const double f = vs_stats.frames ? (double)vs_stats.frames : 1.0;
+	const double ms = ticks_per_ms > 0.0 ? ticks_per_ms : 1.0;
+
+	if (!vs_stats.frames)
+		return;
+	tick_snapshot_say("tick snapshot, a frame's begin %.3f ms (asking for the lines of %.1f new copies, %.1f lines: %.3f ms) and end %.3f ms (%lu frames)", (double)vs_stats.begin / ms / f,
+		(double)vs_stats.objects / f, (double)vs_stats.lines / f, (double)vs_stats.prefetch / ms / f, (double)vs_stats.end / ms / f, vs_stats.frames);
+	if (vs_stats.perf_begin.stretches)
+	{
+		unsigned long long const *b = vs_stats.perf_begin.sum, *e = vs_stats.perf_end.sum;
+
+		tick_snapshot_say("tick snapshot, a frame's begin and end, counters of core %u, a frame: %s %.2f M and %.2f M, %s %.2f M and %.2f M, %s %.1f K and %.1f K, %s %.1f K and %.1f K",
+			wiiu_perfmon_core(), wiiu_perfmon_name(0), b[0] / f / 1e6, e[0] / f / 1e6, wiiu_perfmon_name(1), b[1] / f / 1e6, e[1] / f / 1e6, wiiu_perfmon_name(2), b[2] / f / 1e3,
+			e[2] / f / 1e3, wiiu_perfmon_name(3), b[3] / f / 1e3, e[3] / f / 1e3);
+	}
+	memset(&vs_stats, 0, sizeof(vs_stats));
 }
 
 #include "tick_snapshot_hash.inc"
