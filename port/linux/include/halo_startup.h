@@ -14,6 +14,8 @@ digest harness's) has any of this; every other build is untouched, the macros be
 build's old start-up: */
 enum
 {
+	/* the saved games' checks start when the game's systems are up, not when the main menu is loaded (ui_widget.c) */
+	STARTUP_EARLY_FILESYSTEM_CHECKS = 1,
 	/* the menus' XML is read by a thread of its own from the start, not by the game thread when the menus' map has loaded (menu_files.c) */
 	STARTUP_PRELOAD_MENUS = 2,
 	/* and that thread then makes the images of the pictures the main menu draws, as the game thread would when it first draws them (xbox_textures_gx2.c) */

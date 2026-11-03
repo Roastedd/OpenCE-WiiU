@@ -5027,6 +5027,25 @@ static void perform_filesystem_initialization(
 	return;
 }
 
+/* port: whether the saved games' checks were started before the main menu was loaded (ui_widgets_start_filesystem_checks) */
+static boolean filesystem_checks_started_early;
+
+/* port (HALO_WIIU, halo/startup.txt bit 1): the saved games' checks, which the menus must wait for, started as soon as the game's systems are up,
+beside the main menu's map being loaded, rather than after it. The thread is the same and does the same; it starts about 2.4 s earlier on the
+console, where its file operations were found to hold the menu back (the highlight appears when the widgets are first processed, which waits for
+the thread to end). Only for a first load of the main menu: a run that starts a map from init.txt starts it when the menu is first loaded. */
+void ui_widgets_start_filesystem_checks(
+	void)
+{
+	if (main_screen_shell_first_load != TRUE || filesystem_checks_started_early || widget_globals.initialization_thread ||
+		!STARTUP_OPTION(STARTUP_EARLY_FILESYSTEM_CHECKS))
+	{
+		return;
+	}
+	filesystem_checks_started_early = TRUE;
+	perform_filesystem_initialization();
+}
+
 void main_screen_shell_load(
 	void)
 {
@@ -5054,7 +5073,8 @@ void main_screen_shell_load(
 			if (!bink_playback_active())
 				load_main_menu = TRUE;
 		}
-		perform_filesystem_initialization();
+		if (!filesystem_checks_started_early)
+			perform_filesystem_initialization();
 		input_abstraction_reset_controller_detection_timer();
 	}
 	if (load_main_menu)

@@ -3856,6 +3856,11 @@ void main_loop(
 	game_initialize();
 	STARTUP_MARK("game_init");
 	console_startup();
+#ifdef HALO_WIIU
+	/* port: the saved games' checks, which the main menu waits for, run beside its map being loaded, not after it (ui_widget.c) */
+	if (main_globals.want_to_be_at_main_menu && !main_globals.playback_last_recording)
+		ui_widgets_start_filesystem_checks();
+#endif
 	/* (the main menu is loaded here, its map and its widgets) */
 	main_setup_connection();
 	main_initialize_time();
