@@ -1004,11 +1004,13 @@ void wiiu_error_file_text(char const *text)
 	fputs(text, stderr);
 }
 
-/* xinput_wiiu.c: the face buttons by their places (the console's default) */
+/* xinput_wiiu.c: the face buttons by their places (the console's default); with --wiiu-input that file is linked and says it */
+#ifndef GAME_DIGEST_WIIU_INPUT
 int wiiu_face_buttons_by_label(void)
 {
 	return 0;
 }
+#endif
 
 /* wiiu_input.c: no controllers merged */
 int wiiu_input_controllers_merged(void)

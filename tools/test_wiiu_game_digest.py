@@ -10,7 +10,7 @@ build draw every frame of the game the same. A change to the rendering that keep
 the first tick it changes (tools/wiiu/digest_compare.py, which also compares the traces' lines, and in any order within a frame or a span).
 
     tools/test_wiiu_game_digest.py build [--name NAME] [--rev REV] [--mutate PATH BEFORE AFTER]... [--poison]
-    tools/test_wiiu_game_digest.py run RUN [--name NAME] [--poison] [--ticks N] [--trace FIRST-LAST|all] [--detail TICK] [--random] [--mode host|local|solo|solo-bloodgulch|solo-deathless|menu|menu-cycle|menu-campaign]
+    tools/test_wiiu_game_digest.py run RUN [--name NAME] [--poison] [--ticks N] [--trace FIRST-LAST|all] [--detail TICK] [--random] [--mode host|local|solo|solo-bloodgulch|solo-deathless|menu|menu-cycle|menu-campaign|split2|split3|split4]
     tools/test_wiiu_game_digest.py compare RUN_A RUN_B [digest_compare.py's options]
     GAME_DIGEST=1 python3 -m unittest tools.test_wiiu_game_digest      (GAME_DIGEST_TICKS: the ticks each run plays, 300 by default)
 
@@ -19,7 +19,9 @@ tick overlap (port/linux/game/tick_overlap.h), which only a campaign game of one
 init.txt; it opens with a cinematic of about 1,070 ticks), solo-bloodgulch (a multiplayer map as a game of one player, no cinematic) and solo-deathless (b30 with
 cheat_deathless_player and cheat_infinite_ammo, so that the fight goes on). HALO_TICK_* in the environment, and GAME_DIGEST_ENV="NAME=VALUE,NAME=VALUE" for the others
 (HALO_RENDER_REPEAT=3), go to the game. menu, menu-cycle and menu-campaign are the main menu and the way back to it (a game started from it, the main menu
-again, and so on: network_test.c's solo: and its main_menu cue); their --ticks counts frames.
+again, and so on: network_test.c's solo: and its main_menu cue); their --ticks counts frames. split2, split3 and split4 are Blood Gulch as a split screen game of two,
+three or four players, joined in the lobby by the virtual controllers of debug.virtual_gamepads' script (SPLIT_JOIN), with the program built --wiiu-input
+(tools/test_wiiu_game_digest.py build --wiiu-input: the Wii U's own controller layer, xinput_wiiu.c, in place of SDL's, with no console behind it).
 
 A build named here (the default) is this checkout's; another is a copy of the sources in build/game-digest/trees/NAME, of this checkout's files or of
 a commit's (--rev, git archive), with this checkout's game digest folder over it (a branch before it has none) and --mutate's changes made in it
@@ -59,6 +61,17 @@ GAME_ENVIRONMENT = {
 }
 # host: b30 hosted as network co-op, no one joining (the host runs'); local: the same as a local game of one player
 MODES = {"host": "host:levels\\b30\\b30:coop", "local": "local:levels\\b30\\b30:coop", "solo": "log", "solo-bloodgulch": "log", "solo-deathless": "log"}
+# split screen: bloodgulch as a game of this machine's players (host:), whose lobby the Wii U's virtual controllers (debug.virtual_gamepads and its script,
+# port/wiiu/src/wiiu_virtual_pads.h) fill in, in the program built with --wiiu-input (the Wii U's controller layer, xinput_wiiu.c, in place of SDL's). Pad n is
+# the controller n - 1. The script, in the clock of 30 presented frames a second from when the lobby opens: pad 2's START joins (the 4-way screen opens),
+# the spinner moves past the two default profiles (whose names a game cannot use) to a profile made for the run (game_digest_input.c), A selects it; each other
+# joiner the same; a selected player's A ends the screen; the game starts HALO_NETWORK_TEST_START seconds into the lobby, and from 30 s every pad walks
+SPLIT_JOIN = {2: "3 2 start; 4 2 right; 4.5 2 right; 5 2 a; 8 2 a",
+              3: "3 2 start; 4 2 right; 4.5 2 right; 5 2 a; 6 3 start; 7 3 right; 7.5 3 right; 8 3 right; 8.5 3 a; 11 2 a",
+              4: "3 2 start; 4 2 right; 4.5 2 right; 5 2 a; 6 3 start; 7 3 right; 7.5 3 right; 8 3 right; 8.5 3 a; 9.5 4 start; 10.5 4 right; 11 4 right; "
+                 "11.5 4 right; 12 4 right; 12.5 4 a; 14 2 a"}
+SPLIT_MODES = {f"split{n}": n for n in SPLIT_JOIN}
+MODES.update({name: "host:levels\\test\\bloodgulch\\bloodgulch" for name in SPLIT_MODES})
 # the main menu and back: menu (the main menu alone, no network test), menu-cycle (from the main menu a game of one player on bloodgulch, the main menu
 # again 20 s in, as the pause menu's Quit goes, and so on: network_test.c's "solo:"), menu-campaign (the same with b30, 50 s in, past its opening
 # cinematic). Their --ticks is a count of frames (the menu has no game ticks), and their frames are not compared
@@ -133,13 +146,13 @@ def tree(name: str, rev: str = None, mutations=()) -> Path:
     return folder
 
 
-def build(name: str = "here", rev: str = None, mutations=(), poison: bool = False) -> Path:
+def build(name: str = "here", rev: str = None, mutations=(), poison: bool = False, wiiu_input: bool = False) -> Path:
     """the game digest's program for the sources (tree), built in Docker (with poison, build.py --poison's, in build/game-digest-poison); its
     folder"""
     sources = tree(name, rev, mutations)
-    folder = "build/game-digest-poison" if poison else "build/game-digest"
+    folder = "build/game-digest-poison" if poison else "build/game-digest-input" if wiiu_input else "build/game-digest"
     run_command(["docker", "run", "--rm", "-v", f"{sources}:/src", "-w", "/src", IMAGE, "python3", "port/wiiu/tests/game_digest/build.py",
-                 "--build-dir", folder, *(["--poison"] if poison else [])], timeout=3600)
+                 "--build-dir", folder, *(["--poison"] if poison else []), *(["--wiiu-input"] if wiiu_input else [])], timeout=3600)
     program = sources / folder
     if not (program / "halo").is_file():
         raise AssertionError(f"no program in {program}")
@@ -158,6 +171,9 @@ def start(program: Path, run: str, ticks: int, trace: str = None, detail: str = 
     environment = dict(GAME_ENVIRONMENT, HALO_NETWORK_TEST=MODES[mode], GAME_DIGEST_DIR="/out", GAME_DIGEST_TICKS=str(ticks),
                        GAME_DIGEST_TRACE={None: "0", "all": "1"}.get(trace, trace), GAME_DIGEST_DETAIL=detail or "",
                        GAME_DIGEST_RANDOM="1" if random else "0")
+    if mode in SPLIT_MODES:
+        environment.update(HALO_NETWORK_TEST_START="25", HALO_VIRTUAL_GAMEPADS=str(SPLIT_MODES[mode]),
+                           HALO_VIRTUAL_GAMEPAD_SCRIPT=SPLIT_JOIN[SPLIT_MODES[mode]] + "; " + "; ".join(f"30 {pad} walk" for pad in range(1, SPLIT_MODES[mode] + 1)))
     if mode in MENU_MODES:
         environment.update(GAME_DIGEST_TICKS="0", GAME_DIGEST_FRAMES=str(ticks), HALO_NETWORK_TEST_CUES=MENU_CUES.get(mode, ""))
     # (the tick owners' settings of the environment, to compare the switch on and off: HALO_TICK_*)
@@ -304,6 +320,7 @@ def main() -> int:
     build_parser.add_argument("--rev", help="a commit's sources (git archive), with this checkout's harness")
     build_parser.add_argument("--mutate", nargs=3, action="append", default=[], metavar=("PATH", "BEFORE", "AFTER"))
     build_parser.add_argument("--poison", action="store_true", help="build.py --poison's program (the stack filled, the data moved)")
+    build_parser.add_argument("--wiiu-input", action="store_true", help="build.py --wiiu-input's program (the Wii U's controller layer: the split screen modes)")
     run_parser = commands.add_parser("run", help="run a build to a tick")
     run_parser.add_argument("run")
     run_parser.add_argument("--name", default="here", help="the build's name (build)")
@@ -317,10 +334,11 @@ def main() -> int:
     compare_parser.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.command == "build":
-        print(build(args.name, args.rev, [tuple(m) for m in args.mutate], args.poison) / "halo")
+        print(build(args.name, args.rev, [tuple(m) for m in args.mutate], args.poison, args.wiiu_input) / "halo")
         return 0
     if args.command == "run":
-        program = (ROOT if args.name == "here" else DIGEST / "trees" / args.name) / "build" / ("game-digest-poison" if args.poison else "game-digest")
+        program = (ROOT if args.name == "here" else DIGEST / "trees" / args.name) / "build" / (
+            "game-digest-poison" if args.poison else "game-digest-input" if args.mode in SPLIT_MODES else "game-digest")
         summary = finish(*start(program, args.run, args.ticks, args.trace, args.detail, args.random, args.mode))
         print(" ".join(f"{name} {value}" for name, value in summary.items()))
         return 0
