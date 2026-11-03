@@ -352,8 +352,9 @@ on 32-bit x86 and big-endian (`tools/harness/tests/test_wiiu_voice.py`: the queu
   a thread that does not answer has the microphone closed for it by the callback, if it is between microphone calls), and opens it again when
   the foreground is back, every 10 s while that fails. With no microphone open the callback does not wait at all ("HOME with no microphone
   open"): the console's logs of 2026-10-31 had "did not answer in 100 ms" at every one of 41 HOMEs, each with the microphone closed, so the
-  100 ms was spent for nothing. The thread says "noticed HOME N ms after it was asked" when it does notice late, and the "did not answer" line
-  says how long ago its loop last came round: that settles whether the thread is starved or stopped in the background. The close ends the thread within 300 ms, and `exit-trail.txt` says "the voice thread
+  100 ms was spent for nothing. The thread says "noticed HOME N ms after it was asked" when it does notice late, "its loop did not come round for N ms" when it
+  runs again after a gap of a quarter of a second, and the lines of HOME say how long ago its loop last came round: those settle whether the
+  thread is starved or stopped by the system in the background. The close ends the thread within 300 ms, and `exit-trail.txt` says "the voice thread
   ended".
 - **What the host is told**: a machine says it hears voices only while it can play them (`voice_audio_hears`: the voice thread running, in the
   foreground, with the sound mixing), so a host sends none to a Wii U that cannot play them; a microphone that does not open does not stop it

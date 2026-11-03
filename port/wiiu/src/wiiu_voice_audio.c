@@ -80,6 +80,8 @@ call takes one packet, of a frame given before, so at a slow frame rate one can 
 /* how long HOME waits for the voice thread to close the microphone (ms) */
 #define VOICE_SUSPEND_WAIT_MS 100u
 #define VOICE_REPORT_MS 10000u
+/* a gap this long between two turns of the voice thread's loop is logged (ms) */
+#define VOICE_GAP_LOG_MS 250u
 /* (Opus's own stack: 41.7 KB at the most, measured under qemu-ppc; with the frames' buffers, a third of this) */
 #define VOICE_STACK_BYTES (128u * 1024u)
 #define VOICE_PRIORITY 20
@@ -767,7 +769,16 @@ static int voice_main(int argc, const char **argv)
 		const uint32_t wanted = __atomic_load_n(&request, __ATOMIC_ACQUIRE);
 		int active;
 
-		__atomic_store_n(&last_turn_ms, now_ms(), __ATOMIC_RELAXED);
+		{
+			/* (a loop that did not come round for a quarter of a second: HOME holding the thread, or a core kept busy; a microphone that
+			takes 137 ms to open is below it) */
+			const uint32_t turn = now_ms();
+			const uint32_t before = __atomic_load_n(&last_turn_ms, __ATOMIC_RELAXED);
+
+			if (before && turn - before >= VOICE_GAP_LOG_MS)
+				wiiu_log("Voice chat: the voice thread's loop did not come round for %u ms (HOME, or a core kept busy)", (unsigned)(turn - before));
+			__atomic_store_n(&last_turn_ms, turn, __ATOMIC_RELAXED);
+		}
 		if ((wanted & 3u) == REQUEST_STOP)
 		{
 			microphone_close("the app closes");
@@ -1047,7 +1058,8 @@ void wiiu_voice_suspend(void)
 		OSUnlockMutex(&microphone_lock);
 		if (closed)
 		{
-			wiiu_log("Voice chat: HOME with no microphone open: the voice thread is told, and not waited for");
+			wiiu_log("Voice chat: HOME with no microphone open: the voice thread is told, and not waited for (its loop last came round %u ms ago)",
+				(unsigned)(now_ms() - __atomic_load_n(&last_turn_ms, __ATOMIC_RELAXED)));
 			return;
 		}
 	}

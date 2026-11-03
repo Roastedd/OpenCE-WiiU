@@ -947,11 +947,14 @@ int main(int argc, char **argv)
 			(unsigned)((uint32_t)OSTicksToMilliseconds(OSGetSystemTime()) - before));
 		CHECK(logged("Voice chat: HOME with no microphone open"), "no line of it");
 		CHECK(!logged("did not answer"), "waited all the same");
+		/* (held for 400 ms more, as if the system had stopped it: it says so when it runs again) */
+		advance(400);
 		hold(voice_thread.host, 0);
 		/* (woken, it answers, and says how late: and asked for the microphone in the background it opens none) */
 		voice_audio_microphone(TRUE);
 		advance(300);
 		CHECK(mic.inits == 0, "the microphone set up in the background");
+		CHECK(logged("Voice chat: the voice thread's loop did not come round for"), "no line of the thread's gap");
 		CHECK(__atomic_load_n(&acknowledged, __ATOMIC_ACQUIRE) == __atomic_load_n(&request, __ATOMIC_ACQUIRE), "the voice thread did not answer once woken");
 		wiiu_voice_resume();
 		play_for(200, TRUE, FALSE, -1, -1);
