@@ -254,6 +254,10 @@ markers in the command streams, and for each frame a line of passes.txt: its tic
 indexed draws, the decal draws, the state writes, the draw facts, the constant rows and the vertex formats the streams held between its mark and the next
 (replay_gx2_totals). The markers are lines of the frame, so a digest of a run with this on is not the digest of one without: the measurement of what a
 setting saves, not the parity check. */
+/* port/linux/game/render_governor.h's counters (the glue is built without the game's headers) */
+#define RENDER_GOVERNOR_COUNTS 8
+extern unsigned long render_governor_counts[RENDER_GOVERNOR_COUNTS];
+
 #define PASSES_MAX 14
 static const char *const pass_names[PASSES_MAX] = { "visibility", "begin", "sky", "objects", "lightmaps", "shadows", "decals", "specular", "transparent",
 	"effects", "detail", "hud", "end", "window_end" };
@@ -264,6 +268,7 @@ static struct
 	int current; /* the pass the streams are in (PASSES_MAX: before the first mark of the frame) */
 	unsigned long at[REPLAY_TOTAL_COUNT];
 	unsigned long sum[PASSES_MAX + 1][REPLAY_TOTAL_COUNT];
+	unsigned long counts_at[RENDER_GOVERNOR_COUNTS];
 } passes = { .current = PASSES_MAX };
 
 static void passes_take(void)
@@ -306,6 +311,13 @@ static void passes_present(long tick)
 		fprintf(passes.file, " | %s", pass < PASSES_MAX ? pass_names[pass] : "other");
 		for (kind = 0; kind < REPLAY_TOTAL_COUNT; kind++)
 			fprintf(passes.file, " %lu", passes.sum[pass][kind]);
+	}
+	/* (and what the governor's counters in the game counted this frame: objects drawn and culled, shadows, decals and particles drawn and skipped) */
+	fprintf(passes.file, " | game");
+	for (kind = 0; kind < RENDER_GOVERNOR_COUNTS; kind++)
+	{
+		fprintf(passes.file, " %lu", render_governor_counts[kind] - passes.counts_at[kind]);
+		passes.counts_at[kind] = render_governor_counts[kind];
 	}
 	fprintf(passes.file, "\n");
 	memset(passes.sum, 0, sizeof(passes.sum));
