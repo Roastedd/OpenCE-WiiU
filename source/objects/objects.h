@@ -256,6 +256,8 @@ objects.c) is not marked by what is done to it meanwhile: its block is compared 
 extern volatile int tick_snapshot_dirty_tracking;
 /* >0 while the ticks' thread is in code that only reads what the accessors give (the collision tests): nothing it gives is marked. Counted by the ticks' thread alone. */
 extern volatile int tick_snapshot_read_only;
+/* ... the same for the thread that draws, outside a frame's view (the test driver's reads of the world: network_test.c), counted by it alone */
+extern volatile int tick_snapshot_render_read_only;
 extern volatile unsigned long tick_snapshot_dirty[HALO_PORT_MAXIMUM_OBJECTS_PER_MAP];
 extern volatile unsigned long tick_snapshot_dirty_next;
 extern volatile unsigned char tick_snapshot_in_scope[HALO_PORT_MAXIMUM_OBJECTS_PER_MAP];
@@ -266,11 +268,18 @@ __inline void tick_snapshot_mark_object(long object_index)
 {
 	const unsigned long absolute_index = (unsigned long)DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
 
-	if (tick_snapshot_dirty_tracking && absolute_index < (unsigned long)HALO_PORT_MAXIMUM_OBJECTS_PER_MAP && !tick_snapshot_in_scope[absolute_index] &&
-		(!tick_snapshot_read_only || TICK_OVERLAP_ON_RENDER_STACK()))
+	if (tick_snapshot_dirty_tracking && absolute_index < (unsigned long)HALO_PORT_MAXIMUM_OBJECTS_PER_MAP && !tick_snapshot_in_scope[absolute_index])
 	{
-		/* (the thread that draws, outside a frame's view: for good, since its mark may be older than the capture it races with) */
-		tick_snapshot_dirty[absolute_index] = TICK_OVERLAP_ON_RENDER_STACK() ? ~0UL : tick_snapshot_dirty_next;
+		if (TICK_OVERLAP_ON_RENDER_STACK())
+		{
+			/* (the thread that draws, outside a frame's view: for good, since its mark may be older than the capture it races with) */
+			if (!tick_snapshot_render_read_only)
+				tick_snapshot_dirty[absolute_index] = ~0UL;
+		}
+		else if (!tick_snapshot_read_only)
+		{
+			tick_snapshot_dirty[absolute_index] = tick_snapshot_dirty_next;
+		}
 	}
 }
 
@@ -286,14 +295,24 @@ __inline void tick_snapshot_mark_changed(long object_index)
 /* code that reads objects and writes none (but the marker, which is not in the copies) says so with these, around its work (collisions.c, aim_assist.c, actor_perception.c) */
 __inline void tick_snapshot_read_only_enter(void)
 {
-	if (tick_snapshot_dirty_tracking && !TICK_OVERLAP_ON_RENDER_STACK())
-		tick_snapshot_read_only++;
+	if (tick_snapshot_dirty_tracking)
+	{
+		if (TICK_OVERLAP_ON_RENDER_STACK())
+			tick_snapshot_render_read_only++;
+		else
+			tick_snapshot_read_only++;
+	}
 }
 
 __inline void tick_snapshot_read_only_leave(void)
 {
-	if (tick_snapshot_dirty_tracking && !TICK_OVERLAP_ON_RENDER_STACK())
-		tick_snapshot_read_only--;
+	if (tick_snapshot_dirty_tracking)
+	{
+		if (TICK_OVERLAP_ON_RENDER_STACK())
+			tick_snapshot_render_read_only--;
+		else
+			tick_snapshot_read_only--;
+	}
 }
 
 __inline void tick_snapshot_scope_enter(long object_index)
