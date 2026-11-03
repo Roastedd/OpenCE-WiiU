@@ -281,12 +281,13 @@ static void passes_take(void)
 
 static void passes_marker(const char *text, size_t length)
 {
-	const char *name = memchr(text, ':', length);
+	const char *colon = memchr(text, ':', length);
+	char name[64];
 	int pass;
 
-	if (!name)
+	if (!colon || colon + 2 > text + length)
 		return;
-	name += 2;
+	snprintf(name, sizeof(name), "%.*s", (int)(text + length - (colon + 2)), colon + 2);
 	passes_take();
 	for (pass = 0; pass < PASSES_MAX; pass++)
 		if (!strcmp(name, pass_names[pass]))
@@ -1062,6 +1063,25 @@ void wiiu_tick_part(const char *name, long long started)
 void wiiu_tick_done(long long started)
 {
 	(void)started;
+}
+
+/* wiiu_study.c's: halo/governor.txt, the dynamic quality's settings (port/linux/game/render_governor.c); here HALO_GOVERNOR's text, so that a run can hold
+a step ("step 3") or tune the ladder, and the governor's own decisions are tested on made-up frame times (they are not the host's: qemu's clock) */
+int render_governor_settings_text(char *text, unsigned long size)
+{
+	const char *value = getenv("HALO_GOVERNOR");
+
+	if (!value || !*value)
+		return 0;
+	snprintf(text, size, "%s", value);
+	return 1;
+}
+
+/* wiiu_render_passes.c's: the passes' milliseconds, which the host does not time */
+unsigned long render_governor_pass_milliseconds(double milliseconds[13])
+{
+	memset(milliseconds, 0, 13 * sizeof(double));
+	return 0;
 }
 
 /* wiiu_render_passes.c and d3d8_gx2.c's frame parts: the console's timing log */

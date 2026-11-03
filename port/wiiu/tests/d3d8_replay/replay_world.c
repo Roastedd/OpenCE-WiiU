@@ -203,6 +203,20 @@ int halo_interpolation_enabled(void)
 }
 
 /* hud_hires_tags.c's: no menu has the screen, so dynamic resolution's controller would run (it is off: host_gx2_drs_lines answers no step) */
+/* port/linux/game/render_governor.c's (the layer asks for the dynamic quality's model level of detail and tells it each frame's work): not on here */
+float render_governor_lod_scale(void)
+{
+	return 1.0f;
+}
+
+void render_governor_frame(double work_ms, double tick_ms, double render_ms, double now_ms)
+{
+	(void)work_ms;
+	(void)tick_ms;
+	(void)render_ms;
+	(void)now_ms;
+}
+
 int port_menus_active(void)
 {
 	return 0;
