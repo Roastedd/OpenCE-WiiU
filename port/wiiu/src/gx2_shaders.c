@@ -21,10 +21,13 @@ shader-misses-*.txt batches for shader_pack.py; .part files are incomplete and m
 
 void wiiu_thread_off_game_core(void);
 
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #define PACK_FILE "/vol/external01/wiiu/apps/halo/shaders.pack"
 #define PROGRAM_LIMIT 512
@@ -60,33 +63,44 @@ static uint32_t big32(const unsigned char *at)
 by the GX2 thread when the first draw asks for a shader, or before that by a thread of its own (dk_shader_pack_prefetch). */
 static unsigned char *pack_read(uint32_t *size_out)
 {
-	FILE *file;
-	long size;
+	off_t length;
+	size_t done = 0;
 	unsigned char *buffer;
+	int file;
 	STARTUP_TIMER(started);
 
-	file = fopen(PACK_FILE, "rb");
-	if (!file)
+	/* (open and read, not fopen and fread: the C library's stdio reads a file through its own small buffer unless it is asked for a lot at once, and the
+	card gives most when it is asked for a lot at once) */
+	file = open(PACK_FILE, O_RDONLY);
+	if (file < 0)
 	{
 		platform_log("shaders: no pack at %s: no draw will be made", PACK_FILE);
 		return NULL;
 	}
-	if (fseek(file, 0, SEEK_END) != 0 || (size = ftell(file)) < 16 || fseek(file, 0, SEEK_SET) != 0)
+	length = lseek(file, 0, SEEK_END);
+	if (length < 16 || lseek(file, 0, SEEK_SET) != 0)
 	{
-		fclose(file);
+		close(file);
 		return NULL;
 	}
-	buffer = malloc((size_t)size);
-	if (!buffer || fread(buffer, 1, (size_t)size, file) != (size_t)size)
+	buffer = malloc((size_t)length);
+	while (buffer && done < (size_t)length)
+	{
+		const ssize_t got = read(file, buffer + done, (size_t)length - done);
+
+		if (got <= 0)
+			break;
+		done += (size_t)got;
+	}
+	close(file);
+	if (!buffer || done != (size_t)length)
 	{
 		free(buffer);
-		fclose(file);
 		platform_log("shaders: the pack could not be read");
 		return NULL;
 	}
-	fclose(file);
-	STARTUP_ADD("shader_pack_read", started, 1, size);
-	*size_out = (uint32_t)size;
+	STARTUP_ADD("shader_pack_read", started, 1, done);
+	*size_out = (uint32_t)done;
 	return buffer;
 }
 
