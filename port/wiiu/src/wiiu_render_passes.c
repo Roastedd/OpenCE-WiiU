@@ -29,6 +29,9 @@ static OSTime pass_ticks[PASS_COUNT];
 static OSTime pass_started, logged_at;
 static int current_pass = -1;
 static unsigned long windows;
+/* the same, since the dynamic quality's (render_governor.c) last line, which says them beside its step */
+static OSTime governor_ticks[PASS_COUNT];
+static unsigned long governor_windows;
 
 /* one log line of the parts from first to last (a Wii U log line holds 199 characters) */
 static void passes_log(int first, int last)
@@ -50,12 +53,16 @@ void wiiu_render_pass(int pass)
 	const OSTime now = OSGetSystemTime();
 
 	if (current_pass >= 0)
+	{
 		pass_ticks[current_pass] += now - pass_started;
+		governor_ticks[current_pass] += now - pass_started;
+	}
 	pass_started = now;
 	current_pass = pass >= 0 && pass < PASS_COUNT ? pass : -1;
 	if (pass != PASS_COUNT)
 		return;
 	windows++;
+	governor_windows++;
 	if (!logged_at)
 		logged_at = now;
 	if (now - logged_at < (OSTime)OSSecondsToTicks(5))
@@ -65,4 +72,17 @@ void wiiu_render_pass(int pass)
 	memset(pass_ticks, 0, sizeof(pass_ticks));
 	windows = 0;
 	logged_at = now;
+}
+
+/* render_governor.c: the milliseconds a window in each pass since this was last called, and the windows they are the mean of */
+unsigned long render_governor_pass_milliseconds(double milliseconds[PASS_COUNT])
+{
+	const unsigned long counted = governor_windows;
+	int pass;
+
+	for (pass = 0; pass < PASS_COUNT; pass++)
+		milliseconds[pass] = counted ? (double)OSTicksToMicroseconds(governor_ticks[pass]) / 1000.0 / (double)counted : 0.0;
+	memset(governor_ticks, 0, sizeof(governor_ticks));
+	governor_windows = 0;
+	return counted;
 }

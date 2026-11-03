@@ -192,6 +192,13 @@ static const struct config_setting config_settings[] =
 		"resolution) or \"custom\" (the settings as they are). The menus write a\n"
 		"mode's values when it is chosen; changing one of them there makes it\n"
 		"custom." },
+	{ "display.dynamic_quality", _config_boolean, "false", "HALO_DYNAMIC_QUALITY", _environment_value, _platform_wiiu,
+		"Leave out optional drawing while the frames take longer than 22 ms (45 a\n"
+		"second), a step at a time, the least noticeable first: small and far objects,\n"
+		"their shadows, far and some decals, small particles, the grass, the lens\n"
+		"flares and the specular shine; and put it back when there is room\n"
+		"(port/linux/game/render_governor.c). Only what is drawn changes, never the\n"
+		"game. halo/governor.txt on the card sets the target and the steps." },
 	{ "display.grass", _config_boolean, "true", "HALO_GRASS", _environment_value, _platform_all,
 		"Draw the detail objects: the grass, pebbles and plants near the camera." },
 	{ "display.decals", _config_boolean, "true", "HALO_DECALS", _environment_value, _platform_all,

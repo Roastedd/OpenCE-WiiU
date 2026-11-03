@@ -52,6 +52,11 @@ void replay_gx2_finish(void);
 uint64_t replay_gx2_digest(void);
 unsigned long replay_gx2_lines(void);
 unsigned long replay_gx2_draws(void);
+/* what the streams held so far: draws, their indices (or vertices), indexed draws, decal draws, state writes (index, value pairs), draw facts,
+constant rows, vertex formats set; none of it is in a line or a digest */
+enum { REPLAY_TOTAL_DRAWS, REPLAY_TOTAL_INDICES, REPLAY_TOTAL_INDEXED, REPLAY_TOTAL_DECAL_DRAWS, REPLAY_TOTAL_STATE_WRITES, REPLAY_TOTAL_FACTS,
+	REPLAY_TOTAL_CONSTANT_ROWS, REPLAY_TOTAL_FORMATS, REPLAY_TOTAL_COUNT };
+void replay_gx2_totals(unsigned long out[REPLAY_TOTAL_COUNT]);
 unsigned long replay_gx2_most_queued(void);
 
 /* replay_game.c */

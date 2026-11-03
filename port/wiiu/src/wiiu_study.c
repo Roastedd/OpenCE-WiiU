@@ -30,6 +30,23 @@ long wiiu_study_number(const char *name, long fallback)
 	return number;
 }
 
+/* halo/governor.txt (the dynamic quality's settings, port/linux/game/render_governor.c): its text in text (size bytes with the end), 0 if there is no such file */
+int render_governor_settings_text(char *text, unsigned long size)
+{
+	char path[256];
+	FILE *file;
+	size_t length;
+
+	snprintf(path, sizeof(path), "%s/governor.txt", WIIU_DATA_DIRECTORY);
+	file = fopen(path, "r");
+	if (!file)
+		return 0;
+	length = fread(text, 1, size - 1, file);
+	fclose(file);
+	text[length] = 0;
+	return 1;
+}
+
 /* The tick thread (source/main/main.c) says once, in the log, that it runs and on which core, and what its FPU's status register holds: Cafe OS starts
 a thread with the non-IEEE bit (00000004) set, which wiiu_fpu_setup clears, and a tick that ran with it set would flush denormals where a PC keeps
 them. Call it after wiiu_fpu_setup, wiiu_thread_off_game_core and wiiu_tick_thread_priority. */
