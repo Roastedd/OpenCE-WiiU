@@ -486,6 +486,8 @@ void render_interpolation_tick(void)
 			interpolated_objects[index].object_index = NONE;
 	}
 
+	/* port: it reads every object's node matrices and writes the records here and no object: not marked for the tick snapshot (objects.h) */
+	OBJECTS_READ_ONLY_BEGIN();
 	object_iterator_new(&iterator, _object_mask_all, 0);
 	while ((object = (struct object_datum *)object_iterator_next(&iterator)) != NULL)
 	{
@@ -554,6 +556,7 @@ void render_interpolation_tick(void)
 		record->has_previous = continuing;
 		record->blended_frame = NONE;
 	}
+	OBJECTS_READ_ONLY_END();
 }
 
 /* a new map (game.c): its objects take the indices of the last one's, and
