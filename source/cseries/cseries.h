@@ -292,7 +292,22 @@ void stack_walk_disregard_symbol_names(boolean disregard);
 
 /* ---------- globals */
 
-extern char temporary[256];
+/* port: each thread's own (a tick on another thread than the game's formats its diagnostics too; the one buffer would be written by both) */
+extern __thread char temporary[256];
+
+/* port: a lock for the few things two threads may do at once, the log's lines (error, terminal_printf): recursive (the same thread may take it
+again: error() prints to the terminal, which may note an error), and waited for only a while (a thread that died holding it, or a crash report
+written while this thread held it, goes on without it). Not for the simulation: nothing that decides a tick waits on it. */
+struct halo_shared_lock
+{
+	void *volatile owner;
+	long depth;
+};
+extern struct halo_shared_lock halo_log_lock;
+void halo_shared_lock_acquire(
+	struct halo_shared_lock *lock);
+void halo_shared_lock_release(
+	struct halo_shared_lock *lock);
 
 extern const union real_argb_color *global_real_argb_white;
 extern const union real_argb_color *global_real_argb_grey;

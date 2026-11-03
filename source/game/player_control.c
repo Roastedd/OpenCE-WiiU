@@ -213,6 +213,11 @@ symbols in this file:
 #include "passenger_camera.h" /* port: port/linux/game/passenger_camera.c; after the limit2d alias above */
 #include "network_coop.h" /* port: port/linux/game/network_coop.c */
 #include "view_fov.h" /* port: port/linux/game/view_fov.c */
+#ifdef HALO_WIIU
+#include "tick_input.h" /* port: port/linux/game/tick_input.c: the input this file reads is the frame's copy (tick_input.h) */
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
+#endif
 
 /* ---------- constants */
 
@@ -889,6 +894,15 @@ long player_control_get_unit_index(
 {
 	match_assert("c:\\halo\\SOURCE\\game\\player_control.c", 0xB1,
 		local_player_index>=0 && local_player_index<MAXIMUM_NUMBER_OF_LOCAL_PLAYERS);
+#ifdef HALO_WIIU
+	/* port: the frame's copy while a frame is drawn from the tick snapshot (tick_snapshot.c) */
+	{
+		long unit_index;
+
+		if (tick_snapshot_player_unit(local_player_index, &unit_index))
+			return unit_index;
+	}
+#endif
 	return player_control_globals->players[local_player_index].unit_index;
 }
 
@@ -975,10 +989,78 @@ real_euler_angles2d const *player_control_get_facing_angles(
 	return &player->desired_angles;
 }
 
+#ifdef HALO_WIIU
+/* port: the facing as the last frame's tick side left it (players.h) */
+static real_euler_angles2d player_control_display_facing[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
+static boolean player_control_display_facing_valid[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
+
+void player_control_publish_display_facing(
+	void)
+{
+	short local_player_index;
+
+	if (!TICK_OWNERS_FEATURE(TICK_FEATURE_FACING))
+		return;
+	for (local_player_index = 0; local_player_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS; local_player_index++)
+	{
+		player_control_display_facing_valid[local_player_index] = local_player_get_player_index(local_player_index) != NONE;
+		if (player_control_display_facing_valid[local_player_index])
+			player_control_display_facing[local_player_index] = player_control_get(local_player_index)->desired_angles;
+	}
+
+	return;
+}
+
+/* the overlap's (tick_overlap.h): the game thread's copy of the facing, taken at the sync point when the tick thread is idle, which it reads while the
+tick thread's next job publishes a new one */
+static real_euler_angles2d player_control_display_facing_view[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
+static boolean player_control_display_facing_view_valid[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
+
+void player_control_sync_display_facing(
+	void)
+{
+	short local_player_index;
+
+	for (local_player_index = 0; local_player_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS; local_player_index++)
+	{
+		player_control_display_facing_view_valid[local_player_index] = player_control_display_facing_valid[local_player_index];
+		player_control_display_facing_view[local_player_index] = player_control_display_facing[local_player_index];
+	}
+
+	return;
+}
+
+real_vector3d *player_control_get_display_facing_direction(
+	short local_player_index,
+	real_vector3d *facing_direction)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_FACING) && local_player_index >= 0 && local_player_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS)
+	{
+		const boolean from_view = tick_overlap_reading_published();
+
+		if (from_view ? player_control_display_facing_view_valid[local_player_index] : player_control_display_facing_valid[local_player_index])
+		{
+			player_aiming_vector_from_facing(
+				local_player_get_player_index(local_player_index),
+				facing_direction,
+				from_view ? &player_control_display_facing_view[local_player_index] : &player_control_display_facing[local_player_index]);
+			return facing_direction;
+		}
+	}
+
+	return player_control_get_facing_direction(local_player_index, facing_direction);
+}
+#endif
+
 real_vector3d *player_control_get_facing_direction(
 	short local_player_index,
 	real_vector3d *facing_direction)
 {
+#ifdef HALO_WIIU
+	/* port: the frame's copy while a frame is drawn from the tick snapshot (tick_snapshot.c) */
+	if (tick_snapshot_player_facing(local_player_index, facing_direction))
+		return facing_direction;
+#endif
 	player_aiming_vector_from_facing(
 		local_player_get_player_index(local_player_index),
 		facing_direction,

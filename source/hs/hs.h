@@ -229,6 +229,16 @@ long *hs_macro_function_evaluate(
 void hs_recompile(
 	void);
 
+#ifdef HALO_WIIU
+/* port: hs_compile_and_evaluate for what is typed or sent to the game (the console, the telnet console, a cheat button, the
+Wii U's debug server): with the tick owners' queues on (port/linux/game/tick_owners.h) the hs runtime is the tick thread's,
+so the text waits in a queue until it runs the line; done is called with the answer (and the argument) when it has,
+at once with the queues off */
+void hs_compile_and_evaluate_queued(
+	char const *expression,
+	void (*done)(long argument, boolean succeeded),
+	long argument);
+#endif
 boolean hs_compile_and_evaluate(
 	char const *expression);
 

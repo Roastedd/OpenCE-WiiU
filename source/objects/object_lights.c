@@ -184,6 +184,10 @@ symbols in this file:
 #include "tag_files/tag_groups.h"
 #include "units/units.h"
 #include "cache/cache_files.h" /* port: (tag_iterator: light_port_glow_definition_get) */
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
+#endif
 void shield_glow_update(void); /* port: port/linux/game/shield_glow.c */
 
 /* port: port/linux/src (halo.log) */
@@ -241,8 +245,18 @@ enum
 
 /* ---------- macros */
 
+#ifdef HALO_WIIU
+/* port: the light array a read of the lights goes through: the game state's, or, while this thread draws a frame beside the tick thread
+(tick_overlap.h), the copy the frame's slot of the ring holds (tick_snapshot.c), which the ticks do not change */
+extern struct data_array *light_data;
+struct data_array *tick_snapshot_light_array(void);
+#define LIGHT_DATA() (tick_snapshot_headers ? tick_snapshot_light_array() : light_data)
+#else
+#define LIGHT_DATA() (light_data)
+#endif
+
 #define light_get(index) \
-	((struct light_datum *)datum_get(light_data, (index)))
+	((struct light_datum *)datum_get(LIGHT_DATA(), (index)))
 
 #define light_definition_get(index) \
 	((struct point_light_definition *)tag_get(LIGHT_DEFINITION_TAG, (index)))
@@ -403,6 +417,44 @@ typedef char verify_rasterizer_light_submit_parameters_size[
 typedef char verify_lights_globals_size[
 	sizeof(struct lights_globals) == 0x350 + 4 * (MAXIMUM_RENDERED_LIGHTS - 128) ? 1 : -1];
 
+/* port: what the renderer works out of a light each frame (its rasterizer light, its colour and its radius, in
+lights_preprocess_scene), and the tick reads for a unit's illumination (units.c: lights_illumination_at_point). With the
+tick owners' queues on (port/linux/game/tick_owners.h) they are not kept in the light's datum, in the game state, but in a
+table of the renderer's own by the light's slot: the renderer writes what is its own, the tick reads it, and a copy of
+the game state for the renderer is never written to. With them off they are the datum's fields, as they were. */
+struct light_render_fields
+{
+	long rasterizer_light_index;
+	real_rgb_color color;
+	real radius;
+	/* (and whether the light is the first person weapon's: set and read by the renderer alone, in the datum's flags with the queues off) */
+	boolean attached_to_first_person_weapon;
+};
+
+#ifdef HALO_WIIU
+static struct light_render_fields light_render_side[MAXIMUM_LIGHTS_PER_MAP];
+#endif
+
+static struct light_render_fields *light_render_side_get(
+	struct light_datum *light);
+
+/* the datum's own, or the table's: an lvalue each */
+#ifdef HALO_WIIU
+#define LIGHT_RASTERIZER_INDEX(light) (*(TICK_OWNERS_FEATURE(TICK_FEATURE_LIGHTS) ? &light_render_side_get(light)->rasterizer_light_index : &(light)->rasterizer_light_index))
+#define LIGHT_COLOR(light) (*(TICK_OWNERS_FEATURE(TICK_FEATURE_LIGHTS) ? &light_render_side_get(light)->color : &(light)->color))
+#define LIGHT_RADIUS(light) (*(TICK_OWNERS_FEATURE(TICK_FEATURE_LIGHTS) ? &light_render_side_get(light)->radius : &(light)->radius))
+#define LIGHT_FIRST_PERSON_SET(light, value) \
+	do { if (TICK_OWNERS_FEATURE(TICK_FEATURE_LIGHTS)) light_render_side_get(light)->attached_to_first_person_weapon = (value); else SET_FLAG((light)->flags, _point_light_attached_to_first_person_weapon_bit, (value)); } while (0)
+#define LIGHT_FIRST_PERSON_TEST(light) \
+	(TICK_OWNERS_FEATURE(TICK_FEATURE_LIGHTS) ? light_render_side_get(light)->attached_to_first_person_weapon != 0 : TEST_FLAG((light)->flags, _point_light_attached_to_first_person_weapon_bit))
+#else
+#define LIGHT_RASTERIZER_INDEX(light) ((light)->rasterizer_light_index)
+#define LIGHT_COLOR(light) ((light)->color)
+#define LIGHT_RADIUS(light) ((light)->radius)
+#define LIGHT_FIRST_PERSON_SET(light, value) SET_FLAG((light)->flags, _point_light_attached_to_first_person_weapon_bit, (value))
+#define LIGHT_FIRST_PERSON_TEST(light) TEST_FLAG((light)->flags, _point_light_attached_to_first_person_weapon_bit)
+#endif
+
 /* ---------- prototypes */
 
 static boolean should_render_lights(
@@ -518,7 +570,7 @@ struct lights_port_entry
 	real_point3d position;
 	real radius;
 };
-static struct
+struct lights_port_cache
 {
 	/* each light's radius or rasterizer light written (lights_preprocess_scene) */
 	unsigned long radius_writes;
@@ -529,7 +581,15 @@ static struct
 	short cluster_first_entries[MAXIMUM_CLUSTERS_PER_STRUCTURE];
 	short cluster_entry_counts[MAXIMUM_CLUSTERS_PER_STRUCTURE];
 	struct lights_port_entry entries[LIGHTS_PORT_MAXIMUM_ENTRIES];
-} lights_port;
+};
+static struct lights_port_cache lights_port_live;
+#ifdef HALO_WIIU
+/* (the drawing thread's, when it draws beside the tick thread: kept for the capture it draws from) */
+static struct lights_port_cache lights_port_view;
+#define lights_port (*(tick_snapshot_headers ? &lights_port_view : &lights_port_live))
+#else
+#define lights_port lights_port_live
+#endif
 struct lights_game_globals *lights_game_globals = NULL;
 short debug_rasterizer_light_count;
 struct lights_globals lights_globals;
@@ -677,6 +737,22 @@ static boolean should_render_lights(
 	return FALSE;
 }
 
+#ifdef HALO_WIIU
+/* the table's entry for a light: by its slot in the light data */
+static struct light_render_fields *light_render_side_get(
+	struct light_datum *light)
+{
+	return &light_render_side[((byte *)light - (byte *)LIGHT_DATA()->data) / sizeof(struct light_datum)];
+}
+
+/* a new light: its entry as the zeroed datum had it (and every light's, with the map) */
+static void light_render_side_reset(
+	long light_index)
+{
+	csmemset(&light_render_side[DATUM_INDEX_TO_ABSOLUTE_INDEX(light_index)], 0, sizeof(light_render_side[0]));
+}
+#endif
+
 void lights_initialize(
 	void)
 {
@@ -770,9 +846,9 @@ boolean light_port_glow_set(
 		return FALSE;
 	SET_FLAG(light->flags, _point_light_port_glow_bit, TRUE);
 	light->parent_light_index = game_time_get(); /* (alive another moment) */
-	light->color.red = PIN(color->red, 0.0f, 1.0f);
-	light->color.green = PIN(color->green, 0.0f, 1.0f);
-	light->color.blue = PIN(color->blue, 0.0f, 1.0f);
+	LIGHT_COLOR(light).red = PIN(color->red, 0.0f, 1.0f);
+	LIGHT_COLOR(light).green = PIN(color->green, 0.0f, 1.0f);
+	LIGHT_COLOR(light).blue = PIN(color->blue, 0.0f, 1.0f);
 	light->intensity_scale = radius;
 	return TRUE;
 }
@@ -781,6 +857,9 @@ void lights_initialize_for_new_map(
 	void)
 {
 	light_port_glow_definition = NONE - 1; /* port: (looked for again) */
+#ifdef HALO_WIIU
+	csmemset(light_render_side, 0, sizeof(light_render_side));
+#endif
 	data_make_valid(light_data);
 	lights_game_globals->render_lights = TRUE;
 	cluster_partition_make_valid(&light_cluster_partition);
@@ -871,6 +950,9 @@ long light_new(
 		{
 			struct light_datum *light = light_get(light_index);
 
+#ifdef HALO_WIIU
+			light_render_side_reset(light_index);
+#endif
 			light->definition_index = definition_index;
 			light->object_index = object_index;
 			light->attachment_marker_index = object_attachment_index;
@@ -934,6 +1016,9 @@ long light_new_unattached(
 		struct light_datum *light = light_get(light_index);
 		struct point_light_definition *definition = light_definition_get(definition_index);
 
+#ifdef HALO_WIIU
+		light_render_side_reset(light_index);
+#endif
 		light->flags = 0;
 		light->parent_light_index = game_time_get();
 		light->definition_index = definition_index;
@@ -960,6 +1045,49 @@ long light_new_unattached(
 	return light_index;
 }
 
+#ifdef HALO_WIIU
+/* port: the lights that fade (a light a moment after the effect that made it, light_port_glow and the game's own passing lights: parent_light_index is
+the time it began to fade) let go of when they have, and the ones that follow an object moved with it. Done by lights_preprocess_scene at each frame
+of the serial loop's; in a frame drawn beside the tick thread (tick_overlap.h) the drawing changes none of the light data, so the tick thread does it,
+once after the ticks of each job. */
+void lights_fade_update(
+	void)
+{
+	long current_time = game_time_get();
+	long light_index;
+
+	for (light_index = data_next_index(light_data, NONE);
+		light_index != NONE;
+		light_index = data_next_index(light_data, light_index))
+	{
+		struct light_datum *light = light_get(light_index);
+
+		if (light->parent_light_index != NONE)
+		{
+			struct point_light_definition *definition = light_definition_get(
+				light->definition_index);
+			real elapsed = (real)(current_time - light->parent_light_index);
+
+			if (elapsed > definition->transition_duration)
+			{
+				cluster_partition_disconnect(
+					&light_cluster_partition,
+					light_index,
+					&light_get(light_index)->cluster_reference);
+				datum_delete(light_data, light_index);
+			}
+			else if (object_try_and_get(light->object_index))
+			{
+				light_disconnect_from_map(light_index);
+				light_reconnect_to_map(light_index);
+			}
+		}
+	}
+
+	return;
+}
+#endif
+
 void lights_preprocess_scene(
 	void)
 {
@@ -968,25 +1096,39 @@ void lights_preprocess_scene(
 	short rendered_cluster_index;
 	short scene_light_index;
 	short queued_lens_flare_index;
+#ifdef HALO_WIIU
+	boolean overlap;
+#endif
 
 	profile_enter(lights_section);
 	debug_rasterizer_light_count = 0;
 	/* port: the lights in order before they are drawn (a frame can come
 	between ticks: lights_port_recover) */
+#ifdef HALO_WIIU
+	/* port: a frame drawn beside the tick thread (tick_overlap.h) changes none of the light data, which the ticks change meanwhile: the lights that
+	fade are let go of and moved by the tick thread (lights_fade_update), and the shield glow, which makes lights from the drawing, is left out */
+	overlap = tick_overlap_frame_active();
+	if (!overlap)
+		lights_port_recover();
+	if (!overlap)
+		shield_glow_update(); /* port: port/linux/game/shield_glow.c */
+#else
 	lights_port_recover();
 	shield_glow_update(); /* port: port/linux/game/shield_glow.c */
-	for (light_index = data_next_index(light_data, NONE);
+#endif
+	for (light_index = data_next_index(LIGHT_DATA(), NONE);
 		light_index != NONE;
-		light_index = data_next_index(light_data, light_index))
+		light_index = data_next_index(LIGHT_DATA(), light_index))
 	{
 		struct light_datum *light = light_get(light_index);
 
-		SET_FLAG(
-			light->flags,
-			_point_light_attached_to_first_person_weapon_bit,
-			FALSE);
-		light->rasterizer_light_index = NONE;
+		LIGHT_FIRST_PERSON_SET(light, FALSE);
+		LIGHT_RASTERIZER_INDEX(light) = NONE;
 		lights_port.radius_writes++;
+#ifdef HALO_WIIU
+		if (overlap)
+			continue;
+#endif
 		if (light->parent_light_index != NONE)
 		{
 			struct point_light_definition *definition = light_definition_get(
@@ -1066,7 +1208,7 @@ void lights_preprocess_scene(
 				? global_real_rgb_white
 				: &object->object.outgoing_change_colors[light->color_function_index];
 			rgb_colors_interpolate_and_scale(
-				&light->color,
+				&LIGHT_COLOR(light),
 				definition->color_interpolation_flags,
 				&definition->color_lower_bound,
 				&definition->color_upper_bound,
@@ -1081,7 +1223,7 @@ void lights_preprocess_scene(
 					/ definition->transition_duration))
 				* light->intensity_scale;
 			rgb_colors_interpolate(
-				&light->color,
+				&LIGHT_COLOR(light),
 				definition->color_interpolation_flags,
 				&definition->color_lower_bound.rgb,
 				&definition->color_upper_bound.rgb,
@@ -1092,15 +1234,15 @@ void lights_preprocess_scene(
 		match_assert(
 			"c:\\halo\\SOURCE\\objects\\object_lights.c",
 			0x1BB,
-			light->color.red >=0.0f && light->color.red <=1.0f);
+			LIGHT_COLOR(light).red >=0.0f && LIGHT_COLOR(light).red <=1.0f);
 		match_assert(
 			"c:\\halo\\SOURCE\\objects\\object_lights.c",
 			0x1BC,
-			light->color.green>=0.0f && light->color.green<=1.0f);
+			LIGHT_COLOR(light).green>=0.0f && LIGHT_COLOR(light).green<=1.0f);
 		match_assert(
 			"c:\\halo\\SOURCE\\objects\\object_lights.c",
 			0x1BD,
-			light->color.blue >=0.0f && light->color.blue <=1.0f);
+			LIGHT_COLOR(light).blue >=0.0f && LIGHT_COLOR(light).blue <=1.0f);
 
 		if (object)
 		{
@@ -1119,39 +1261,39 @@ void lights_preprocess_scene(
 						_light_definition_dont_fade_active_camouflage_bit))
 				{
 					lens_flare_scale = 1.0f - parent_unit->unit.active_camouflage;
-					light->color.red *= lens_flare_scale;
-					light->color.green *= lens_flare_scale;
-					light->color.blue *= lens_flare_scale;
+					LIGHT_COLOR(light).red *= lens_flare_scale;
+					LIGHT_COLOR(light).green *= lens_flare_scale;
+					LIGHT_COLOR(light).blue *= lens_flare_scale;
 					match_assert(
 						"c:\\halo\\SOURCE\\objects\\object_lights.c",
 						0x1D1,
-						light->color.red >=0.0f && light->color.red <=1.0f);
+						LIGHT_COLOR(light).red >=0.0f && LIGHT_COLOR(light).red <=1.0f);
 					match_assert(
 						"c:\\halo\\SOURCE\\objects\\object_lights.c",
 						0x1D2,
-						light->color.green>=0.0f && light->color.green<=1.0f);
+						LIGHT_COLOR(light).green>=0.0f && LIGHT_COLOR(light).green<=1.0f);
 					match_assert(
 						"c:\\halo\\SOURCE\\objects\\object_lights.c",
 						0x1D3,
-						light->color.blue >=0.0f && light->color.blue <=1.0f);
+						LIGHT_COLOR(light).blue >=0.0f && LIGHT_COLOR(light).blue <=1.0f);
 				}
 			}
 		}
 
-		if (light->color.red != 0.0f
-			|| light->color.green != 0.0f
-			|| light->color.blue != 0.0f)
+		if (LIGHT_COLOR(light).red != 0.0f
+			|| LIGHT_COLOR(light).green != 0.0f
+			|| LIGHT_COLOR(light).blue != 0.0f)
 		{
 			if (TEST_FLAG(light->flags, _point_light_dynamic_bit))
 			{
-				light->radius = (definition->radius_modifier_lower_bound * inverse_intensity
+				LIGHT_RADIUS(light) = (definition->radius_modifier_lower_bound * inverse_intensity
 					+ definition->radius_modifier_upper_bound * intensity)
 					* definition->radius;
 				/* port: a glow's radius is as set (light_port_glow_set) */
 				if (TEST_FLAG(light->flags, _point_light_port_glow_bit))
-					light->radius = light->intensity_scale;
+					LIGHT_RADIUS(light) = light->intensity_scale;
 				lights_port.radius_writes++;
-				if (light->radius != 0.0f)
+				if (LIGHT_RADIUS(light) != 0.0f)
 				{
 					struct rasterizer_light_submit_parameters light_parameters;
 
@@ -1160,20 +1302,20 @@ void lights_preprocess_scene(
 					light_parameters.position = light->position;
 					light_parameters.forward = light->forward;
 					light_parameters.up = light->up;
-					light_parameters.radius = light->radius;
-					light_parameters.color = light->color;
+					light_parameters.radius = LIGHT_RADIUS(light);
+					light_parameters.color = LIGHT_COLOR(light);
 					match_assert(
 						"c:\\halo\\SOURCE\\objects\\object_lights.c",
 						0x1EE,
-						light->color.red >=0.0f && light->color.red <=1.0f);
+						LIGHT_COLOR(light).red >=0.0f && LIGHT_COLOR(light).red <=1.0f);
 					match_assert(
 						"c:\\halo\\SOURCE\\objects\\object_lights.c",
 						0x1EF,
-						light->color.green>=0.0f && light->color.green<=1.0f);
+						LIGHT_COLOR(light).green>=0.0f && LIGHT_COLOR(light).green<=1.0f);
 					match_assert(
 						"c:\\halo\\SOURCE\\objects\\object_lights.c",
 						0x1F0,
-						light->color.blue >=0.0f && light->color.blue <=1.0f);
+						LIGHT_COLOR(light).blue >=0.0f && LIGHT_COLOR(light).blue <=1.0f);
 
 					if (light->parent_light_index == NONE)
 					{
@@ -1224,27 +1366,24 @@ void lights_preprocess_scene(
 						}
 						if (adjusted)
 						{
-							SET_FLAG(
-								light->flags,
-								_point_light_attached_to_first_person_weapon_bit,
-								TRUE);
+							LIGHT_FIRST_PERSON_SET(light, TRUE);
 						}
 					}
 
-					light->rasterizer_light_index = rasterizer_light_submit(
+					LIGHT_RASTERIZER_INDEX(light) = rasterizer_light_submit(
 						&light_parameters);
 					/* (port: the lights submitted so far: not a light the
 					window had no room for (MAXIMUM_LIGHTS_PER_WINDOW), whose
 					index is NONE: that made the count 0, and every object
 					lit by the ones before it failed render_objects.c's
 					check of their indices against it) */
-					if (light->rasterizer_light_index != NONE)
-						debug_rasterizer_light_count = (short)(light->rasterizer_light_index + 1);
+					if (LIGHT_RASTERIZER_INDEX(light) != NONE)
+						debug_rasterizer_light_count = (short)(LIGHT_RASTERIZER_INDEX(light) + 1);
 				}
 			}
 			else
 			{
-				light->radius = definition->radius;
+				LIGHT_RADIUS(light) = definition->radius;
 				lights_port.radius_writes++;
 			}
 
@@ -1255,7 +1394,7 @@ void lights_preprocess_scene(
 				lens_flare_parameters.definition = lens_flare_definition_get(
 					definition->lens_flare.index);
 				lens_flare_parameters.compressed_light_color =
-					real_a_rgb_color_to_pixel32(lens_flare_scale, &light->color);
+					real_a_rgb_color_to_pixel32(lens_flare_scale, &LIGHT_COLOR(light));
 				lens_flare_parameters.compressed_light_scale =
 					compress_real_to_int8(intensity);
 				lens_flare_parameters.compressed_window_index = (byte)render.window_index;
@@ -1387,7 +1526,7 @@ real object_get_self_illumination(
 
 				/* (port: not one let go of: lights_port_recover) */
 				if (light)
-					illumination += real_rgb_color_brightness(&light->color);
+					illumination += real_rgb_color_brightness(&LIGHT_COLOR(light));
 			}
 			attachment_index++;
 		}
@@ -1587,9 +1726,36 @@ void lights_reconnect_to_structure_bsp(
 	return;
 }
 
+#ifdef HALO_WIIU
+/* port: the drawing thread's own light marker, when the ticks run beside the drawing (tick_overlap.h): its searches for the lights near an object (the
+objects pass, the scene's lights) mark a table of its own, so that the ticks' searches (a unit's illumination) and its do not disturb each other */
+static struct
+{
+	boolean initialized;
+	long marker;
+	long marks[MAXIMUM_LIGHTS_PER_MAP];
+} light_render_markers;
+#define LIGHT_MARKER_RENDER() (tick_overlap_markers_split && tick_overlap_thread_is_render())
+#define LIGHT_MARKER_INITIALIZED() (LIGHT_MARKER_RENDER() ? light_render_markers.initialized : lights_globals.marker_initialized)
+#else
+#define LIGHT_MARKER_INITIALIZED() (lights_globals.marker_initialized)
+#endif
+
 static void light_marker_begin(
 	void)
 {
+#ifdef HALO_WIIU
+	if (LIGHT_MARKER_RENDER())
+	{
+		match_assert(
+			"c:\\halo\\SOURCE\\objects\\object_lights.c",
+			0x664,
+			!light_render_markers.initialized);
+		light_render_markers.marker++;
+		light_render_markers.initialized = TRUE;
+		return;
+	}
+#endif
 	match_assert(
 		"c:\\halo\\SOURCE\\objects\\object_lights.c",
 		0x664,
@@ -1605,6 +1771,23 @@ static boolean light_mark(
 {
 	struct light_datum *light = light_get(light_index);
 
+#ifdef HALO_WIIU
+	if (LIGHT_MARKER_RENDER())
+	{
+		long *mark = &light_render_markers.marks[DATUM_INDEX_TO_ABSOLUTE_INDEX(light_index)];
+
+		match_assert(
+			"c:\\halo\\SOURCE\\objects\\object_lights.c",
+			0x67F,
+			light_render_markers.initialized);
+		if (*mark != light_render_markers.marker)
+		{
+			*mark = light_render_markers.marker;
+			return TRUE;
+		}
+		return FALSE;
+	}
+#endif
 	match_assert(
 		"c:\\halo\\SOURCE\\objects\\object_lights.c",
 		0x67F,
@@ -1623,6 +1806,16 @@ static boolean light_unmarked(
 {
 	struct light_datum *light = light_get(light_index);
 
+#ifdef HALO_WIIU
+	if (LIGHT_MARKER_RENDER())
+	{
+		match_assert(
+			"c:\\halo\\SOURCE\\objects\\object_lights.c",
+			0x66F,
+			light_render_markers.initialized);
+		return light_render_markers.marks[DATUM_INDEX_TO_ABSOLUTE_INDEX(light_index)] != light_render_markers.marker;
+	}
+#endif
 	match_assert(
 		"c:\\halo\\SOURCE\\objects\\object_lights.c",
 		0x66F,
@@ -1638,6 +1831,17 @@ static boolean light_unmarked(
 static void light_marker_end(
 	void)
 {
+#ifdef HALO_WIIU
+	if (LIGHT_MARKER_RENDER())
+	{
+		match_assert(
+			"c:\\halo\\SOURCE\\objects\\object_lights.c",
+			0x68E,
+			light_render_markers.initialized);
+		light_render_markers.initialized = FALSE;
+		return;
+	}
+#endif
 	match_assert(
 		"c:\\halo\\SOURCE\\objects\\object_lights.c",
 		0x68E,
@@ -1665,7 +1869,7 @@ static void render_debug_light(
 		render_debug_sphere(
 			TRUE,
 			&light->position,
-			light->radius,
+			LIGHT_RADIUS(light),
 			&color);
 		color.red *= 0.8f;
 		color.green *= 0.8f;
@@ -1676,7 +1880,7 @@ static void render_debug_light(
 			render_debug_sphere(
 				TRUE,
 				&light->position,
-				definition->specular_radius_multiplier * light->radius,
+				definition->specular_radius_multiplier * LIGHT_RADIUS(light),
 				&color);
 		}
 		color.red *= 0.8f;
@@ -1755,7 +1959,7 @@ static void light_compute_bounding_sphere(
 	struct point_light_definition *definition = light_definition_get(light->definition_index);
 	real light_radius = maximum
 		? definition->radius_modifier_upper_bound * definition->radius
-		: light->radius;
+		: LIGHT_RADIUS(light);
 
 	if (!TEST_FLAG(definition->flags, _light_definition_no_specular_bit)
 		&& (specular || maximum))
@@ -1857,10 +2061,9 @@ void lights_render_diffuse(
 				lights_globals.scene_point_lights[light_index]);
 
 			if (TEST_FLAG(light->flags, _point_light_dynamic_bit)
-				&& light->rasterizer_light_index != NONE)
+				&& LIGHT_RASTERIZER_INDEX(light) != NONE)
 			{
-				boolean skip_clusters = TEST_FLAG(light->flags,
-						_point_light_attached_to_first_person_weapon_bit)
+				boolean skip_clusters = LIGHT_FIRST_PERSON_TEST(light)
 					&& TEST_FLAG(light_definition_get(light->definition_index)->flags,
 						_light_definition_supersize_in_first_person_bit);
 				short cluster_count = 0;
@@ -1882,7 +2085,7 @@ void lights_render_diffuse(
 					&center,
 					&radius);
 				structure_render_diffuse_light(
-					light->rasterizer_light_index,
+					LIGHT_RASTERIZER_INDEX(light),
 					&center,
 					radius,
 					cluster_count,
@@ -1912,12 +2115,11 @@ void lights_render_specular(
 				lights_globals.scene_point_lights[light_index]);
 
 			if (TEST_FLAG(light->flags, _point_light_dynamic_bit)
-				&& light->rasterizer_light_index != NONE
+				&& LIGHT_RASTERIZER_INDEX(light) != NONE
 				&& !TEST_FLAG(light_definition_get(light->definition_index)->flags,
 					_light_definition_no_specular_bit))
 			{
-				boolean skip_clusters = TEST_FLAG(light->flags,
-						_point_light_attached_to_first_person_weapon_bit)
+				boolean skip_clusters = LIGHT_FIRST_PERSON_TEST(light)
 					&& TEST_FLAG(light_definition_get(light->definition_index)->flags,
 						_light_definition_supersize_in_first_person_bit);
 				short cluster_count = 0;
@@ -1939,7 +2141,7 @@ void lights_render_specular(
 					&center,
 					&radius);
 				structure_render_specular_light(
-					light->rasterizer_light_index,
+					LIGHT_RASTERIZER_INDEX(light),
 					&center,
 					radius,
 					cluster_count,
@@ -2034,17 +2236,17 @@ static void find_point_light_for_object(
 	{
 		struct light_datum *light = light_get(light_index);
 
-		if (light->rasterizer_light_index != NONE
+		if (LIGHT_RASTERIZER_INDEX(light) != NONE
 			&& (light->object_index != object_index
 				|| !TEST_FLAG(light_definition_get(light->definition_index)->flags,
 					_light_definition_dont_light_own_object_bit)))
 		{
 			real distance = distance3d(&light->position, center);
 
-			if (distance < radius + light->radius)
+			if (distance < radius + LIGHT_RADIUS(light))
 			{
-				real attenuation = light_attenuation(light->radius, distance);
-				real intensity = real_rgb_color_brightness(&light->color) * attenuation;
+				real attenuation = light_attenuation(LIGHT_RADIUS(light), distance);
+				real intensity = real_rgb_color_brightness(&LIGHT_COLOR(light)) * attenuation;
 				short index;
 
 				if (*light_count < maximum_light_count)
@@ -2097,7 +2299,11 @@ static boolean lights_port_cluster(
 	short *first_entry,
 	short *entry_count)
 {
+#ifdef HALO_WIIU
+	unsigned long generation = 1 + tick_snapshot_cluster_partition(&light_cluster_partition)->port_modification_count + lights_port.radius_writes;
+#else
 	unsigned long generation = 1 + light_cluster_partition.port_modification_count + lights_port.radius_writes;
+#endif
 	long reference_index;
 	long light_index;
 	short first;
@@ -2122,7 +2328,7 @@ static boolean lights_port_cluster(
 			/* (one not drawn this frame lights nothing: reaching an object,
 			it would only be marked, for that object's other clusters to pass
 			over) */
-			if (light->rasterizer_light_index == NONE)
+			if (LIGHT_RASTERIZER_INDEX(light) == NONE)
 				continue;
 			if (lights_port.entry_count >= LIGHTS_PORT_MAXIMUM_ENTRIES)
 			{
@@ -2134,7 +2340,7 @@ static boolean lights_port_cluster(
 			entry = &lights_port.entries[lights_port.entry_count++];
 			entry->light_index = light_index;
 			entry->position = light->position;
-			entry->radius = light->radius;
+			entry->radius = LIGHT_RADIUS(light);
 		}
 		lights_port.cluster_generations[cluster_index] = generation;
 		lights_port.cluster_first_entries[cluster_index] = first;
@@ -2165,7 +2371,7 @@ static void find_point_lights_for_object_in_cluster(
 	match_assert(
 		"c:\\halo\\SOURCE\\objects\\object_lights.c",
 		0x544,
-		lights_globals.marker_initialized);
+		LIGHT_MARKER_INITIALIZED());
 	/* port: the cluster's lights as kept (lights_port_cluster). A light too
 	far to reach the object is passed over: the Xbox's loop tested it the
 	same, on the same position and radius, and rejected it. Left unmarked, it
@@ -2294,9 +2500,9 @@ void lights_illumination_at_point(
 
 			if (TEST_FLAG(light->flags, _point_light_dynamic_bit))
 			{
-				color->red += light->color.red * light_attenuations[light_index];
-				color->green += light->color.green * light_attenuations[light_index];
-				color->blue += light->color.blue * light_attenuations[light_index];
+				color->red += LIGHT_COLOR(light).red * light_attenuations[light_index];
+				color->green += LIGHT_COLOR(light).green * light_attenuations[light_index];
+				color->blue += LIGHT_COLOR(light).blue * light_attenuations[light_index];
 			}
 		}
 	}
@@ -2347,7 +2553,7 @@ void lights_prepare_for_object_dynamic(
 		for (light_index = 0; light_index < lighting->point_light_count; light_index++)
 		{
 			long rasterizer_light_index =
-				light_get(lighting->point_light_indices[light_index])->rasterizer_light_index;
+				LIGHT_RASTERIZER_INDEX(light_get(lighting->point_light_indices[light_index]));
 
 			if (rasterizer_light_index != NONE)
 				lighting->point_light_indices[kept++] = rasterizer_light_index;

@@ -213,6 +213,9 @@ symbols in this file:
 #include "ai/actors.h"
 #include "ai/ai.h"
 #include "cache/cache_files.h"
+#ifdef HALO_WIIU
+#include "cache/predicted_resources.h" /* port: the caches are the game thread's (tick_owners.h) */
+#endif
 #include "cseries/errors.h"
 #include "cseries/profile.h"
 #include "effects/effect_definitions.h"
@@ -624,9 +627,15 @@ static void weapon_precache_projectile_trails(
 
 							for (bitmap_index = 0; bitmap_index < bitmap->bitmaps.count; bitmap_index++)
 							{
+#ifdef HALO_WIIU
+								/* port: the texture cache is the game thread's (tick_owners.h) */
+								predicted_resources_request_bitmap(
+									TAG_BLOCK_GET_ELEMENT(&bitmap->bitmaps, bitmap_index, struct bitmap_data));
+#else
 								_texture_cache_bitmap_get_hardware_format(
 									TAG_BLOCK_GET_ELEMENT(&bitmap->bitmaps, bitmap_index, struct bitmap_data),
 									FALSE, TRUE);
+#endif
 							}
 						}
 					}

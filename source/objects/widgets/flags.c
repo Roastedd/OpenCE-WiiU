@@ -215,6 +215,70 @@ void flag_set_trailing_shape(
 
 struct data_array *flag_data;
 
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+
+/* port: how many ticks have passed since the widget was last drawn, kept as two counts that one thread each writes
+(tick_owners.h): the tick's count of ticks, and the renderer's note of the tick count at its last draw. Their difference
+(taken as the short it was) is the old field's value. With the tick owners' queues off the field in the datum is used,
+as it was. */
+static unsigned short flag_tick_counts[2];
+static unsigned short flag_drawn_counts[2];
+#endif
+
+/* the tick: one more update; the ticks since the last draw */
+static short flag_tick_updates_since_render(
+	long flag_index,
+	struct flag_datum_prefix *flag)
+{
+#ifdef HALO_WIIU
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_WIDGET_COUNTS))
+	{
+		long slot = DATUM_INDEX_TO_ABSOLUTE_INDEX(flag_index);
+
+		flag_tick_counts[slot]++;
+		return (short)(flag_tick_counts[slot] - flag_drawn_counts[slot]);
+	}
+#endif
+	return ++flag->updates_since_last_render;
+}
+
+/* the renderer: the ticks since the last draw */
+static short flag_updates_since_render(
+	long flag_index,
+	struct flag_datum_prefix *flag)
+{
+#ifdef HALO_WIIU
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_WIDGET_COUNTS))
+	{
+		long slot = DATUM_INDEX_TO_ABSOLUTE_INDEX(flag_index);
+
+		return (short)(flag_tick_counts[slot] - flag_drawn_counts[slot]);
+	}
+#endif
+	return flag->updates_since_last_render;
+}
+
+/* the renderer has drawn it, or it is new: none since */
+static void flag_note_drawn(
+	long flag_index,
+	struct flag_datum_prefix *flag,
+	boolean is_new)
+{
+#ifdef HALO_WIIU
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_WIDGET_COUNTS))
+	{
+		long slot = DATUM_INDEX_TO_ABSOLUTE_INDEX(flag_index);
+
+		if (is_new)
+			flag_tick_counts[slot] = 0;
+		flag_drawn_counts[slot] = flag_tick_counts[slot];
+		return;
+	}
+#endif
+	flag->updates_since_last_render = 0;
+}
+
 /* ---------- public code */
 
 void flags_initialize(
@@ -273,9 +337,10 @@ void flags_update(
 		struct flag_definition *definition =
 			flag_definition_get(flag->definition_index);
 
-		flag->updates_since_last_render++;
+		short updates_since_render = flag_tick_updates_since_render(flag_index, flag);
+
 		if (flag->object_index != NONE &&
-			flag->updates_since_last_render < 5 &&
+			updates_since_render < 5 &&
 			delta != 0.0f)
 		{
 			flag_update(flag, definition, delta);
@@ -299,13 +364,13 @@ void flag_render(
 	definition = flag_definition_get(flag->definition_index);
 	flag->object_index = object_index;
 
-	if (flag->updates_since_last_render > 5 || !flag->initialized)
+	if (flag_updates_since_render(flag_index, flag) > 5 || !flag->initialized)
 	{
 		flag_update(flag, definition, 5.0f);
 		flag->initialized = TRUE;
 	}
 
-	flag->updates_since_last_render = 0;
+	flag_note_drawn(flag_index, flag, FALSE);
 	if (!flag->noop)
 		flag_render_proper(flag, definition, lighting, animation);
 
@@ -328,6 +393,7 @@ long flag_new(
 		if (flag_index != NONE)
 		{
 			struct flag_datum_prefix *flag = flag_get(flag_index);
+			flag_note_drawn(flag_index, flag, TRUE);
 			/* port: and a height the update's rows hold, with the one past
 			the last that the attachments' spans reach, and a size that isn't
 			negative (a map's; a negative width let any height through the

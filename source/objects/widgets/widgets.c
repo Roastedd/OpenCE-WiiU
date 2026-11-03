@@ -151,6 +151,37 @@ struct data_array *widget_data;
 
 /* ---------- public code */
 
+#ifdef HALO_WIIU
+extern volatile int tick_overlap_markers_split;
+void sched_yield_for_data(void);
+static volatile int widgets_spin_lock;
+
+void widgets_lock(
+	void)
+{
+	long spins = 0;
+
+	if (!tick_overlap_markers_split)
+		return;
+	while (__sync_lock_test_and_set(&widgets_spin_lock, 1))
+	{
+		if (++spins > 2000)
+		{
+			sched_yield_for_data();
+			spins = 0;
+		}
+	}
+}
+
+void widgets_unlock(
+	void)
+{
+	if (!tick_overlap_markers_split)
+		return;
+	__sync_lock_release(&widgets_spin_lock);
+}
+#endif
+
 short tag_group_to_widget_type(
 	unsigned long group_tag)
 {
@@ -255,6 +286,9 @@ void widgets_new(
 	struct object_definition *object_definition = object_definition_get(object->definition_index);
 	short widget_reference_index;
 
+#ifdef HALO_WIIU
+	widgets_lock();
+#endif
 	object->object.first_widget_index = NONE;
 	widget_reference_index = 0;
 	if (object_definition->object.widgets.count > 0)
@@ -301,6 +335,9 @@ void widgets_new(
 		}
 		while (widget_reference_index < object_definition->object.widgets.count);
 	}
+#ifdef HALO_WIIU
+	widgets_unlock();
+#endif
 
 	return;
 }
@@ -311,6 +348,9 @@ void widgets_delete(
 	struct object_datum *object = object_get(object_index);
 	long widget_index = object->object.first_widget_index;
 
+#ifdef HALO_WIIU
+	widgets_lock();
+#endif
 	while (widget_index != NONE)
 	{
 		struct widget_datum *widget = widget_get(widget_index);
@@ -329,6 +369,9 @@ void widgets_delete(
 		widget_index = next_widget_index;
 	}
 	object->object.first_widget_index = NONE;
+#ifdef HALO_WIIU
+	widgets_unlock();
+#endif
 
 	return;
 }
@@ -338,9 +381,20 @@ boolean widgets_need_lighting(
 {
 	boolean result = FALSE;
 
+#ifdef HALO_WIIU
+	widgets_lock();
+#endif
 	while (widget_index != NONE)
 	{
+#ifdef HALO_WIIU
+		/* port: a widget the ticks let go of since the copy of the object (tick_overlap.h) names it ends the list */
+		struct widget_datum *widget = (struct widget_datum *)datum_try_and_get(widget_data, widget_index);
+
+		if (!widget)
+			break;
+#else
 		struct widget_datum *widget = widget_get(widget_index);
+#endif
 
 		if (widget_type_definition_get(widget->type)->needs_lighting)
 		{
@@ -349,6 +403,9 @@ boolean widgets_need_lighting(
 		}
 		widget_index = widget->next_widget_index;
 	}
+#ifdef HALO_WIIU
+	widgets_unlock();
+#endif
 
 	return result;
 }
@@ -361,10 +418,23 @@ void widgets_render(
 	struct object_datum *object = object_get(object_index);
 	long widget_index = object->object.first_widget_index;
 
+#ifdef HALO_WIIU
+	widgets_lock();
+#endif
 	while (widget_index != NONE)
 	{
+#ifdef HALO_WIIU
+		/* port: a widget the ticks let go of since the copy of the object (tick_overlap.h) names it ends the list */
+		struct widget_datum *widget = (struct widget_datum *)datum_try_and_get(widget_data, widget_index);
+		struct widget_type_definition *type_definition;
+
+		if (!widget)
+			break;
+		type_definition = widget_type_definition_get(widget->type);
+#else
 		struct widget_datum *widget = widget_get(widget_index);
 		struct widget_type_definition *type_definition = widget_type_definition_get(widget->type);
+#endif
 
 		if (type_definition->render_proc)
 		{
@@ -380,6 +450,9 @@ void widgets_render(
 		}
 		widget_index = widget->next_widget_index;
 	}
+#ifdef HALO_WIIU
+	widgets_unlock();
+#endif
 
 	return;
 }
@@ -389,6 +462,9 @@ void widgets_update(
 {
 	short type;
 
+#ifdef HALO_WIIU
+	widgets_lock();
+#endif
 	for (type = 0; type < NUMBER_OF_WIDGET_TYPES; type++)
 	{
 		struct widget_type_definition *type_definition = widget_type_definition_get(type);
@@ -396,6 +472,9 @@ void widgets_update(
 		if (type_definition->update)
 			type_definition->update(delta);
 	}
+#ifdef HALO_WIIU
+	widgets_unlock();
+#endif
 
 	return;
 }

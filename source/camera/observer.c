@@ -110,6 +110,10 @@ symbols in this file:
 #include "physics/collision_usage.h"
 #include "scenario/scenario.h"
 #include "structures/structure_bsp_definitions.h"
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
+#endif
 
 /* ---------- constants */
 
@@ -321,6 +325,15 @@ static short observer_parameter_derivative_real_counts[NUMBER_OF_OBSERVER_COMMAN
 
 static struct observer_globals observer_globals;
 
+#ifdef HALO_WIIU
+/* port: the cameras as the last update of the observer left them, for the renderer and the sound listener (tick_owners.h) */
+static struct observer_result observer_published[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
+static boolean observer_published_valid[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
+/* the overlap's (tick_overlap.h): the game thread's copy, taken at the sync point when the tick thread is idle */
+static struct observer_result observer_published_view[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
+static boolean observer_published_view_valid[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
+#endif
+
 /* ---------- private code */
 
 static struct observer *observer_get(
@@ -381,6 +394,10 @@ void observer_initialize_for_new_map(
 		local_player_index++)
 	{
 		observer_clear(observer_get(local_player_index));
+#ifdef HALO_WIIU
+		observer_published_valid[local_player_index] = FALSE;
+		observer_published_view_valid[local_player_index] = FALSE;
+#endif
 	}
 
 	return;
@@ -411,6 +428,41 @@ struct observer_result const *observer_get_camera(
 
 	return result;
 }
+
+#ifdef HALO_WIIU
+void observer_sync_published(
+	void)
+{
+	short local_player_index;
+
+	for (local_player_index = 0; local_player_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS; local_player_index++)
+	{
+		observer_published_view_valid[local_player_index] = observer_published_valid[local_player_index];
+		observer_published_view[local_player_index] = observer_published[local_player_index];
+	}
+
+	return;
+}
+
+struct observer_result const *observer_get_published_camera(
+	short local_player_index)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_OBSERVER) && local_player_index != NONE)
+	{
+		if (tick_overlap_reading_published())
+		{
+			if (observer_published_view_valid[local_player_index])
+				return &observer_published_view[local_player_index];
+		}
+		else if (observer_published_valid[local_player_index])
+		{
+			return &observer_published[local_player_index];
+		}
+	}
+
+	return observer_get_camera(local_player_index);
+}
+#endif
 
 boolean observer_command_has_finished(
 	short local_player_index)
@@ -1332,6 +1384,11 @@ void observer_update(
 				observer_pass_time(local_player_index);
 			}
 			observer_postcheck(local_player_index);
+#ifdef HALO_WIIU
+			/* port: published for the renderer and the sound listener (observer_get_published_camera) */
+			observer_published[local_player_index] = observer->result;
+			observer_published_valid[local_player_index] = TRUE;
+#endif
 
 			match_assert(
 				"c:\\halo\\SOURCE\\camera\\observer.c",

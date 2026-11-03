@@ -12,6 +12,9 @@ DEBUG_KEYS.C
 #include "profile.h"
 #include "integer_math.h"
 #include "input.h"
+#ifdef HALO_WIIU
+#include "tick_input.h" /* port: port/linux/game/tick_input.c: the input this file reads is the frame's copy (tick_input.h) */
+#endif
 
 /* ---------- prototypes */
 

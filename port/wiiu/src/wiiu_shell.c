@@ -32,6 +32,7 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 #include <coreinit/core.h>
 #include <sysapp/launch.h>
 #include <coreinit/debug.h>
+#include <coreinit/memdefaultheap.h>
 #include <coreinit/memexpheap.h>
 #include <coreinit/memheap.h>
 #include <coreinit/mutex.h>
@@ -296,8 +297,42 @@ then ends in a fault in the system's code, and the console with it). The threads
 safe points; it returns at once in the foreground, and in the background holds the caller until the foreground is back (or the app is closing). The
 release callback waits for the game thread to be held before it lets the system have the GPU. */
 static volatile uint32_t game_gate_held;
+/* the tick thread (source/main/main.c, halo/tick_thread.txt) held at its own gate, before it starts a tick. While it runs ticks the game thread
+waits for it (nothing runs at the same time yet), so either being held is the game being held: the game thread cannot be at its gate then, and
+the tick thread is not in a GX2 call (the ticks make none). When the ticks run beside the drawing this becomes both, in game_threads_held. */
+static volatile uint32_t tick_gate_held;
+
+/* The tick thread beside the drawing (the tick overlap, port/linux/game/tick_overlap.h): both threads run game code, so the game is held when both are quiet.
+The game thread is quiet at its gate, or waiting for the tick thread (which cannot be drawing then); the tick thread at its gate, or idle, waiting for a job
+the game thread has not given it. */
+static volatile uint32_t tick_overlap_registered;
+static volatile uint32_t tick_thread_idle;
+static volatile uint32_t game_thread_waiting;
+
+static volatile uint32_t game_halted;
+
+static int game_threads_held(void)
+{
+	/* (a halt: the thread that halted is parked for good, and the other is held at its next gate) */
+	if (game_halted)
+		return 1;
+	if (tick_overlap_registered)
+		return (game_gate_held != 0 || game_thread_waiting != 0) && (tick_gate_held != 0 || tick_thread_idle != 0);
+	return game_gate_held != 0 || tick_gate_held != 0;
+}
 
 void wiiu_foreground_gate(int is_game_thread);
+
+/* The tick thread (the game's ticks on a thread of their own: port/linux/game/tick_owners.h) has a gate of its own. It touches neither
+the GPU, the controllers nor the sound, so HOME does not need it held for the system's sake; but a tick thread that goes on in the background
+would run the game on with nobody drawing it, and after the game has halted or the app is closing it must not run at all. It registers when it
+starts (and unregisters when it ends), and calls wiiu_tick_gate at its safe points, between two ticks; the release callback and the close wait
+for it as for the game thread's gate, and a halted game holds it for good. Nothing registers while the ticks run on the game thread. */
+static volatile uint32_t tick_gate_registered;
+static volatile uint32_t tick_gate_held;
+
+void wiiu_tick_gate_register(int registered);
+void wiiu_tick_gate(void);
 
 /* called every few milliseconds by a thread held at the gate: the GX2 thread drains the GPU here when the release callback asks it to (wiiu_gx2.c) */
 void (*wiiu_gate_poll)(void);
@@ -317,6 +352,81 @@ void wiiu_foreground_gate(int is_game_thread)
 	}
 	if (is_game_thread)
 		game_gate_held = 0;
+}
+
+/* The tick thread's gate, called before each tick it is asked for: returns at once in the foreground, holds the thread in the background (and for
+good once the app is closing), as wiiu_foreground_gate does the game thread. The release callback and the close wait for it as for the game thread. */
+void wiiu_tick_thread_gate(void);
+
+void wiiu_tick_thread_gate(void)
+{
+	if (foreground && !exit_requested && !game_halted)
+		return;
+	tick_gate_held = 1;
+	while (!foreground || exit_requested || game_halted)
+	{
+		if (wiiu_gate_poll)
+			wiiu_gate_poll();
+		sleep_ms(5);
+	}
+	tick_gate_held = 0;
+}
+
+/* the tick owners' (port/linux/game/tick_owners.c) calls of the gate: the tick thread gates itself in main.c's loop (wiiu_tick_thread_gate above), so the
+registration needs nothing here, and a gate asked for from the game thread returns at once in the foreground and holds in the background as the game
+thread's own does */
+void wiiu_tick_gate_register(int registered);
+void wiiu_tick_gate(void);
+
+void wiiu_tick_gate_register(int registered)
+{
+	tick_overlap_registered = registered != 0;
+}
+
+/* the tick thread waits for a job (1) or runs one (0), and the game thread waits for it to end (1) or does not (0) (tick_overlap.c) */
+void wiiu_tick_idle_set(int idle);
+void wiiu_game_waiting_set(int waiting);
+
+void wiiu_tick_idle_set(int idle)
+{
+	tick_thread_idle = idle != 0;
+}
+
+void wiiu_game_waiting_set(int waiting)
+{
+	game_thread_waiting = waiting != 0;
+}
+
+/* the calling thread's stack, as the OS says it: the tick snapshot's view belongs to the game thread's, found by it (port/linux/game/tick_stack.h); and the
+time base (tick_overlap.c's numbers) */
+void wiiu_thread_stack_range(unsigned long *low, unsigned long *size);
+unsigned long long wiiu_now_ticks(void);
+unsigned long wiiu_ticks_per_second(void);
+
+void wiiu_thread_stack_range(unsigned long *low, unsigned long *size)
+{
+	const OSThread *thread = OSGetCurrentThread();
+	const unsigned long start = (unsigned long)(uintptr_t)thread->stackStart;
+	const unsigned long end = (unsigned long)(uintptr_t)thread->stackEnd;
+
+	*low = start < end ? start : end;
+	*size = start < end ? end - start : start - end;
+}
+
+/* the time base's ticks, as the OS counts them (a conversion to microseconds is a 64-bit division, which the blends' two reads an object would pay) */
+unsigned long long wiiu_now_ticks(void)
+{
+	return (unsigned long long)OSGetSystemTime();
+}
+
+unsigned long wiiu_ticks_per_second(void)
+{
+	return (unsigned long)OSTimerClockSpeed;
+}
+
+void wiiu_tick_gate(void)
+{
+	wiiu_tick_thread_gate();
 }
 
 /* The game quits (its Quit, or a timed run that is over): the Wii U Menu is asked for, and the system ends the app through ProcUI, as it does for HOME's Close
@@ -358,10 +468,64 @@ void platform_request_quit(void)
 }
 
 /* for the threads the game and the port make with pthreads (the game's CreateThread: its file reads, input; the vertical blank): off the game thread's core and the GX2
-thread's, on core 0 */
+thread's, on core 0. A running thread keeps its core until it is next scheduled (2026-11-02: the tick thread said core 2 right after this), so it
+sleeps a moment here and is on core 0 when it returns. */
 void wiiu_thread_off_game_core(void)
 {
 	OSSetThreadAffinity(OSGetCurrentThread(), OS_THREAD_ATTRIB_AFFINITY_CPU0);
+	OSSleepTicks(OSMillisecondsToTicks(1));
+}
+
+/* The tick thread (port/linux/game/tick_overlap.c): an OSThread made on core 0, not a pthread. wut makes a pthread with OSCreateThread at priority 16 with
+every core allowed (OS_THREAD_ATTRIB_AFFINITY_ANY) and resumes it at once; OSSetThreadAffinity from inside it did not keep it on core 0 (2026-11-02:
+it said core 2, and core 1 after a sleep of 1 ms). Made with the affinity, as the game thread, the audio and the debug server are, it is on core 0 from
+its first instruction. wut's mutexes, conditions and thread-specific values (OSFastMutex, OSFastCond, OSGetThreadSpecific), which the thread and
+the game's code use, work in any OSThread. Returns 1 if the thread was made, -1 if it could not be (no stack, no thread). */
+int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes);
+
+static OSThread tick_thread;
+static uint8_t *tick_thread_stack;
+static void *(*tick_thread_entry)(void *);
+
+static int tick_thread_main(int argc, const char **argv)
+{
+	(void)argc;
+	(void)argv;
+	tick_thread_entry(NULL);
+	return 0;
+}
+
+int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes)
+{
+	if (tick_thread_stack)
+		return -1;
+	tick_thread_stack = (uint8_t *)MEMAllocFromDefaultHeapEx(stack_bytes, 16);
+	if (!tick_thread_stack)
+	{
+		wiiu_log("The tick thread: no memory for its stack (%lu bytes)", stack_bytes);
+		return -1;
+	}
+	tick_thread_entry = entry;
+	if (!OSCreateThread(&tick_thread, tick_thread_main, 0, NULL, tick_thread_stack + stack_bytes, stack_bytes, main_priority,
+			OS_THREAD_ATTRIB_AFFINITY_CPU0))
+	{
+		wiiu_log("OSCreateThread failed for the tick thread");
+		MEMFreeToDefaultHeap(tick_thread_stack);
+		tick_thread_stack = NULL;
+		return -1;
+	}
+	OSSetThreadName(&tick_thread, "ticks");
+	OSResumeThread(&tick_thread);
+	return 1;
+}
+
+/* the tick thread (source/main/main.c) at the game thread's priority: above the workers (the log, the debug server, the voice thread run at the game's +4,
+setup_thread) so that a tick is not held up behind a write of the log, and below the audio mixer (priority 10, wiiu_audio.c), which shares core 0 with it and
+must run when its ring needs filling: a tick is the one that waits. Returns the priority it set. */
+int wiiu_tick_thread_priority(void)
+{
+	OSSetThreadPriority(OSGetCurrentThread(), main_priority);
+	return (int)main_priority;
 }
 
 /* DirectSound's packet decoder (dsound_sdl.c): on core 2, which the GX2 thread leaves mostly idle, at the GX2 thread's priority: that thread waits for
@@ -404,7 +568,7 @@ int wiiu_game_gate_is_held(void);
 
 int wiiu_game_gate_is_held(void)
 {
-	return game_gate_held != 0;
+	return game_threads_held();
 }
 
 static uint32_t on_release(void *unused)
@@ -419,12 +583,12 @@ static uint32_t on_release(void *unused)
 	{
 		uint32_t waited = 0;
 
-		while (!game_gate_held && waited < 2000u && started_game)
+		while (!game_threads_held() && waited < 2000u && started_game)
 		{
 			sleep_ms(5);
 			waited += 5u;
 		}
-		wiiu_log("HOME: the game thread is %s after %u ms", game_gate_held ? "held" : "NOT held", (unsigned)waited);
+		wiiu_log("HOME: the game thread is %s after %u ms", game_threads_held() ? (game_gate_held ? "held" : "waiting for the tick thread, which is held") : "NOT held", (unsigned)waited);
 	}
 	/* (voice chat first: its thread closes the microphone, which HOME is not documented to do, before the sound goes) */
 	wiiu_voice_suspend();
@@ -740,6 +904,33 @@ static int start_game(void)
 	/* the core the game runs on (halo/game_core.txt: 0, 1 or 2; 1 if none). GX2 must be driven from the core ProcUI's callbacks run on (1): the system does not run the app's threads on the
 	other cores while its HOME callback does, and the GPU's release then never completes: so with the GX2 thread on core 1 the game itself can be on 0 or 2 (wiiu_gx2.c) */
 	unsigned game_core = 1;
+	/* the tick owners' queues (port/linux/game/tick_owners.h; halo/tick_owners.txt: 0 off, 1 queues applied where the direct call was, 2
+	queues applied at their owner's points, off if none; and after it the parts to leave out, a number): the game reads the setting from its environment, as the host runs do */
+	{
+		FILE *file = fopen(WIIU_DATA_DIRECTORY "/tick_owners.txt", "r");
+
+		if (file)
+		{
+			unsigned mode = 0;
+			unsigned long off = 0;
+			int read = fscanf(file, "%u %li", &mode, (long *)&off);
+
+			if (read >= 1 && mode >= 1 && mode <= 2)
+			{
+				char text[16];
+
+				setenv("HALO_TICK_OWNERS", mode == 1 ? "1" : "2", 1);
+				/* (an optional second number: the parts left out, tick_owners.h) */
+				if (read == 2 && off)
+				{
+					snprintf(text, sizeof(text), "0x%lx", off);
+					setenv("HALO_TICK_OWNERS_OFF", text, 1);
+				}
+				wiiu_log("Tick owners: the queues are on, mode %u, parts left out 0x%lx (halo/tick_owners.txt)", mode, off);
+			}
+			fclose(file);
+		}
+	}
 	{
 		FILE *file = fopen(WIIU_DATA_DIRECTORY "/game_core.txt", "r");
 
@@ -774,6 +965,7 @@ void wiiu_game_halted(void)
 	wiiu_shell_log_flush(&shell_log, 1000);
 	/* (this thread is parked for good, as the foreground gate parks it: the release callback must not wait for it to be held, as it did, 2 s a time, with the
 	console left on the Wii U's logo) */
+	game_halted = 1;
 	game_gate_held = 1;
 	SYSLaunchMenu();
 	for (;;)
@@ -949,12 +1141,12 @@ int wiiu_shell_run(int (*game_main)(void))
 	{
 		uint32_t waited = 0;
 
-		while (!game_gate_held && waited < 1500u && started_game && !game_done)
+		while (!game_threads_held() && waited < 1500u && started_game && !game_done)
 		{
 			sleep_ms(5);
 			waited += 5u;
 		}
-		wiiu_log("Closing: the game thread is %s after %u ms", game_gate_held ? "held" : "NOT held", (unsigned)waited);
+		wiiu_log("Closing: the game thread is %s after %u ms", game_threads_held() ? (game_gate_held ? "held" : "waiting for the tick thread, which is held") : "NOT held", (unsigned)waited);
 		/* (voice chat's thread closes the microphone and ends; one that does not within 300 ms is left, as the log writers are, and the
 		trail says so) */
 		{

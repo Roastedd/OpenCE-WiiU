@@ -281,6 +281,17 @@ void players_unzoom_all(
 void player_control_unzoom(long unit_index);
 real_euler_angles2d const *player_control_get_facing_angles(
 	short local_player_index);
+#ifdef HALO_WIIU
+/* port: the facing the display is posed from (render_interpolation.c's direct camera): the tick side works out the player's facing
+(player_control_update, the ticks), and publishes it when its frame's work is done (player_control_publish_display_facing); the
+game thread then draws from the published one, and a tick thread would only write the next. With the tick owners' queues off it is
+the live facing. */
+void player_control_publish_display_facing(
+	void);
+real_vector3d *player_control_get_display_facing_direction(
+	short local_player_index,
+	real_vector3d *facing_direction);
+#endif
 real_vector3d *player_control_get_facing_direction(
 	short local_player_index,
 	real_vector3d *facing_direction);

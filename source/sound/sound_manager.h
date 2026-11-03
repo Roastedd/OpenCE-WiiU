@@ -57,6 +57,10 @@ void sound_stop_all(
 	void);
 void sound_stop_impulse(
 	long sound_index);
+/* port: sound_index (a script's number for its sound) if the sound is still there, else NONE (tick owners' queues:
+port/linux/game/tick_owners.h) */
+long sound_impulse_current(
+	long sound_index);
 void sound_stop_impulse_by_source_and_definition(
 	long source_identifier,
 	long definition_index);

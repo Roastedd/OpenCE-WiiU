@@ -1215,8 +1215,9 @@ static const struct config_setting config_settings[] =
 		"\"host:<map>\" hosts a game on that map, \"local:<map>\" plays a local (split\n"
 		"screen) game on it, \"join\" joins the first game found,\n"
 		"\"browse\" the one with the most players the server browser lists (not\n"
-		"co-op, if it can), \"log\" logs the game that runs (and runs its cues);\n"
-		"empty for none." },
+		"co-op, if it can), \"log\" logs the game that runs (and runs its cues),\n"
+		"\"solo:<level>\" starts a campaign game of one player on it from the main\n"
+		"menu (again each time the game is back there); empty for none." },
 	{ "debug.network_test_start", _config_real, "15.0", "HALO_NETWORK_TEST_START", _environment_value, _platform_all,
 		"Seconds after hosting that an automated test game starts." },
 	{ "debug.network_test_kill", _config_real, "0.0", "HALO_NETWORK_TEST_KILL", _environment_value, _platform_all,
@@ -1256,7 +1257,7 @@ static const struct config_setting config_settings[] =
 		"Console lines an automated test runs at a game second, from the first tick\n"
 		"every player of debug.network_test_cue_players has a unit:\n"
 		"\"<second> <line>|<second> <line>...\" (the host's, or a game of one machine;\n"
-		"not on the web)." },
+		"not on the web). The line main_menu goes to the main menu." },
 	{ "debug.network_test_cue_players", _config_integer, "1", "HALO_NETWORK_TEST_CUE_PLAYERS", _environment_value,
 		_platform_all,
 		"The players debug.network_test_cues waits for." },

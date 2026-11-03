@@ -139,6 +139,9 @@ symbols in this file:
 
 #include "units/unit_definitions.h"
 #include "units/units.h"
+#ifdef HALO_WIIU
+#include "tick_input.h" /* port: port/linux/game/tick_input.c: the input this file reads is the frame's copy (tick_input.h) */
+#endif
 
 /* port: the player's movement and turn before the director's inhibit zeroes
 them (player_control.c), which move the debug camera */
@@ -297,6 +300,13 @@ void director_inhibit_input(
 boolean director_inhibited_facing(
 	short local_player_index)
 {
+#ifdef HALO_WIIU
+	/* port: the frame's copy while a frame is drawn from the tick snapshot (tick_snapshot.c) */
+	int inhibited;
+
+	if (tick_snapshot_director_inhibited_facing(local_player_index, &inhibited))
+		return (boolean)inhibited;
+#endif
 	return director_get(local_player_index)->inhibited_facing;
 }
 
@@ -311,6 +321,15 @@ director_perspective director_get_perspective(
 {
 	struct director *camera;
 
+#ifdef HALO_WIIU
+	/* port: the frame's copy while a frame is drawn from the tick snapshot (tick_snapshot.c) */
+	{
+		int perspective;
+
+		if (tick_snapshot_director_perspective(local_player_index, &perspective))
+			return (director_perspective)perspective;
+	}
+#endif
 	camera = director_get(local_player_index);
 
 	if (camera->camera_proc == first_person_camera_update)

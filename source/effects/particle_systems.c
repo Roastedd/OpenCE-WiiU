@@ -90,6 +90,10 @@ symbols in this file:
 #include "saved games/game_state.h"
 #include "scenario/scenario.h"
 #include "tag_files/tag_files.h"
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#include "tick_presentation.h" /* port: port/linux/game/tick_presentation.c */
+#endif
 
 /* ---------- constants */
 
@@ -220,8 +224,37 @@ void particle_systems_initialize_for_new_map(
 	return;
 }
 
+#ifdef HALO_WIIU
+void particle_system_orphan_now(
+	long system_index);
+
+/* port: as particle_system_new_attached: the ticket is named, and its system, if there still is one, let go of */
 void particle_system_orphan(
 	long system_index)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_PARTICLE_SYSTEMS))
+		tick_presentation_particle_system_orphan(system_index);
+	else
+		particle_system_orphan_now(system_index);
+
+	return;
+}
+
+void particle_system_orphan_if_alive(
+	long system_index)
+{
+	if (datum_try_and_get(particle_systems, system_index))
+		particle_system_orphan_now(system_index);
+
+	return;
+}
+
+void particle_system_orphan_now(
+	long system_index)
+#else
+void particle_system_orphan(
+	long system_index)
+#endif
 {
 	struct particle_system_datum *system = particle_system_get(system_index);
 
@@ -404,12 +437,46 @@ static void particle_system_next_particle_state_index(
 	return;
 }
 
+#ifdef HALO_WIIU
+long particle_system_new_unattached_now(
+	long definition_index,
+	real_point3d const *position,
+	real_vector3d const *velocity,
+	real_argb_color const *color,
+	real scale);
+
+/* port: the particle systems are the render thread's (tick_owners.h): an effect's, made by a tick, is made by the render thread when its turn comes
+(tick_presentation.h). Nothing keeps the index it would return. */
 long particle_system_new_unattached(
 	long definition_index,
 	real_point3d const *position,
 	real_vector3d const *velocity,
 	real_argb_color const *color,
 	real scale)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_PARTICLE_SYSTEMS))
+	{
+		tick_presentation_particle_system_new_unattached(definition_index, position, velocity, color, scale);
+		return NONE;
+	}
+
+	return particle_system_new_unattached_now(definition_index, position, velocity, color, scale);
+}
+
+long particle_system_new_unattached_now(
+	long definition_index,
+	real_point3d const *position,
+	real_vector3d const *velocity,
+	real_argb_color const *color,
+	real scale)
+#else
+long particle_system_new_unattached(
+	long definition_index,
+	real_point3d const *position,
+	real_vector3d const *velocity,
+	real_argb_color const *color,
+	real scale)
+#endif
 {
 	long system_index = datum_new(particle_systems);
 
@@ -438,10 +505,35 @@ long particle_system_new_unattached(
 	return system_index;
 }
 
+#ifdef HALO_WIIU
+long particle_system_new_attached_now(
+	long definition_index,
+	long object_index,
+	short attachment_index);
+
+/* port: the particle systems are the render thread's (tick_owners.h): the object keeps the ticket a tick's make returns, and the
+render thread makes the system when its turn comes (tick_presentation.h) */
 long particle_system_new_attached(
 	long definition_index,
 	long object_index,
 	short attachment_index)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_PARTICLE_SYSTEMS))
+		return tick_presentation_particle_system_new_attached(definition_index, object_index, attachment_index);
+
+	return particle_system_new_attached_now(definition_index, object_index, attachment_index);
+}
+
+long particle_system_new_attached_now(
+	long definition_index,
+	long object_index,
+	short attachment_index)
+#else
+long particle_system_new_attached(
+	long definition_index,
+	long object_index,
+	short attachment_index)
+#endif
 {
 	long system_index = datum_new(particle_systems);
 

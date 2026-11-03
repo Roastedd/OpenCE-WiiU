@@ -385,6 +385,11 @@ symbols in this file:
 #include "network_chat.h" /* port: port/linux/game/network_chat.c */
 #include "network_aim_assist.h" /* port: port/linux/game/network_aim_assist.c */
 #include "network_shield_effects.h" /* port: port/linux/game/network_shield_effects.c */
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#include "tick_input.h" /* port: port/linux/game/tick_input.c */
+#include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
+#endif
 #include "map_share.h" /* port: port/linux/game/map_share.c */
 #include "profile_sections.h" /* port: port/linux/include/profile_sections.h */
 #ifdef HALO_PROFILE
@@ -717,7 +722,8 @@ static void main_frame_rate_debug(
 static void main_new_map(
 	struct game_options *options);
 static void main_game_render(
-	double time_delta_since_tick_sec);
+	double time_delta_since_tick_sec,
+	long repeat);
 
 /* ---------- globals */
 
@@ -1170,6 +1176,25 @@ static void screenshot_record(
 	return;
 }
 
+#ifndef HALO_WEB
+#include <stdlib.h>
+static boolean main_study_setting_cached_no_camera_effect(
+	void)
+{
+	static int skip = -1;
+
+	if (skip < 0)
+	{
+		char const *value = getenv("HALO_STUDY_NO_CAMERA_EFFECT");
+
+		skip = value && *value && strtol(value, NULL, 10) > 0;
+	}
+	return skip != 0;
+}
+#else
+#define main_study_setting_cached_no_camera_effect() FALSE
+#endif
+
 void set_window_camera_values(
 	struct render_window *window,
 	struct observer_result const *observer)
@@ -1186,7 +1211,9 @@ void set_window_camera_values(
 					observer->field_of_view),
 				1.0f));
 
+		/* port: the study's HALO_STUDY_NO_CAMERA_EFFECT=1 leaves it out (main_render_repeat) */
 		if (window->local_player_index != NONE &&
+			!main_study_setting_cached_no_camera_effect() &&
 			!console_is_active() &&
 			!game_time_get_paused() &&
 			director_get_perspective(window->local_player_index) !=
@@ -3334,6 +3361,9 @@ void main_loop_of_death(
 
 			wiiu_debug_console_run();
 		}
+		/* port: and the lines the telnet console and that server queued for the hs runtime, run by the tick thread
+		(tick_owners.h; at once with the queues in mode 1, here with them in mode 2) */
+		tick_owners_drain(TICK_OWNER_TICK);
 #endif
 		process_ui_widgets();
 		main_pregame_render();
@@ -3345,8 +3375,192 @@ void main_loop_of_death(
 	return;
 }
 
+/* port: the game's ticks on a thread of their own, overlapped with drawing in the end (the tools repository's
+reports/research/2026-11-01/ticks-off-thread.md, ticks-stage1.md). Switches, read once, from the environment (the Wii U has none: its one is
+halo/tick_thread.txt, wiiu_study.c):
+- HALO_RENDER_REPEAT=<n>: every frame drawn n times (0: not at all), to show
+  that what the ticks compute does not depend on how often the world is drawn
+  between them, which overlapping them with drawing needs;
+- HALO_TICK_THREAD=1: game_time_update run on a second thread while this one
+  waits for it. Nothing runs at the same time yet, so the ticks must come out
+  exactly as they do on one thread; on the Wii U it is core 0, whose cache is a
+  quarter of core 1's, to measure a tick's cost there beside the audio mixer.
+  What the thread does not share with the game's: the random seed's lock count,
+  the collision log's stack (and, on the Wii U, its counts), the frame's
+  interpolation and function-render modes, the profile, the diagnostics buffer;
+  and one lock covers the log's lines (error, terminal_printf). The renderer
+  finds its objects with a set of its own (render_objects.c). */
+#ifndef HALO_WEB
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static long main_study_setting(
+	char const *name,
+	long fallback)
+{
+	char const *value = getenv(name);
+
+#ifdef HALO_WIIU
+	/* (the console has no environment: the ticks' thread is halo/tick_thread.txt's number, 1 for core 0; port/wiiu/src/wiiu_study.c
+	reads it, as this file's fopen takes the Xbox's paths) */
+	if (!strcmp(name, "HALO_TICK_THREAD"))
+	{
+		long wiiu_study_number(const char *name, long fallback);
+
+		return wiiu_study_number("tick_thread.txt", fallback);
+	}
+#endif
+	return value && *value ? strtol(value, NULL, 10) : fallback;
+}
+
+static long main_render_repeat(
+	void)
+{
+	static long repeat = -1;
+
+	if (repeat < 0)
+	{
+		repeat = main_study_setting("HALO_RENDER_REPEAT", 1);
+		if (repeat < 0)
+			repeat = 1;
+		if (repeat != 1)
+			error(_error_silent, "study: every frame drawn %ld times (HALO_RENDER_REPEAT)", repeat);
+	}
+	return repeat;
+}
+
+static boolean main_study_no_sound_render(
+	void)
+{
+	static long skip = -1;
+
+	if (skip < 0)
+		skip = main_study_setting("HALO_STUDY_NO_SOUND_RENDER", 0) > 0;
+	return skip != 0;
+}
+
+static boolean main_study_skip_frame(
+	void)
+{
+	static long skip = -1;
+
+	if (skip < 0)
+		skip = main_study_setting("HALO_RENDER_SKIP_FRAME", 0) > 0;
+	return skip != 0;
+}
+
+#ifdef HALO_WIIU
+/* (the thread, and the work it is given while this one waits, are tick_overlap.c's: the same thread runs the overlap's jobs) */
+static struct
+{
+	int state; /* -1 not set up yet, 0 off, 1 running */
+} main_tick_thread = { -1 };
+
+static void main_game_time_update_work(
+	void *argument)
+{
+	game_time_update(*(real *)argument);
+}
+
+static void main_game_time_update(
+	real time_delta_sec)
+{
+	if (main_tick_thread.state < 0)
+	{
+		main_tick_thread.state = 0;
+		if (main_study_setting("HALO_TICK_THREAD", 0) > 0)
+			main_tick_thread.state = tick_overlap_start_thread() ? 1 : 0;
+	}
+	if (!main_tick_thread.state)
+	{
+		game_time_update(time_delta_sec);
+		return;
+	}
+	tick_overlap_run_and_wait(main_game_time_update_work, &time_delta_sec);
+}
+#else
+/* (the same 8 MiB as the game's own thread: port/wiiu/src/wiiu_shell.c) */
+#define MAIN_TICK_THREAD_STACK_BYTES (8 * 1024 * 1024)
+
+static struct
+{
+	int state; /* -1 not set up yet, 0 off, 1 running */
+	pthread_t thread;
+	pthread_mutex_t mutex;
+	pthread_cond_t posted;
+	pthread_cond_t done;
+	boolean pending;
+	real time_delta_sec;
+} main_tick_thread = { -1 };
+
+static void *main_tick_thread_run(
+	void *unused)
+{
+	(void)unused;
+	/* (no part in the profile: its stack of sections and the frame's record are the game thread's) */
+	profile_thread_disable();
+	pthread_mutex_lock(&main_tick_thread.mutex);
+	for (;;)
+	{
+		while (!main_tick_thread.pending)
+			pthread_cond_wait(&main_tick_thread.posted, &main_tick_thread.mutex);
+		pthread_mutex_unlock(&main_tick_thread.mutex);
+		game_time_update(main_tick_thread.time_delta_sec);
+		pthread_mutex_lock(&main_tick_thread.mutex);
+		main_tick_thread.pending = FALSE;
+		pthread_cond_signal(&main_tick_thread.done);
+	}
+	return NULL;
+}
+
+static void main_game_time_update(
+	real time_delta_sec)
+{
+	if (main_tick_thread.state < 0)
+	{
+		pthread_attr_t attributes;
+
+		main_tick_thread.state = 0;
+		if (main_study_setting("HALO_TICK_THREAD", 0) > 0 &&
+			pthread_mutex_init(&main_tick_thread.mutex, NULL) == 0 &&
+			pthread_cond_init(&main_tick_thread.posted, NULL) == 0 &&
+			pthread_cond_init(&main_tick_thread.done, NULL) == 0 &&
+			pthread_attr_init(&attributes) == 0)
+		{
+			pthread_attr_setstacksize(&attributes, MAIN_TICK_THREAD_STACK_BYTES);
+			if (pthread_create(&main_tick_thread.thread, &attributes, main_tick_thread_run, NULL) == 0)
+				main_tick_thread.state = 1;
+			pthread_attr_destroy(&attributes);
+			error(_error_silent, "study: the ticks on a thread of their own (HALO_TICK_THREAD): %s",
+				main_tick_thread.state ? "running" : "could not be started");
+		}
+	}
+	if (!main_tick_thread.state)
+	{
+		game_time_update(time_delta_sec);
+		return;
+	}
+	pthread_mutex_lock(&main_tick_thread.mutex);
+	main_tick_thread.time_delta_sec = time_delta_sec;
+	main_tick_thread.pending = TRUE;
+	pthread_cond_signal(&main_tick_thread.posted);
+	while (main_tick_thread.pending)
+		pthread_cond_wait(&main_tick_thread.done, &main_tick_thread.mutex);
+	pthread_mutex_unlock(&main_tick_thread.mutex);
+}
+#endif
+#else
+#define main_render_repeat() 1L
+#define main_study_skip_frame() FALSE
+#define main_study_no_sound_render() FALSE
+#define main_game_time_update game_time_update
+#endif
+
 static void main_game_render(
-	double time_delta_since_tick_sec)
+	double time_delta_since_tick_sec,
+	long repeat)
 {
 	boolean force_single_screen;
 	long window_index;
@@ -3356,9 +3570,41 @@ static void main_game_render(
 	long window_count;
 	short last_local_player_index;
 
+#ifdef HALO_WIIU
+	/* port: the frame the tick thread runs beside (tick_overlap.h) is drawn from the ring of the tick snapshot, and reads nothing of the objects
+	that the tick changes meanwhile: the memory pool is not held for it, and the frame's own work and the sound are inside the view */
+	const boolean overlap = tick_overlap_frame_active();
+#endif
+#ifdef HALO_WIIU
+	/* port: the particles, particle systems, contrails and decals that the ticks made since the frame's game_frame
+	(tick_owners.h), before the frame's draw reads and ages them */
+	tick_owners_drain(TICK_OWNER_RENDER);
+	/* port: the objects' memory pool is not compacted while this frame holds pointers into it (tick_owners.h) */
+	if (!overlap)
+		tick_owners_object_pool_reader_begin();
+#endif
 	lock_global_random_seed();
 	collision_log_continue_period(TRUE);
-	sound_render();
+#ifdef HALO_WIIU
+	if (overlap)
+	{
+		/* port: the view first (the frame's work and the sound read objects, and the ticks run beside them), then the frame's own work, once,
+		whatever the number of times it is drawn: what the serial loop does at the end of game_time_update (game.c's game_frame), here on the
+		game thread, in the pose the frame draws (render_interpolation.c) */
+		tick_snapshot_view_begin();
+		if (!repeat)
+			game_frame((real)time_delta_since_tick_sec);
+	}
+#endif
+	/* port: the study's HALO_STUDY_NO_SOUND_RENDER=1 leaves it out */
+	if (!main_study_no_sound_render())
+		sound_render();
+#ifdef HALO_WIIU
+	/* port: from here the frame reads the tick snapshot, if halo/tick_snapshot.txt says so (port/linux/game/tick_snapshot.c): the sound
+	above writes game state (mouth apertures) and reads what the tick sends it, and stays on the game state */
+	if (!overlap)
+		tick_snapshot_view_begin();
+#endif
 	force_single_screen = game_engine_force_single_screen();
 	last_local_player_index = NONE;
 
@@ -3400,7 +3646,15 @@ static void main_game_render(
 			}
 
 			window->local_player_index = last_local_player_index;
+#ifdef HALO_WIIU
+			/* port: the camera as the observer's last update published it (tick_owners.h) */
+			observer = observer_get_published_camera(window->local_player_index);
+#else
 			observer = observer_get_camera(window->local_player_index);
+#ifdef HALO_WIIU
+			observer = tick_snapshot_camera(window->local_player_index, observer);
+#endif
+#endif
 			observer = render_interpolation_camera(window->local_player_index, observer);
 		}
 		else
@@ -3422,7 +3676,12 @@ static void main_game_render(
 	window->console_window = TRUE;
 	set_window_camera_values(window, NULL);
 
-	if (global_screenshot_count.count <= 0)
+	/* port: the study's HALO_RENDER_SKIP_FRAME=1: the frame's cameras and
+	sound done, its world not drawn (main_render_repeat) */
+	if (main_study_skip_frame())
+	{
+	}
+	else if (global_screenshot_count.count <= 0)
 	{
 		render_frame(
 			global_screenshot_count.windows,
@@ -3437,10 +3696,103 @@ static void main_game_render(
 		screenshot_render(global_screenshot_count.windows);
 	}
 
+#ifdef HALO_WIIU
+	tick_snapshot_view_end();
+#endif
 	collision_log_end_period();
 	unlock_global_random_seed();
+#ifdef HALO_WIIU
+	if (!overlap)
+		tick_owners_object_pool_reader_end();
+#endif
 	return;
 }
+
+#ifdef HALO_WIIU
+/* port: whether this frame's tick side may be the tick thread's, beside the drawing (tick_overlap.h): a game of this machine alone and one player, in
+the game's own time, with nothing that shows or changes the world in a way the ring of the snapshot cannot follow. Asked by the game thread with the
+tick thread idle. Anything else is the serial loop's frame. */
+boolean main_overlap_eligible(
+	void)
+{
+	static char const *last_reason = NULL;
+	char const *reason = NULL;
+
+	if (main_globals.connection != _game_connection_local)
+		reason = "a network game or a saved film";
+	else if (main_globals.main_menu_scenario_loaded)
+		reason = "the main menu's scene";
+	else if (main_globals.movie)
+		reason = "a recording";
+	else if (!main_globals.halt_time_scale)
+		reason = "the game's time is halted";
+	else if (game_in_editor())
+		reason = "the editor";
+	else if (debug_no_drawing)
+		reason = "no drawing";
+	else if (halo_server_mode())
+		reason = "a dedicated server";
+	else if (!halo_interpolation_enabled())
+		reason = "no interpolation";
+	else if (local_player_count() != 1)
+		reason = local_player_count() ? "split screen" : "no local player yet";
+	else if (cinematic_in_progress())
+		reason = "a cinematic";
+	else if (game_engine_running())
+		reason = "a game engine running";
+	else if (game_time_menu_scene())
+		reason = "the main menu's clock";
+	else if (game_time_ui_get_paused() || game_time_get_paused())
+		reason = "the game paused";
+	else if (game_time_get_speed() != 1.0f)
+		reason = "the game's speed is not 1";
+	else if (main_globals.saving_map)
+		reason = "a save";
+	/* (the reason for a frame of the serial loop's, said when it changes: the log is where a run says why the overlap was not used) */
+	if (reason != last_reason)
+	{
+		void platform_log(char const *format, ...);
+
+		last_reason = reason;
+		platform_log(reason ? "tick overlap: serial frames from here (%s)" : "tick overlap: overlapped frames from here", reason ? reason : "");
+	}
+
+	return reason == NULL;
+}
+
+/* port: the tick thread's part of a frame (tick_overlap.h): the steps the serial loop's tick side takes above, in the same order, on the input copy
+the game thread took. The clock was decided on the game thread (game_time_overlap_step): ticks_elapsed ticks, then leftover_after of time. The
+frame's own work (game_frame) is the game thread's, in its view of the ring. Returns the ticks run. */
+long main_overlap_tick_side(
+	real dt,
+	long ticks_elapsed,
+	real leftover_after,
+	long previous_job_tick)
+{
+	long ticks_run;
+
+	/* port: not while a chat line is typed (its K plays an animation) */
+	if (!network_chat_typing())
+		debug_keys_update();
+	cheats_update();
+	/* port: the console's and the cheats' lines, run by the tick thread (tick_owners.h) */
+	tick_owners_drain(TICK_OWNER_TICK);
+	player_control_update(dt);
+	ticks_run = game_time_overlap_run(ticks_elapsed, leftover_after);
+	/* port: the lights that fade, which the drawing of the serial loop's frames lets go of (object_lights.c) */
+	lights_fade_update();
+	director_update(dt);
+	observer_update(dt);
+	game_engine_update_non_deterministic(dt);
+	/* port: the frame's tick side is done: what the game thread draws from (the facing) is published, the input copy let go of (tick_owners.h),
+	and the cameras attached to the capture of the last tick and the ring's new ticks made visible (tick_snapshot.c) */
+	player_control_publish_display_facing();
+	tick_input_release();
+	tick_snapshot_job_end(game_time_overlap_time(), ticks_run, previous_job_tick);
+
+	return ticks_run;
+}
+#endif
 
 /* port: the main loop's steps, timed in the profiling build */
 PROFILE_SECTION(main_input_section, "input")
@@ -3488,6 +3840,11 @@ void main_loop(
 	main_globals.want_to_be_at_main_menu = !game_in_editor();
 	main_globals.switch_to_structure_bsp_index = NONE;
 	main_globals.halt_time_scale = TRUE;
+#ifdef HALO_WIIU
+	/* port: this is the drawing thread: the tick snapshot's view, the markers and the game clock's view are its own, and the ticks, on another thread
+	beside it, find which is which by the stack (tick_stack.h) */
+	tick_overlap_note_render_thread();
+#endif
 
 	console_initialize();
 	debug_keys_initialize();
@@ -3511,6 +3868,11 @@ static boolean main_loop_iteration(
 	while (TRUE)
 #endif
 	{
+#ifdef HALO_WIIU
+		/* port: the tick thread's job of the last frame is over before anything else is done with the game state (the map changes, the saves
+		and the rest of this frame's work below): tick_overlap.h */
+		tick_overlap_sync_point();
+#endif
 		if (!game_in_editor())
 		{
 			if (main_globals.switch_to_structure_bsp_index!=NONE)
@@ -3615,6 +3977,9 @@ static boolean main_loop_iteration(
 
 			wiiu_debug_console_run();
 		}
+		/* port: and the lines the telnet console and that server queued for the hs runtime, run by the tick thread
+		(tick_owners.h; at once with the queues in mode 1, here with them in mode 2) */
+		tick_owners_drain(TICK_OWNER_TICK);
 #endif
 		profile_scope_exit(main_platform_events_section)
 
@@ -3709,10 +4074,40 @@ static boolean main_loop_iteration(
 
 				if (!console_update() || main_globals.connection!=_game_connection_local)
 				{
+					boolean overlap_frame = FALSE;
+
+#ifdef HALO_WIIU
+					/* port: a save that the last job's scripts asked for, made now with the tick thread idle (it was asked for in the frame before
+					this one; the serial loop makes it at the end of that frame) */
+					if (main_globals.saving_map && tick_overlap_enabled())
+					{
+						main_save_map_private();
+					}
+					/* port: the tick side of the frame, if it is the overlap's (tick_overlap.h): its job is given to the tick thread, which runs it beside
+					the drawing below. Otherwise it is the serial loop's, as follows. */
+					{
+						void wiiu_frame_part(int part, int ticks);
+
+						wiiu_frame_part(0, 0);
+						overlap_frame = tick_overlap_post_frame((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);
+						if (overlap_frame)
+							wiiu_frame_part(1, game_time_get_elapsed());
+					}
+#endif
+					if (!overlap_frame)
+					{
+#ifdef HALO_WIIU
+					/* port: the tick side of the frame reads the input as of here (tick_input.h): the game thread hands it a copy */
+					tick_input_capture();
+#endif
 					/* port: not while a chat line is typed (its K plays an animation) */
 					if (!network_chat_typing())
 						debug_keys_update();
 					cheats_update();
+#ifdef HALO_WIIU
+					/* port: the console's and the cheats' lines, run by the tick thread (tick_owners.h) */
+					tick_owners_drain(TICK_OWNER_TICK);
+#endif
 					player_control_update((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);
 
 					connection = main_globals.connection;
@@ -3733,12 +4128,12 @@ static boolean main_loop_iteration(
 						void wiiu_frame_part(int part, int ticks);
 
 						wiiu_frame_part(0, 0);
-						game_time_update((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);
+						main_game_time_update((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);
 						wiiu_frame_part(1, game_time_get_elapsed());
 					}
 #else
 					profile_scope(main_game_time_update_section,
-						game_time_update((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);)
+						main_game_time_update((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);)
 #endif
 
 					render_frame = main_globals.main_menu_scenario_loaded ||
@@ -3756,13 +4151,29 @@ static boolean main_loop_iteration(
 					collision_log_end_period();
 					game_engine_update_non_deterministic((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);
 					profile_scope_exit(main_non_deterministic_update_section)
+#ifdef HALO_WIIU
+					/* port: the frame's tick side is done: what the game thread draws from (the facing) is published, and the
+					input copy let go of (tick_owners.h) */
+					player_control_publish_display_facing();
+					tick_input_release();
+#endif
+					}
 				}
 
-				if (main_globals.saving_map)
+				if (main_globals.saving_map
+#ifdef HALO_WIIU
+					/* (a job in flight: at the next frame's start) */
+					&& !tick_overlap_job_in_flight()
+#endif
+					)
 				{
 					main_save_map_private();
 				}
 
+#ifdef HALO_WIIU
+				/* port: what the ticks asked of the texture and sound caches, made by the game thread before it draws (tick_owners.h) */
+				tick_owners_drain(TICK_OWNER_GAME);
+#endif
 				if (render_frame && !debug_no_drawing)
 				{
 					profile_render_start();
@@ -3770,21 +4181,35 @@ static boolean main_loop_iteration(
 #ifdef HALO_WIIU
 					{
 						void wiiu_frame_part(int part, int ticks);
+						long repeat;
 
 						wiiu_frame_part(2, 0);
-						main_game_render((double)main_globals.seconds_elapsed);
+						for (repeat = 0; repeat < main_render_repeat(); repeat++)
+							main_game_render((double)main_globals.seconds_elapsed, repeat);
 						wiiu_frame_part(3, 0);
 					}
 #else
-					main_game_render((double)main_globals.seconds_elapsed);
+					{
+						long repeat;
+
+						for (repeat = 0; repeat < main_render_repeat(); repeat++)
+							main_game_render((double)main_globals.seconds_elapsed, repeat);
+					}
 #endif
 					render_interpolation_frame_end();
 					profile_render_end();
+#ifdef HALO_WIIU
+					/* port: the frame's work is done but for the throttle and the present: its time, for the overlap's log */
+					tick_overlap_draw_done();
+#endif
 				}
 			}
 			/* port: nothing drawn on a dedicated server, nor waited for */
 			else if (!halo_server_mode())
 			{
+#ifdef HALO_WIIU
+				tick_owners_drain(TICK_OWNER_GAME);
+#endif
 				profile_render_start();
 				main_pregame_render();
 				profile_render_end();
@@ -3797,6 +4222,10 @@ static boolean main_loop_iteration(
 			{
 				profile_scope(main_present_section, main_present_frame();)
 			}
+#ifdef HALO_WIIU
+			/* port: the overlap's frame is over (its view of the clock and of the ring let go of, its numbers logged) */
+			tick_overlap_frame_end();
+#endif
 		}
 
 		input_frame_end();

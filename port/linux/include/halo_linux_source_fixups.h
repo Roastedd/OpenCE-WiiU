@@ -14,6 +14,35 @@ void wiiu_missing_keys_gameplay(int active);
 void game_time_wiiu_capture_menu(int main_menu);
 #endif
 
+#ifdef HALO_WIIU
+/* the render view snapshot (port/linux/game/tick_snapshot.c): a copy, made after each tick, of what the renderer reads of the game state, which a
+frame is drawn from while halo/tick_snapshot.txt says so */
+struct observer_result;
+union real_vector3d;
+void tick_snapshot_capture(void);
+void tick_snapshot_reset(void);
+void tick_snapshot_objects_changed(void);
+void tick_snapshot_view_begin(void);
+void tick_snapshot_view_end(void);
+int tick_snapshot_viewing(void);
+struct cluster_partition;
+/* the snapshot's copy of the object cluster partitions (the others are not copied: the partition itself) */
+struct cluster_partition const *tick_snapshot_cluster_partition(struct cluster_partition const *live);
+/* the console's timers (port/wiiu/src/wiiu_tick_snapshot_timers.c installs them; none on the host): a time to start with, and the time since it
+added to a part (tick_snapshot.c numbers them) */
+unsigned long long tick_snapshot_time(void);
+void tick_snapshot_time_add(int part, unsigned long long since);
+/* the snapshots' rotations found by a tick (render_interpolation.c): nodes of one object's snapshot, for the log's counts */
+void tick_snapshot_note_rotations(long nodes);
+void tick_snapshot_timers_install(unsigned long long (*clock)(void), void (*add)(int part, unsigned long long since));
+/* the cameras as of the frame's start, while a frame is drawn from the snapshot (the game state's if not; the others answer 0 if not) */
+struct observer_result const *tick_snapshot_camera(short local_player_index, struct observer_result const *live);
+int tick_snapshot_director_perspective(short local_player_index, int *perspective);
+int tick_snapshot_director_inhibited_facing(short local_player_index, int *inhibited_facing);
+int tick_snapshot_player_unit(short local_player_index, long *unit_index);
+int tick_snapshot_player_facing(short local_player_index, union real_vector3d *facing);
+#endif
+
 /* frames between the 30 Hz ticks (port/linux/game/render_interpolation.c);
 the platform layer reads the display.interpolation setting */
 struct observer_result;

@@ -2847,6 +2847,9 @@ symbols in this file:
 #include "profile_console.h" /* port: port/linux/game/profile_console.c */
 #endif
 #include "structure_culling.h" /* port: port/linux/game/structure_culling.c */
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#endif
 
 /* ---------- constants */
 
@@ -15597,6 +15600,60 @@ static char const *hs_host_player_command(
 	text += index;
 	return *text == ' ' || *text == '\t' || *text == 0 ? text : NULL;
 }
+
+#ifdef HALO_WIIU
+/* port: the tick owners' queue of the hs runtime (tick_owners.h): scripts run by the tick thread, so what someone types
+or sends is queued for it. A request is the text, and what to do with the answer. */
+struct hs_command_request
+{
+	void (*done)(long argument, boolean succeeded);
+	long argument;
+	char text[300];
+};
+
+static void hs_command_apply(
+	void const *record);
+
+TICK_QUEUE_DEFINE(hs_command_queue, "hs", TICK_OWNER_TICK, struct hs_command_request, 32, hs_command_apply);
+
+static void hs_command_apply(
+	void const *record)
+{
+	struct hs_command_request const *request = (struct hs_command_request const *)record;
+	boolean succeeded = hs_compile_and_evaluate(request->text);
+
+	if (request->done)
+		request->done(request->argument, succeeded);
+
+	return;
+}
+
+void hs_compile_and_evaluate_queued(
+	char const *expression,
+	void (*done)(long argument, boolean succeeded),
+	long argument)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_HS))
+	{
+		struct hs_command_request request;
+
+		request.done = done;
+		request.argument = argument;
+		csstrncpy(request.text, expression, NUMBEROF(request.text) - 1);
+		request.text[NUMBEROF(request.text) - 1] = 0;
+		tick_queue_push(&hs_command_queue, &request);
+	}
+	else
+	{
+		boolean succeeded = hs_compile_and_evaluate(expression);
+
+		if (done)
+			done(argument, succeeded);
+	}
+
+	return;
+}
+#endif
 
 /* port: a command someone typed (the console, the telnet console, a cheat
 button, init.txt): what it logs is its answer, shown whatever

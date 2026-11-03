@@ -7,6 +7,9 @@ REAL_MATH.C
 #include "cseries.h"
 #include "real_math.h"
 #include "periodic_functions.h"
+#ifdef HALO_BW_KERNELS
+#include "halo_bw_kernels.h"
+#endif
 
 /* ---------- constants */
 
@@ -405,6 +408,40 @@ void vectors3d_from_euler_angles3d(
 	return;
 }
 
+#ifdef HALO_BW_KERNELS
+/* port: the Broadway kernel (port/wiiu/src/bw/halo_bw_sphere.S) gives the same answer as the C below for every input. The function that asks
+for it is small, so that the kernel's path has none of the C's frame, and while halo_bw_flags is zero it is a test and a jump to the C, which is
+halo_bw_c_fast_vector_intersects_sphere, the function below under another name. */
+__attribute__((noinline)) boolean halo_bw_c_fast_vector_intersects_sphere(real_point3d const *point, real_vector3d const *vector, real_point3d const *center, real radius);
+
+static __attribute__((noinline)) boolean halo_bw_ask_fast_vector_intersects_sphere(
+	real_point3d const *point,
+	real_vector3d const *vector,
+	real_point3d const *center,
+	real radius)
+{
+	HALO_BW_COUNT(HALO_BW_K_SPHERE);
+	if (halo_bw_flags & HALO_BW_BIT(HALO_BW_K_SPHERE))
+	{
+		HALO_BW_USED(HALO_BW_K_SPHERE);
+		return halo_bw_ray_sphere((float const *)point, (float const *)vector, (float const *)center, radius) != 0;
+	}
+	return halo_bw_c_fast_vector_intersects_sphere(point, vector, center, radius);
+}
+
+boolean fast_vector_intersects_sphere(
+	real_point3d const *point,
+	real_vector3d const *vector,
+	real_point3d const *center,
+	real radius)
+{
+	if (halo_bw_flags)
+		return halo_bw_ask_fast_vector_intersects_sphere(point, vector, center, radius);
+	return halo_bw_c_fast_vector_intersects_sphere(point, vector, center, radius);
+}
+
+#define fast_vector_intersects_sphere halo_bw_c_fast_vector_intersects_sphere
+#endif
 boolean fast_vector_intersects_sphere(
 	real_point3d const *point,
 	real_vector3d const *vector,
@@ -458,6 +495,9 @@ boolean fast_vector_intersects_sphere(
 		}
 	}
 }
+#ifdef HALO_BW_KERNELS
+#undef fast_vector_intersects_sphere
+#endif
 
 real fast_vector_intersection_with_sphere(
 	real_point3d const *point,

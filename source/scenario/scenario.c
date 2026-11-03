@@ -819,6 +819,10 @@ void scenario_location_from_point(
 {
 	long cluster_index;
 
+	/* port: the location's bonus word was left as it was, whatever the caller's local held (stack garbage, which is copied into the objects, actors,
+	props and effects that keep a location, and differs from one thread's stack to another's); nothing reads it but scenario_location_award_bonus's
+	writer. Set, so that the game state is the same bytes whatever thread ran the tick (HALO_TICK_HASH). */
+	location->bonus = 0;
 	location->leaf_index = bsp3d_test_point(
 		global_bsp3d_get(),
 		0,

@@ -259,6 +259,36 @@ void data_make_invalid(
 	return;
 }
 
+#ifdef HALO_WIIU
+/* port: the data arrays are made and deleted from more than one thread once the ticks run beside the drawing (tick_overlap.h: the drawing's widgets, lights
+and looping sounds, the ticks' objects, effects and scripts): a free list that two threads change at once loses a datum or hands one out twice. A
+short lock around the creation and deletion of a datum, taken only while a tick thread exists. The reading of a datum is not locked: what a thread
+reads of an array the other changes is the other's to queue (tick_owners.h) */
+extern volatile int tick_overlap_markers_split;
+void sched_yield_for_data(void);
+static volatile int data_array_lock;
+
+static void data_array_lock_take(void)
+{
+	long spins = 0;
+
+	while (__sync_lock_test_and_set(&data_array_lock, 1))
+	{
+		if (++spins > 2000)
+		{
+			sched_yield_for_data();
+			spins = 0;
+		}
+	}
+}
+
+#define DATA_LOCK() boolean data_locked = tick_overlap_markers_split != 0; if (data_locked) data_array_lock_take()
+#define DATA_UNLOCK() if (data_locked) __sync_lock_release(&data_array_lock)
+#define datum_new_at_index datum_new_at_index_body
+#define datum_new datum_new_body
+#define datum_delete datum_delete_body
+#endif
+
 long datum_new_at_index(
 	struct data_array *data,
 	long index)
@@ -373,6 +403,49 @@ void datum_delete(
 
 	return;
 }
+
+#ifdef HALO_WIIU
+#undef datum_new_at_index
+#undef datum_new
+#undef datum_delete
+
+long datum_new_at_index(
+	struct data_array *data,
+	long index)
+{
+	long result;
+	DATA_LOCK();
+
+	result = datum_new_at_index_body(data, index);
+	DATA_UNLOCK();
+
+	return result;
+}
+
+long datum_new(
+	struct data_array *data)
+{
+	long result;
+	DATA_LOCK();
+
+	result = datum_new_body(data);
+	DATA_UNLOCK();
+
+	return result;
+}
+
+void datum_delete(
+	struct data_array *data,
+	long index)
+{
+	DATA_LOCK();
+
+	datum_delete_body(data, index);
+	DATA_UNLOCK();
+
+	return;
+}
+#endif
 
 void data_delete_all(
 	struct data_array *data)

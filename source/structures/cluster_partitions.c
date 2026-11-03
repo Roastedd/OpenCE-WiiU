@@ -72,6 +72,10 @@ symbols in this file:
 #include "cluster_partitions.h"
 #include "structure_bsp_definitions.h"
 #include "structures/structures.h"
+#ifdef HALO_BW_KERNELS
+#include "halo_bw_kernels.h"
+typedef char halo_bw_reference_layout_assert[sizeof(struct data_reference) == 12 && offsetof(struct data_reference, datum_index) == 4 && offsetof(struct data_reference, next_reference_index) == 8 ? 1 : -1];
+#endif
 
 /* ---------- constants */
 
@@ -132,6 +136,53 @@ static struct
 
 /* ---------- public code */
 
+#ifdef HALO_BW_KERNELS
+/* port: the Broadway kernel (port/wiiu/src/bw/halo_bw_reference.S) finds the link that holds the datum's reference, checking each reference
+on the way as datum_get does; where it finds none (the datum is not on the list, or a reference on the way is not one datum_get returns) the
+C below runs and does what it does, errors included. The function that asks for it is small, so that the kernel's path has none of the C's
+frame, and while halo_bw_flags is zero it is a test and a jump to the C, which is halo_bw_c_reference_list_remove, the function below under
+another name. */
+__attribute__((noinline)) void halo_bw_c_reference_list_remove(struct data_array *array, long *first_reference_index, long datum_index);
+
+static __attribute__((noinline)) void halo_bw_ask_reference_list_remove(
+	struct data_array *array,
+	long *first_reference_index,
+	long datum_index)
+{
+	HALO_BW_COUNT(HALO_BW_K_REFERENCE);
+	if ((halo_bw_flags & HALO_BW_BIT(HALO_BW_K_REFERENCE)) && array->valid && array->count >= 0 && array->size == sizeof(struct data_reference) &&
+		array->data)
+	{
+		long *found = (long *)halo_bw_reference_find(array->data, (unsigned)array->count, array->identifier_zero_invalid ? 1u : 0u,
+			(int *)first_reference_index, (int)datum_index);
+
+		if (found)
+		{
+			struct data_reference *reference = (struct data_reference *)datum_get(array, *found);
+
+			HALO_BW_USED(HALO_BW_K_REFERENCE);
+			datum_delete(array, *found);
+			*found = reference->next_reference_index;
+
+			return;
+		}
+	}
+	halo_bw_c_reference_list_remove(array, first_reference_index, datum_index);
+}
+
+void reference_list_remove(
+	struct data_array *array,
+	long *first_reference_index,
+	long datum_index)
+{
+	if (halo_bw_flags)
+		halo_bw_ask_reference_list_remove(array, first_reference_index, datum_index);
+	else
+		halo_bw_c_reference_list_remove(array, first_reference_index, datum_index);
+}
+
+#define reference_list_remove halo_bw_c_reference_list_remove
+#endif
 void reference_list_remove(
 	struct data_array *array,
 	long *first_reference_index,
@@ -162,6 +213,9 @@ void reference_list_remove(
 
 	return;
 }
+#ifdef HALO_BW_KERNELS
+#undef reference_list_remove
+#endif
 
 /* The initialization and cursor-advance order preserve January's coalescing
  * of the source cursor into EBX and the loop index into ESI. */
@@ -370,6 +424,11 @@ long cluster_partition_get_next_datum(
 	struct cluster_partition const *partition,
 	long *reference_index)
 {
+#ifdef HALO_WIIU
+	/* port: the snapshot's copy of the partition while a frame is drawn from it (tick_snapshot.c) */
+	if (tick_snapshot_viewing())
+		partition = tick_snapshot_cluster_partition(partition);
+#endif
 	return reference_list_get_next_datum_index(partition->data_reference_data, reference_index);
 }
 
@@ -378,6 +437,11 @@ long cluster_partition_get_first_cluster(
 	long *reference_index,
 	long first_cluster_reference)
 {
+#ifdef HALO_WIIU
+	/* port: the snapshot's copy of the partition while a frame is drawn from it (tick_snapshot.c): the object's cluster list is the capture's too */
+	if (tick_snapshot_viewing())
+		partition = tick_snapshot_cluster_partition(partition);
+#endif
 	*reference_index = first_cluster_reference;
 
 	return reference_list_get_next_datum_index(partition->cluster_reference_data, reference_index);
@@ -387,6 +451,10 @@ long cluster_partition_get_next_cluster(
 	struct cluster_partition const *partition,
 	long *reference_index)
 {
+#ifdef HALO_WIIU
+	if (tick_snapshot_viewing())
+		partition = tick_snapshot_cluster_partition(partition);
+#endif
 	return reference_list_get_next_datum_index(partition->cluster_reference_data, reference_index);
 }
 
@@ -486,6 +554,10 @@ long cluster_partition_get_first_datum(
 	long *reference_index,
 	short cluster_index)
 {
+#ifdef HALO_WIIU
+	if (tick_snapshot_viewing())
+		partition = tick_snapshot_cluster_partition(partition);
+#endif
 	*reference_index = *cluster_partition_get_first_reference((struct cluster_partition *)partition, cluster_index);
 
 	return reference_list_get_next_datum_index(partition->data_reference_data, reference_index);
@@ -588,6 +660,11 @@ static void cluster_partition_port_remove(
 
 		while (index != NONE)
 		{
+#ifdef HALO_BW_KERNELS
+			/* (counted for the log: this walk is the one place the cluster code still searches a list; the kernel is not used here) */
+			if (halo_bw_flags)
+				halo_bw_walked[HALO_BW_K_REFERENCE]++;
+#endif
 			reference = (struct data_reference *)datum_get(array, index);
 			if (reference->datum_index == datum_index)
 			{

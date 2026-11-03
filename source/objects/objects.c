@@ -57,6 +57,10 @@ OBJECTS.C
 #include "sound/game_sound.h"
 #include "structures/structure_bsp_definitions.h"
 #include "units/units.h"
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
+#endif
 /* port: object_bounds_cache.c's */
 void object_bounds_cache_update(long object_index, real_point3d const *center, real radius);
 /* port: port/linux/game/first_person_legs.c's */
@@ -98,8 +102,16 @@ index, which reads no function: 0 */
 #define OBJECT_FRAME_INDEX_GET(object_index) ((object_index) + game_time_get())
 
 /* port: set while a frame is drawn, so a function read for the picture is
-the tick's value moved into the frame */
-static int object_function_render_depth = 0;
+the tick's value moved into the frame. It is the drawing thread's own (a tick
+on a thread of its own, beside the drawing, must read the tick's values), and
+object_function_render_threads, which says whether any thread has it set, lets
+the tick's reads skip the thread's lookup when none has: on the Wii U a
+__thread variable is a call, and a function is read for every object a tick
+updates. */
+static __thread int object_function_render_depth = 0;
+static volatile long object_function_render_threads = 0;
+
+#define OBJECT_FUNCTION_RENDERING_HERE() (object_function_render_threads > 0 && object_function_render_depth > 0)
 
 static real object_function_addition(
 	struct object_datum *object,
@@ -233,6 +245,15 @@ static struct memory_pool *object_memory_pool = NULL;
 static struct object_globals *object_globals = NULL;
 /* port: (by the object's absolute index) */
 static struct object_function_inputs object_function_inputs[MAXIMUM_OBJECTS_PER_MAP];
+#ifdef HALO_WIIU
+/* port: the snapshot's copy of those inputs, one per object copied (port/linux/game/tick_snapshot.c), which a frame drawn from the snapshot reads */
+static struct object_function_inputs object_function_inputs_snapshot[TICK_SNAPSHOT_SLOTS][MAXIMUM_OBJECTS_PER_MAP];
+/* (the slot the drawing thread's view is of; read only by that thread) */
+static int object_function_inputs_view_slot = 0;
+#define OBJECT_FUNCTION_INPUTS(absolute_index) (tick_snapshot_headers ? &object_function_inputs_snapshot[object_function_inputs_view_slot][absolute_index] : &object_function_inputs[absolute_index])
+#else
+#define OBJECT_FUNCTION_INPUTS(absolute_index) (&object_function_inputs[absolute_index])
+#endif
 
 boolean debug_objects_names;
 boolean debug_objects_pathfinding_spheres;
@@ -365,14 +386,21 @@ void *object_iterator_next(
 		iterator->signature==OBJECT_ITERATOR_SIGNATURE,
 		"uninitialized iterator passed to object_iterator_next()");
 
+#ifdef HALO_WIIU
+	/* port: while a frame is drawn from the tick snapshot, the snapshot's headers (and an object's copy made if it had none) */
+	struct data_array *headers = tick_snapshot_headers ? tick_snapshot_headers : object_header_data;
+#else
+	struct data_array *headers = object_header_data;
+#endif
+
 	data_verify(object_header_data);
 	
 	abs_index = iterator->absolute_index;
 
 	// The operation to get this header is inlined in the original code?
-	header = (struct object_header_datum *)((char*)object_header_data->data + sizeof(struct object_header_datum) * abs_index);
+	header = (struct object_header_datum *)((char*)headers->data + sizeof(struct object_header_datum) * abs_index);
 
-	while (abs_index<object_header_data->count)
+	while (abs_index<headers->count)
 	{
 		long index = DATUM_INDEX_NEW(abs_index++, header->identifier);
 		if (header->identifier)
@@ -381,6 +409,10 @@ void *object_iterator_next(
 				TEST_FLAG(iterator->type_flags, header->type))
 			{
 				iterator->index = index;
+#ifdef HALO_WIIU
+				if (tick_snapshot_headers)
+					header = tick_snapshot_object_header_get(index);
+#endif
 				result = header->datum;
 				break;
 			}
@@ -726,6 +758,9 @@ static long object_header_new(
 	if (index!=NONE)
 	{
 		struct object_header_datum *header = (struct object_header_datum *)datum_get(data, index);
+#ifdef HALO_WIIU
+		tick_snapshot_objects_changed();
+#endif
 		if (memory_pool_block_allocate(object_memory_pool, (void**)&header->datum, size))
 		{
 			header->data_size = size;
@@ -747,6 +782,9 @@ static void object_header_delete(
 {
 	struct object_header_datum *object_header = (struct object_header_datum *)datum_get(data, object_index);
 
+#ifdef HALO_WIIU
+	tick_snapshot_objects_changed();
+#endif
 	if (object_header->datum)
 	{
 		memory_pool_block_free(object_memory_pool, (void**)&object_header->datum);
@@ -811,9 +849,28 @@ void object_scripting_set_collideable(
 	return;
 }
 
+#ifdef HALO_WIIU
+/* port: the object marker of the drawing thread, when the ticks run beside the drawing (tick_overlap.h): its tests (the HUD's lines of sight, the
+sound's obstruction) mark the copies of the objects it reads (tick_snapshot.c), with a counter of its own in a range the ticks' never reach, so that
+neither disturbs the other's search */
+#define RENDER_OBJECT_MARKER_FIRST 0x40000000L
+static long render_object_marker = RENDER_OBJECT_MARKER_FIRST;
+static boolean render_object_marker_initialized = FALSE;
+#define OBJECT_MARKER_RENDER() (tick_overlap_markers_split && tick_overlap_thread_is_render())
+#endif
+
 void object_marker_begin(
 	void)
 {
+#ifdef HALO_WIIU
+	if (OBJECT_MARKER_RENDER())
+	{
+		match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 3503, !render_object_marker_initialized);
+		++render_object_marker;
+		render_object_marker_initialized = TRUE;
+		return;
+	}
+#endif
 	match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 3503, !object_globals->object_marker_initialized);
 
 	++global_object_marker;
@@ -825,6 +882,14 @@ void object_marker_begin(
 void object_marker_end(
 	void)
 {
+#ifdef HALO_WIIU
+	if (OBJECT_MARKER_RENDER())
+	{
+		match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 3514, render_object_marker_initialized);
+		render_object_marker_initialized = FALSE;
+		return;
+	}
+#endif
 	match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 3514, object_globals->object_marker_initialized);
 
 	object_globals->object_marker_initialized = FALSE;
@@ -838,6 +903,13 @@ boolean object_unmarked_function(
 	struct object_datum *object = object_get(object_index);
 	boolean result;
 
+#ifdef HALO_WIIU
+	if (OBJECT_MARKER_RENDER())
+	{
+		match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 3526, render_object_marker_initialized);
+		return object->object.magic_number!=render_object_marker;
+	}
+#endif
 	match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 3526, object_globals->object_marker_initialized);
 
 	result = object->object.magic_number!=global_object_marker;
@@ -851,6 +923,18 @@ boolean object_mark_function(
 	boolean result;
 	struct object_datum *object = object_get(object_index);
 
+#ifdef HALO_WIIU
+	if (OBJECT_MARKER_RENDER())
+	{
+		match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 3543, render_object_marker_initialized);
+		if (object->object.magic_number!=render_object_marker)
+		{
+			object->object.magic_number = render_object_marker;
+			return TRUE;
+		}
+		return FALSE;
+	}
+#endif
 	match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 3543, object_globals->object_marker_initialized);
 
 	if (object->object.magic_number!=global_object_marker)
@@ -1587,9 +1671,15 @@ void object_functions_set_for_render(
 	boolean for_render)
 {
 	if (for_render)
-		object_function_render_depth++;
+	{
+		if (!object_function_render_depth++)
+			__sync_fetch_and_add(&object_function_render_threads, 1);
+	}
 	else if (object_function_render_depth > 0)
-		object_function_render_depth--;
+	{
+		if (!--object_function_render_depth)
+			__sync_fetch_and_sub(&object_function_render_threads, 1);
+	}
 }
 
 void object_function_inputs_forget(
@@ -1599,7 +1689,30 @@ void object_function_inputs_forget(
 
 	for (index = 0; index < MAXIMUM_OBJECTS_PER_MAP; index++)
 		object_function_inputs[index].object_index = NONE;
+#ifdef HALO_WIIU
+	/* (a game state loaded or a map started: the snapshot's copies are of what was) */
+	tick_snapshot_reset();
+#endif
 }
+
+#ifdef HALO_WIIU
+/* port: an object's inputs copied into the snapshot (tick_snapshot.c, with its block) */
+void object_function_inputs_copy_to_snapshot(
+	int slot,
+	long absolute_index)
+{
+	if (slot >= 0 && slot < TICK_SNAPSHOT_SLOTS && absolute_index >= 0 && absolute_index < MAXIMUM_OBJECTS_PER_MAP)
+		object_function_inputs_snapshot[slot][absolute_index] = object_function_inputs[absolute_index];
+}
+
+/* the slot the drawing thread's view is of (tick_snapshot_view_begin) */
+void object_function_inputs_set_view(
+	int slot)
+{
+	if (slot >= 0 && slot < TICK_SNAPSHOT_SLOTS)
+		object_function_inputs_view_slot = slot;
+}
+#endif
 
 void object_function_values_for_render(
 	long object_index,
@@ -1608,7 +1721,7 @@ void object_function_values_for_render(
 	struct object_datum *object = object_get(object_index);
 	struct object_definition *definition = object_definition_get(object->definition_index);
 	struct object_function_inputs const *inputs =
-		&object_function_inputs[DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index)];
+		OBJECT_FUNCTION_INPUTS(DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index));
 	/* port: the inputs the tick's values came from (object_function_inputs) */
 	real const *incoming = inputs->values;
 	/* port: where the picture is, between the previous tick (0) and this one
@@ -1696,7 +1809,7 @@ boolean object_get_function_value(
 		it reads as off */
 		if (VALID_INDEX(function_index, NUMBER_OF_OUTGOING_OBJECT_FUNCTIONS))
 		{
-			if (object_function_render_depth > 0)
+			if (OBJECT_FUNCTION_RENDERING_HERE())
 			{
 				real shown[NUMBER_OF_OUTGOING_OBJECT_FUNCTIONS];
 
@@ -4258,6 +4371,26 @@ static boolean objects_garbage_active_due(
 	return garbage_active_retry_time == NONE || now >= garbage_active_retry_time;
 }
 
+/* port: the objects' memory pool compacted. With the tick owners' queues on (port/linux/game/tick_owners.h) it is only
+compacted at the hand-off, when the renderer is not inside a frame holding pointers into the blocks that move. */
+#ifdef HALO_WIIU
+static void objects_pool_compact_now(
+	void)
+{
+	memory_pool_compact(object_memory_pool);
+}
+#endif
+
+static void objects_pool_compact(
+	void)
+{
+#ifdef HALO_WIIU
+	tick_owners_object_pool_compact(objects_pool_compact_now);
+#else
+	memory_pool_compact(object_memory_pool);
+#endif
+}
+
 void objects_garbage_collection(
 	void)
 {
@@ -4269,7 +4402,7 @@ void objects_garbage_collection(
 	}
 	else if (memory_pool_get_contiguous_free_size(object_memory_pool)<=GARBAGE_LIMIT_FREE_MEMORY_CRITICAL)
 	{
-		memory_pool_compact(object_memory_pool);
+		objects_pool_compact();
 		
 		if (memory_pool_get_contiguous_free_size(object_memory_pool)<=GARBAGE_LIMIT_FREE_MEMORY_TRIGGER)
 		{
@@ -4409,7 +4542,7 @@ void objects_garbage_collection(
 			garbage_active_retry_time = should_collect ? NONE : game_time_get() + GARBAGE_ACTIVE_RETRY_TICKS;
 		if (!network_coop_active() || collected_count > 0 ||
 			garbage_collect_mode != _garbage_collect_active_objects)
-			memory_pool_compact(object_memory_pool);
+			objects_pool_compact();
 		
 		if (debug_object_garbage_collection)
 		{
@@ -4566,7 +4699,7 @@ void objects_garbage_collection(
 						}
 
 						garbage_collection_after_first_attempt = TRUE;
-						memory_pool_compact(object_memory_pool);
+						objects_pool_compact();
 					}
 					else
 					{
@@ -4720,7 +4853,7 @@ void objects_memory_compact(
 	void)
 {
 	objects_garbage_collection();
-	memory_pool_compact(object_memory_pool);
+	objects_pool_compact();
 	return;
 }
 

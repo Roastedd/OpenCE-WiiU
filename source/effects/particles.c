@@ -95,6 +95,10 @@ symbols in this file:
 #include "scenario/scenario.h"
 #include "sound/game_sound.h"
 #include "sound/sound_definitions.h"
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#include "tick_presentation.h" /* port: port/linux/game/tick_presentation.c */
+#endif
 
 /* ---------- constants */
 
@@ -234,11 +238,82 @@ particles a fraction of a tick at a time, so particle_drawn holds a particle
 back until a tick's update has passed, the dt of the last update kept here. */
 static real particles_last_update_dt = 0.f;
 
+#ifdef HALO_WIIU
+/* port: the effects and material effects that the frame's particle update makes (a particle that dies, or lands) are the tick
+thread's to make (tick_owners.h): requests in this queue, which the tick thread applies at the start of its pass, in order */
+enum particle_tick_request_kind
+{
+	_particle_tick_effect,
+	_particle_tick_material_effect,
+};
+
+struct particle_tick_request
+{
+	short kind;
+	long definition_index;
+	real_vector3d velocity;
+	real_point3d marker_points[NUMBER_OF_PARTICLE_EFFECT_MARKERS];
+	real_vector3d marker_forwards[NUMBER_OF_PARTICLE_EFFECT_MARKERS];
+	real scale;
+	short effect_index;
+	short material_index;
+	real_point3d position;
+	real_vector3d normal;
+	struct location location;
+};
+
+static void particle_tick_request_apply(
+	void const *record);
+
+TICK_QUEUE_DEFINE(particle_tick_queue, "particle effects", TICK_OWNER_TICK, struct particle_tick_request, 256,
+	particle_tick_request_apply);
+#endif
+
 static char const *particle_effect_marker_names[NUMBER_OF_PARTICLE_EFFECT_MARKERS] =
 {
 	"velocity",
 	"gravity"
 };
+
+#ifdef HALO_WIIU
+/* the tick thread's turn */
+static void particle_tick_request_apply(
+	void const *record)
+{
+	struct particle_tick_request const *request = (struct particle_tick_request const *)record;
+
+	switch (request->kind)
+	{
+	case _particle_tick_effect:
+		effect_new_unattached_from_markers(
+			request->definition_index,
+			NONE,
+			&request->velocity,
+			NUMBER_OF_PARTICLE_EFFECT_MARKERS,
+			particle_effect_marker_names,
+			request->marker_points,
+			request->marker_forwards,
+			request->scale,
+			0.0f,
+			NULL,
+			NULL,
+			FALSE);
+		break;
+	case _particle_tick_material_effect:
+		material_effect_new(
+			request->definition_index,
+			request->effect_index,
+			request->material_index,
+			&request->position,
+			&request->normal,
+			&request->location,
+			request->scale);
+		break;
+	}
+
+	return;
+}
+#endif
 
 /* ---------- public code */
 
@@ -288,8 +363,27 @@ void particle_delete(
 	return;
 }
 
+#ifdef HALO_WIIU
+void particles_stop_on_first_person_weapon_now(short local_player_index);
+
+/* port: the particles are the render thread's (tick_owners.h): a tick's, or a draw's, ask waits for its turn */
 void particles_stop_on_first_person_weapon(
 	short local_player_index)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_PARTICLES))
+		tick_presentation_particles_stop_on_first_person_weapon(local_player_index);
+	else
+		particles_stop_on_first_person_weapon_now(local_player_index);
+
+	return;
+}
+
+void particles_stop_on_first_person_weapon_now(
+	short local_player_index)
+#else
+void particles_stop_on_first_person_weapon(
+	short local_player_index)
+#endif
 {
 	long particle_index;
 
@@ -422,6 +516,22 @@ static void particle_effect_new(
 
 		normalize3d(&marker_forwards[_particle_effect_velocity_marker]);
 
+#ifdef HALO_WIIU
+		if (TICK_OWNERS_FEATURE(TICK_FEATURE_PARTICLE_EFFECTS))
+		{
+			struct particle_tick_request request;
+
+			csmemset(&request, 0, sizeof(request));
+			request.kind = _particle_tick_effect;
+			request.definition_index = effect_index;
+			request.velocity = velocity;
+			csmemcpy(request.marker_points, marker_points, sizeof(request.marker_points));
+			csmemcpy(request.marker_forwards, marker_forwards, sizeof(request.marker_forwards));
+			request.scale = scale;
+			tick_queue_push(&particle_tick_queue, &request);
+			return;
+		}
+#endif
 		effect_new_unattached_from_markers(
 			effect_index,
 			NONE,
@@ -703,6 +813,24 @@ static boolean particle_update_physics(
 					if (definition->collision_material_effects.index != NONE &&
 						material_effect_visible(&particle->position))
 					{
+#ifdef HALO_WIIU
+						if (TICK_OWNERS_FEATURE(TICK_FEATURE_PARTICLE_EFFECTS))
+						{
+							struct particle_tick_request request;
+
+							csmemset(&request, 0, sizeof(request));
+							request.kind = _particle_tick_material_effect;
+							request.definition_index = definition->collision_material_effects.index;
+							request.effect_index = _material_effect_impact;
+							request.material_index = collision_material_type;
+							request.position = particle->position;
+							request.normal = collision_normal;
+							request.location = particle->location;
+							request.scale = scale;
+							tick_queue_push(&particle_tick_queue, &request);
+						}
+						else
+#endif
 						material_effect_new(
 							definition->collision_material_effects.index,
 							_material_effect_impact,
@@ -822,8 +950,27 @@ static boolean particle_update_physics(
 	return TRUE;
 }
 
+#ifdef HALO_WIIU
+void particle_new_now(struct new_particle_data const *data);
+
+/* port: the particles are the render thread's (tick_owners.h): an effect's ask waits for its turn */
 void particle_new(
 	struct new_particle_data const *data)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_PARTICLES))
+		tick_presentation_particle_new(data);
+	else
+		particle_new_now(data);
+
+	return;
+}
+
+void particle_new_now(
+	struct new_particle_data const *data)
+#else
+void particle_new(
+	struct new_particle_data const *data)
+#endif
 {
 	struct particle_definition *definition;
 	struct particle_datum *particle;

@@ -24,6 +24,10 @@ node stretch vertices across the screen.
 Particles, contrails and other effects already move every frame
 (game_frame), so they need nothing here.
 
+On the Wii U (HALO_WIIU), with the ticks beside the drawing (port/linux/game/tick_overlap.h), a frame blends the pose of each object in the two
+captures of the snapshot's ring that it is drawn between (tick_snapshot.c), and the camera of the same two, instead of the snapshots kept here, which the
+tick would be writing meanwhile. The frames of the serial loop, and every other platform, keep what is below as it was.
+
 An object the distributed netcode moves to where the host has it
 (port/linux/game/network_objects.c) is drawn gliding there over a few ticks
 rather than jumping: its snapshots move with it, and the difference is drawn
@@ -44,6 +48,9 @@ tick, such as a nav marker, is moved as far as the object is drawn from there
 #include "game/players.h"
 #include "render/render_cameras.h"
 #include "units/units.h"
+#ifdef HALO_WIIU
+#include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
+#endif
 
 /* port/linux/src/port_config.c */
 int config_boolean(const char *name);
@@ -154,8 +161,34 @@ static struct interpolated_camera interpolated_cameras[MAXIMUM_LOCAL_PLAYERS];
 static struct interpolated_first_person interpolated_first_person[MAXIMUM_LOCAL_PLAYERS];
 static long interpolation_tick;
 static long interpolation_frame;
-static boolean interpolation_rendering;
+/* whether a frame is being drawn (render_interpolation_frame_begin), as the thread that is drawing it sees it: the ticks may run on a thread of their
+own, and what they ask the game for (an object's node matrices, a marker) is the tick's pose, whatever the other thread is blending. interpolation_
+rendering_threads says whether any thread is drawing, so that the ticks' reads (one for every node matrix they ask for) skip the thread's lookup
+when none is: on the Wii U a __thread variable is a call. The game's own frame work (game_frame, at the end of game_time_update) is a drawing too,
+and sets it on whichever thread runs it. */
+static __thread boolean interpolation_rendering_here;
+static volatile long interpolation_rendering_threads;
+#define interpolation_rendering (interpolation_rendering_threads > 0 && interpolation_rendering_here)
 static real interpolation_fraction = 1.0f;
+
+#ifdef HALO_WIIU
+/* The overlap's frames (tick_overlap.h): the tick thread runs beside the drawing, so nothing here is kept by the tick. A frame blends the node
+matrices of the two ticks the ring of the snapshot holds for it (tick_snapshot.c), the pose each object had after the tick before the frame's tick and
+after it, and the cameras of the same two. All of it is the game thread's. */
+static boolean overlap_frame;
+
+struct overlap_object
+{
+	long object_index; /* the object the blend is of, NONE when unused */
+	long frame; /* the frame it was made in */
+	short capacity;
+	boolean blended; /* the frame has a blend (else the pose is the tick's own) */
+	real_matrix4x3 *nodes;
+};
+
+static struct overlap_object *overlap_objects;
+static struct observer_result overlap_cameras[MAXIMUM_LOCAL_PLAYERS];
+#endif
 
 /* ---------- blending */
 
@@ -511,18 +544,131 @@ void render_interpolation_reset(void)
 	}
 }
 
+#ifdef HALO_WIIU
+/* the blend a frame of the overlap draws an object with (render_interpolation_object_node_matrices): NULL if the object has no pose of the tick before
+(it is the tick's own) */
+static real_matrix4x3 *overlap_object_node_matrices(long object_index)
+{
+	struct overlap_object *record;
+	struct object_datum *object;
+	real_matrix4x3 const *previous;
+	real_matrix4x3 const *latest;
+	real_matrix4x3 *blended;
+	long absolute_index;
+	short node_count, node_index;
+	boolean snap;
+	unsigned long long started;
+
+	if (object_index == NONE)
+		return NULL;
+	absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
+	if (absolute_index < 0 || absolute_index >= MAXIMUM_INTERPOLATED_OBJECTS)
+		return NULL;
+	if (!overlap_objects)
+	{
+		long index;
+
+		overlap_objects = calloc(MAXIMUM_INTERPOLATED_OBJECTS, sizeof(*overlap_objects));
+		if (!overlap_objects)
+			return NULL;
+		for (index = 0; index < MAXIMUM_INTERPOLATED_OBJECTS; index++)
+			overlap_objects[index].object_index = NONE;
+	}
+	record = &overlap_objects[absolute_index];
+	if (record->frame == interpolation_frame && record->object_index == object_index)
+		return record->blended ? record->nodes : NULL;
+	object = object_try_and_get(object_index);
+	record->frame = interpolation_frame;
+	record->object_index = object_index;
+	record->blended = FALSE;
+	if (!object)
+		return NULL;
+	node_count = (short)(object->object.node_matrices.size / (short)sizeof(real_matrix4x3));
+	if (node_count <= 0 || node_count > MAXIMUM_INTERPOLATED_NODES || object->object.node_matrices.offset <= 0)
+		return NULL;
+	previous = tick_snapshot_previous_node_matrices(object_index, node_count);
+	if (!previous)
+		return NULL;
+	started = tick_overlap_now();
+	latest = (real_matrix4x3 const *)((byte const *)object + object->object.node_matrices.offset);
+	if (record->capacity < node_count)
+	{
+		real_matrix4x3 *nodes = realloc(record->nodes, node_count * sizeof(real_matrix4x3));
+
+		if (!nodes)
+			return NULL;
+		record->nodes = nodes;
+		record->capacity = node_count;
+	}
+	blended = record->nodes;
+	/* (as the serial frames' blend above: a pose that moved too far for one tick is another, not this one moving; so written that a position not a
+	number snaps) */
+	snap = !(distance_squared(&previous[0].position, &latest[0].position) <= OBJECT_SNAP_DISTANCE * OBJECT_SNAP_DISTANCE);
+	for (node_index = 1; !snap && node_index < node_count; node_index++)
+	{
+		real_point3d previous_local, latest_local;
+
+		matrix4x3_inverse_transform_point(&previous[0], &previous[node_index].position, &previous_local);
+		matrix4x3_inverse_transform_point(&latest[0], &latest[node_index].position, &latest_local);
+		snap = !(distance_squared(&previous_local, &latest_local) <= NODE_SNAP_DISTANCE * NODE_SNAP_DISTANCE);
+	}
+	if (snap)
+	{
+		memcpy(blended, latest, node_count * sizeof(real_matrix4x3));
+	}
+	else
+	{
+		struct interpolation_rotation previous_rotations[MAXIMUM_INTERPOLATED_NODES];
+		struct interpolation_rotation latest_rotations[MAXIMUM_INTERPOLATED_NODES];
+
+		for (node_index = 0; node_index < node_count; node_index++)
+		{
+			rotation_from_matrix(&previous[node_index], &previous_rotations[node_index]);
+			rotation_from_matrix(&latest[node_index], &latest_rotations[node_index]);
+		}
+		for (node_index = 0; node_index < node_count; node_index++)
+		{
+			matrix_blend_rotations(&previous[node_index], &latest[node_index], &previous_rotations[node_index], &latest_rotations[node_index],
+				interpolation_fraction, &blended[node_index]);
+		}
+	}
+	record->blended = TRUE;
+	tick_overlap_note_blend(tick_overlap_now() - started);
+	return blended;
+}
+
+/* a frame of the overlap is being drawn, from the ring's pair of which the latest is tick (or no more: the end of the frame) */
+void render_interpolation_overlap_set(
+	boolean on,
+	long tick)
+{
+	overlap_frame = on;
+	if (on)
+		interpolation_tick = tick;
+}
+#endif
+
 /* ---------- frames */
+
+static void interpolation_rendering_set(boolean rendering)
+{
+	if (rendering && !interpolation_rendering_here)
+		__sync_fetch_and_add(&interpolation_rendering_threads, 1);
+	else if (!rendering && interpolation_rendering_here)
+		__sync_fetch_and_sub(&interpolation_rendering_threads, 1);
+	interpolation_rendering_here = rendering;
+}
 
 void render_interpolation_frame_begin(void)
 {
-	interpolation_rendering = halo_interpolation_enabled();
+	interpolation_rendering_set(halo_interpolation_enabled());
 	interpolation_frame++;
 	interpolation_fraction = game_time_get_tick_fraction();
 }
 
 void render_interpolation_frame_end(void)
 {
-	interpolation_rendering = FALSE;
+	interpolation_rendering_set(FALSE);
 }
 
 real render_interpolation_fraction(void)
@@ -535,6 +681,10 @@ real_matrix4x3 *render_interpolation_object_node_matrices(long object_index)
 	struct interpolated_object *record;
 	long absolute_index;
 
+#ifdef HALO_WIIU
+	if (overlap_frame && interpolation_rendering)
+		return overlap_object_node_matrices(object_index);
+#endif
 	if (!interpolation_rendering || !interpolated_objects || object_index == NONE)
 		return NULL;
 	absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
@@ -747,11 +897,22 @@ static struct observer_result const *render_interpolation_direct_camera(
 
 	direct = &direct_cameras[local_player_index];
 	*direct = *observer;
+#ifdef HALO_WIIU
+	/* port: the facing as the tick side published it (tick_owners.h) */
+	player_control_get_display_facing_direction(local_player_index, &direct->forward);
+#else
 	player_control_get_facing_direction(local_player_index, &direct->forward);
+#endif
 	observer_up_from_forward(&direct->forward, &direct->up);
 	return direct;
 #endif
 }
+
+#ifdef HALO_WIIU
+static struct observer_result const *overlap_blended_camera(
+	short local_player_index,
+	struct observer_result const *observer);
+#endif
 
 struct observer_result const *render_interpolation_camera(
 	short local_player_index,
@@ -759,6 +920,10 @@ struct observer_result const *render_interpolation_camera(
 {
 	if (local_player_index < 0 || local_player_index >= MAXIMUM_LOCAL_PLAYERS)
 		return observer;
+#ifdef HALO_WIIU
+	if (overlap_frame && interpolation_rendering)
+		return render_interpolation_direct_camera(local_player_index, overlap_blended_camera(local_player_index, observer));
+#endif
 	return render_interpolation_direct_camera(local_player_index,
 		render_interpolation_blended_camera(local_player_index, observer));
 }
@@ -804,6 +969,40 @@ static boolean observer_cut(
 	return !(distance_squared(&a->position, &b->position) <= CAMERA_CUT_DISTANCE * CAMERA_CUT_DISTANCE) ||
 		!(a->forward.i * b->forward.i + a->forward.j * b->forward.j + a->forward.k * b->forward.k >= CAMERA_CUT_COSINE);
 }
+
+#ifdef HALO_WIIU
+/* the camera the tick thread left with the capture of each of the pair's ticks (tick_snapshot.c), blended as the serial frames' is. observer is the
+fallback (the pair has none) */
+static struct observer_result const *overlap_blended_camera(
+	short local_player_index,
+	struct observer_result const *observer)
+{
+	struct observer_result const *previous;
+	struct observer_result const *latest;
+
+	if (!tick_snapshot_view_cameras(local_player_index, &previous, &latest))
+		return observer;
+	/* a scripted camera is where its script has it (the serial frames' relative-to-an-object correction needs the object's pose between ticks,
+	which a cinematic, where it is used, is not the overlap's) */
+	if (!previous || director_get_perspective(local_player_index) == _director_perspective_scripted || observer_cut(previous, latest))
+		return latest;
+	observer_blend(previous, latest, interpolation_fraction, &overlap_cameras[local_player_index]);
+	return &overlap_cameras[local_player_index];
+}
+
+/* the camera a fraction t of the way from a to b (the tick thread's, for the capture of a tick between two: tick_snapshot_job_end) */
+void render_interpolation_camera_between(
+	struct observer_result const *a,
+	struct observer_result const *b,
+	real t,
+	struct observer_result *result)
+{
+	if (observer_cut(a, b))
+		*result = *b;
+	else
+		observer_blend(a, b, t, result);
+}
+#endif
 
 static struct observer_result const *render_interpolation_blended_camera(
 	short local_player_index,

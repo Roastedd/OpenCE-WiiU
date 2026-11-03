@@ -255,6 +255,15 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
                 " && $python tools/wiiu_check_objects.py --quiet --audio-ps-object $out $out",
         description="WIIU AUDIO PS ASM $out",
     )
+    # The Broadway kernels (port/wiiu/src/bw): paired-single assembly, which the devkitPPC assembler takes with -mgekko (the default
+    # wiiu-clang target has no paired singles). Each object is held to an allowlist of instructions: no fused multiply-add, no
+    # estimate, no control register written.
+    n.rule(
+        name="wiiu_bw_asm",
+        command="$wiiu_ld -c -g -mcpu=750 -meabi -mhard-float -Wa,-mgekko $in -o $out"
+                " && $python tools/wiiu_check_objects.py --quiet --bw-kernel-object $out $out",
+        description="WIIU BW ASM $out",
+    )
     n.rule(
         name="wiiu_link",
         command='test -n "$$WUT_ROOT" || { echo "WUT_ROOT is not set: the Wii U build runs in the opence-wiiu container" >&2; exit 1; }'
@@ -282,7 +291,8 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
     release = getattr(sln, "port_release", False)
     # (no stack protector: newlib has no guard; no -mcpu twice: the compiler adds it)
     # (HALO_WIIU: the Xbox memory window is at the top of MEM2, not at 0x80000000: halo_port_capacity.h)
-    abi = " ".join(wiiu_flags(LINUX_ABI_FLAGS) + [WIIU_MARCH, WIIU_TLS, "-DHALO_WIIU"] + configuration_defines(sln))
+    # (HALO_BW_KERNELS: the Broadway kernels, port/wiiu/src/bw, which the game's sources call once halo/broadway.txt turns them on)
+    abi = " ".join(wiiu_flags(LINUX_ABI_FLAGS) + [WIIU_MARCH, WIIU_TLS, "-DHALO_WIIU", "-DHALO_BW_KERNELS"] + configuration_defines(sln))
     port_include = LINUX_DIR / "include"
     sdk_flags = f"-idirafter {XDK_INCLUDE}"
     objects: List[Path] = []
@@ -371,6 +381,9 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
         if source.name.startswith(WIIU_NATIVE_PREFIX):
             # (-ffp-contract=off: the objects are checked for fused multiply-adds whether or not they touch the simulation)
             extra = f" {mbedtls_include} -I{MONOCYPHER_DIR} {update_defines(release)}" if source.name in WIIU_UPDATE_UNITS else ""
+            if source.name == "wiiu_bw_kernels.c":
+                # (the Broadway kernels' switch includes the game's header of them, which is not on the platform layer's include path)
+                extra = f" -iquote {port_include}"
             add_object(source, f"{posix_cflags} -ffp-contract=off -I{wiiu_src} -I{platform_dir}{extra}")
         else:
             # (the platform layer's flags; the Xbox-facing units that include xgpu.h get a stand-in for SDL's OpenGL header)
@@ -380,6 +393,10 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
     objects.append(audio_ps_object)
     n.build(outputs=audio_ps_object, rule="wiiu_audio_ps_asm", inputs=wiiu_src / "wiiu_resampler_ps.S",
             implicit=[Path("tools/wiiu_check_objects.py"), Path("tools/wiiu_resampler_ps_audit.py")])
+    for bw_source in sorted((wiiu_src / "bw").glob("*.S")):
+        bw_object = obj_dir / bw_source.with_suffix(".o")
+        objects.append(bw_object)
+        n.build(outputs=bw_object, rule="wiiu_bw_asm", inputs=bw_source, implicit=[Path("tools/wiiu_check_objects.py")])
     # the high-res HUD's, the menus' titles' and buttons' pictures, the fonts and the menus' files: big-endian words, from tools/embed_assets.py --wiiu
     assets_source = build_dir / "generated" / "hud_assets.c"
     n.rule(name="wiiu_embed_assets", command="$python tools/embed_assets.py $out --wiiu", description="WIIU EMBED $out")

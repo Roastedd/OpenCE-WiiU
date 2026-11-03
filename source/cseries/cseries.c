@@ -166,7 +166,60 @@ enum
 
 /* ---------- globals */
 
-char temporary[256];
+__thread char temporary[256];
+
+/* ---------- the log's lock (cseries.h) */
+
+struct halo_shared_lock halo_log_lock;
+
+/* (the address of a variable of the thread's own: not the same in two threads, never NULL) */
+static __thread char halo_shared_lock_thread_token;
+
+void halo_shared_lock_acquire(
+	struct halo_shared_lock *lock)
+{
+	void *me = &halo_shared_lock_thread_token;
+
+	if (lock->owner == me)
+	{
+		lock->depth++;
+	}
+	else
+	{
+		long waited;
+
+		/* (up to about two seconds, a millisecond at a time: the owner is writing a line) */
+		for (waited = 0; waited < 2000 && !__sync_bool_compare_and_swap(&lock->owner, NULL, me); waited++)
+		{
+			Sleep(1);
+		}
+		if (lock->owner == me)
+		{
+			lock->depth = 1;
+		}
+	}
+
+	return;
+}
+
+void halo_shared_lock_release(
+	struct halo_shared_lock *lock)
+{
+	void *me = &halo_shared_lock_thread_token;
+
+	/* (a call that did not get the lock, after its wait, owns nothing) */
+	if (lock->owner == me)
+	{
+		if (--lock->depth <= 0)
+		{
+			lock->depth = 0;
+			__sync_synchronize();
+			lock->owner = NULL;
+		}
+	}
+
+	return;
+}
 
 static const real_argb_color global_real_argb_color_table[17] =
 {

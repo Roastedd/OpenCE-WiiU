@@ -78,6 +78,10 @@ symbols in this file:
 #include "scenario/scenario.h" /* port: game_time_menu_scene */
 #include "scenario/scenario_definitions.h"
 #include "profile_sections.h" /* port: port/linux/include/profile_sections.h */
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
+#endif
 /* port/linux/game/network_distributed.c's */
 void network_distributed_tick(void);
 
@@ -118,6 +122,20 @@ struct game_time_globals_struct
 /* ---------- globals */
 
 static struct game_time_globals_struct *game_time_globals;
+
+#ifdef HALO_WIIU
+/* port: the clock as the drawing thread sees it while a frame is drawn beside the ticks (tick_overlap.h): the tick the frame is drawn from, the ticks
+the frame's job runs, and how far the frame is into the next. The ticks run on another thread and move the real clock meanwhile, so the drawing
+reads these instead (the thread that reads them is told by its core; the tick thread reads the clock). Written by the drawing thread only. */
+static struct
+{
+	volatile int on;
+	long time;
+	short elapsed;
+	real fraction;
+} game_time_view;
+#define GAME_TIME_VIEW() (game_time_view.on && tick_overlap_thread_is_render())
+#endif
 
 #ifdef HALO_WIIU
 /* port: only the game thread reads its clock/menu state; the optional shader-file worker receives an atomic activity flag.
@@ -225,6 +243,10 @@ long game_time_get(
 {
 	match_assert("c:\\halo\\SOURCE\\game\\game_time.c", 463, game_time_globals && game_time_globals->initialized);
 
+#ifdef HALO_WIIU
+	if (GAME_TIME_VIEW())
+		return game_time_view.time;
+#endif
 	return game_time_globals->local_time;
 }
 
@@ -233,6 +255,10 @@ short game_time_get_elapsed(
 {
 	match_assert("c:\\halo\\SOURCE\\game\\game_time.c", 471, game_time_globals && game_time_globals->initialized);
 
+#ifdef HALO_WIIU
+	if (GAME_TIME_VIEW())
+		return game_time_view.elapsed;
+#endif
 	return game_time_globals->last_local_time_elapsed;
 }
 
@@ -241,6 +267,10 @@ long local_time_get(
 {
 	match_assert("c:\\halo\\SOURCE\\game\\game_time.c", 479, game_time_globals && game_time_globals->initialized);
 
+#ifdef HALO_WIIU
+	if (GAME_TIME_VIEW())
+		return game_time_view.time;
+#endif
 	return game_time_globals->local_time;
 }
 
@@ -249,6 +279,10 @@ short local_time_get_elapsed(
 {
 	match_assert("c:\\halo\\SOURCE\\game\\game_time.c", 487, game_time_globals && game_time_globals->initialized);
 
+#ifdef HALO_WIIU
+	if (GAME_TIME_VIEW())
+		return game_time_view.elapsed;
+#endif
 	return game_time_globals->last_local_time_elapsed;
 }
 
@@ -319,6 +353,68 @@ void game_time_set_paused(
 	return;
 }
 
+#ifdef HALO_WIIU
+/* port: the menus' pause, a message to the tick thread (tick_owners.h). The queue's records are the pause wanted; the menu's
+own reading of the pause is the last message while any waits. */
+struct game_time_pause_message
+{
+	boolean paused;
+};
+
+static void game_time_pause_message_apply(
+	void const *record);
+
+TICK_QUEUE_DEFINE(game_time_pause_queue, "pause", TICK_OWNER_TICK, struct game_time_pause_message, 16, game_time_pause_message_apply);
+
+static boolean game_time_pause_shadow = FALSE;
+
+static void game_time_pause_message_apply(
+	void const *record)
+{
+	game_time_set_paused(((struct game_time_pause_message const *)record)->paused);
+
+	return;
+}
+
+void game_time_post_paused(
+	boolean paused)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_PAUSE))
+	{
+		struct game_time_pause_message message;
+
+		message.paused = paused;
+		game_time_pause_shadow = paused;
+		tick_queue_push(&game_time_pause_queue, &message);
+	}
+	else
+	{
+		game_time_set_paused(paused);
+	}
+
+	return;
+}
+
+boolean game_time_ui_get_paused(
+	void)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_PAUSE) && tick_queue_count(&game_time_pause_queue))
+		return game_time_pause_shadow;
+
+	return game_time_get_paused();
+}
+
+/* the messages made now, for a menu that goes on to change the clock itself */
+void game_time_ui_flush_paused(
+	void)
+{
+	if (TICK_OWNERS_FEATURE(TICK_FEATURE_PAUSE))
+		tick_queue_drain(&game_time_pause_queue);
+
+	return;
+}
+#endif
+
 /* how far the clock has run into the next tick, 0 to 1: the native ports
 draw frames between ticks (port/linux/game/render_interpolation.c) */
 real game_time_get_tick_fraction(
@@ -326,6 +422,10 @@ real game_time_get_tick_fraction(
 {
 	real fraction;
 
+#ifdef HALO_WIIU
+	if (GAME_TIME_VIEW())
+		return game_time_view.fraction;
+#endif
 	if (!game_time_globals || !game_time_globals->active || game_time_globals->paused)
 		return 1.0f;
 	fraction = game_time_globals->leftover_dt * game_time_globals->speed * TICKS_PER_SECOND;
@@ -439,6 +539,171 @@ void game_time_start(
 	return;
 }
 
+/* The clock's decision for a frame of time_delta_sec: how many ticks it runs, and the time left over after them. One function for the serial update and
+the overlap's (which makes the decision for a frame before the tick thread runs it: tick_overlap.h). Returns FALSE (no tick, the leftover as it
+was) when the clock is stopped or the speed is nothing. */
+static boolean game_time_clock_step(
+	real time_delta_sec,
+	real leftover_in,
+	real speed,
+	long *ticks_elapsed_out,
+	real *leftover_out)
+{
+	long connection;
+	long ticks_elapsed;
+	real ticks_per_second = speed*TICKS_PER_SECOND;
+
+	*ticks_elapsed_out = 0;
+	*leftover_out = leftover_in;
+	if (ticks_per_second > 0.f)
+	{
+		boolean discard_leftover_time;
+		real game_time;
+		real ticks_elapsed_real;
+		real leftover_dt;
+
+		connection = game_connection();
+		switch (connection)
+		{
+		case _game_connection_film_playback:
+			connection = TICKS_PER_SECOND;
+			discard_leftover_time = FALSE;
+			goto calculate_elapsed_ticks;
+		case _game_connection_network_client:
+		case _game_connection_network_server:
+			/* (the distributed netcode: every machine ticks on its own
+			clock, and the host waits for nobody) */
+			connection = TICKS_PER_SECOND;
+			break;
+		case _game_connection_local:
+			connection = 7;
+			break;
+		default:
+			connection = 7;
+			break;
+		}
+		discard_leftover_time = TRUE;
+
+	calculate_elapsed_ticks:
+		game_time = time_delta_sec + leftover_in;
+		ticks_elapsed_real = (real)floor(game_time*ticks_per_second);
+		ticks_elapsed = (long)(ticks_elapsed_real <= (real)SOME_LARGE_NUMBER_OF_TICKS ?
+			ticks_elapsed_real : (real)SOME_LARGE_NUMBER_OF_TICKS);
+		if (ticks_elapsed > connection)
+		{
+			ticks_elapsed = connection;
+			if (discard_leftover_time)
+				game_time = ticks_elapsed_real/ticks_per_second;
+		}
+
+		leftover_dt = game_time - ticks_elapsed_real/ticks_per_second;
+		if (leftover_dt < 0.f)
+			leftover_dt = 0.f;
+		/* port: debug.fixed_step, a game of this machine alone: one tick a
+		frame that has time (main.c gives it a tick's; a 30th of a second in
+		a float is not one tick exactly), so that what runs once a frame
+		(aiming) sees the game's time; game_speed has no effect */
+		if (halo_fixed_step() && game_connection() == _game_connection_local && time_delta_sec > 0.f)
+		{
+			ticks_elapsed = 1;
+			leftover_dt = 0.f;
+		}
+		match_assert("c:\\halo\\SOURCE\\game\\game_time.c", 306,
+			leftover_dt>=0.f && leftover_dt<100.f);
+		*ticks_elapsed_out = ticks_elapsed;
+		*leftover_out = leftover_dt;
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+/* The ticks of a frame: ticks_elapsed of them, with the time they bring. capture_last says which get a capture of the render view snapshot after
+them (tick_snapshot.c): every one if it is negative, else the last capture_last of them (the overlap's frames blend the last two ticks only, and
+a capture is the part of a tick the drawing thread needs). Returns the ticks run. */
+static long game_time_run_ticks(
+	long ticks_elapsed,
+	long capture_last)
+{
+	long final_local_time;
+	long maximum_possible_server_time;
+	long ticks_run = 0;
+
+	final_local_time = game_time_globals->local_time + ticks_elapsed;
+	switch (game_connection())
+	{
+	case _game_connection_local:
+		update_client_local_ticks(ticks_elapsed);
+		break;
+	case _game_connection_network_server:
+		network_game_server_update_ticks(global_network_game_server_get(), (short)ticks_elapsed);
+		break;
+	}
+
+	/* (a client of the distributed netcode ticks on its own clock,
+	with its own input and the latest the host relayed, from the
+	host's first game update, which brings the host's time: the
+	host ticks only once every machine has loaded) */
+	/* port: the main menu's scene ticks on this machine's clock,
+	in a lobby too (game_time_menu_scene) */
+	if (game_time_menu_scene())
+	{
+		maximum_possible_server_time = final_local_time;
+	}
+	else if (game_connection() == _game_connection_network_client)
+	{
+		maximum_possible_server_time = game_time_held() ?
+			game_time_globals->server_time : final_local_time;
+	}
+	else
+		maximum_possible_server_time = update_client_get_maximum_possible_server_time();
+	if (maximum_possible_server_time > game_time_globals->server_time)
+	{
+		long final_server_time = MIN(maximum_possible_server_time, final_local_time);
+		long server_updates = final_server_time - game_time_globals->server_time;
+		long update_index;
+
+		for (update_index = 0; update_index < server_updates; update_index++)
+		{
+			game_tick();
+#ifdef HALO_WIIU
+			if (capture_last < 0)
+			{
+				/* the chain of snapshots of each object that the serial frames blend (render_interpolation.c) */
+				profile_scope(game_time_render_interpolation_tick_section, render_interpolation_tick();)
+				/* the render view snapshot (tick_snapshot.c): what the renderer reads of this tick's objects */
+				tick_snapshot_capture_tick(game_time_globals->local_time + 1, TRUE);
+			}
+			else if (server_updates - update_index <= capture_last)
+			{
+				/* (the overlap's: the ring, committed with the cameras when the job is over) */
+				tick_snapshot_capture_tick(game_time_globals->local_time + 1, FALSE);
+			}
+#else
+			profile_scope(game_time_render_interpolation_tick_section, render_interpolation_tick();)
+#endif
+			game_time_globals->server_time++;
+			game_time_globals->local_time++;
+			ticks_run++;
+			game_state_tick_hash(game_time_globals->server_time);
+			/* the distributed netcode's per-tick state (port: none of
+			the main menu's scene, which a lobby's machines do not share) */
+			if (!game_time_menu_scene())
+				profile_scope(game_time_network_distributed_tick_section, network_distributed_tick();)
+#ifdef HALO_WIIU
+			/* port: the tick thread's safe point, between two ticks (tick_owners.h) */
+			tick_owners_safe_point();
+#endif
+		}
+	}
+
+	/* (none while a client's clock waits: a frame that runs no tick
+	reports none) */
+	game_time_globals->last_local_time_elapsed = game_time_held() ? 0 : (short)ticks_elapsed;
+
+	return ticks_run;
+}
+
 void game_time_update(
 	real time_delta_sec)
 {
@@ -446,9 +711,8 @@ void game_time_update(
 
 	if (game_time_globals->active)
 	{
-		long connection;
 		long ticks_elapsed;
-		real ticks_per_second = game_time_globals->speed*TICKS_PER_SECOND;
+		real leftover_dt;
 
 		/* The native builds draw several frames per tick
 		(port/linux/game/render_interpolation.c). A frame that runs no tick has
@@ -460,117 +724,11 @@ void game_time_update(
 		every frame ran at least one tick. */
 		game_time_globals->last_local_time_elapsed = 0;
 
-		if (ticks_per_second > 0.f)
+		if (game_time_clock_step(time_delta_sec, game_time_globals->leftover_dt, game_time_globals->speed, &ticks_elapsed, &leftover_dt))
 		{
-			boolean discard_leftover_time;
-			real game_time;
-			real ticks_elapsed_real;
-
-			connection = game_connection();
-			switch (connection)
-			{
-			case _game_connection_film_playback:
-				connection = TICKS_PER_SECOND;
-				discard_leftover_time = FALSE;
-				goto calculate_elapsed_ticks;
-			case _game_connection_network_client:
-			case _game_connection_network_server:
-				/* (the distributed netcode: every machine ticks on its own
-				clock, and the host waits for nobody) */
-				connection = TICKS_PER_SECOND;
-				break;
-			case _game_connection_local:
-				connection = 7;
-				break;
-			default:
-				connection = 7;
-				break;
-			}
-			discard_leftover_time = TRUE;
-
-		calculate_elapsed_ticks:
-			game_time = time_delta_sec + game_time_globals->leftover_dt;
-			ticks_elapsed_real = (real)floor(game_time*ticks_per_second);
-			ticks_elapsed = (long)(ticks_elapsed_real <= (real)SOME_LARGE_NUMBER_OF_TICKS ?
-				ticks_elapsed_real : (real)SOME_LARGE_NUMBER_OF_TICKS);
-			if (ticks_elapsed > connection)
-			{
-				ticks_elapsed = connection;
-				if (discard_leftover_time)
-					game_time = ticks_elapsed_real/ticks_per_second;
-			}
-
-			game_time_globals->leftover_dt = game_time - ticks_elapsed_real/ticks_per_second;
-			if (game_time_globals->leftover_dt < 0.f)
-				game_time_globals->leftover_dt = 0.f;
-			/* port: debug.fixed_step, a game of this machine alone: one tick a
-			frame that has time (main.c gives it a tick's; a 30th of a second in
-			a float is not one tick exactly), so that what runs once a frame
-			(aiming) sees the game's time; game_speed has no effect */
-			if (halo_fixed_step() && game_connection() == _game_connection_local && time_delta_sec > 0.f)
-			{
-				ticks_elapsed = 1;
-				game_time_globals->leftover_dt = 0.f;
-			}
-			match_assert("c:\\halo\\SOURCE\\game\\game_time.c", 306,
-				game_time_globals->leftover_dt>=0.f && game_time_globals->leftover_dt<100.f);
-
+			game_time_globals->leftover_dt = leftover_dt;
 			if (ticks_elapsed > 0)
-			{
-				long final_local_time;
-				long maximum_possible_server_time;
-
-				final_local_time = game_time_globals->local_time + ticks_elapsed;
-				switch (game_connection())
-				{
-				case _game_connection_local:
-					update_client_local_ticks(ticks_elapsed);
-					break;
-				case _game_connection_network_server:
-					network_game_server_update_ticks(global_network_game_server_get(), (short)ticks_elapsed);
-					break;
-				}
-
-				/* (a client of the distributed netcode ticks on its own clock,
-				with its own input and the latest the host relayed, from the
-				host's first game update, which brings the host's time: the
-				host ticks only once every machine has loaded) */
-				/* port: the main menu's scene ticks on this machine's clock,
-				in a lobby too (game_time_menu_scene) */
-				if (game_time_menu_scene())
-				{
-					maximum_possible_server_time = final_local_time;
-				}
-				else if (game_connection() == _game_connection_network_client)
-				{
-					maximum_possible_server_time = game_time_held() ?
-						game_time_globals->server_time : final_local_time;
-				}
-				else
-					maximum_possible_server_time = update_client_get_maximum_possible_server_time();
-				if (maximum_possible_server_time > game_time_globals->server_time)
-				{
-					long final_server_time = MIN(maximum_possible_server_time, final_local_time);
-					long server_updates = final_server_time - game_time_globals->server_time;
-					long update_index;
-
-					for (update_index = 0; update_index < server_updates; update_index++)
-					{
-						game_tick();
-						profile_scope(game_time_render_interpolation_tick_section, render_interpolation_tick();)
-						game_time_globals->server_time++;
-						game_time_globals->local_time++;
-						/* the distributed netcode's per-tick state (port: none of
-						the main menu's scene, which a lobby's machines do not share) */
-						if (!game_time_menu_scene())
-							profile_scope(game_time_network_distributed_tick_section, network_distributed_tick();)
-					}
-				}
-
-				/* (none while a client's clock waits: a frame that runs no tick
-				reports none) */
-				game_time_globals->last_local_time_elapsed = game_time_held() ? 0 : (short)ticks_elapsed;
-			}
+				game_time_run_ticks(ticks_elapsed, -1);
 		}
 
 		/* The effects and the widgets that move every frame (game_frame) hang
@@ -589,5 +747,76 @@ void game_time_update(
 
 	return;
 }
+
+#ifdef HALO_WIIU
+/* ---------- the overlap's clock (tick_overlap.h) */
+
+/* The game thread's, with the tick thread idle: what the frame about to be handed to the tick thread does to the clock. FALSE if the clock is
+stopped, paused or has no speed (the frame is not the overlap's). time_now is the game time before the frame's ticks, the ticks the frame runs,
+leftover_after the time left over after them. */
+boolean game_time_overlap_step(
+	real time_delta_sec,
+	long *time_now,
+	long *ticks_elapsed,
+	real *leftover_after,
+	real *speed)
+{
+	if (!game_time_globals || !game_time_globals->initialized || !game_time_globals->active || game_time_globals->paused ||
+		game_connection() != _game_connection_local)
+	{
+		return FALSE;
+	}
+	*time_now = game_time_globals->local_time;
+	*speed = game_time_globals->speed;
+	return game_time_clock_step(time_delta_sec, game_time_globals->leftover_dt, game_time_globals->speed, ticks_elapsed, leftover_after);
+}
+
+/* The tick thread's part of such a frame: the clock set as the decision made, and the ticks run (game_frame is the drawing thread's in the overlap).
+Returns the ticks run. */
+long game_time_overlap_run(
+	long ticks_elapsed,
+	real leftover_after)
+{
+	long ticks_run = 0;
+
+	if (!game_time_globals->active)
+	{
+		game_time_globals->last_local_time_elapsed = 0;
+		return 0;
+	}
+	game_time_globals->last_local_time_elapsed = 0;
+	game_time_globals->leftover_dt = leftover_after;
+	if (ticks_elapsed > 0)
+		ticks_run = game_time_run_ticks(ticks_elapsed, 2);
+
+	return ticks_run;
+}
+
+/* The clock as the drawing thread sees it for the frame (game_time_view above), or not (on = FALSE) */
+void game_time_set_view(
+	boolean on,
+	long time,
+	short elapsed,
+	real fraction)
+{
+	game_time_view.time = time;
+	game_time_view.elapsed = elapsed;
+	game_time_view.fraction = fraction;
+	game_time_view.on = on;
+}
+
+/* the clock's own time and leftover, as the tick thread left them (read when it is idle) */
+long game_time_overlap_time(
+	void)
+{
+	return game_time_globals ? game_time_globals->local_time : 0;
+}
+
+real game_time_overlap_leftover(
+	void)
+{
+	return game_time_globals ? game_time_globals->leftover_dt : 0.0f;
+}
+#endif
 
 /* ---------- private code */

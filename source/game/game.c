@@ -183,6 +183,10 @@ struct game_options;
 #include "units/units.h"
 #include "units/vehicles.h"
 #include "network_coop.h" /* port: port/linux/game/network_coop.c */
+#ifdef HALO_WIIU
+#include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
+#include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
+#endif
 #ifdef HALO_PROFILE
 #include "profile_console.h" /* port: port/linux/game/profile_console.c */
 #endif
@@ -328,10 +332,25 @@ void game_initialize(
 	return;
 }
 
+#if defined(HALO_WIIU) && !defined(HALO_PROFILE)
+/* port: on the Wii U each part of the tick its sections name is timed (port/wiiu/src/wiiu_tick_parts.c) */
+long long wiiu_tick_part_now(void);
+void wiiu_tick_part(const char *name, long long started);
+void wiiu_tick_done(long long started);
+#undef profile_scope
+#define profile_scope(variable, statement) { long long tick_part_started = wiiu_tick_part_now(); statement wiiu_tick_part(#variable, tick_part_started); }
+#define TICK_PARTS_BEGIN() long long tick_started = wiiu_tick_part_now();
+#define TICK_PARTS_END() wiiu_tick_done(tick_started);
+#else
+#define TICK_PARTS_BEGIN()
+#define TICK_PARTS_END()
+#endif
+
 void game_tick(
 	void)
 {
 	real seconds_per_tick;
+	TICK_PARTS_BEGIN()
 
 	profile_tick_start();
 	collision_log_begin_period(0);
@@ -374,7 +393,12 @@ void game_tick(
 	physics act against the frames' own movement of it, and a vehicle at
 	speed swings it far wider than a tick's step does. The frames between the
 	ticks are drawn from what each tick leaves (antenna.c). */
+#ifdef HALO_WIIU
+	/* port: the antennas stepped with the widgets held, which a frame drawn beside the tick thread draws (widgets.h) */
+	profile_scope(game_tick_antennas_section, widgets_lock(); antennas_update(seconds_per_tick); widgets_unlock();)
+#else
 	profile_scope(game_tick_antennas_section, antennas_update(seconds_per_tick);)
+#endif
 	profile_scope(game_tick_first_person_section,
 		lock_global_random_seed();
 		rumble_update();
@@ -399,6 +423,7 @@ void game_tick(
 	profile_exit(game_update_section);
 	collision_log_end_period();
 	profile_tick_end();
+	TICK_PARTS_END()
 
 	return;
 }
@@ -658,6 +683,8 @@ void game_initialize_for_new_map(
 		!game_globals->active);
 
 	set_random_seed(game_globals->options.random_seed);
+	/* port: and the local random seed again (HALO_MAP_START_SEED, random_math.c) */
+	random_math_test_seed(get_global_local_random_seed_address());
 	game_engine_dispose();
 	game_engine_initialize(&game_variant_global);
 	real_math_reset_precision();
@@ -676,6 +703,11 @@ void game_initialize_for_new_map(
 	the host's indices, not its own objects' of the last game's */
 	network_distributed_new_game();
 	render_interpolation_reset();
+#ifdef HALO_WIIU
+	/* port: the tick thread idle (the main loop's map changes are made at its sync point), the ring of the snapshot and the overlap's views forgotten */
+	tick_overlap_map_reset();
+	tick_snapshot_reset();
+#endif
 	render_initialize_for_new_map();
 	structures_initialize_for_new_map();
 	breakable_surfaces_initialize_for_new_map();
@@ -911,6 +943,13 @@ void game_precache_new_map(
 void game_dispose_from_old_map(
 	void)
 {
+#ifdef HALO_WIIU
+	/* port: the tick owners' queues (tick_owners.h): what they carried this map, and what is still waiting names
+	nothing that stays */
+	tick_overlap_map_reset();
+	tick_owners_report();
+	tick_owners_discard_all();
+#endif
 	rasterizer_dispose_from_old_map();
 	game_state_dispose_from_old_map();
 	cheats_dispose_from_old_map();
@@ -966,6 +1005,11 @@ void game_frame(
 		585,
 		game_globals->active);
 
+#ifdef HALO_WIIU
+	/* port: what the ticks made and deleted among the particles, particle systems, contrails and decals since the last frame
+	(tick_presentation.h), made by the render thread before it updates them */
+	tick_owners_drain(TICK_OWNER_RENDER);
+#endif
 	collision_log_begin_period(1);
 	particles_update(frame_dt);
 	contrails_update(frame_dt);

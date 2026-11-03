@@ -191,6 +191,14 @@ boolean game_time_held(void);
 /* port: whether the main menu's scene is what ticks (game_time.c) */
 boolean game_time_menu_scene(void);
 void game_time_set_paused(boolean paused);
+#ifdef HALO_WIIU
+/* port: the menus' side of the game clock's pause (port/linux/game/tick_owners.h): the pause is the tick thread's, so a menu
+posts a message (game_time_post_paused) and reads what it has asked for until the tick thread has done it
+(game_time_ui_get_paused). With the tick owners' queues off, both are the plain calls. */
+void game_time_post_paused(boolean paused);
+boolean game_time_ui_get_paused(void);
+void game_time_ui_flush_paused(void);
+#endif
 real game_time_get_speed(void);
 void game_time_set_speed(real speed);
 void game_time_start(void);
