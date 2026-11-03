@@ -180,17 +180,52 @@ What three and four take, from the code:
   The high-res text is sized by the screen's pixels for each of its 480 lines (`halo_screen_pixel_scale`), the same in every window. The
   scoreboard of a split view is the Xbox's, six rows, with its wide tab stops in any window whose title-safe frame is wider than 320 columns (a
   quarter's is about 360 on the 852-wide picture, its score column at 315).
-- **Pause menus**: the 2p menu in a full-width window, the 4p one in a quarter (`ui_widget.c`). Found, not changed: the menus' centring offset is
-  the whole picture's (106 columns) in every window, so a 4p pause menu, 320 wide, sits against the right edge of its 426-wide quarter, 53
-  columns from its centre, and in the right-hand quarters against the picture's right edge, where a TV's overscan may cut it. The offset is set
-  for a frame by the platform layer (`halo_screen_ui_offset`) and the GamePad's touch mapping assumes it, in every build; centring each window's
-  widgets in its own share, as `hud_zoomed_layout_begin` does for the HUD, would take both.
+- **Pause menus**: the 2p menu in a full-width window, the 4p one in a quarter (`ui_widget.c`). Each view centres its own menus: `render.c` asks
+  `halo_screen_ui_offset_view` (`src/d3d8_gx2.c`) for the offset of the view's width, 640 columns centred in a half or the whole picture and a quarter's
+  320 centred in the quarter (upstream's ba759d5b, merged after this section was first written; it said then that every window used the whole picture's
+  106 columns, which is no longer so). What still assumes the whole picture's offset is the GamePad's touch mapping (`menu_point_from_gamepad`,
+  `src/d3d8_gx2.c`): a tap on player 1's pause menu in a quarter lands up to 53 columns to the left of where it is drawn (not run on a console).
 - **Frame rate and detail**: `display.split_screen_detail` and `display.split_screen_fps` (`port/linux/game/graphics_quality.c`, `port/linux/README.md`).
   With three or four views the defaults leave out the object shadows, the lens flares and the level's specular shine and reflections, and hold the
   frames to 30 a second through `halo_interpolation_enabled` (`src/platform_wiiu.c`) while `display.interpolation` stays as the player set it. The
   overlay (L + R + −) shows `30HZ` while they are held. In another machine's game the host's rules put the lens flares and the level's specular
   parts back every tick (`cheats.c`'s `cheats_network_client_enforce`, as they do the performance mode's), so a client keeps only the shadows off;
   the split screen lobby is a game this machine hosts, which has the whole set.
+
+### Virtual controllers: split screen with one person, or none
+
+`debug.virtual_gamepads` (0 to 4) and `debug.virtual_gamepad_script` are the desktop build's test controllers, and the Wii U build plays them too
+(`src/wiiu_virtual_pads.[ch]`, put on the Xbox pads by `src/xinput_wiiu.c`; they were settings the Wii U's `config.toml` listed that did nothing until
+this was written). Pad n drives the game's port n - 1: pad 1 is the GamePad's port (merged with the GamePad and the controllers that share it), pads 2 to 4
+are ports 1 to 3 and are there as long as the count says, whatever is connected. The script is `"<seconds> <pad> <what>; ..."`, the seconds counted from
+when the network lobby first opens (the log says `Input: N virtual controllers (debug.virtual_gamepads): the script's clock starts`), `what` one of `a b x y
+start back up down left right lb rb lt rt` (the Xbox's buttons, whatever the face buttons' match is; pressed 150 ms and until the game has read them 8 times) or
+`walk` / `still` (the sticks move from then on, each pad its own way). Pad 0 is the desktop's keyboard: the Wii U has none, and its entries do nothing.
+
+A game of 2, 3 or 4 from `config.toml` alone, with no hands (a LAN game this console hosts: `debug.network_test` hosts it as Create Game does, adds player 1,
+and starts it `debug.network_test_start` seconds after the lobby opens):
+
+```toml
+[debug]
+network_test = "host:bloodgulch"        # or another multiplayer map's name
+network_test_start = 25.0
+virtual_gamepads = 4
+virtual_gamepad_script = "3 2 start; 4 2 right; 4.5 2 right; 5 2 a; 6 3 start; 7 3 right; 7.5 3 right; 8 3 right; 8.5 3 a; 9.5 4 start; 10.5 4 right; 11 4 right; 11.5 4 right; 12 4 right; 12.5 4 a; 14 2 a; 30 1 walk; 30 2 walk; 30 3 walk; 30 4 walk"
+```
+
+What the script does, as the game's lobby has it (`menu_functions.c`'s `join4_*`): pad 2's START joins and opens the 4-way screen; its spinner starts on a
+profile no one has, and the first two profiles of the list are the game's defaults, whose names a game cannot use ("the profile's name can't be used in
+multiplayer"), so the script moves it right twice, to the first profile the card has made; A selects it (the screen says "Another player has that
+profile." for one that another player has: **each player needs a profile of their own, so 3 or 4 players need that many made on the card, and the owner's card
+has two**); pads 3 and 4 do the same from their own START (the first free profile is the default ones, then the card's, so they move right once more for
+each pad before them); a selected player's A ends the screen. A card with other profiles, or in another order, needs other `right` presses: the first run
+shows the spinner's choice (the debug server's screenshot) and the entries are adjusted. `network_test = "local:..."` is no use here: it starts the game
+at once with one player.
+
+The same script plays on the host with no console: `tools/test_wiiu_game_digest.py run NAME --mode split4` (the Wii U's controller layer and Direct3D layer
+under qemu-ppc, `--mode split2` and `split3` too; build once with `build --wiiu-input`). Measured so (2026-11-02, Blood Gulch at its spawns, 400 ticks, the
+players standing, one walking): 1 player 239 draws a frame (median), 2 players 349, 3 players 433, 4 players 619; with `display.split_screen_detail =
+"same"`: 496 for 3 and 694 for 4, so the reduced set takes 12% and 11% of the draws. No error or assertion in the log of any of them.
 
 ### The console test plan
 
