@@ -143,6 +143,8 @@ boolean tick_snapshot_pin(long tick);
 void tick_snapshot_unpin(void);
 void tick_snapshot_job_end(long tick, long ticks_in_job, long previous_job_tick);
 real_matrix4x3 const *tick_snapshot_previous_node_matrices(long object_index, short node_count);
+long tick_snapshot_pose_serial(long absolute_index, boolean previous);
+int tick_snapshot_rotation_cache(void);
 int tick_snapshot_view_cameras(short local_player_index, struct observer_result const **previous, struct observer_result const **latest);
 void render_interpolation_camera_between(struct observer_result const *a, struct observer_result const *b, real t, struct observer_result *result);
 void render_interpolation_overlap_set(boolean on, long tick);
