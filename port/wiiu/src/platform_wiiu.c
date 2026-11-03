@@ -18,6 +18,8 @@ Linux code does when its feature is off. What the Wii U does need (input, audio,
 #include "halo_menus.h"
 #include "controller_remap.h"
 #include "update.h"
+#include "wiiu_input.h"
+#include "wiiu_virtual_pads.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -284,8 +286,14 @@ unsigned char halo_keyboard_shares_gamepad(void)
 	return 0;
 }
 
+/* debug.virtual_gamepad_script's clock starts, the first time: the network lobby opening (wiiu_virtual_pads.h; xinput_wiiu.c plays the pads) */
 void halo_virtual_gamepads_start(void)
 {
+	const int before = wiiu_virtual_pads_started();
+
+	wiiu_virtual_pads_start((int)config_integer("debug.virtual_gamepads"), wiiu_input_milliseconds());
+	if (!before && wiiu_virtual_pads_started())
+		platform_log("Input: %ld virtual controllers (debug.virtual_gamepads): the script's clock starts, the network lobby is open", config_integer("debug.virtual_gamepads"));
 }
 
 int halo_linux_debug_camera_input(int *middle, int *up, int *down, float *wheel)

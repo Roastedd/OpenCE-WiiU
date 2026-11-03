@@ -1322,9 +1322,9 @@ static const struct config_setting config_settings[] =
 		"second (a, b, x, y, up, down, left, right, start, back or wait, separated\n"
 		"by spaces or commas), for testing the menus; empty for none." },
 	{ "debug.virtual_gamepads", _config_integer, "0", "HALO_VIRTUAL_GAMEPADS", _environment_value, _platform_desktop,
-		"Attach this many SDL virtual gamepads (0 to 4), which the game takes for\n"
+		"Attach this many virtual gamepads (0 to 4), which the game takes for\n"
 		"gamepads plugged in, for testing split screen; debug.virtual_gamepad_script\n"
-		"drives them." },
+		"drives them. On the Wii U, pad n is player n (pad 1 shares the GamePad's)." },
 	{ "debug.virtual_gamepad_script", _config_string, "\"\"", "HALO_VIRTUAL_GAMEPAD_SCRIPT", _environment_value,
 		_platform_desktop,
 		"What debug.virtual_gamepads press: \"<seconds> <pad> <what>; ...\", the\n"
