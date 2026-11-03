@@ -4589,6 +4589,12 @@ static uint32_t run_job(uint32_t job, uint32_t a, uint32_t b)
 	return 0;
 }
 
+/* The GX2 thread waits for work yielding (OSYieldThread), which lets only threads of its priority or above run, and a thread of its priority that holds the core for a time slice
+or a job (the tick thread, 14 ms a tick) keeps the GX2 thread from taking a stream the game thread has posted: the game thread then waits for a free stream slot inside its draws (the
+console, 2026-11-03: the draws 5.4 ms a frame with the tick thread on core 0, 8.5 on core 2 beside the GX2 thread). With the tick thread on this core, one priority below, the GX2 thread
+sleeps this many microseconds between looks instead (halo/gx2_idle_sleep.txt overrides; 0 is the yield), and a thread below it runs in the gaps. Set by the shell. */
+static volatile uint32_t gx2_idle_sleep_us;
+
 static int gx2_thread_main(int argc, const char **argv)
 {
 	int ok;
@@ -4743,12 +4749,6 @@ int wiiu_gx2_thread_core_planned(void)
 	}
 	return on == 0 ? -1 : on == 2 ? 1 : (on == 3 || on == 5) ? 0 : 2;
 }
-
-/* The GX2 thread waits for work yielding (OSYieldThread), which lets only threads of its priority or above run, and a thread of its priority that holds the core for a time slice
-or a job (the tick thread, 14 ms a tick) keeps the GX2 thread from taking a stream the game thread has posted: the game thread then waits for a free stream slot inside its draws (the
-console, 2026-11-03: the draws 5.4 ms a frame with the tick thread on core 0, 8.5 on core 2 beside the GX2 thread). With the tick thread on this core, one priority below, the GX2 thread
-sleeps this many microseconds between looks instead (halo/gx2_idle_sleep.txt overrides; 0 is the yield), and a thread below it runs in the gaps. Set by the shell. */
-static volatile uint32_t gx2_idle_sleep_us;
 
 void wiiu_gx2_idle_sleep_set(uint32_t microseconds);
 
