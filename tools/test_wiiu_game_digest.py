@@ -10,7 +10,7 @@ build draw every frame of the game the same. A change to the rendering that keep
 the first tick it changes (tools/wiiu/digest_compare.py, which also compares the traces' lines, and in any order within a frame or a span).
 
     tools/test_wiiu_game_digest.py build [--name NAME] [--rev REV] [--mutate PATH BEFORE AFTER]... [--poison]
-    tools/test_wiiu_game_digest.py run RUN [--name NAME] [--poison] [--ticks N] [--trace FIRST-LAST|all] [--detail TICK] [--random] [--mode host|local|solo|solo-bloodgulch|solo-deathless|menu|menu-cycle|menu-campaign]
+    tools/test_wiiu_game_digest.py run RUN [--name NAME] [--poison] [--ticks N] [--trace FIRST-LAST|all] [--detail TICK] [--random] [--keys] [--custom-map NAME] [--mode host|local|solo|solo-bloodgulch|solo-deathless|menu|menu-cycle|menu-campaign]
     tools/test_wiiu_game_digest.py compare RUN_A RUN_B [digest_compare.py's options]
     GAME_DIGEST=1 python3 -m unittest tools.test_wiiu_game_digest      (GAME_DIGEST_TICKS: the ticks each run plays, 300 by default)
 
@@ -29,6 +29,13 @@ game-digest of all the frames of the game), stderr.txt (the game's log) and, as 
 data-be's (GAME_DIGEST_MAPS, else the first data-be/maps above this checkout). A run of 1400 ticks took about 260 s alone and about 270 s four at
 once (an M-series Mac's Docker, 2026-11-01), a full build about a minute; the first 125 frames are the menus and the loading, which are not compared
 (their first frames still vary now and then: game_digest_glue.c has why that does not reach the game's).
+
+--keys writes the shader keys the run's draws need (the pixel and vertex keys the console's GX2 thread looks up in shaders.pack, in the lines the missing-shader
+capture writes on the card) to RUN/out/keys.txt, for tools/wiiu/key_diff.py to compare with tools/wiiu/shader_keys.txt: which shaders a map needs that the pack
+lacks, before the map is played on a console. --custom-map NAME plays a Halo Custom Edition map as a game of one player (slayer, as the console's
+`game_variant slayer`, `map_name custom_maps\\NAME` do): the folder of the maps, with bitmaps.map, sounds.map and loc.map, is GAME_DIGEST_CUSTOM_MAPS (it
+is mounted read-only as /data/custom_maps, and nothing is copied); the game's settings are the defaults, as the Mac's runs have them, or those of
+GAME_DIGEST_CONFIG, a copy of a card's config.toml (display.high_res_hud, per_pixel_lighting and the like change the keys).
 
 Nothing here touches a console. The game's tests are skipped unless GAME_DIGEST is set (they need Docker, the image and the maps); the compare
 tool's, on made-up runs, always run.
@@ -146,20 +153,30 @@ def build(name: str = "here", rev: str = None, mutations=(), poison: bool = Fals
     return program
 
 
-def start(program: Path, run: str, ticks: int, trace: str = None, detail: str = None, random: bool = False, mode: str = "host"):
+def start(program: Path, run: str, ticks: int, trace: str = None, detail: str = None, random: bool = False, mode: str = "host", keys: bool = False,
+          custom_map: str = None, variant: str = "slayer"):
     """a run of the program to the frame of the game at tick ticks, in build/game-digest/runs/RUN, started; (its process, its folder)"""
     folder = DIGEST / "runs" / run
     shutil.rmtree(folder, ignore_errors=True)
     (folder / "data").mkdir(parents=True)
     (folder / "out").mkdir()
     (folder / "data" / "empty-brokers.txt").write_text("")
-    if mode in SOLO_INIT:
+    if os.environ.get("GAME_DIGEST_CONFIG"):
+        # (the settings of a console's card, for the keys it would need: a copy of its config.toml)
+        shutil.copyfile(os.environ["GAME_DIGEST_CONFIG"], folder / "data" / "config.toml")
+    if custom_map:
+        # (a Custom Edition map as a game of one player: init.txt, as the console's map_name starts it; a multiplayer scenario needs a game variant)
+        mode = "solo"
+        (folder / "data" / "init.txt").write_text((f"game_variant {variant}\n" if variant else "") + f"map_name custom_maps\\{custom_map}\n")
+    elif mode in SOLO_INIT:
         (folder / "data" / "init.txt").write_text(SOLO_INIT[mode])
     environment = dict(GAME_ENVIRONMENT, HALO_NETWORK_TEST=MODES[mode], GAME_DIGEST_DIR="/out", GAME_DIGEST_TICKS=str(ticks),
                        GAME_DIGEST_TRACE={None: "0", "all": "1"}.get(trace, trace), GAME_DIGEST_DETAIL=detail or "",
                        GAME_DIGEST_RANDOM="1" if random else "0")
     if mode in MENU_MODES:
         environment.update(GAME_DIGEST_TICKS="0", GAME_DIGEST_FRAMES=str(ticks), HALO_NETWORK_TEST_CUES=MENU_CUES.get(mode, ""))
+    if keys:
+        environment["GAME_DIGEST_KEYS"] = "/out/keys.txt"
     # (the tick owners' settings of the environment, to compare the switch on and off: HALO_TICK_*)
     environment.update({key: value for key, value in os.environ.items() if key.startswith("HALO_TICK_")})
     # (and any others, "NAME=VALUE,NAME=VALUE": the render probe's HALO_RENDER_REPEAT=3)
@@ -168,10 +185,16 @@ def start(program: Path, run: str, ticks: int, trace: str = None, detail: str = 
         environment[key] = value
     command = ["docker", "run", "--rm", "--network", "none", "--ulimit", "core=0", "-v", f"{program}:/program:ro", "-v", f"{folder / 'data'}:/data",
                "-v", f"{folder / 'out'}:/out", "-v", f"{maps_folder()}:/data/maps:ro", "-w", "/data"]
+    if custom_map:
+        if not os.environ.get("GAME_DIGEST_CUSTOM_MAPS"):
+            raise SystemExit("--custom-map needs GAME_DIGEST_CUSTOM_MAPS: the folder of the Custom Edition maps and bitmaps.map, sounds.map, loc.map")
+        command += ["-v", f"{os.environ['GAME_DIGEST_CUSTOM_MAPS']}:/data/custom_maps:ro"]
     for key, value in environment.items():
         command += ["-e", f"{key}={value}"]
-    command += [IMAGE, "timeout", "-s", "KILL", str(600 + ticks), "qemu-ppc", "-cpu", "750", "-L", "/usr/powerpc-linux-gnu", "/program/halo",
-                "--config", "/data/config.toml"]
+    # (a Custom Edition map's tag cache is at 0x40440000, where qemu puts the game's 8 MB stack and its libraries: a smaller stack, as the host runs of
+    # the Custom Edition maps have it, tools/stagekit)
+    emulator = ["qemu-ppc", "-cpu", "750", "-L", "/usr/powerpc-linux-gnu"] + (["-s", "0x380000"] if custom_map else [])
+    command += [IMAGE, "timeout", "-s", "KILL", str(600 + ticks), *emulator, "/program/halo", "--config", "/data/config.toml"]
     stderr = open(folder / "out" / "stderr.txt", "w")
     process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=stderr)
     stderr.close()
@@ -312,6 +335,9 @@ def main() -> int:
     run_parser.add_argument("--trace", help="FIRST-LAST: the lines of the frames of these ticks to trace.txt; all: every frame's")
     run_parser.add_argument("--detail", help="TICK, fFRAME or fFIRST-LAST: those frames' constants and formats to detail.txt")
     run_parser.add_argument("--random", action="store_true", help="each frame's callers of the local random numbers to random.txt")
+    run_parser.add_argument("--keys", action="store_true", help="the shader keys the draws need, to RUN/out/keys.txt (key_diff.py compares them with the pack's)")
+    run_parser.add_argument("--custom-map", help="play this Custom Edition map (GAME_DIGEST_CUSTOM_MAPS's folder) as a game of one player")
+    run_parser.add_argument("--variant", default="slayer", help="the game variant a multiplayer Custom Edition map is played with (--custom-map); empty for a campaign map")
     run_parser.add_argument("--mode", choices=sorted(MODES), default="host")
     compare_parser = commands.add_parser("compare", help="tools/wiiu/digest_compare.py on two runs (names under build/game-digest/runs, or folders)")
     compare_parser.add_argument("arguments", nargs=argparse.REMAINDER)
@@ -321,7 +347,7 @@ def main() -> int:
         return 0
     if args.command == "run":
         program = (ROOT if args.name == "here" else DIGEST / "trees" / args.name) / "build" / ("game-digest-poison" if args.poison else "game-digest")
-        summary = finish(*start(program, args.run, args.ticks, args.trace, args.detail, args.random, args.mode))
+        summary = finish(*start(program, args.run, args.ticks, args.trace, args.detail, args.random, args.mode, args.keys, args.custom_map, args.variant))
         print(" ".join(f"{name} {value}" for name, value in summary.items()))
         return 0
     arguments = [str(DIGEST / "runs" / a / "out") if not a.startswith("-") and not Path(a).exists() and (DIGEST / "runs" / a).is_dir() else a

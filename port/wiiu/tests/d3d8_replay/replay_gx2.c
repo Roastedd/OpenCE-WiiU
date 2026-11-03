@@ -12,6 +12,8 @@ The decals' expansion is wiiu_gx2.c's own (decals_expand, taken from the source 
 */
 
 #include "replay.h"
+#include "dk_shaders.h"
+#include "shader_key_wire.h"
 
 #include <stdarg.h>
 #include <stddef.h>
@@ -129,6 +131,145 @@ static void stage_text(char *out, size_t size, const struct dk_stage_texture *st
 		snprintf(out, size, "-");
 }
 
+
+/* ---------- the shader keys of the draws (GAME_DIGEST_KEYS=file)
+
+Every draw the layer derives has the keys the console's GX2 thread looks up in shaders.pack (dk_shader_for_draw: the same dk_derive_*_key). With the
+variable set, each key not yet written is appended to that file as the missing-shader capture writes it on the card (wiiu_missing_keys.c: "P" and the
+256-byte pixel key as hex, "V", the program's hash, its packed attribute mask, its instruction count and the words), so that tools/wiiu/key_diff.py can
+tell which keys a map's draws need that the pack lacks, before the map is played on a console. Nothing is written, and the lines of the digest do not
+change, when the variable is not set. */
+
+#define KEYS_SLOTS 65536u
+#define KEYS_PROGRAM_LIMIT 2048u
+
+static struct
+{
+	int tried;
+	FILE *file;
+	uint64_t *seen;
+	unsigned long pixel_keys, vertex_keys, unknown_programs;
+	struct
+	{
+		uint64_t hash;
+		uint32_t *words;
+		unsigned long count;
+	} programs[KEYS_PROGRAM_LIMIT];
+	unsigned program_count;
+	struct nv2a_pixel_shader_key last_pixel;
+	struct dk_vertex_key last_vertex;
+	int last_valid;
+} keys;
+
+static int keys_enabled(void)
+{
+	if (!keys.tried)
+	{
+		const char *path = getenv("GAME_DIGEST_KEYS");
+
+		keys.tried = 1;
+		if (path && *path)
+		{
+			keys.file = fopen(path, "w");
+			keys.seen = calloc(KEYS_SLOTS, sizeof(uint64_t));
+			if (!keys.file || !keys.seen)
+			{
+				if (keys.file)
+					fclose(keys.file);
+				keys.file = NULL;
+			}
+		}
+	}
+	return keys.file != NULL;
+}
+
+/* a program the game made (dk_shader_program_note's arguments): kept by hash so that a vertex key's line can have its words */
+void replay_keys_program(uint64_t program_hash, const uint32_t *words, unsigned long count);
+
+void replay_keys_program(uint64_t program_hash, const uint32_t *words, unsigned long count)
+{
+	unsigned index;
+
+	if (!keys_enabled() || !words || !count || count > 136)
+		return;
+	for (index = 0; index < keys.program_count; index++)
+		if (keys.programs[index].hash == program_hash)
+			return;
+	if (keys.program_count == KEYS_PROGRAM_LIMIT)
+		return;
+	keys.programs[keys.program_count].words = malloc(count * 4 * sizeof(uint32_t));
+	if (!keys.programs[keys.program_count].words)
+		return;
+	memcpy(keys.programs[keys.program_count].words, words, count * 4 * sizeof(uint32_t));
+	keys.programs[keys.program_count].hash = program_hash;
+	keys.programs[keys.program_count].count = count;
+	keys.program_count++;
+}
+
+/* whether this identity is new (and now remembered): an open-addressed set of 64-bit hashes, as the pack's own lookups tell keys apart */
+static int keys_new(uint64_t identity)
+{
+	unsigned slot;
+
+	if (!identity)
+		identity = 1;
+	for (slot = (unsigned)(identity % KEYS_SLOTS); keys.seen[slot]; slot = (slot + 1) % KEYS_SLOTS)
+		if (keys.seen[slot] == identity)
+			return 0;
+	keys.seen[slot] = identity;
+	return 1;
+}
+
+static void keys_note(const struct dk_vertex_key *vertex, const struct nv2a_pixel_shader_key *pixel)
+{
+	if (!keys_enabled())
+		return;
+	if (!keys.last_valid || memcmp(pixel, &keys.last_pixel, sizeof(*pixel)))
+	{
+		unsigned char wire[SHADER_KEY_WIRE_BYTES];
+		unsigned index;
+
+		shader_key_write(pixel, wire);
+		if (keys_new(shader_key_hash(SHADER_KEY_HASH_INIT, wire, sizeof(wire)) ^ 0x5049585Full))
+		{
+			fputs("P ", keys.file);
+			for (index = 0; index < sizeof(wire); index++)
+				fprintf(keys.file, "%02x", wire[index]);
+			fputc('\n', keys.file);
+			keys.pixel_keys++;
+		}
+		keys.last_pixel = *pixel;
+	}
+	if (!keys.last_valid || memcmp(vertex, &keys.last_vertex, sizeof(*vertex)))
+	{
+		if (keys_new(shader_key_hash(SHADER_KEY_HASH_INIT, (const unsigned char *)&vertex->program_hash, sizeof(vertex->program_hash)) * 31u + vertex->packed_mask))
+		{
+			unsigned index, word;
+
+			for (index = 0; index < keys.program_count && keys.programs[index].hash != vertex->program_hash; index++)
+				;
+			if (index < keys.program_count)
+			{
+				fprintf(keys.file, "V %08lx%08lx %lu %lu", (unsigned long)(vertex->program_hash >> 32), (unsigned long)(vertex->program_hash & 0xffffffffu),
+					(unsigned long)vertex->packed_mask, keys.programs[index].count);
+				for (word = 0; word < keys.programs[index].count * 4; word++)
+					fprintf(keys.file, " %08lx", (unsigned long)keys.programs[index].words[word]);
+				fputc('\n', keys.file);
+				keys.vertex_keys++;
+			}
+			else
+			{
+				fprintf(keys.file, "# a vertex key whose program was never noted: %016llx mask %lu\n", (unsigned long long)vertex->program_hash,
+					(unsigned long)vertex->packed_mask);
+				keys.unknown_programs++;
+			}
+		}
+		keys.last_vertex = *vertex;
+	}
+	keys.last_valid = 1;
+	fflush(keys.file);
+}
+
 /* wiiu_gx2.c's draw, as far as what the GPU reads goes */
 static void draw(const struct dk_command_draw *command)
 {
@@ -202,6 +343,7 @@ static void draw(const struct dk_command_draw *command)
 	surface_text(depth, sizeof(depth), &gx.depth);
 	for (stage = 0; stage < 4; stage++)
 		stage_text(stages[stage], sizeof(stages[stage]), &dk_derive_textures(derive)->stages[stage]);
+	keys_note((const struct dk_vertex_key *)dk_derive_vertex_key(derive), (const struct nv2a_pixel_shader_key *)dk_derive_pixel_key(derive));
 	line("draw %lu.%lu: prim %u count %u offset %d indices %016llx%s; targets %s %s; state %016llx vertex key %016llx pixel key %016llx; textures %s %s %s %s; "
 		"vertex parameters %016llx pixel parameters %016llx constants %016llx format %016llx",
 		gx.frame, gx.draw, (unsigned)primitive, (unsigned)command->count, (int)vertex_offset, (unsigned long long)indices, streams, color, depth,
