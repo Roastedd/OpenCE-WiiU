@@ -384,6 +384,8 @@ static int tick_snapshot_mode(void)
 		if (environment && *environment)
 		{
 			value = strtol(environment, NULL, 0);
+			if (value < 0)
+				value = 0;
 		}
 		else
 		{
@@ -391,8 +393,8 @@ static int tick_snapshot_mode(void)
 
 			if (file)
 			{
-				if (fscanf(file, "%li", &value) != 1)
-					value = 0;
+				if (fscanf(file, "%li", &value) != 1 || value < 0)
+					value = 0; /* (-1: as no file) */
 				fclose(file);
 			}
 		}

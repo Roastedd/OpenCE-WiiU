@@ -4745,6 +4745,8 @@ int wiiu_gx2_thread_core_planned(void)
 	{
 		if (fscanf(file, "%d", &on) != 1)
 			on = 0;
+		else if (on < 0)
+			on = 7; /* (-1: as no file) */
 		fclose(file);
 	}
 	return on == 0 ? -1 : on == 2 ? 1 : (on == 3 || on == 5) ? 0 : 2;
@@ -4773,6 +4775,8 @@ static int gt_start(void)
 		{
 			if (fscanf(file, "%d", &on) != 1)
 				on = 0;
+			else if (on < 0)
+				on = 7; /* (-1: as no file) */
 			fclose(file);
 		}
 		/* 1: core 2; 2: core 1, the game's; 3: core 0 */

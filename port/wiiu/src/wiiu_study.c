@@ -27,7 +27,8 @@ long wiiu_study_number(const char *name, long fallback)
 	if (fscanf(file, "%ld", &number) != 1)
 		number = fallback;
 	fclose(file);
-	return number;
+	/* (a negative number, -1 by convention, is the same as no file: a harness that must not delete a card file writes -1 to put it back) */
+	return number < 0 ? fallback : number;
 }
 
 /* halo/governor.txt (the dynamic quality's settings, port/linux/game/render_governor.c): its text in text (size bytes with the end), 0 if there is no such file */

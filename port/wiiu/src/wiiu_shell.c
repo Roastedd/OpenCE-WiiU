@@ -512,7 +512,8 @@ static long card_number(char const *name, long fallback)
 			value = fallback;
 		fclose(file);
 	}
-	return value;
+	/* (a negative number, -1 by convention, is the same as no file: a harness that must not delete a card file writes -1 to put it back) */
+	return value < 0 ? fallback : value;
 }
 
 /* the tick thread's priority and the GX2 thread's way of waiting for the tick thread on a core: shared with the GX2 thread, the tick thread is one priority below it and the GX2 thread sleeps
@@ -1052,9 +1053,12 @@ static int start_game(void)
 
 		if (file)
 		{
-			unsigned mode = 0;
+			int mode_number = 0;
+			unsigned mode;
 			unsigned long off = 0;
-			int read = fscanf(file, "%u %li", &mode, (long *)&off);
+			int read = fscanf(file, "%d %li", &mode_number, (long *)&off);
+
+			mode = mode_number < 0 ? 0 : (unsigned)mode_number; /* (-1: as no file) */
 
 			if (read >= 1 && mode >= 1 && mode <= 2)
 			{
@@ -1077,8 +1081,11 @@ static int start_game(void)
 
 		if (file)
 		{
-			if (fscanf(file, "%u", &game_core) != 1 || game_core > 2)
-				game_core = 1;
+			int number = 1;
+
+			if (fscanf(file, "%d", &number) != 1 || number < 0 || number > 2) /* (-1: as no file) */
+				number = 1;
+			game_core = (unsigned)number;
 			fclose(file);
 		}
 	}
