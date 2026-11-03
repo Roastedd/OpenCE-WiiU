@@ -4509,6 +4509,15 @@ static struct
 	unsigned long jobs;
 } gt;
 
+/* the GX2 thread's core time (the shell's log of the threads' shares of their cores): nanoseconds it has been given, and how many times it was woken; 0 if there is none */
+uint64_t wiiu_gx2_thread_cpu_ns(uint64_t *wakes);
+
+uint64_t wiiu_gx2_thread_cpu_ns(uint64_t *wakes)
+{
+	*wakes = gt.state == 2 ? gt.thread.wakeCount : 0;
+	return gt.state == 2 ? gt.thread.coreTimeConsumedNs : 0;
+}
+
 /* the foreground gate's caller: the GX2 thread is not the game thread (the shell's release callback waits for the game thread to be held, and must not take the GX2
 thread's hold for it) */
 static int gate_is_game_thread(void)

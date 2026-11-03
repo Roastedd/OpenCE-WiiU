@@ -3748,6 +3748,8 @@ boolean main_overlap_eligible(
 		reason = "the game's speed is not 1";
 	else if (main_globals.saving_map)
 		reason = "a save";
+	else if (tick_overlap_late())
+		reason = "the tick thread was late";
 	/* (the reason for a frame of the serial loop's, said when it changes: the log is where a run says why the overlap was not used) */
 	if (reason != last_reason)
 	{

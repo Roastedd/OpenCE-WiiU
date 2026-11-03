@@ -345,6 +345,15 @@ int wiiu_audio_open(void (*mixer)(float *output, unsigned long frames))
 }
 
 /* The app goes to the background (HOME): the system takes the sound engine. The mixer thread is parked first, then the voices let go and AX quit. */
+/* the mixer thread's core time (the shell's log of the threads' shares of their cores): nanoseconds it has been given, and how many times it was woken; 0 if there is none */
+uint64_t wiiu_audio_thread_cpu_ns(uint64_t *wakes);
+
+uint64_t wiiu_audio_thread_cpu_ns(uint64_t *wakes)
+{
+	*wakes = started ? thread.wakeCount : 0;
+	return started ? thread.coreTimeConsumedNs : 0;
+}
+
 void wiiu_audio_suspend(void);
 void wiiu_audio_resume(void);
 

@@ -926,8 +926,12 @@ long wiiu_study_number(const char *name, long fallback)
 {
 	const char *variable = !strcmp(name, "tick_thread.txt") ? "HALO_TICK_THREAD" : !strcmp(name, "tick_overlap.txt") ? "HALO_TICK_OVERLAP" :
 		!strcmp(name, "tick_overlap_stall.txt") ? "HALO_TICK_OVERLAP_STALL" : !strcmp(name, "tick_overlap_serialize.txt") ? "HALO_TICK_OVERLAP_SERIALIZE" : NULL;
-	const char *value = variable ? getenv(variable) : NULL;
+	const char *value;
 
+	/* (the fall back to the serial loop when the tick thread is late is on by default on the console and off here, where qemu is slow: HALO_TICK_OVERLAP_LATE=1) */
+	if (!strcmp(name, "tick_overlap_late.txt"))
+		variable = "HALO_TICK_OVERLAP_LATE", fallback = 0;
+	value = variable ? getenv(variable) : NULL;
 	return value && *value ? strtol(value, NULL, 10) : fallback;
 }
 
@@ -973,6 +977,52 @@ unsigned long long wiiu_now_ticks(void)
 unsigned long wiiu_ticks_per_second(void)
 {
 	return 1000000UL;
+}
+
+/* wiiu_perfmon.c, wiiu_shell.c: the performance counters (off here), and the cores */
+int wiiu_perfmon_set(void)
+{
+	return 0;
+}
+
+void wiiu_perfmon_start(void)
+{
+}
+
+void wiiu_perfmon_read(unsigned long values[4])
+{
+	values[0] = values[1] = values[2] = values[3] = 0;
+}
+
+const char *wiiu_perfmon_name(int counter)
+{
+	(void)counter;
+	return "";
+}
+
+unsigned wiiu_perfmon_core(void)
+{
+	return 0;
+}
+
+void wiiu_tick_thread_move(int to_the_calling_core)
+{
+	(void)to_the_calling_core;
+}
+
+unsigned wiiu_core_here(void)
+{
+	return 1;
+}
+
+unsigned wiiu_tick_thread_core_set(void)
+{
+	return 0;
+}
+
+long long wiiu_tick_begin(void)
+{
+	return 0;
 }
 
 /* wiiu_crash.c: the misaligned accesses the handler took on this core (the tick snapshot's timers) */

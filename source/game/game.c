@@ -335,11 +335,12 @@ void game_initialize(
 #if defined(HALO_WIIU) && !defined(HALO_PROFILE)
 /* port: on the Wii U each part of the tick its sections name is timed (port/wiiu/src/wiiu_tick_parts.c) */
 long long wiiu_tick_part_now(void);
+long long wiiu_tick_begin(void);
 void wiiu_tick_part(const char *name, long long started);
 void wiiu_tick_done(long long started);
 #undef profile_scope
 #define profile_scope(variable, statement) { long long tick_part_started = wiiu_tick_part_now(); statement wiiu_tick_part(#variable, tick_part_started); }
-#define TICK_PARTS_BEGIN() long long tick_started = wiiu_tick_part_now();
+#define TICK_PARTS_BEGIN() long long tick_started = wiiu_tick_begin();
 #define TICK_PARTS_END() wiiu_tick_done(tick_started);
 #else
 #define TICK_PARTS_BEGIN()

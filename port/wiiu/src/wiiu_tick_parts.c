@@ -28,8 +28,29 @@ static int part_count;
 static unsigned long game_ticks;
 static OSTime whole;
 
+/* wiiu_perfmon.c: the calling core's counters (halo/perf_counters.txt), over each tick */
+int wiiu_perfmon_set(void);
+void wiiu_perfmon_start(void);
+void wiiu_perfmon_read(unsigned long values[4]);
+const char *wiiu_perfmon_name(int counter);
+unsigned wiiu_perfmon_core(void);
+static unsigned long counters_before[4];
+static unsigned long long counters_sum[4];
+static unsigned counters_core;
+
 long long wiiu_tick_part_now(void)
 {
+	return (long long)OSGetSystemTime();
+}
+
+/* the start of a tick: the time, and the counters of the core the tick runs on */
+long long wiiu_tick_begin(void)
+{
+	if (wiiu_perfmon_set())
+	{
+		wiiu_perfmon_start();
+		wiiu_perfmon_read(counters_before);
+	}
 	return (long long)OSGetSystemTime();
 }
 
@@ -74,6 +95,15 @@ void wiiu_tick_done(long long started)
 	int order[PART_LIMIT], count = 0, index, slot;
 
 	whole += OSGetSystemTime() - (OSTime)started;
+	if (wiiu_perfmon_set())
+	{
+		unsigned long after[4];
+
+		wiiu_perfmon_read(after);
+		for (index = 0; index < 4; index++)
+			counters_sum[index] += (unsigned long)(after[index] - counters_before[index]);
+		counters_core = wiiu_perfmon_core();
+	}
 	if (++game_ticks < 150)
 		return;
 	/* (most first) */
@@ -95,6 +125,18 @@ void wiiu_tick_done(long long started)
 			platform_log("tick parts: %s", line);
 			used = 0;
 		}
+	}
+	if (wiiu_perfmon_set())
+	{
+		double v[4];
+
+		for (index = 0; index < 4; index++)
+		{
+			v[index] = (double)counters_sum[index] / (double)game_ticks;
+			counters_sum[index] = 0;
+		}
+		platform_log("tick parts, counters of core %u, a tick: %s %.2f M, %s %.2f M, %s %.1f K, %s %.1f K", counters_core, wiiu_perfmon_name(0), v[0] / 1e6, wiiu_perfmon_name(1), v[1] / 1e6,
+			wiiu_perfmon_name(2), v[2] / 1e3, wiiu_perfmon_name(3), v[3] / 1e3);
 	}
 	wiiu_bw_tick_report(game_ticks);
 	for (index = 0; index < part_count; index++)

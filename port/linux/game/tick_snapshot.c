@@ -82,6 +82,7 @@ port/wiiu/src/wiiu_tick_snapshot_timers.c, on the console, the milliseconds a fr
 
 #include "tick_owners.h"
 #include "tick_overlap.h"
+#include "tick_perf.h"
 #include "tick_ring.h"
 
 #include <stdarg.h>
@@ -335,6 +336,8 @@ static struct
 	unsigned long fixups;
 	/* the objects left out because nothing accessed them, and (the host check) the ones that were not the same after all */
 	unsigned long skipped, skipped_bytes, marked, marked_for_good, skipped_wrong, function_inputs_skipped;
+	struct tick_perf perf; /* the counters of the core, over the captures (tick_perf.h) */
+	unsigned perf_core;
 	unsigned long marked_type[16], skipped_type[16];
 	/* the change measure (mode bit 64): objects whose live block differs from the last capture's copy */
 	unsigned long compared, changed, changed_fixed, changed_type, changed_matrices, changed_orientations, changed_words;
@@ -1048,6 +1051,13 @@ static void tick_snapshot_bench(void)
 
 			for (at = 0, index = 0; index < count; index++)
 			{
+	if (tick_perf_on() && cs.perf.stretches)
+	{
+		const double per = (double)cs.perf.stretches;
+
+		tick_snapshot_say("tick snapshot capture, counters of core %u, a capture: %s %.2f M, %s %.2f M, %s %.1f K, %s %.1f K", cs.perf_core, wiiu_perfmon_name(0), (double)cs.perf.sum[0] / per / 1e6,
+			wiiu_perfmon_name(1), (double)cs.perf.sum[1] / per / 1e6, wiiu_perfmon_name(2), (double)cs.perf.sum[2] / per / 1e3, wiiu_perfmon_name(3), (double)cs.perf.sum[3] / per / 1e3);
+	}
 				struct object_header_datum const *header = &headers[list[index]];
 				struct block_parts parts;
 
@@ -1304,12 +1314,14 @@ void tick_snapshot_capture_tick(long tick, boolean commit)
 	s.window_captures++;
 	ADD(PART_CAPTURE, started);
 	mark2 = tick_overlap_now();
+	unsigned long perf_before[4];
 	cs.ring += mark2 - mark;
 	cs.total += mark2 - started_ticks;
 	cs.captures++;
 	cs.fixups += wiiu_crash_fixups_here() - fixups_before;
 	measure_previous = NULL;
 	tick_overlap_note_capture(mark2 - started_ticks);
+	tick_perf_begin(perf_before);
 	if (s.window_captures >= LOG_CAPTURES)
 	{
 		tick_snapshot_log();
@@ -1435,6 +1447,8 @@ static void tick_snapshot_apply_fields(long absolute_index, struct object_header
 	for (field = 0; field < RENDER_FIELD_COUNT; field++)
 	{
 		if (RENDER_FIELDS[field].offset + RENDER_FIELDS[field].size <= header->data_size)
+	tick_perf_end(&cs.perf, perf_before);
+	cs.perf_core = tick_perf_on() ? wiiu_perfmon_core() : 0;
 			memcpy((byte *)header->datum + RENDER_FIELDS[field].offset, kept, RENDER_FIELDS[field].size);
 		kept += RENDER_FIELDS[field].size;
 	}

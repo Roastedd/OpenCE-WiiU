@@ -486,6 +486,14 @@ int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes);
 static OSThread tick_thread;
 static uint8_t *tick_thread_stack;
 static void *(*tick_thread_entry)(void *);
+/* the core the tick thread is made on (halo/tick_core.txt: 0, 1 or 2; 0 if none), and the one it is on now (it is moved to the game thread's while the overlap is late) */
+static unsigned tick_core;
+static unsigned tick_core_now;
+
+static OSThreadAttributes core_attribute(unsigned core)
+{
+	return (OSThreadAttributes)(core == 1 ? OS_THREAD_ATTRIB_AFFINITY_CPU1 : core == 2 ? OS_THREAD_ATTRIB_AFFINITY_CPU2 : OS_THREAD_ATTRIB_AFFINITY_CPU0);
+}
 
 static int tick_thread_main(int argc, const char **argv)
 {
@@ -506,8 +514,20 @@ int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes)
 		return -1;
 	}
 	tick_thread_entry = entry;
-	if (!OSCreateThread(&tick_thread, tick_thread_main, 0, NULL, tick_thread_stack + stack_bytes, stack_bytes, main_priority,
-			OS_THREAD_ATTRIB_AFFINITY_CPU0))
+	{
+		FILE *file = fopen(WIIU_DATA_DIRECTORY "/tick_core.txt", "r");
+
+		if (file)
+		{
+			if (fscanf(file, "%u", &tick_core) != 1 || tick_core > 2)
+				tick_core = 0;
+			fclose(file);
+		}
+		tick_core_now = tick_core;
+		wiiu_log("The tick thread is made on core %u (halo/tick_core.txt: 0, 1 or 2), the game thread is on core %u (halo/game_core.txt)%s", tick_core, (unsigned)OSGetCoreId(),
+			tick_core == (unsigned)OSGetCoreId() ? ": the same core, and the two cannot run beside each other" : "");
+	}
+	if (!OSCreateThread(&tick_thread, tick_thread_main, 0, NULL, tick_thread_stack + stack_bytes, stack_bytes, main_priority, core_attribute(tick_core)))
 	{
 		wiiu_log("OSCreateThread failed for the tick thread");
 		MEMFreeToDefaultHeap(tick_thread_stack);
@@ -517,6 +537,33 @@ int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes)
 	OSSetThreadName(&tick_thread, "ticks");
 	OSResumeThread(&tick_thread);
 	return 1;
+}
+
+/* the tick thread moved to the calling thread's core (the game thread's, while the overlap is late: the game thread waits for it then, and the plain loop's core is the one with the big
+L2), or back to the core it was made on. Called with the tick thread idle (waiting for a job): it takes the core when it is next scheduled. */
+void wiiu_tick_thread_move(int to_the_calling_core);
+void wiiu_tick_thread_move(int to_the_calling_core)
+{
+	const unsigned target = to_the_calling_core ? (unsigned)OSGetCoreId() : tick_core;
+
+	if (!tick_thread_stack || target == tick_core_now)
+		return;
+	OSSetThreadAffinity(&tick_thread, core_attribute(target));
+	tick_core_now = target;
+	wiiu_log("The tick thread is moved to core %u", target);
+}
+
+/* the core the tick thread is set to (tick_overlap.c's log), and the calling thread's */
+unsigned wiiu_tick_thread_core_set(void);
+unsigned wiiu_tick_thread_core_set(void)
+{
+	return tick_core_now;
+}
+
+unsigned wiiu_core_here(void);
+unsigned wiiu_core_here(void)
+{
+	return (unsigned)OSGetCoreId();
 }
 
 /* the tick thread (source/main/main.c) at the game thread's priority: above the workers (the log, the debug server, the voice thread run at the game's +4,
@@ -757,6 +804,52 @@ static void tell_new_fixups(uint32_t *told)
 end of the process would be a second exit from another thread) */
 static volatile uint32_t main_returning;
 
+/* The core time of the app's main threads over the last beat, from the OS's own account (OSThread::coreTimeConsumedNs, which leaves out the slice a thread is in, and the number of times
+it was woken): the game thread, the tick thread, the audio mixer and the GX2 thread, each with the core it is allowed (the first of its affinity). A tick thread that is busy for the whole
+of a job but is given a third of the core's time is one a higher priority thread (the mixer, at 10, on core 0) shares its core with. */
+uint64_t wiiu_audio_thread_cpu_ns(uint64_t *wakes);
+uint64_t wiiu_gx2_thread_cpu_ns(uint64_t *wakes);
+
+static unsigned affinity_core(const OSThread *thread)
+{
+	const unsigned mask = (unsigned)OSGetThreadAffinity((OSThread *)thread);
+
+	return mask & 1u ? 0u : mask & 2u ? 1u : 2u;
+}
+
+static void threads_report(uint32_t window_ms)
+{
+	static uint64_t last_ns[4], last_wakes[4];
+	uint64_t ns[4], wakes[4];
+	char text[200];
+	size_t used = 0;
+	int which;
+	static const char *const names[4] = { "game", "ticks", "audio mixer", "GX2" };
+	unsigned cores[4];
+
+	ns[0] = game_thread.coreTimeConsumedNs;
+	wakes[0] = game_thread.wakeCount;
+	ns[1] = tick_thread_stack ? tick_thread.coreTimeConsumedNs : 0;
+	wakes[1] = tick_thread_stack ? tick_thread.wakeCount : 0;
+	ns[2] = wiiu_audio_thread_cpu_ns(&wakes[2]);
+	ns[3] = wiiu_gx2_thread_cpu_ns(&wakes[3]);
+	cores[0] = affinity_core(&game_thread);
+	cores[1] = tick_thread_stack ? affinity_core(&tick_thread) : 0;
+	cores[2] = 0;
+	cores[3] = 2;
+	for (which = 0; which < 4; which++)
+	{
+		if (ns[which] && used < sizeof(text) - 60)
+		{
+			used += (size_t)snprintf(text + used, sizeof(text) - used, "%s%s %.2f s on core %u (woken %u)", used ? ", " : "", names[which],
+				(double)(ns[which] - last_ns[which]) / 1e9, cores[which], (unsigned)(wakes[which] - last_wakes[which]));
+		}
+		last_ns[which] = ns[which];
+		last_wakes[which] = wakes[which];
+	}
+	wiiu_log("threads: core time in the last %.1f s: %s", (double)window_ms / 1000.0, text);
+}
+
 static void *watchdog_main(void *unused)
 {
 	uint32_t frames_before = 0;
@@ -803,6 +896,7 @@ static void *watchdog_main(void *unused)
 			snprintf(last_beat, sizeof(last_beat), "%s", text);
 			wiiu_log("beat: %s; %u log lines waiting; %u misaligned accesses made by the handler", text, (unsigned)pending,
 				(unsigned)wiiu_crash_fixups());
+			threads_report(now - last_beat_ms);
 			frames_before = shell_watch.frames;
 			last_beat_ms = now;
 		}

@@ -67,6 +67,9 @@ long wiiu_study_number(const char *name, long fallback)
 	/* (every study file is on, but the test aid that waits for each job: the hand-off is tested with the threads beside each other) */
 	if (!strcmp(name, "tick_overlap_serialize.txt"))
 		return fallback;
+	/* (nor the fall back to the serial loop when the tick thread is late: the test's frames are not a game's) */
+	if (!strcmp(name, "tick_overlap_late.txt"))
+		return 0;
 	return 1;
 }
 
@@ -137,6 +140,15 @@ void player_control_sync_display_facing(void) {}
 void observer_sync_published(void) {}
 void render_interpolation_overlap_set(boolean on, long tick) { (void)on; (void)tick; }
 void render_interpolation_blend_log(double ticks_per_ms, unsigned long frames) { (void)ticks_per_ms; (void)frames; }
+void tick_snapshot_say(char const *format, ...) { (void)format; }
+int wiiu_perfmon_set(void) { return 0; }
+void wiiu_perfmon_start(void) {}
+void wiiu_perfmon_read(unsigned long values[4]) { values[0] = values[1] = values[2] = values[3] = 0; }
+const char *wiiu_perfmon_name(int counter) { (void)counter; return ""; }
+unsigned wiiu_perfmon_core(void) { return 0; }
+void wiiu_tick_thread_move(int to_the_calling_core) { (void)to_the_calling_core; }
+unsigned wiiu_core_here(void) { return 1; }
+unsigned wiiu_tick_thread_core_set(void) { return 0; }
 
 #define SLOTS 4
 #define WORDS 128

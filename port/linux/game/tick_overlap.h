@@ -76,6 +76,10 @@ void tick_overlap_sync_point(void);
 /* The tick side of this frame, if it is the overlap's: the job is posted and the picture of the frame is set up (the view of the clock, the pair
 of the ring); the frame's dt is what the serial loop gives player_control_update and the clock. FALSE if the frame is the serial loop's. */
 boolean tick_overlap_post_frame(real dt);
+/* a line of the log said in lines that fit the console's (tick_snapshot.c) */
+void tick_snapshot_say(char const *format, ...);
+/* the tick thread was late for a while (tick_overlap.c): the frames are the serial loop's until it is tried again */
+boolean tick_overlap_late(void);
 /* whether the frame being run is the overlap's (the main loop's game thread, until the frame has been presented) */
 boolean tick_overlap_frame_active(void);
 /* the job is still running (the game thread draws meanwhile) */
