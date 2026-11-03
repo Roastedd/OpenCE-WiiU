@@ -249,6 +249,67 @@ static struct
 	int finished;
 } sink;
 
+/* GAME_DIGEST_PASSES=1: the game's render passes (source/render/render.c's RENDER_PASS marks, named as port/wiiu/src/wiiu_render_passes.c names them) as
+markers in the command streams, and for each frame a line of passes.txt: its tick, and for each pass the draws, the indices (or vertices) they hold, the
+indexed draws, the decal draws, the state writes, the draw facts, the constant rows and the vertex formats the streams held between its mark and the next
+(replay_gx2_totals). The markers are lines of the frame, so a digest of a run with this on is not the digest of one without: the measurement of what a
+setting saves, not the parity check. */
+#define PASSES_MAX 14
+static const char *const pass_names[PASSES_MAX] = { "visibility", "begin", "sky", "objects", "lightmaps", "shadows", "decals", "specular", "transparent",
+	"effects", "detail", "hud", "end", "window_end" };
+static struct
+{
+	int on;
+	FILE *file;
+	int current; /* the pass the streams are in (PASSES_MAX: before the first mark of the frame) */
+	unsigned long at[REPLAY_TOTAL_COUNT];
+	unsigned long sum[PASSES_MAX + 1][REPLAY_TOTAL_COUNT];
+} passes = { .current = PASSES_MAX };
+
+static void passes_take(void)
+{
+	unsigned long now[REPLAY_TOTAL_COUNT];
+	int kind;
+
+	replay_gx2_totals(now);
+	for (kind = 0; kind < REPLAY_TOTAL_COUNT; kind++)
+	{
+		passes.sum[passes.current][kind] += now[kind] - passes.at[kind];
+		passes.at[kind] = now[kind];
+	}
+}
+
+static void passes_marker(const char *text, size_t length)
+{
+	const char *name = memchr(text, ':', length);
+	int pass;
+
+	if (!name)
+		return;
+	name += 2;
+	passes_take();
+	for (pass = 0; pass < PASSES_MAX; pass++)
+		if (!strcmp(name, pass_names[pass]))
+			passes.current = pass;
+}
+
+static void passes_present(long tick)
+{
+	int pass, kind;
+
+	passes_take();
+	passes.current = PASSES_MAX;
+	fprintf(passes.file, "tick %ld", tick);
+	for (pass = 0; pass <= PASSES_MAX; pass++)
+	{
+		fprintf(passes.file, " | %s", pass < PASSES_MAX ? pass_names[pass] : "other");
+		for (kind = 0; kind < REPLAY_TOTAL_COUNT; kind++)
+			fprintf(passes.file, " %lu", passes.sum[pass][kind]);
+	}
+	fprintf(passes.file, "\n");
+	memset(passes.sum, 0, sizeof(passes.sum));
+}
+
 static FILE *sink_open(const char *name)
 {
 	char path[640];
@@ -303,6 +364,8 @@ static void sink_summary(const char *how)
 		sink.lines, sink.draws, how);
 	fclose(summary);
 	fflush(sink.frames);
+	if (passes.file)
+		fflush(passes.file);
 	if (sink.trace)
 		fflush(sink.trace);
 	if (random_log.file)
@@ -378,6 +441,8 @@ static void sink_line(const char *text, size_t length)
 		sink.frame_draws++;
 		sink.draws++;
 	}
+	if (passes.on && length > 7 && !memcmp(text, "marker ", 7))
+		passes_marker(text, length);
 	if (sink.trace)
 	{
 		if (sink.frame_text_used + length + 1 > sink.frame_text_size)
@@ -402,6 +467,8 @@ static void sink_line(const char *text, size_t length)
 			sink.frame_count, tick, (unsigned long long)sink.frame_hash, (unsigned long long)sink.frame_multiset, sink.frame_lines, sink.frame_draws,
 			get_random_seed(), *__real_get_global_local_random_seed_address(), audio_done, clock_extra);
 		random_frame(sink.frame_count, tick);
+		if (passes.on)
+			passes_present(tick);
 		if (sink.trace)
 		{
 			if (sink.trace_first == -2 || (tick >= 0 && tick >= sink.trace_first && tick <= sink.trace_last))
@@ -473,6 +540,11 @@ __attribute__((constructor)) static void sink_start(void)
 	if (!sink.frame_limit && !sink.tick_limit)
 		sink.frame_limit = 100;
 	sink.frames = sink_open("frames.txt");
+	if (getenv("GAME_DIGEST_PASSES") && *getenv("GAME_DIGEST_PASSES") && strcmp(getenv("GAME_DIGEST_PASSES"), "0"))
+	{
+		passes.on = 1;
+		passes.file = sink_open("passes.txt");
+	}
 	if (trace && *trace && strcmp(trace, "0"))
 	{
 		char *end;
@@ -993,9 +1065,12 @@ void wiiu_tick_done(long long started)
 }
 
 /* wiiu_render_passes.c and d3d8_gx2.c's frame parts: the console's timing log */
+void halo_render_marker(char const *name);
+
 void wiiu_render_pass(int pass)
 {
-	(void)pass;
+	if (passes.on && pass >= 0 && pass < PASSES_MAX)
+		halo_render_marker(pass_names[pass]);
 }
 
 /* wiiu_shell.c: debug.txt's lines, written by a thread of their own there; here at once */
