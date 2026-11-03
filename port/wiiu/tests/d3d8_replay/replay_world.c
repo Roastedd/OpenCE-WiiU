@@ -232,6 +232,12 @@ void startup_timeline_frame(void)
 {
 }
 
+int startup_option(unsigned long bit)
+{
+	(void)bit;
+	return 0;
+}
+
 /* hud_hires_tags.c's: no menu has the screen, so dynamic resolution's controller would run (it is off: host_gx2_drs_lines answers no step) */
 int port_menus_active(void)
 {

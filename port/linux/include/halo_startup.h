@@ -10,6 +10,18 @@ digest harness's) has any of this; every other build is untouched, the macros be
 #ifndef HALO_STARTUP_H
 #define HALO_STARTUP_H
 
+/* the start-up changes, each of which the card's halo/startup.txt (a number; no file: all) can switch off by its bit, to compare a run with the
+build's old start-up: */
+enum
+{
+	/* the menus' XML is read by a thread of its own from the start, not by the game thread when the menus' map has loaded (menu_files.c) */
+	STARTUP_PRELOAD_MENUS = 2,
+	/* and that thread then makes the images of the pictures the main menu draws, as the game thread would when it first draws them (xbox_textures_gx2.c) */
+	STARTUP_PREWARM_MENU_ART = 4,
+	/* the shader pack is read by a thread of its own from the start, not by the GX2 thread at the first draw (gx2_shaders.c) */
+	STARTUP_PREFETCH_SHADER_PACK = 8,
+};
+
 #ifdef HALO_WIIU
 
 /* nonzero once the report is made: the timers are nothing then */
@@ -20,6 +32,7 @@ long long startup_timeline_now(void);
 void startup_timeline_add(const char *name, long long started, unsigned long items, unsigned long bytes);
 void startup_timeline_frame(void);
 int startup_timeline_running(void);
+int startup_option(unsigned long bit);
 
 
 /* the game thread reached this point of its start-up (the segments of the one-line breakdown are the gaps between marks) */
@@ -30,6 +43,7 @@ int startup_timeline_running(void);
 #define STARTUP_TIMER(variable) long long variable = startup_timeline_finished ? 0 : startup_timeline_now()
 #define STARTUP_ADD(name, variable, items, bytes) do { if (variable) startup_timeline_add((name), (variable), (unsigned long)(items), (unsigned long)(bytes)); } while (0)
 #define STARTUP_FRAME() startup_timeline_frame()
+#define STARTUP_OPTION(bit) startup_option(bit)
 
 #else
 
@@ -38,6 +52,7 @@ int startup_timeline_running(void);
 #define STARTUP_TIMER(variable) long long variable = 0
 #define STARTUP_ADD(name, variable, items, bytes) ((void)(variable))
 #define STARTUP_FRAME() ((void)0)
+#define STARTUP_OPTION(bit) 0
 
 #endif
 

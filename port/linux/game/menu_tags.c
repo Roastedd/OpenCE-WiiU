@@ -2567,6 +2567,17 @@ static boolean menus_language_maps(void)
 	return FALSE;
 }
 
+#ifdef HALO_WIIU
+/* port (from the game's main, when its memory is set up): the menus' XML read by a thread of its own, and the main menu's art made ready by it
+(menu_files.c), where the game thread would do both when the menus' map has loaded (halo/startup.txt bits 2 and 4) */
+void menu_tags_preload(
+	void)
+{
+	if (menus_pc_chosen() && STARTUP_OPTION(STARTUP_PRELOAD_MENUS))
+		halo_menus_preload();
+}
+#endif
+
 void menu_tags_loaded(
 	char const *map_name)
 {

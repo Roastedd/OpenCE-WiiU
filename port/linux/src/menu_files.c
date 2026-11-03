@@ -20,6 +20,7 @@ high-res HUD's are (hud_hires.c). The Wii U has no OpenGL: its texture cache
 */
 
 #include "halo_menus.h"
+#include "halo_startup.h"
 #include "hud_hires.h"
 #include "menu_files.h"
 #include "platform.h"
@@ -32,6 +33,9 @@ high-res HUD's are (hud_hires.c). The Wii U has no OpenGL: its texture cache
 
 #ifndef HALO_WIIU
 #include <SDL3/SDL.h>
+#endif
+#ifdef HALO_WIIU
+#include <pthread.h>
 #endif
 #include <errno.h>
 #include <stdarg.h>
@@ -239,9 +243,34 @@ static int path_inside_folder(const char *path)
 	return 1;
 }
 
+#ifdef HALO_WIIU
+/* The menus are read, and their art made ready, by a thread of its own while the game starts (halo_menus_preload); this lock is for the files, which that
+thread and the game thread both look in (it is taken by halo_menus_load for the whole of a read, and by file_data for a look), and is there from the
+preload's start. */
+static pthread_mutex_t menus_lock;
+static volatile int menus_lock_ready;
+#define MENUS_LOCK() do { if (menus_lock_ready) pthread_mutex_lock(&menus_lock); } while (0)
+#define MENUS_UNLOCK() do { if (menus_lock_ready) pthread_mutex_unlock(&menus_lock); } while (0)
+#else
+#define MENUS_LOCK() ((void)0)
+#define MENUS_UNLOCK() ((void)0)
+#endif
+
+static const unsigned char *file_data_locked(const char *path, unsigned long *size);
+
 /* a file's data (a bitmap's PNG, by the path its <bitmap> gives): the
 menus folder's, else the embedded one */
 static const unsigned char *file_data(const char *path, unsigned long *size)
+{
+	const unsigned char *data;
+
+	MENUS_LOCK();
+	data = file_data_locked(path, size);
+	MENUS_UNLOCK();
+	return data;
+}
+
+static const unsigned char *file_data_locked(const char *path, unsigned long *size)
 {
 	long index;
 
@@ -971,7 +1000,19 @@ static int read_file(struct reader *reader, const struct menu_file *file)
 
 /* ---------- public code */
 
+static struct halo_menus const *halo_menus_load_locked(void);
+
 struct halo_menus const *halo_menus_load(void)
+{
+	struct halo_menus const *menus;
+
+	MENUS_LOCK();
+	menus = halo_menus_load_locked();
+	MENUS_UNLOCK();
+	return menus;
+}
+
+static struct halo_menus const *halo_menus_load_locked(void)
 {
 	static int read;
 	static struct halo_menus menus;
@@ -1190,5 +1231,119 @@ unsigned int menu_art_texture(unsigned long data, unsigned long *levels)
 	}
 	*levels = art[index].levels;
 	return art[index].texture;
+}
+#endif
+
+#ifdef HALO_WIIU
+/* ---------- the Wii U's preload
+
+The menus' files are read, and the art of the main menu is made ready, by a thread of its own, started when the game's memory is set up and ending a
+few seconds before the main menu is loaded (the menus take the game thread about a second and a half of the start-up on the console, two thirds of it
+the read; the art, the pictures' decoding and their mip levels, about a second more the first time each is drawn, and the highlight's picture of each
+item only when the cursor first rests on it: the menu appeared and its highlight was late). Nothing the thread makes is different from what the
+game thread would: halo_menus_load is the same function, and the images are those png_image makes (xbox_textures_gx2.c). */
+
+void wiiu_thread_off_game_core(void);
+void dk_texture_prewarm_png(const void *png, unsigned long size);
+
+static int preload_started;
+
+static long preload_widget_named(struct halo_menus const *menus, char const *name)
+{
+	long index;
+
+	for (index = 0; name && index < menus->widget_count; index++)
+	{
+		if (!strcmp(menus->widgets[index].name, name))
+			return index;
+	}
+	return HALO_MENU_NONE;
+}
+
+/* the images of a bitmap's frames made ready */
+static void preload_bitmap(struct halo_menus const *menus, char const *name)
+{
+	long index, frame;
+
+	for (index = 0; name && index < menus->bitmap_count; index++)
+	{
+		if (strcmp(menus->bitmaps[index].name, name))
+			continue;
+		for (frame = menus->bitmaps[index].first_frame; frame < menus->bitmaps[index].first_frame + menus->bitmaps[index].frame_count; frame++)
+		{
+			unsigned long size = 0;
+			const unsigned char *png = menus->frames[frame].png ? file_data(menus->frames[frame].png, &size) : NULL;
+
+			if (png)
+				dk_texture_prewarm_png(png, size);
+		}
+		return;
+	}
+}
+
+/* the pictures of a widget and all it holds (its children, and its description), the main menu's being the root's: what is drawn when the menu opens.
+A widget is visited once. */
+static void preload_widget(struct halo_menus const *menus, long widget, unsigned char *visited)
+{
+	struct halo_menu_widget const *source;
+	long child;
+
+	if (widget == HALO_MENU_NONE || visited[widget])
+		return;
+	visited[widget] = 1;
+	source = &menus->widgets[widget];
+	preload_bitmap(menus, source->bitmap);
+	preload_bitmap(menus, source->header_bitmap);
+	preload_bitmap(menus, source->footer_bitmap);
+	if (source->description)
+		preload_widget(menus, preload_widget_named(menus, source->description), visited);
+	for (child = source->first_child; child != HALO_MENU_NONE; child = menus->children[child].next)
+	{
+		const struct halo_menu_child *entry = &menus->children[child];
+
+		preload_widget(menus, entry->nested != HALO_MENU_NONE ? entry->nested : preload_widget_named(menus, entry->widget), visited);
+	}
+}
+
+static void *preload_main(void *unused)
+{
+	struct halo_menus const *menus;
+
+	(void)unused;
+	wiiu_thread_off_game_core();
+	STARTUP_NOTE("menus_read_start");
+	menus = halo_menus_load();
+	STARTUP_NOTE("menus_read_end");
+	if (menus && STARTUP_OPTION(STARTUP_PREWARM_MENU_ART))
+	{
+		unsigned char *visited = calloc((size_t)menus->widget_count + 1, 1);
+		long root = preload_widget_named(menus, menus->root);
+
+		if (visited && root != HALO_MENU_NONE)
+			preload_widget(menus, root, visited);
+		free(visited);
+		STARTUP_NOTE("menu_art_ready");
+	}
+	return NULL;
+}
+
+void halo_menus_preload(void)
+{
+	pthread_attr_t attributes;
+	pthread_t thread;
+
+	if (preload_started)
+		return;
+	preload_started = 1;
+	if (pthread_mutex_init(&menus_lock, NULL) != 0)
+		return;
+	menus_lock_ready = 1;
+	pthread_attr_init(&attributes);
+	pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
+	pthread_attr_setstacksize(&attributes, 1024 * 1024);
+	/* (a thread that cannot be made leaves the game thread to read the menus when it needs them, as it always did) */
+	if (pthread_create(&thread, &attributes, preload_main, NULL) != 0)
+		platform_log("startup: the menus' thread could not be made; the game thread reads them");
+	pthread_attr_destroy(&attributes);
 }
 #endif

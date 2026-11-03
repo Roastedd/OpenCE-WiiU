@@ -921,11 +921,11 @@ int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes)
 }
 
 /* wiiu_study.c: a study switch's number from a file on the card; here from the environment (tick_thread.txt: HALO_TICK_THREAD,
-tick_overlap.txt: HALO_TICK_OVERLAP), so that a run can have the ticks on a thread of their own, and overlapped */
+tick_overlap.txt: HALO_TICK_OVERLAP, startup.txt: HALO_STARTUP), so that a run can have the ticks on a thread of their own, and overlapped */
 long wiiu_study_number(const char *name, long fallback)
 {
 	const char *variable = !strcmp(name, "tick_thread.txt") ? "HALO_TICK_THREAD" : !strcmp(name, "tick_overlap.txt") ? "HALO_TICK_OVERLAP" :
-		!strcmp(name, "tick_overlap_stall.txt") ? "HALO_TICK_OVERLAP_STALL" : NULL;
+		!strcmp(name, "tick_overlap_stall.txt") ? "HALO_TICK_OVERLAP_STALL" : !strcmp(name, "startup.txt") ? "HALO_STARTUP" : NULL;
 	const char *value = variable ? getenv(variable) : NULL;
 
 	return value && *value ? strtol(value, NULL, 10) : fallback;
@@ -973,6 +973,11 @@ unsigned long long wiiu_now_ticks(void)
 unsigned long wiiu_ticks_per_second(void)
 {
 	return 1000000UL;
+}
+
+/* gx2_shaders.c (the console's shader pack): none is read here */
+void dk_shader_pack_prefetch(void)
+{
 }
 
 /* wiiu_shell.c: the log's clock in milliseconds (startup_timeline.c's marks); here the time since the first read, which a run that is digested

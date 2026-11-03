@@ -24,6 +24,7 @@ made once, then the marks and timers do nothing.
 
 void platform_log(char const *format, ...);
 unsigned long wiiu_shell_ms(void);
+long wiiu_study_number(const char *name, long fallback);
 unsigned long long wiiu_now_ticks(void);
 unsigned long wiiu_ticks_per_second(void);
 
@@ -79,6 +80,22 @@ static void lock(void)
 static void unlock(void)
 {
 	__sync_lock_release(&t.lock);
+}
+
+/* halo/startup.txt: a number whose bits switch the start-up changes (halo_startup.h); none, or no file: all of them */
+int startup_option(unsigned long bit)
+{
+	static volatile int read;
+	static volatile unsigned long options;
+
+	if (!read)
+	{
+		options = (unsigned long)wiiu_study_number("startup.txt", -1L);
+		read = 1;
+		if (options != (unsigned long)-1L)
+			platform_log("startup: halo/startup.txt says %lu: the changes it leaves out are off", options);
+	}
+	return (options & bit) != 0;
 }
 
 int startup_timeline_running(void)
