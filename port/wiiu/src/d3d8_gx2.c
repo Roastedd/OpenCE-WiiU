@@ -19,6 +19,7 @@ and presenting go there; a draw and a visibility test do nothing yet.
 #include "xgpu.h"
 #include "sdl_platform.h"
 #include "halo_ui_pointer.h"
+#include "halo_startup.h"
 #include "touch_menu.h"
 #include "port_config.h"
 #include "posix.h"
@@ -4202,6 +4203,16 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 
 	D3DDevice_Present_inner(source_rectangle, destination_rectangle, unused, unused2);
 	present = profile_now_ms() - start;
+	{
+		/* the start-up's timeline (startup_timeline.c): the first presents, and the report once the main menu is live and has been drawn a few times */
+		static unsigned presents;
+		static const char *const names[] = { "present_1", "present_2", "present_3", "present_4" };
+
+		if (presents < sizeof(names) / sizeof(names[0]))
+			STARTUP_MARK(names[presents]);
+		presents++;
+		STARTUP_FRAME();
+	}
 	profile.last_exit_ms = profile_now_ms();
 	profile.present_ms += present;
 	profile.work_ms += work;

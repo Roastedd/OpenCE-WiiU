@@ -36,6 +36,7 @@ symbols in this file:
 #include "physical_memory_map.h"
 #include "main.h"
 #include "rasterizer/xbox/rasterizer_xbox.h"
+#include "halo_startup.h" /* port: port/linux/include/halo_startup.h */
 
 /* ---------- prototypes */
 
@@ -108,9 +109,12 @@ int main(
 	server's checks of its game data and settings, before anything is
 	allocated or bound (port/linux/src/server_mode.c) */
 	server_mode_start();
+	STARTUP_MARK("main");
 	fuck_code_in_the_eye();
 	rasterizer_preinitialize__fill_you_up_with_the_devils_cock();
+	STARTUP_MARK("preinit");
 	physical_memory_allocate();
+	STARTUP_MARK("memory");
 
 	__try
 	{

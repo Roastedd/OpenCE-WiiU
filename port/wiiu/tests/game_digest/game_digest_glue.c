@@ -975,6 +975,19 @@ unsigned long wiiu_ticks_per_second(void)
 	return 1000000UL;
 }
 
+/* wiiu_shell.c: the log's clock in milliseconds (startup_timeline.c's marks); here the time since the first read, which a run that is digested
+does not look at (it only says in the log where the start-up's time went) */
+unsigned long wiiu_shell_ms(void)
+{
+	static struct timespec first;
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	if (!first.tv_sec && !first.tv_nsec)
+		first = now;
+	return (unsigned long)((now.tv_sec - first.tv_sec) * 1000L + (now.tv_nsec - first.tv_nsec) / 1000000L);
+}
+
 /* wiiu_tick_parts.c: the console's timing of the parts of a tick */
 long long wiiu_tick_part_now(void)
 {

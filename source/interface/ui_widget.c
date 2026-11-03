@@ -680,6 +680,7 @@ struct widget_instance;
 #include "text/text_group.h"
 #include "text/unicode.h"
 #include "ui_widget.h"
+#include "halo_startup.h" /* port: port/linux/include/halo_startup.h */
 
 #ifdef HALO_WIIU
 /* port: a menu's pause of the game clock is a message to the tick thread, and the menu reads what it has asked for
@@ -4985,7 +4986,11 @@ short remap_sticks_for_local_player(
 static unsigned long __stdcall filesystem_initialization_thread_proc(
 	void *input)
 {
+	STARTUP_TIMER(started);
+
+	STARTUP_NOTE("fs_start");
 	widget_globals.filesystem_check_result = saved_game_perform_file_system_checks();
+	STARTUP_ADD("fs_checks", started, 1, 0);
 	if (!widget_globals.filesystem_check_result)
 	{
 		word number_of_profiles = 1;
@@ -4995,6 +5000,8 @@ static unsigned long __stdcall filesystem_initialization_thread_proc(
 		player_profiles_enumerate_available_to_local_player_index(NONE, &number_of_profiles, &profile_index, TRUE);
 		player_ui_get_player1_last_used_profile_index();
 	}
+	STARTUP_ADD("fs_all", started, 1, 0);
+	STARTUP_NOTE("fs_end");
 
 	return 0;
 }
@@ -8693,6 +8700,16 @@ void process_ui_widgets(
 		}
 
 		return;
+	}
+	/* port: the main menu's widgets are processed for the first time: its highlight is there to be drawn (startup_timeline.c) */
+	{
+		static boolean live_marked;
+
+		if (!live_marked && we_are_at_the_main_menu && widget_globals.active_widgets[0])
+		{
+			live_marked = TRUE;
+			STARTUP_MARK("menu_live");
+		}
 	}
 	pause_pressed = ui_check_for_pause_game();
 	any_modal_widget_active = FALSE;
