@@ -220,6 +220,25 @@ static int keys_new(uint64_t identity)
 	return 1;
 }
 
+/* the frame the draws now belong to (the sweep, game_digest_sweep.c, logs its stops by it, so that a key is told by the stop that made it) */
+unsigned long replay_keys_frame(void);
+
+unsigned long replay_keys_frame(void)
+{
+	return gx.frame;
+}
+
+static unsigned long keys_frame_written = ~0ul;
+
+static void keys_frame_comment(void)
+{
+	if (keys_frame_written != gx.frame)
+	{
+		fprintf(keys.file, "# frame %lu\n", gx.frame);
+		keys_frame_written = gx.frame;
+	}
+}
+
 static void keys_note(const struct dk_vertex_key *vertex, const struct nv2a_pixel_shader_key *pixel)
 {
 	if (!keys_enabled())
@@ -232,6 +251,7 @@ static void keys_note(const struct dk_vertex_key *vertex, const struct nv2a_pixe
 		shader_key_write(pixel, wire);
 		if (keys_new(shader_key_hash(SHADER_KEY_HASH_INIT, wire, sizeof(wire)) ^ 0x5049585Full))
 		{
+			keys_frame_comment();
 			fputs("P ", keys.file);
 			for (index = 0; index < sizeof(wire); index++)
 				fprintf(keys.file, "%02x", wire[index]);
@@ -248,6 +268,7 @@ static void keys_note(const struct dk_vertex_key *vertex, const struct nv2a_pixe
 
 			for (index = 0; index < keys.program_count && keys.programs[index].hash != vertex->program_hash; index++)
 				;
+			keys_frame_comment();
 			if (index < keys.program_count)
 			{
 				fprintf(keys.file, "V %08lx%08lx %lu %lu", (unsigned long)(vertex->program_hash >> 32), (unsigned long)(vertex->program_hash & 0xffffffffu),
@@ -267,6 +288,48 @@ static void keys_note(const struct dk_vertex_key *vertex, const struct nv2a_pixe
 		keys.last_vertex = *vertex;
 	}
 	keys.last_valid = 1;
+	fflush(keys.file);
+}
+
+/* Every vertex key the game can ask for, at the end of a run (GAME_DIGEST_KEYS): the game makes all of its vertex programs when it starts (the 67 of
+rasterizer_xbox_vertex_shaders.c, and the loading screen's), each with the attributes its declaration packs, and a draw from immediate-mode vertices
+asks for a program with none packed. So the keys the console can meet are the programs' (hash, packed mask) and (hash, 0), whether or not a run drew
+with them. Written with "#" comments saying which: key_diff.py reads them like the others. */
+unsigned long d3d8_dk_vertex_shader_count(void);
+int d3d8_dk_vertex_program_by_id(unsigned long id, uint64_t *program_hash, const uint32_t **instructions, unsigned long *instruction_count);
+unsigned long d3d8_dk_vertex_program_packed_mask_by_id(unsigned long id);
+
+void replay_keys_finish(void)
+{
+	unsigned long id, count = d3d8_dk_vertex_shader_count(), written = 0;
+	unsigned variant;
+
+	if (!keys_enabled() || !getenv("GAME_DIGEST_KEYS_ALL_VERTEX"))
+		return;
+	for (id = 1; id < count; id++)
+	{
+		uint64_t program_hash;
+		const uint32_t *words;
+		unsigned long instruction_count, word, mask = d3d8_dk_vertex_program_packed_mask_by_id(id);
+
+		if (!d3d8_dk_vertex_program_by_id(id, &program_hash, &words, &instruction_count) || !instruction_count || instruction_count > 136)
+			continue;
+		for (variant = 0; variant < 2; variant++)
+		{
+			unsigned long use = variant ? 0 : mask;
+
+			if (variant && !mask)
+				continue;
+			if (!keys_new(shader_key_hash(SHADER_KEY_HASH_INIT, (const unsigned char *)&program_hash, sizeof(program_hash)) * 31u + use))
+				continue;
+			fprintf(keys.file, "V %08lx%08lx %lu %lu", (unsigned long)(program_hash >> 32), (unsigned long)(program_hash & 0xffffffffu), use, instruction_count);
+			for (word = 0; word < instruction_count * 4; word++)
+				fprintf(keys.file, " %08lx", (unsigned long)words[word]);
+			fputc('\n', keys.file);
+			written++;
+		}
+	}
+	fprintf(keys.file, "# vertex programs listed at the end: %lu of %lu ids, %lu keys\n", count ? count - 1 : 0, count, written);
 	fflush(keys.file);
 }
 

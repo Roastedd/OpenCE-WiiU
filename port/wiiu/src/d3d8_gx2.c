@@ -2352,6 +2352,16 @@ int d3d8_dk_vertex_program_by_id(unsigned long id, uint64_t *program_hash, const
 	return 1;
 }
 
+/* the attributes the program's declaration feeds as packed integers (NORMPACKED3), which its vertex key names with the program (a draw from
+immediate-mode vertices has none packed: mask 0); 0 for an id with no program. The digest harness lists every vertex key from these
+(replay_gx2.c, GAME_DIGEST_KEYS) */
+unsigned long d3d8_dk_vertex_program_packed_mask_by_id(unsigned long id)
+{
+	struct vertex_shader_object *object = id < vertex_shaders_by_id_count ? vertex_shaders_by_id[id] : NULL;
+
+	return object && object->instructions ? (unsigned long)object->packed_mask : 0;
+}
+
 
 /* d3d8_gl.c's program records, whose keys the dump's pixel shaders are */
 #define PROGRAM_RECORD_MAGIC 0x31435350UL /* "PSC1" */
