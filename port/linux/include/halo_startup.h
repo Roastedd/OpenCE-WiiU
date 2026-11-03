@@ -22,6 +22,8 @@ enum
 	STARTUP_PREWARM_MENU_ART = 4,
 	/* the shader pack is read by a thread of its own from the start, not by the GX2 thread at the first draw (gx2_shaders.c) */
 	STARTUP_PREFETCH_SHADER_PACK = 8,
+	/* the card's free space is asked on a thread of its own and the main menu does not wait for it (saved_game_files.c) */
+	STARTUP_FREE_SPACE_APART = 16,
 };
 
 #ifdef HALO_WIIU

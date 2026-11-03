@@ -323,6 +323,7 @@ symbols in this file:
 #include "interface/player_ui.h"
 #include "text/text_group.h"
 #include "game_modes.h" /* port: port/linux/game/game_modes.c */
+#include "halo_startup.h" /* port: port/linux/include/halo_startup.h */
 #include "tag_files/tag_groups.h"
 /* the saved game file checksum is an XDK content signature, and enumerated
    saved game metadata is created/deleted through the XDK save game API. */
@@ -649,15 +650,24 @@ void saved_game_files_release_mutex(
 	return;
 }
 
-short saved_game_perform_file_system_checks(
+#ifdef HALO_WIIU
+/* port: the card's free space asked once, on a thread of its own, and the menu not held for it. The checks the main menu waits for began with the
+space (GetDiskFreeSpaceEx, the system's count of the card's free clusters, which on a big FAT card reads the card's allocation table), and the menu's
+widgets were not processed, nor its highlight drawn, until the thread that asked had the answer. Now the thread of the checks takes the space as it
+is known: not asked yet, or being asked, it is enough (a card with less than 40 MB free is the rare card); when the answer is that it is not, the
+game's error for it is queued, as a profile's creation queues it. The profile's creation uses the answer too, and asks itself if nothing has.
+0 not asked, 1 being asked, 2 enough, 3 not enough. */
+static volatile int free_space_state;
+
+static short free_space_ask(
 	void)
 {
 	ULARGE_INTEGER free_bytes_available;
 	char root_path[MEMORY_UNIT_ROOT_PATH_SIZE];
 	ULARGE_INTEGER total_number_of_free_bytes;
 	ULARGE_INTEGER total_number_of_bytes;
-	XGAME_FIND_DATA find_data;
 	short result = _saved_game_file_system_ok;
+	STARTUP_TIMER(started);
 
 	if (GetDiskFreeSpaceEx(
 			wide_to_ascii(memory_unit_root_path[_memory_unit_hard_drive], root_path, sizeof(root_path)),
@@ -665,6 +675,90 @@ short saved_game_perform_file_system_checks(
 			&total_number_of_bytes,
 			&total_number_of_free_bytes) &&
 		free_bytes_available.QuadPart < MINIMUM_FREE_DISK_SPACE)
+	{
+		result = _saved_game_file_system_out_of_disk_space;
+	}
+	STARTUP_ADD("free_space", started, 1, 0);
+	STARTUP_NOTE("free_space_end");
+	return result;
+}
+
+static unsigned long __stdcall free_space_thread_proc(
+	void *input)
+{
+	if (free_space_ask() == _saved_game_file_system_ok)
+	{
+		free_space_state = 2;
+	}
+	else
+	{
+		free_space_state = 3;
+		display_error_abort_to_dashboard_deferred(33, TRUE);
+	}
+
+	return 0;
+}
+
+/* whether the card is known to have less than the minimum free: asked now if nothing has asked, and taken as enough while it is being asked */
+static boolean free_space_known_short(
+	void)
+{
+	if (free_space_state == 0)
+	{
+		free_space_state = 1;
+		free_space_state = free_space_ask() == _saved_game_file_system_ok ? 2 : 3;
+	}
+
+	return free_space_state == 3;
+}
+
+/* (from the main menu's loading, before the thread of the checks) */
+void saved_game_files_ask_free_space(
+	void)
+{
+	HANDLE thread;
+
+	if (free_space_state)
+	{
+		return;
+	}
+	free_space_state = 1;
+	thread = CreateThread(NULL, 0, free_space_thread_proc, NULL, 0, NULL);
+	if (thread)
+	{
+		CloseHandle(thread);
+	}
+	else
+	{
+		free_space_state = 0;
+	}
+
+	return;
+}
+#endif
+
+short saved_game_perform_file_system_checks(
+	void)
+{
+#ifndef HALO_WIIU
+	ULARGE_INTEGER free_bytes_available;
+	ULARGE_INTEGER total_number_of_free_bytes;
+	ULARGE_INTEGER total_number_of_bytes;
+#endif
+	char root_path[MEMORY_UNIT_ROOT_PATH_SIZE];
+	XGAME_FIND_DATA find_data;
+	short result = _saved_game_file_system_ok;
+
+#ifdef HALO_WIIU
+	if (free_space_known_short())
+#else
+	if (GetDiskFreeSpaceEx(
+			wide_to_ascii(memory_unit_root_path[_memory_unit_hard_drive], root_path, sizeof(root_path)),
+			&free_bytes_available,
+			&total_number_of_bytes,
+			&total_number_of_free_bytes) &&
+		free_bytes_available.QuadPart < MINIMUM_FREE_DISK_SPACE)
+#endif
 	{
 		result = _saved_game_file_system_out_of_disk_space;
 	}

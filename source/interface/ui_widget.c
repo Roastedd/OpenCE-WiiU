@@ -4997,7 +4997,9 @@ static unsigned long __stdcall filesystem_initialization_thread_proc(
 		long profile_index;
 
 		playlist_profiles_enumerate_available_to_local_player_index(NONE, &number_of_profiles, &profile_index);
+		STARTUP_NOTE("fs_playlists");
 		player_profiles_enumerate_available_to_local_player_index(NONE, &number_of_profiles, &profile_index, TRUE);
+		STARTUP_NOTE("fs_profiles");
 		player_ui_get_player1_last_used_profile_index();
 	}
 	STARTUP_ADD("fs_all", started, 1, 0);
@@ -5014,6 +5016,11 @@ static void perform_filesystem_initialization(
 		5439,
 		widget_globals.initialization_thread==NULL);
 	error(_error_silent, "begining filesystem checks & saved game file enumeration...");
+#ifdef HALO_WIIU
+	/* port: the card's free space is asked on a thread of its own, which the menu does not wait for (saved_game_files.c) */
+	if (STARTUP_OPTION(STARTUP_FREE_SPACE_APART))
+		saved_game_files_ask_free_space();
+#endif
 	ui_widgets_inhibit_processing(TRUE);
 	widget_globals.filesystem_check_result = 0;
 	if (!create_thread(0, filesystem_initialization_thread_proc, NULL, &widget_globals.initialization_thread))
