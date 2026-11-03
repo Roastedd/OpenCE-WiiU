@@ -87,9 +87,9 @@ UNIT_RENAMES = {"source/interface/progress_bar.c": {"GetTickCount": "game_digest
 # stack cleared first)
 WRAPPED = ["host_gx2_submit", "cache_copy_get_status", "system_milliseconds", "cache_file_read", "_texture_cache_bitmap_get_hardware_format",
            "_sound_cache_sound_request", "get_global_local_random_seed_address", "network_game_get_random_player_name",
-           "game_initialize_for_new_map", "rasterizer_set_model_lighting"]
-# (and with --poison, the frame's rendering, whose stack is filled first)
-POISON_WRAPPED = ["render_frame"]
+           "game_initialize_for_new_map", "rasterizer_set_model_lighting", "render_frame", "cheats_update"]
+# (the frame's rendering is wrapped for the sweep, game_digest_sweep.c, and with --poison its stack is filled first)
+POISON_WRAPPED = []
 # the bytes the program's data is moved by with --poison
 POISON_PADDING = 40000
 
@@ -107,6 +107,7 @@ class DigestWriter(Writer):
         self.build_dir = build_dir
         self.links = []
         self.dropped = set()
+        self.game_variables = None
 
     def build(self, outputs, rule, inputs=None, implicit=None, order_only=None, variables=None, implicit_outputs=None, pool=None, dyndep=None):
         source = Path(inputs).as_posix() if isinstance(inputs, (str, Path)) else None
@@ -117,6 +118,9 @@ class DigestWriter(Writer):
             if source.startswith("source/") or source.startswith("port/linux/game/") or source in WIIU_PLATFORM_UNITS:
                 variables = dict(variables or {})
                 variables["cflags"] = variables["cflags"] + " -DHALO_WIIU"
+                if source == "source/main/main.c":
+                    # (the game's flags, for the sweep's unit: it is compiled as a game unit is)
+                    self.game_variables = dict(variables)
             if source in UNIT_RENAMES:
                 variables = dict(variables or {})
                 variables["cflags"] = variables["cflags"] + "".join(f" -D{name}={value}" for name, value in UNIT_RENAMES[source].items())
@@ -175,6 +179,11 @@ def generate(build_dir: Path, poison: bool = False) -> str:
         poisoned = [f"-DGAME_DIGEST_POISON={POISON_PADDING}"] if poison and unit.name == "game_digest_glue.c" else []
         n.build(out, "digest_cc", str(unit), implicit=[semantics, decals],
                 variables={"cflags": " ".join(target + LAYER_FLAGS + includes + poisoned)})
+    # the sweep (game_digest_sweep.c): a unit of the game's own flags and headers, which tours what a map can draw when GAME_DIGEST_SWEEP says so
+    sweep = obj / HERE / "game_digest_sweep.o"
+    extra.append(sweep.as_posix())
+    n.build(sweep, "linux_cc", str(HERE / "game_digest_sweep.c"), implicit=[semantics, build_dir / "linux-ppc" / "halo_msvc_semantics.h"],
+            variables=dict(n.game_variables))
     for unit in HOST_UNITS:
         out = obj / Path(unit).with_suffix(".o")
         extra.append(out.as_posix())
