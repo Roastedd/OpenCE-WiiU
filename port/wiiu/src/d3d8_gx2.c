@@ -4183,9 +4183,9 @@ static void draw_statistics_log(void)
 				const double work = profile.work_ms > 0.0 ? profile.work_ms : 1.0, frames = (double)profile.frames;
 
 				platform_log("frame shares of %.1f ms: ticks %.0f%%, rendering %.0f%% (stream slot wait %.0f%%, GX2 streams wait %.0f%%, idle wait %.0f%%), rest of the loop %.0f%%, "
-					"files %.0f%% (inside these)", work / frames, 100.0 * sum_tick_ms / work, 100.0 * sum_render_ms / work,
+					"files (all threads) %.1f ms a frame", work / frames, 100.0 * sum_tick_ms / work, 100.0 * sum_render_ms / work,
 					100.0 * sum_slot_ms / work, 100.0 * (waits_ms - waits_before_note) / work, 100.0 * (idle_ms - idle_before_note) / work,
-					100.0 * (work - sum_tick_ms - sum_render_ms) / work, 100.0 * sum_file_ms / work);
+					100.0 * (work - sum_tick_ms - sum_render_ms) / work, sum_file_ms / frames);
 			}
 			slot_waits_before = slot_waits;
 			waits_before_note = waits_ms;
@@ -4252,10 +4252,10 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 		const double file_ms = (platform_file_io_snapshot(&io), io.read_ms + io.write_ms);
 
 		if (work > 34.0)
-			platform_log("hitch: frame %lu took %.1f ms of work: %.1f in the game's %lu ticks, %.1f rendering (%.1f in draws, %.1f for a stream slot), %.1f waiting for the GX2 thread's "
-				"streams, %.1f in %lu idle waits, %.1f in files, %.1f other, present %.1f", device.frame, work, frame_tick_ms, frame_ticks, frame_render_ms, ticks_ms(frame_draw_ticks),
-				slot_wait_ms - slot_before, waits_ms - waits_before, idle_ms - idle_before, idle_calls - idle_calls_before, file_ms - file_before,
-				work - frame_tick_ms - frame_render_ms, present);
+			platform_log("hitch: frame %lu took %.1f ms of work: %.1f in the game's %lu ticks, %.1f rendering (%.1f draws, %.1f stream slot wait), %.1f other, %.1f file time, present %.1f, "
+				"%.1f GX2 streams wait, %.1f idle waits (%lu)", device.frame, work, frame_tick_ms, frame_ticks, frame_render_ms, ticks_ms(frame_draw_ticks),
+				slot_wait_ms - slot_before, work - frame_tick_ms - frame_render_ms, file_ms - file_before, present, waits_ms - waits_before, idle_ms - idle_before,
+				idle_calls - idle_calls_before);
 		sum_tick_ms += frame_tick_ms;
 		sum_render_ms += frame_render_ms;
 		sum_ticks += frame_ticks;
