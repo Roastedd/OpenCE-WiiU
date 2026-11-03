@@ -877,3 +877,32 @@ and immutable vertices. Two deliberate faults must fail. It does not emulate
 GPU pixels. The fixed shader's sources and byte identity live in
 `shaders/mip.*`; regenerate the embedded GFD with
 `python3 port/wiiu/tools/embed_mip_shader.py --compiler <existing-glslcompiler>`.
+
+## Start-up
+
+The log says where the first seconds go. Once the main menu's widgets have been processed (the first time its highlight can be drawn) and the menu has been
+drawn a few times, `log.txt` has a block of lines, each starting `startup:`, from `port/linux/game/startup_timeline.c`:
+
+- the milliseconds to a live menu, and the segments: each is the mark that ends it and the milliseconds since the mark before (`log_up`, `updater`,
+  `game_thread`, `main`, `memory`, `tag_files`, `game_state`, `rasterizer`, `input`, `sound`, `game_init`, `map_tags` to `menus_widgets` for the menus'
+  map and their build, `ui_map`, `widgets`, `precache`, `present_N`, `menu_live`);
+- events of other threads, in milliseconds since the start (`menus_read_end`, `menu_art_ready`, `shader_pack_ready`, `free_space_end`, `fs_start`,
+  `fs_playlists`, `fs_profiles`, `fs_end`, `gx2_present_N`);
+- work added up under a name, as calls, milliseconds and kilobytes (`png_decode`, `png_mips`, `png_send`, `png_all`, `atlas_all`, `tex_get`, `texture_wait`,
+  `read_big` and `read_small` for the map and card reads, `shader_pack_read`, `shader_pack_wait`, `fs_checks`, `fs_all`, `free_space`, `ui_wait_checks` for the
+  frames the menu's widgets were held back by the saved games' checks, `mt_*` for the menus' build), and, for the first twelve, `startup: waited N ms for the
+  pixels of <bitmap>`.
+
+Four things the start-up does differently from before, each switched off by its bit in `halo/startup.txt` (a number; no file: all on):
+
+| bit | what |
+| --- | --- |
+| 1 | the saved games' checks, which the main menu's widgets wait for, start when the game's systems are up, not after the menu's map is loaded |
+| 2 | the menus' XML is read by a thread of its own from the start of the game's memory |
+| 4 | that thread then decodes the pictures of the main menu (every frame of each: the highlight's too) into the texture cache's chains |
+| 8 | the shader pack is read by a thread of its own, not by the GX2 thread at the first draw |
+| 16 | the card's free space is asked on a thread of its own, which the saved games' checks do not wait for |
+
+`halo/startup.txt` `0` is the old start-up (the menus' tags look their names up in hash tables, and the texture work is done a word at a time, in either).
+The drawn frames are the same with any of them (the digest harness: tools/test_wiiu_game_digest.py), but for the first two of the main menu, where the highlight is
+there a frame or two sooner with bit 1.
