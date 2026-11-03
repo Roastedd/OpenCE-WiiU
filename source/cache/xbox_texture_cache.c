@@ -121,6 +121,7 @@ symbols in this file:
 #include "text/draw_string.h"
 #include <xtl.h>
 #include "custom_edition_cache.h" /* port: port/linux/game/custom_edition_cache.c */
+#include "halo_startup.h" /* port: port/linux/include/halo_startup.h */
 
 #ifdef HALO_ANDROID
 #include "android_ce_texture_cache.h" /* port: port/linux/game/android_ce_texture_cache.c */
@@ -1089,6 +1090,9 @@ void *_texture_cache_bitmap_get_hardware_format(
 				xbox_texture_cache_globals.textures,
 				bitmap->cache_block_index);
 
+			STARTUP_TIMER(waiting);
+			boolean waited = block && !texture->loaded;
+
 			lruv_block_touch(
 				xbox_texture_cache_globals.cache,
 				bitmap->cache_block_index);
@@ -1122,6 +1126,9 @@ void *_texture_cache_bitmap_get_hardware_format(
 				}
 			}
 			while (!hardware_format && block);
+			/* port: (the start-up's timeline, startup_timeline.c: the time a bitmap's pixels were waited for, the reads of the card) */
+			if (waited)
+				STARTUP_ADD("texture_wait", waiting, 1, bitmap->pixels_size);
 		}
 	}
 	else
