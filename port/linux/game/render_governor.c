@@ -254,7 +254,7 @@ float render_governor_lod_scale(void)
 	return render_governor_values()->lod_scale;
 }
 
-static void governor_log(double now_ms, char const *why)
+static void governor_log(double now_ms)
 {
 	double passes[13];
 	unsigned long windows = render_governor_pass_milliseconds(passes);
@@ -267,10 +267,9 @@ static void governor_log(double now_ms, char const *why)
 		delta[index] = render_governor_counts[index] - governor.counts_at[index];
 		governor.counts_at[index] = render_governor_counts[index];
 	}
-	platform_log("governor: step %d (%s)%s, frame work %.1f ms (ticks %.1f, rendering %.1f, worst %.0f) over target %.1f, %lu frames; steps down %lu up %lu%s%s",
+	platform_log("governor: step %d (%s)%s: frame work %.1f ms (ticks %.1f, rendering %.1f, worst %.0f), target %.1f, %lu frames, steps down %lu up %lu",
 		governor.step, values[governor.step].name, settings.forced >= 0 ? " held" : "", governor.log_work / frames, governor.log_tick / frames,
-		governor.log_render / frames, governor.log_worst, settings.target_ms, governor.frames_in_log, governor.downs, governor.ups,
-		why ? ": " : "", why ? why : "");
+		governor.log_render / frames, governor.log_worst, settings.target_ms, governor.frames_in_log, governor.downs, governor.ups);
 	if (windows)
 		platform_log("governor: passes, ms a window (%lu): visibility %.2f sky %.2f objects %.2f lightmaps %.2f shadows %.2f decals %.2f specular %.2f "
 			"transparent %.2f effects %.2f detail %.2f hud %.2f", windows, passes[0], passes[2], passes[3], passes[4], passes[5], passes[6], passes[7],
@@ -287,7 +286,7 @@ static void governor_log(double now_ms, char const *why)
 
 static void governor_set_step(int step, double now_ms, char const *why)
 {
-	char reason[96];
+	char reason[160];
 
 	if (step > governor.step)
 	{
@@ -302,14 +301,15 @@ static void governor_set_step(int step, double now_ms, char const *why)
 		governor.ups++;
 		governor.last_change_was_up = 1;
 	}
-	snprintf(reason, sizeof(reason), "step %d to %d, %s", governor.step, step, why);
+	snprintf(reason, sizeof(reason), "governor: step %d to %d (%s): %s", governor.step, step, values[step].name, why);
+	platform_log("%s", reason);
 	governor.step = step;
 	governor.last_change = now_ms;
 	governor.over_windows = governor.under_windows = 0;
 	governor.sum_work = governor.sum_tick = governor.sum_render = 0.0;
 	governor.frames = 0;
 	governor.window_start = now_ms;
-	governor_log(now_ms, reason);
+	governor_log(now_ms);
 }
 
 void render_governor_frame(double work_ms, double tick_ms, double render_ms, double now_ms)
@@ -335,7 +335,7 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 		{
 			governor.step = settings.forced;
 			governor.last_change = now_ms;
-			governor_log(now_ms, "held by the card file");
+			governor_log(now_ms);
 		}
 	}
 	if (!governor.window_start)
@@ -398,7 +398,7 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 		governor.frames = 0;
 	}
 	if (settings.log_ms > 0.0 && now_ms - governor.last_log >= settings.log_ms)
-		governor_log(now_ms, NULL);
+		governor_log(now_ms);
 }
 
 #else /* not the Wii U: the governor is off and every value neutral */

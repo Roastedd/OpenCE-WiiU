@@ -1077,6 +1077,50 @@ void wiiu_tick_done(long long started)
 	(void)started;
 }
 
+/* The frame work the dynamic quality governor (port/linux/game/render_governor.c) is told: the host's clock is qemu's and says nothing about the console, so
+with GAME_DIGEST_FAKE_WORK="FIRST-LAST:MS,FIRST-LAST:MS" (game ticks; 12 ms outside them) each frame of the game is told that many milliseconds of work, 40% of it
+ticks, on a clock that advances by it (not under 16.7 ms: a refresh), and the governor decides the steps by them. Without it the governor is told what the layer measured. */
+void __real_render_governor_frame(double work_ms, double tick_ms, double render_ms, double now_ms);
+
+void __wrap_render_governor_frame(double work_ms, double tick_ms, double render_ms, double now_ms)
+{
+	static const char *schedule;
+	static int parsed;
+	static double clock_ms = 1000.0;
+	long tick = !main_menu_is_active() && game_time_initialized() ? game_time_get() : -1;
+
+	if (!parsed)
+	{
+		parsed = 1;
+		schedule = getenv("GAME_DIGEST_FAKE_WORK");
+		if (schedule && !*schedule)
+			schedule = NULL;
+	}
+	if (schedule)
+	{
+		const char *at = schedule;
+
+		work_ms = 12.0;
+		while (*at)
+		{
+			char *end;
+			long first = strtol(at, &end, 10), last = strtol(*end == '-' ? end + 1 : end, &end, 10);
+			double ms = *end == ':' ? strtod(end + 1, &end) : 12.0;
+
+			if (tick >= first && tick <= last)
+				work_ms = ms;
+			at = *end == ',' ? end + 1 : end;
+			if (end == at && *end)
+				break;
+		}
+		tick_ms = work_ms * 0.4;
+		render_ms = work_ms * 0.6;
+		clock_ms += work_ms > 16.7 ? work_ms : 16.7;
+		now_ms = clock_ms;
+	}
+	__real_render_governor_frame(work_ms, tick_ms, render_ms, now_ms);
+}
+
 /* wiiu_study.c's: halo/governor.txt, the dynamic quality's settings (port/linux/game/render_governor.c); here HALO_GOVERNOR's text, so that a run can hold
 a step ("step 3") or tune the ladder, and the governor's own decisions are tested on made-up frame times (they are not the host's: qemu's clock) */
 int render_governor_settings_text(char *text, unsigned long size)
