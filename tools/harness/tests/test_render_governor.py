@@ -50,7 +50,7 @@ unsigned long render_governor_pass_milliseconds(double milliseconds[13])
 }
 
 /* the milliseconds a frame each step takes off the one before, in a fight (render_governor.c's default_save_ms, less a little: the model is worse) */
-static const double saved_up_to[RENDER_GOVERNOR_STEPS] = { 0, 0.5, 1.3, 2.1, 2.9, 4.1, 5.6, 7.1 };
+static const double saved_up_to[RENDER_GOVERNOR_STEPS] = { 0, 0.5, 1.7, 2.9, 4.4, 6.4, 8.0, 9.6 };
 static double now_ms = 1000.0;
 static unsigned long noise_state = 12345;
 static int last_step;
@@ -96,7 +96,7 @@ int main(int argc, char **argv)
 	else if (!strcmp(scenario, "down_then_up"))
 	{
 		config_on = 1;
-		run(25, 30, 0);
+		run(25, 32, 0);
 		printf("RESULT after_heavy %d\n", render_governor_step());
 		run(150, 14, 0);
 		printf("RESULT after_light %d\n", render_governor_step());

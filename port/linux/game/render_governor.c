@@ -46,16 +46,17 @@ unsigned long config_changes(void);
 Blood Gulch and b30 (reports/research/2026-11-03/governor.md has how); the step-up test uses the saving, so an estimate too small only waits longer. */
 static struct render_governor_values const default_values[STEPS] =
 {
-	/* 0 */ { "full",         0.f,  0.f,  0.f, 1.00f,    0.f,   0.f, 16, 1.0f, 16, 1, 1, 1, 1 },
-	/* 1 */ { "far props",    8.f,  8.f,  0.f, 1.00f,   30.f,   0.f, 16, 1.0f, 16, 1, 1, 1, 1 },
-	/* 2 */ { "decals, shadows", 12.f, 12.f, 0.f, 0.85f, 60.f, 90.f, 10, 1.5f, 12, 1, 1, 1, 1 },
-	/* 3 */ { "particles",    16.f, 16.f,  0.f, 0.70f,  90.f,  60.f,  8, 2.0f,  8, 1, 0, 0, 1 },
-	/* 4 */ { "detail",       24.f, 24.f,  0.f, 0.55f, 120.f,  40.f,  6, 3.0f,  6, 0, 0, 0, 1 },
-	/* 5 */ { "far units",    32.f, 32.f,  8.f, 0.45f, 1e9f,   25.f,  4, 4.0f,  4, 0, 0, 0, 0 },
-	/* 6 */ { "minimum",      48.f, 48.f, 14.f, 0.35f, 1e9f,   15.f,  2, 6.0f,  2, 0, 0, 0, 0 },
-	/* 7 */ { "emergency",    64.f, 64.f, 24.f, 0.25f, 1e9f,   10.f,  1, 8.0f,  1, 0, 0, 0, 0 },
+	/* name              scenery item unit  lod  shadow  decal: radius keep  particle: lod keep  grass flares specular contrails */
+	/* 0 */ { "full",          0.f,  0.f,  0.f, 1.00f,   0.f,   0.f, 16, 1.00f, 16, 1, 1, 1, 1 },
+	/* 1 */ { "far props",     8.f,  8.f,  0.f, 1.00f,  45.f, 120.f, 14, 1.25f, 14, 1, 1, 1, 1 },
+	/* 2 */ { "small things", 14.f, 14.f,  0.f, 0.85f,  60.f,  90.f, 12, 1.50f, 12, 1, 1, 1, 1 },
+	/* 3 */ { "grass, flares", 20.f, 20.f, 0.f, 0.70f,  80.f,  60.f,  9, 2.00f,  8, 0, 0, 1, 1 },
+	/* 4 */ { "shine, units", 28.f, 28.f,  8.f, 0.55f, 110.f,  40.f,  6, 3.00f,  6, 0, 0, 0, 1 },
+	/* 5 */ { "no shadows",   40.f, 40.f, 14.f, 0.45f,  1e9f,  25.f,  4, 4.00f,  4, 0, 0, 0, 0 },
+	/* 6 */ { "minimum",      56.f, 56.f, 22.f, 0.35f,  1e9f,  15.f,  2, 6.00f,  2, 0, 0, 0, 0 },
+	/* 7 */ { "emergency",    80.f, 80.f, 32.f, 0.25f,  1e9f,  10.f,  1, 8.00f,  1, 0, 0, 0, 0 },
 };
-static float const default_save_ms[STEPS] = { 0.f, 0.5f, 0.8f, 0.8f, 0.8f, 1.2f, 1.5f, 1.5f };
+static float const default_save_ms[STEPS] = { 0.f, 0.5f, 1.2f, 1.2f, 1.5f, 2.0f, 1.6f, 1.6f };
 
 static struct render_governor_values values[STEPS];
 static float save_ms[STEPS];
