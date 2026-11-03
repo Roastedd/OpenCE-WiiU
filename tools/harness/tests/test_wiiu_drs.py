@@ -1,5 +1,6 @@
 """Dynamic resolution's controller (port/wiiu/src/wiiu_drs.c) on a made-up console: a step is dropped only when the median GPU time is near the
-budget, the GPU was behind when the frame was handed over (not just starved by a late game thread) and the frame waited for the flip, one at a time with 30 frames between changes; a step is raised when the time predicted at the step above fits
+budget, the GPU's time makes up the frames' interval (not a game thread that is the limit), the GPU was behind when the frame was handed over (not just
+starved by a late game thread) and the frame waited for the flip, one at a time with 30 frames between changes; a step is raised when the time predicted at the step above fits
 in 0.75 of the budget, or after 120 frames without a wait for the flip, never within 3 s of a drop; a menu holds it at the ceiling; a frame drawn
 at the step before is no measure of the new one; the floor and the 30-frames-a-second budget hold. Each fault must be caught."""
 import subprocess
@@ -14,10 +15,12 @@ from harness import mutated, read
 FAULTS = {
     "kept": None,
     # (a GPU time that reads high because the game thread is late drops a step)
-    "no_flip_wait": ("BACKLOG_SHARE * frame->budget_ms &&\n\t\tframe->flip_wait_ms > FLIP_WAIT_MS)", "BACKLOG_SHARE * frame->budget_ms)"),
+    "no_flip_wait": ("UTILISATION_MIN && frame->flip_wait_ms > FLIP_WAIT_MS)", "UTILISATION_MIN)"),
     # (a GPU that was starved by a game thread that took 17 ms to make the frame, with the display holding some frames, drops steps for nothing)
     "no_backlog": ("backlog > BACKLOG_SHARE * frame->budget_ms", "backlog > -1.0e9f"),
-    # (one frame that took 200 ms, a hitch, is eight frames of the GPU behind)
+    # (a game thread that is the limit, with a GPU that works 17 ms of its 31, drops steps for nothing)
+    "no_utilisation": ("utilisation >= UTILISATION_MIN", "utilisation >= -2.0f"),
+    # (one frame that took 100 ms, a hitch, is eight frames of the GPU behind)
     "mean_not_median": ("return count & 1 ? sorted[count / 2] : 0.5f * (sorted[count / 2 - 1] + sorted[count / 2]);",
                         "{ float sum = 0.0f; for (i = 0; i < count; i++) sum += sorted[i]; return sum / (float)count; }"),
     # (no frames held after a change: the steps change every frame)
@@ -65,6 +68,7 @@ struct sim
 	/* span: the ms the game thread takes to hand over a frame's draws; the GPU's time less it is the backlog. spike_ms, every spike_every frames:
 	one frame whose GPU time is that (a hitch) */
 	float span;
+	float cpu_ms; /* the ms the game thread takes to make a frame: no frame is shorter */
 	float spike_ms;
 	long spike_every;
 	int menu;
@@ -113,8 +117,11 @@ static void sim_run(struct sim *s, long frames)
 		f.gpu_lines = s->drawn_lines[READ_LAG];
 		f.gpu_ms = s->read_ms > 0.0f ? s->read_ms : s->drawn_gpu[READ_LAG];
 		f.gpu_backlog_ms = s->span < 0.0f ? -1.0f : f.gpu_ms > s->span ? f.gpu_ms - s->span : 0.0f;
-		f.flip_wait_ms = gpu > s->budget ? gpu - s->budget + 2.0f : s->vsync_wait;
-		f.frame_ms = gpu > s->budget ? gpu : s->budget;
+		/* (the frame's interval: the GPU's time and the blits after it, the game thread's time, or the display's refresh) */
+		f.frame_ms = gpu + 2.5f > s->budget ? gpu + 2.5f : s->budget;
+		if (s->cpu_ms > f.frame_ms)
+			f.frame_ms = s->cpu_ms;
+		f.flip_wait_ms = gpu + 2.5f > s->budget ? gpu + 2.5f - s->budget + 2.0f : s->vsync_wait;
 		f.budget_ms = s->budget;
 		f.menu = s->menu;
 		step = wiiu_drs_frame(&s->drs, &f);
@@ -185,11 +192,11 @@ int main(void)
 	sim_run(&s, 600);
 	if (s.step != 0 || s.rises != 3 || s.closest < 30 || s.quickest_rise_ms < 3000.0)
 		return 5;
-	/* a moment of 30 ms, then light: one drop, and its rise held for 3 s */
+	/* a moment of 30 ms (a drop needs 64 frames at the step), then light: one drop, and its rise held for 3 s */
 	sim_start(&s, 720, 540, 16.7f);
 	s.base = 30.0f;
 	s.vsync_wait = 3.0f;
-	sim_run(&s, 45);
+	sim_run(&s, 120);
 	s.base = 4.0f;
 	sim_run(&s, 600);
 	if (s.drops != 1 || s.rises != 1 || s.step != 0 || s.quickest_rise_ms < 3000.0)
@@ -240,9 +247,10 @@ int main(void)
 		if (s.step != 3 || s.last_change >= back)
 			return 13;
 	}
-	/* 30 frames a second (a budget of 33.3 ms): 25 ms is within it; 32 ms is over 0.9 of it, and one step down fits */
+	/* 30 frames a second (a budget of 33.3 ms): 28 ms and the blits fit it (0.92 of the interval is the GPU's, but its time is under 0.9 of the
+	budget); 32 ms is over 0.9 of it, and one step down fits */
 	sim_start(&s, 1080, 540, 33.3f);
-	s.base = 25.0f;
+	s.base = 28.0f;
 	s.vsync_wait = 2.0f;
 	sim_run(&s, 600);
 	if (s.step != 0 || s.drops)
@@ -314,16 +322,35 @@ int main(void)
 	sim_run(&s, 300);
 	if (s.drops < 1)
 		return 24;
-	/* one frame in 200 takes 200 ms (a hitch: a level's load, a stall of the card) among frames of 4 ms: the eight frames' average is over the
-	budget for eight frames, their median is not: no drop */
+	/* a GPU at 0.9 of the budget (12.5 ms and the blits) with a hitch of 100 ms every 8 frames: the average of eight frames is over the budget, their
+	median is not, and the interval is made of the GPU's time: no drop */
 	sim_start(&s, 720, 540, 16.7f);
-	s.base = 4.0f;
+	s.base = 12.5f;
 	s.vsync_wait = 3.0f;
-	s.spike_ms = 200.0f;
-	s.spike_every = 200;
-	sim_run(&s, 2400);
+	s.spike_ms = 100.0f;
+	s.spike_every = 8;
+	sim_run(&s, 1200);
 	if (s.step != 0 || s.drops)
 		return 25;
+	/* a game thread that takes 31 ms to make a frame, a GPU that works 17 ms of it (the a30 fight: 16 to 18 ms at 30 to 38 frames a second), the
+	display holding frames (waits over 1 ms), and a hand-over of 6 ms, so that 11 ms of the GPU's time are behind it: the GPU's time is 0.63 of the
+	interval, lowering the lines would not make a frame faster: no drop */
+	sim_start(&s, 720, 540, 16.7f);
+	s.base = 17.0f;
+	s.cpu_ms = 31.0f;
+	s.vsync_wait = 3.0f;
+	sim_run(&s, 1800);
+	if (s.step != 0 || s.drops || s.changes)
+		return 27;
+	/* the same GPU with a game thread of 19 ms (c10: 19 ms of the game thread, a GPU of 18 ms and the blits, 47 frames a second): the GPU is the
+	limit, and drops */
+	sim_start(&s, 720, 540, 16.7f);
+	s.base = 18.0f;
+	s.cpu_ms = 19.0f;
+	s.vsync_wait = 3.0f;
+	sim_run(&s, 600);
+	if (s.drops < 1)
+		return 28;
 	/* the backlog not known (-1: wiiu_gx2.c could not tell) drops nothing */
 	sim_start(&s, 720, 540, 16.7f);
 	s.base = 30.0f;

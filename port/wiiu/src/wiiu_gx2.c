@@ -4180,9 +4180,10 @@ static void present(const struct dk_command_present *command)
 				gx.drs_lines, gx.render_height, gx.drs_clears);
 		else if (gx.drs_on)
 			wiiu_log("GX2:   dynamic resolution: %u of %u lines (the controller); since the last note %u drops and %u rises, %u of %u frames waited over "
-				"1 ms for the flip, %u had a menu; the GPU's time at this step %.2f ms on average, %.2f the median, its backlog %.2f the median, over %u frames (-1: none yet); "
-				"%u targets cleared at a change of step", gx.drs_lines, gx.render_height, gx.drs_drops, gx.drs_rises, gx.drs_waits, gx.drs_frames, gx.drs_menu_frames,
-				(double)wiiu_drs_average(&gx.drs), (double)wiiu_drs_median(&gx.drs), (double)wiiu_drs_backlog(&gx.drs), gx.drs.gpu_count, gx.drs_clears);
+				"1 ms for the flip, %u had a menu; the GPU's time at this step %.2f ms on average, %.2f the median, its backlog %.2f the median, over %u frames, and %.2f of the frames' interval "
+				"over %u (-1: none yet); %u targets cleared at a change of step", gx.drs_lines, gx.render_height, gx.drs_drops, gx.drs_rises, gx.drs_waits, gx.drs_frames,
+				gx.drs_menu_frames, (double)wiiu_drs_average(&gx.drs), (double)wiiu_drs_median(&gx.drs), (double)wiiu_drs_backlog(&gx.drs), gx.drs.gpu_count,
+				(double)wiiu_drs_utilisation(&gx.drs), gx.drs.busy_count, gx.drs_clears);
 		gx.drs_drops = gx.drs_rises = gx.drs_waits = gx.drs_frames = gx.drs_menu_frames = gx.drs_clears = 0;
 		wiiu_log("GX2:   frame times: longest %llu ms, %u over 40 ms; shaders loaded %u (%llu ms loading)", (unsigned long long)OSTicksToMilliseconds(gx.longest_frame),
 			gx.slow_frames, gx.shaders_loaded, (unsigned long long)OSTicksToMilliseconds(gx.shader_ticks));

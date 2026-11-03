@@ -14,6 +14,8 @@ so that a host test (tools/harness/tests/test_wiiu_drs.py) can run it on frames 
 #define WIIU_DRS_STEPS 4
 /* the frames the GPU's time is averaged over */
 #define WIIU_DRS_AVERAGED 8
+/* the frames the share of the frames' interval that the GPU's time makes is taken over */
+#define WIIU_DRS_UTILISED 64
 
 /* what a frame's present measured */
 struct wiiu_drs_frame
@@ -43,6 +45,8 @@ struct wiiu_drs
 	unsigned step; /* the step decided, which the game draws at a frame or two later */
 	float gpu[WIIU_DRS_AVERAGED]; /* the GPU's latest times at that step, and the part of each that was still to run when its frame was handed over */
 	float backlog[WIIU_DRS_AVERAGED];
+	float busy[WIIU_DRS_UTILISED], interval[WIIU_DRS_UTILISED]; /* the GPU's time plus the blits, and the frame's interval, of the latest frames at that step */
+	unsigned busy_count, busy_next;
 	unsigned gpu_count, gpu_next;
 	unsigned hold; /* frames until another change may be made */
 	float since_drop_ms; /* the time since the last drop */
@@ -62,5 +66,8 @@ float wiiu_drs_average(const struct wiiu_drs *drs);
 median of the backlogs (-1 if none, or if any of them was not known) */
 float wiiu_drs_median(const struct wiiu_drs *drs);
 float wiiu_drs_backlog(const struct wiiu_drs *drs);
+/* the share of the frames' interval that the GPU's time plus the blits makes over the last 64 frames at the step (the GPU is the limit near 1, the game
+thread well under), or -1 if there are fewer than 64 */
+float wiiu_drs_utilisation(const struct wiiu_drs *drs);
 
 #endif
