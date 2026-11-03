@@ -408,7 +408,11 @@ it. The big-endian builds turn it in memory as it loads instead
    Before following anything the swap checks each definition's blocks, data and
    structures against the tables (tables of other schemas are refused); every
    block and data must lie in the tags, none may overlap another (the
-   validator's rule), and no byte is turned twice. A map the swap cannot walk is
+   validator's rule), and no byte is turned twice. A block's elements and a
+   data's bytes above the game's maximum are walked only as far as the
+   validator cuts them (`validate_block_extent`, `validate_data_extent`), so
+   that a count of a protected map's that is garbage, which the desktop builds
+   cut and play, does not make the swap refuse the map. A map the swap cannot walk is
    refused, and `debug.txt` says why.
 3. From here on everything reads the tags as the host's own: the Ogg Vorbis
    sounds decoded, the undecodable silenced, the validator, the bitmaps, the

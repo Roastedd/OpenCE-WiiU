@@ -98,6 +98,59 @@ def test_custom_edition_swap_is_map_converts(report_tool, schema, tmp_path, case
     assert (tmp_path / "c").read_bytes()[0x24:0x28] == b"tags"
 
 
+def swap_status(*arguments):
+    """map_validate's exit status and what it said (the swap refused, or not)"""
+    if not MAP_VALIDATE.is_file():
+        pytest.skip(f"needs the build's map_validate ({MAP_VALIDATE}: ninja linux)")
+    result = subprocess.run([*RUNNER, str(MAP_VALIDATE), *map(str, arguments)], capture_output=True, text=True)
+    return result.returncode, result.stdout + result.stderr
+
+
+def weapon_hud_dump(report_tool, tmp_path, statics_count, slack):
+    """a weapon HUD map's tags (as the report tool dumps them), its statics block given statics_count elements, at the start of `slack` zero bytes
+    added to the end of the tags; (the map's path, the tags' path, where the block is in the tags)"""
+    cache = caches.Map(weapon_hud=[((1.0, 1.0), 4), ((0.5, 0.5), 0), ((1.0, 1.0), 4)])
+    path = cache.write(tmp_path)
+    data = bytearray(path.read_bytes())
+    struct.pack_into("<I", data, cache.where["instances"] + cache.tag_indices["test\\weapon"] * 0x20, UNWALKED_GROUP)
+    path.write_bytes(data)
+    returncode, report = caches.report_one(report_tool, path, "--dump-tags", tmp_path / "tags")
+    assert returncode == 0 and report["convert"] == "ok", report
+    tags = bytearray((tmp_path / "tags").read_bytes())
+    block = cache.addresses["test\\weapon hud"] - caches.BASE + 0x60
+    struct.pack_into("<II", tags, block, statics_count, caches.BASE + len(tags))
+    tags += bytes(slack)
+    (tmp_path / "tags").write_bytes(tags)
+    return path, tmp_path / "tags", block
+
+
+def test_a_block_past_the_games_maximum_is_walked_only_as_far_as_the_validator_cuts_it(report_tool, tmp_path):
+    """The validator cuts a block's elements to the game's maximum (a weapon HUD's statics: 16) before it follows the block, so a count of a protected
+    map's that is garbage is played on the desktop builds; the swap used to follow the count it was given and refuse the map ('has N elements'). Here the
+    statics have 0x40000000 elements at 16 elements' worth of zero bytes: cut to 16, the swap goes through; the count is kept (turned), for the validator
+    to cut again. A negative count is not cut, as the validator refuses it."""
+    path, tags, block = weapon_hud_dump(report_tool, tmp_path, 0x40000000, 16 * 0xB4)
+    returncode, said = swap_status("--swap", tags, tmp_path / "c", path)
+    assert returncode == 0, said
+    assert (tmp_path / "c").read_bytes()[block:block + 4] == struct.pack(">I", 0x40000000)
+    refused = tmp_path / "refused"
+    path, tags, block = weapon_hud_dump(report_tool, refused, 0x80000000, 16 * 0xB4)
+    returncode, said = swap_status("--swap", tags, refused / "c", path)
+    assert returncode != 0 and "elements" in said, said
+
+
+def test_a_block_is_cut_to_the_games_maximum_and_no_further(report_tool, tmp_path):
+    """16 elements of a block that may have 16 are followed whole (15 elements' room is too little), and 17 are cut to 16, which 15 elements' room is too
+    little for as well: the cut is the validator's, no more lenient."""
+    path, tags, _ = weapon_hud_dump(report_tool, tmp_path / "full", 16, 16 * 0xB4)
+    returncode, said = swap_status("--swap", tags, tmp_path / "full" / "c", path)
+    assert returncode == 0, said
+    for count in (16, 17):
+        path, tags, _ = weapon_hud_dump(report_tool, tmp_path / f"short{count}", count, 15 * 0xB4)
+        returncode, said = swap_status("--swap", tags, tmp_path / f"short{count}" / "c", path)
+        assert returncode != 0 and "outside the tags" in said, said
+
+
 def xbox_maps():
     folder = ROOT / "assets/maps"
     return sorted(folder.glob("*.map"), key=lambda path: path.stat().st_size)[:2] if folder.is_dir() else []
