@@ -105,8 +105,9 @@ int main(void)
 
 	/* the card */
 	CHECK(wiiu_pacing_parse(&policy, "1\n") && policy.mode == 1 && policy.depth == 1);
-	CHECK(wiiu_pacing_parse(&policy, "2 3") && policy.mode == 2 && policy.depth == 3);
-	CHECK(wiiu_pacing_parse(&policy, "1 9") && policy.mode == 1 && policy.depth == 1); /* (a depth out of 1 to 3 is ignored) */
+	CHECK(wiiu_pacing_parse(&policy, "2 2") && policy.mode == 2 && policy.depth == 2);
+	CHECK(wiiu_pacing_parse(&policy, "1 9") && policy.mode == 1 && policy.depth == 1); /* (a depth out of 1 to 2 is ignored) */
+	CHECK(wiiu_pacing_parse(&policy, "1 3") && policy.mode == 1 && policy.depth == 1);
 	CHECK(wiiu_pacing_parse(&policy, "0") && policy.mode == 0);
 	CHECK(!wiiu_pacing_parse(&policy, "7") && policy.mode == 0);
 	CHECK(!wiiu_pacing_parse(&policy, "-1") && policy.mode == 0);

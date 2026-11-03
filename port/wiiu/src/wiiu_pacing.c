@@ -118,7 +118,7 @@ int wiiu_pacing_parse(struct wiiu_pacing_policy *policy, const char *text)
 	if (read < 1 || mode < 0 || mode > 2)
 		return 0;
 	policy->mode = mode;
-	if (read == 2 && depth >= 1 && depth <= 3)
+	if (read == 2 && depth >= 1 && depth <= 2)
 		policy->depth = (unsigned)depth;
 	return 1;
 }

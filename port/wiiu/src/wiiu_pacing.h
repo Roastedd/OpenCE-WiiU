@@ -59,7 +59,7 @@ int wiiu_pacing_format_display(const struct wiiu_pacing_stats *stats, char *out,
 struct wiiu_pacing_policy
 {
 	int mode; /* halo/pacing.txt's first number: 0 off, 1 tear when late, 2 never wait for the vsync */
-	unsigned depth; /* its second: the swaps that may wait for their flip before present() waits (1 as it has been; at most 3) */
+	unsigned depth; /* its second: the swaps that may wait for their flip before present() waits (1 as it has been; 2 at most: GX2 holds two swaps and blocks the third itself) */
 };
 
 /* the card's text read: false if it does not hold a mode of 0 to 2 (the policy is then off) */
