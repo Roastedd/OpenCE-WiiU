@@ -50,7 +50,7 @@ unsigned long render_governor_pass_milliseconds(double milliseconds[13])
 }
 
 /* the milliseconds a frame each step takes off the one before, in a fight (render_governor.c's default_save_ms, less a little: the model is worse) */
-static const double saved_up_to[RENDER_GOVERNOR_STEPS] = { 0, 0.5, 1.7, 2.9, 4.4, 6.4, 8.0, 9.6 };
+static const double saved_up_to[RENDER_GOVERNOR_STEPS] = { 0, 0.9, 2.1, 3.3, 4.8, 6.9, 8.2, 9.4 };
 static double now_ms = 1000.0;
 static unsigned long noise_state = 12345;
 static int last_step;
@@ -103,7 +103,7 @@ int main(int argc, char **argv)
 	}
 	else if (!strcmp(scenario, "settles"))
 	{
-		/* a scene of 24 ms: step 3 takes it to 21.9, which fits; nothing takes it back up (21.9 and 0.8 more is over 88% of 22) */
+		/* a scene of 24 ms: step 2 takes it to 21.9, which fits; nothing takes it back up (21.9 and 1.2 more is over 88% of 22) */
 		config_on = 1;
 		run(300, 24, 0);
 		printf("RESULT step %d\n", render_governor_step());
@@ -265,8 +265,8 @@ def test_down_by_steps_and_back_up_slowly(tmp_path):
 
 def test_settles_on_a_step_that_fits(tmp_path):
     transitions, results, _ = run_scenario(tmp_path, "settles")
-    assert results["step"] == 3
-    assert [t[2] for t in transitions] == [1, 2, 3]
+    assert results["step"] == 2
+    assert [t[2] for t in transitions] == [1, 2]
 
 
 def test_a_scene_at_the_edge_does_not_oscillate(tmp_path):

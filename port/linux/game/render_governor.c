@@ -43,7 +43,7 @@ unsigned long config_changes(void);
 #define STEPS RENDER_GOVERNOR_STEPS
 
 /* The ladder. Each row is the step's values (render_governor.h) and the milliseconds a frame it is estimated to save of the one before it in a fight on
-Blood Gulch and b30 (reports/research/2026-11-03/governor.md has how); the step-up test uses the saving, so an estimate too small only waits longer. */
+b30 (reports/research/2026-11-03/governor.md has how: 80% of what the host's draw counts say); the step-up test uses the saving, so an estimate too small only waits longer. */
 static struct render_governor_values const default_values[STEPS] =
 {
 	/* name              scenery item unit  lod  shadow  decal: radius keep  particle: lod keep  grass flares specular contrails */
@@ -56,7 +56,7 @@ static struct render_governor_values const default_values[STEPS] =
 	/* 6 */ { "minimum",      56.f, 56.f, 22.f, 0.35f,  1e9f,  15.f,  2, 6.00f,  2, 0, 0, 0, 0 },
 	/* 7 */ { "emergency",    80.f, 80.f, 32.f, 0.25f,  1e9f,  10.f,  1, 8.00f,  1, 0, 0, 0, 0 },
 };
-static float const default_save_ms[STEPS] = { 0.f, 0.5f, 1.2f, 1.2f, 1.5f, 2.0f, 1.6f, 1.6f };
+static float const default_save_ms[STEPS] = { 0.f, 0.9f, 1.2f, 1.2f, 1.5f, 2.1f, 1.3f, 1.2f };
 
 static struct render_governor_values values[STEPS];
 static float save_ms[STEPS];
