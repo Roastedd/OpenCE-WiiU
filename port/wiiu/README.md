@@ -454,8 +454,11 @@ Written and tested on the build machine (branch `wiiu-drs`), not run on a consol
 - **The steps** are 1, 0.9, 0.8 and 0.75 of the ceiling: 720, 648, 576 and 540 lines, or 1080, 972, 864 and 810.
   `halo/drs_lines.txt` (a number of lines, 240 to the ceiling) fixes one for the whole run, with the controller off whatever
   `display.dynamic_resolution` says.
-- **The controller** (`src/wiiu_drs.c`, run in `present()` on the GX2 thread) drops a step when the last 8 frames' GPU time averages over 0.9
-  of the budget (16.7 ms, 33.3 at 30 frames a second) and the frame waited more than 1 ms for the flip; it raises one when the time
+- **The controller** (`src/wiiu_drs.c`, run in `present()` on the GX2 thread) drops a step when the median of the last 8 frames' GPU time
+  is over 0.9 of the budget (16.7 ms, 33.3 at 30 frames a second), the median of their backlogs is over 0.1 of it, and the frame waited more
+  than 1 ms for the flip. The backlog is the part of a frame's GPU time still to run when the game thread had handed over its last draw: the
+  GPU's time (bottom-of-pipe samples) includes the moments it waited for a late game thread, and the display holds nearly every early frame
+  (11 to 16 ms a frame at 60 in the console's logs), so neither says by itself that the GPU is behind. It raises a step when the median
   predicted at the step above fits in 0.75 of the budget, or after 120 frames without a wait. It holds 30 frames after any change and 3 s
   after a drop, and is off while a menu has the screen (the menus draw every line). `display.dynamic_resolution` (off by default; the graphics
   mode Quality turns it on) and `display.dynamic_resolution_floor` (540) set it.
@@ -467,7 +470,7 @@ Written and tested on the build machine (branch `wiiu-drs`), not run on a consol
 The log says, at the start, `GX2: dynamic resolution: the frames draw N of the targets' M lines for this run (halo/drs_lines.txt)` when the
 note is there, and at the first present (and each change of the settings) `GX2: dynamic resolution is on|off ...`; every 5 s, with the other
 notes, `GX2:   dynamic resolution: N of M lines (...); since the last note D drops and R rises, W of F frames waited over 1 ms for the
-flip, K had a menu; the GPU's time at this step ... ms on average over n frames; C targets cleared at a change of step`. The frame times'
+flip, K had a menu; the GPU's time at this step ... ms on average and in the median, its backlog ... ms in the median, over n frames; C targets cleared at a change of step`. The frame times'
 percentiles are the line before it, `GX2:   frame times: median ..., 95th percentile ..., 99th ... ms`. The overlay shows the size drawn.
 
 ### The console's tests
