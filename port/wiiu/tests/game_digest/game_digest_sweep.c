@@ -39,6 +39,7 @@ It never changes how a frame is drawn when the variable is not set, so the diges
 #include "objects/damage.h"
 #include "objects/object_lights.h"
 #include "items/weapon_definitions.h"
+#include "items/weapons.h"
 #include "objects/object_definitions.h"
 #include "render/render.h"
 #include "render/render_cameras.h"
@@ -262,6 +263,42 @@ static void configure(void)
 
 /* ---------- the census of the shaders the map holds */
 
+/* rasterizer_xbox_models.c's own (it keeps it to itself): a shader_model's properties, to the fields the model pixel shaders are made of */
+struct sweep_shader_model_properties
+{
+	word flags;
+	short type;
+	byte reserved04[0xC];
+	real translucency;
+	byte reserved14[0x10];
+	short change_color_source;
+	byte reserved26[0x1E];
+	word self_illumination_flags;
+	short pad46;
+	short self_illumination_color_source;
+	short self_illumination_animation_function;
+	real self_illumination_animation_period;
+	real_rgb_color self_illumination_animation_color_lower_bound;
+	real_rgb_color self_illumination_animation_color_upper_bound;
+	byte reserved68[0xC];
+	real map_u_scale;
+	real map_v_scale;
+	struct tag_reference base_map;
+	byte reserved8C[8];
+	struct tag_reference multipurpose_map;
+	byte reservedA4[8];
+	short detail_function;
+	short detail_mask;
+	real detail_map_scale;
+	struct tag_reference detail_map;
+};
+
+struct sweep_shader_model
+{
+	byte shader[0x28];
+	struct sweep_shader_model_properties model;
+};
+
 #include "rasterizer/xbox/rasterizer_xbox_pixel_shader.h"
 #include "rasterizer/xbox/shader_transparent_chicago_preprocessor.h"
 boolean shader_transparent_generic_create(struct shader *shader, struct pixel_shader_definition *pixel_shader);
@@ -320,6 +357,24 @@ static void census_definitions(void)
 	}
 }
 
+/* every shader_model tag's detail function and mask, flags and maps: the model pixel shaders of the reflection family are made of them (set_environment_shader_pixel_shader) */
+static void census_models(void)
+{
+	struct tag_iterator iterator;
+	long tag_index;
+
+	tag_iterator_new(&iterator, 'soso');
+	for (tag_index = tag_iterator_next(&iterator); tag_index != NONE; tag_index = tag_iterator_next(&iterator))
+	{
+		struct sweep_shader_model const *shader = (struct sweep_shader_model const *)tag_get('soso', tag_index);
+
+		if (shader && sweep.log)
+			fprintf(sweep.log, "frame %lu: census model %ld function %d mask %d flags %u cube %d multipurpose %d base %d detail %d %s\n", replay_keys_frame(), tag_index,
+				(int)shader->model.detail_function, (int)shader->model.detail_mask, (unsigned)shader->model.flags, *(long const *)((byte const *)shader + 0x170 + offsetof(struct tag_reference, index)) != NONE,
+				shader->model.multipurpose_map.index != NONE, shader->model.base_map.index != NONE, shader->model.detail_map.index != NONE, tag_get_name(tag_index));
+	}
+}
+
 static void census(void)
 {
 	static unsigned long const groups[] = { 'senv', 'soso', 'sotr', 'schi', 'scex', 'sgla', 'smet', 'spla', 'swat' };
@@ -343,6 +398,7 @@ static void census(void)
 	}
 	note("census shaders %ld", total);
 	census_definitions();
+	census_models();
 	{
 		long script_index;
 
@@ -818,6 +874,25 @@ static void phase_weapons(void)
 		if (weapon_index == NONE || !unit_add_weapon_to_inventory(unit_index, weapon_index, _unit_add_weapon_replace))
 			note("  (not carried)");
 	}
+	if (sweep.frame_in_stop >= 10 && sweep.frame_in_stop < ZOOM_AT)
+	{
+		/* the weapon's own function inputs (heat, battery, overcharge, its light), which the weapon's shaders glow by: held at their extremes in turn, as
+		firing and charging would make them */
+		long weapon_index = unit_inventory_get_weapon(unit_index, unit->unit.current_weapon_index);
+
+		if (weapon_index != NONE && object_try_and_get_and_verify_type(weapon_index, 0xFFFFFFFFul))
+		{
+			struct weapon_datum *weapon = weapon_get(weapon_index);
+
+			weapon->weapon.heat = sweep.frame_in_stop < 25 ? 1.0f : 0.0f;
+			weapon->weapon.age = sweep.frame_in_stop >= 25 && sweep.frame_in_stop < 40 ? 1.0f : 0.0f;
+			weapon->weapon.overcharged = sweep.frame_in_stop >= 40 ? 1.0f : 0.0f;
+			weapon->weapon.integrated_light_power = 1.0f;
+		}
+	}
+	if (sweep.frame_in_stop == 0)
+	{
+	}
 	else if (sweep.frame_in_stop == ZOOM_AT)
 	{
 		struct weapon_definition const *weapon = (struct weapon_definition const *)tag_get('weap', sweep.list[sweep.stop_index]);
@@ -1176,6 +1251,25 @@ static void phase_list(int objects)
 
 					if (unit)
 						unit->unit.flags |= 1UL << _unit_active_camouflaged_bit;
+				}
+				else if (sweep.object_pass == 1)
+				{
+					/* (the second go: a unit's own light and a weapon's glow on, as a fight leaves them) */
+					struct weapon_datum *made = (struct weapon_datum *)object_try_and_get_and_verify_type(sweep.object_index, 0xFFFFFFFFul);
+
+					if (made && made->object.type == _object_type_biped)
+					{
+						struct unit_datum *unit = (struct unit_datum *)made;
+
+						unit->unit.integrated_light_power = 1.0f;
+						unit->unit.flags |= 1UL << _unit_integrated_light_on_bit;
+					}
+					else if (made && made->object.type == _object_type_weapon)
+					{
+						made->weapon.heat = 1.0f;
+						made->weapon.overcharged = 1.0f;
+						made->weapon.integrated_light_power = 1.0f;
+					}
 				}
 			}
 			else if (sweep.phase == PHASE_EFFECTS)
