@@ -606,6 +606,16 @@ boolean tick_overlap_post_frame(
 		o.overlap_frames++;
 		o.ahead_sum += (unsigned long long)((time_now + ticks - tick) * 1000);
 		tick_overlap_post(tick_overlap_job_work, job);
+		/* (a test aid: halo/tick_overlap_serialize.txt holds 1: the job is waited for before the frame is drawn, so that nothing runs beside the drawing and two runs
+		draw the same frames: the pictures' random numbers, which the two threads draw from one seed, come in one order. The picture is the same pair of the ring.) */
+		{
+			static long serialize = -1;
+
+			if (serialize < 0)
+				serialize = wiiu_study_number("tick_overlap_serialize.txt", 0);
+			if (serialize > 0)
+				tick_overlap_wait();
+		}
 		return TRUE;
 	}
 	/* no pair to draw yet (the first frame of a map, or after frames of the serial loop's that kept no ring): the job is run at once, and the
