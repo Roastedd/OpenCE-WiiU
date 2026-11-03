@@ -908,6 +908,18 @@ void wiiu_study_tick_thread_report(void)
 {
 }
 
+void wiiu_study_tick_thread_job_report(void)
+{
+}
+
+/* the console's tick thread is an OSThread on core 0; here none is made (0), and tick_overlap.c makes a pthread */
+int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes)
+{
+	(void)entry;
+	(void)stack_bytes;
+	return 0;
+}
+
 /* wiiu_study.c: a study switch's number from a file on the card; here from the environment (tick_thread.txt: HALO_TICK_THREAD,
 tick_overlap.txt: HALO_TICK_OVERLAP), so that a run can have the ticks on a thread of their own, and overlapped */
 long wiiu_study_number(const char *name, long fallback)

@@ -30,6 +30,9 @@ int wiiu_tick_thread_priority(void);
 void wiiu_tick_thread_gate(void);
 void wiiu_foreground_gate(int is_game_thread);
 void wiiu_study_tick_thread_report(void);
+void wiiu_study_tick_thread_job_report(void);
+int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes);
+void wiiu_thread_stack_range(unsigned long *low, unsigned long *size);
 void wiiu_tick_idle_set(int idle);
 void wiiu_game_waiting_set(int waiting);
 unsigned long long wiiu_now_ticks(void);
@@ -92,7 +95,9 @@ static struct
 	int enabled; /* -1 not decided */
 	/* the thread */
 	int state; /* -1 not tried, 0 could not be started, 1 running */
-	pthread_t thread;
+	pthread_t thread; /* (a pthread's: the host's; the console's is an OSThread of the platform's, wiiu_tick_thread_create) */
+	/* the tick thread's stack, which it says when it starts (the calling thread is the tick thread if its stack is there: tick_overlap_thread_is_tick) */
+	unsigned long tick_stack_low, tick_stack_size;
 	pthread_mutex_t lock;
 	pthread_cond_t posted;
 	volatile boolean pending;
@@ -168,7 +173,7 @@ void tick_overlap_note_render_thread(
 boolean tick_overlap_thread_is_tick(
 	void)
 {
-	return o.state > 0 && pthread_equal(pthread_self(), o.thread);
+	return o.state > 0 && TICK_STACK_POINTER() - LOAD(o.tick_stack_low) < LOAD(o.tick_stack_size);
 }
 
 /* ---------- the thread */
@@ -183,7 +188,16 @@ unsigned long long tick_overlap_now(
 static void *tick_overlap_thread_run(
 	void *unused)
 {
+	boolean first_job = TRUE;
+
 	(void)unused;
+	{
+		unsigned long low = 0, size = 0;
+
+		wiiu_thread_stack_range(&low, &size);
+		STORE(o.tick_stack_low, low);
+		STORE(o.tick_stack_size, size);
+	}
 	/* (what every thread that runs game code needs: wiiu_shell.h) */
 	wiiu_fpu_setup();
 	wiiu_thread_off_game_core();
@@ -213,6 +227,12 @@ static void *tick_overlap_thread_run(
 		/* (HOME and closing hold this thread before a job, as they hold the game thread at its safe points) */
 		wiiu_tick_thread_gate();
 		work(argument);
+		/* (the core it really ran its first job on: the console's log) */
+		if (first_job)
+		{
+			first_job = FALSE;
+			wiiu_study_tick_thread_job_report();
+		}
 		pthread_mutex_lock(&o.lock);
 		__atomic_store_n(&o.pending, FALSE, __ATOMIC_RELEASE);
 	}
@@ -231,9 +251,17 @@ boolean tick_overlap_start_thread(
 	if (pthread_mutex_init(&o.lock, NULL) == 0 && pthread_cond_init(&o.posted, NULL) == 0 &&
 		pthread_attr_init(&attributes) == 0)
 	{
-		pthread_attr_setstacksize(&attributes, TICK_OVERLAP_STACK_BYTES);
-		if (pthread_create(&o.thread, &attributes, tick_overlap_thread_run, NULL) == 0)
+		/* (the console makes it an OSThread on core 0 (1); the host, none (0): a pthread) */
+		const int made = wiiu_tick_thread_create(tick_overlap_thread_run, TICK_OVERLAP_STACK_BYTES);
+
+		if (made > 0)
 			o.state = 1;
+		else if (made == 0)
+		{
+			pthread_attr_setstacksize(&attributes, TICK_OVERLAP_STACK_BYTES);
+			if (pthread_create(&o.thread, &attributes, tick_overlap_thread_run, NULL) == 0)
+				o.state = 1;
+		}
 		pthread_attr_destroy(&attributes);
 	}
 	error(_error_silent, "study: the ticks on a thread of their own (halo/tick_thread.txt): %s", o.state ? "running" : "could not be started");

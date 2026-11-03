@@ -45,3 +45,11 @@ void wiiu_study_tick_thread_report(void)
 	wiiu_log("study: the tick thread runs on core %u at priority %d, FPSCR %08x (bit 00000004 clear: IEEE denormals)", (unsigned)OSGetCoreId(),
 		(int)OSGetThreadPriority(OSGetCurrentThread()), (unsigned)(status.bits & 0xFFFFFFFFu));
 }
+
+/* ... and, after its first job, the core it ran it on and the cores it may run on (OSGetThreadAffinity: 1 is core 0 alone), which say whether it stayed
+on core 0 */
+void wiiu_study_tick_thread_job_report(void)
+{
+	wiiu_log("study: the tick thread ran its first job on core %u (its affinity %x: 1 is core 0 alone)", (unsigned)OSGetCoreId(),
+		(unsigned)OSGetThreadAffinity(OSGetCurrentThread()));
+}

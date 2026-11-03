@@ -32,6 +32,7 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 #include <coreinit/core.h>
 #include <sysapp/launch.h>
 #include <coreinit/debug.h>
+#include <coreinit/memdefaultheap.h>
 #include <coreinit/memexpheap.h>
 #include <coreinit/memheap.h>
 #include <coreinit/mutex.h>
@@ -473,6 +474,49 @@ void wiiu_thread_off_game_core(void)
 {
 	OSSetThreadAffinity(OSGetCurrentThread(), OS_THREAD_ATTRIB_AFFINITY_CPU0);
 	OSSleepTicks(OSMillisecondsToTicks(1));
+}
+
+/* The tick thread (port/linux/game/tick_overlap.c): an OSThread made on core 0, not a pthread. wut makes a pthread with OSCreateThread at priority 16 with
+every core allowed (OS_THREAD_ATTRIB_AFFINITY_ANY) and resumes it at once; OSSetThreadAffinity from inside it did not keep it on core 0 (2026-11-02:
+it said core 2, and core 1 after a sleep of 1 ms). Made with the affinity, as the game thread, the audio and the debug server are, it is on core 0 from
+its first instruction. wut's mutexes, conditions and thread-specific values (OSFastMutex, OSFastCond, OSGetThreadSpecific), which the thread and
+the game's code use, work in any OSThread. Returns 1 if the thread was made, -1 if it could not be (no stack, no thread). */
+int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes);
+
+static OSThread tick_thread;
+static uint8_t *tick_thread_stack;
+static void *(*tick_thread_entry)(void *);
+
+static int tick_thread_main(int argc, const char **argv)
+{
+	(void)argc;
+	(void)argv;
+	tick_thread_entry(NULL);
+	return 0;
+}
+
+int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes)
+{
+	if (tick_thread_stack)
+		return -1;
+	tick_thread_stack = (uint8_t *)MEMAllocFromDefaultHeapEx(stack_bytes, 16);
+	if (!tick_thread_stack)
+	{
+		wiiu_log("The tick thread: no memory for its stack (%lu bytes)", stack_bytes);
+		return -1;
+	}
+	tick_thread_entry = entry;
+	if (!OSCreateThread(&tick_thread, tick_thread_main, 0, NULL, tick_thread_stack + stack_bytes, stack_bytes, main_priority,
+			OS_THREAD_ATTRIB_AFFINITY_CPU0))
+	{
+		wiiu_log("OSCreateThread failed for the tick thread");
+		MEMFreeToDefaultHeap(tick_thread_stack);
+		tick_thread_stack = NULL;
+		return -1;
+	}
+	OSSetThreadName(&tick_thread, "ticks");
+	OSResumeThread(&tick_thread);
+	return 1;
 }
 
 /* the tick thread (source/main/main.c) at the game thread's priority: above the workers (the log, the debug server, the voice thread run at the game's +4,

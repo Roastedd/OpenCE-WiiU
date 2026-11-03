@@ -109,6 +109,8 @@ int wiiu_tick_thread_priority(void) { return 16; }
 void wiiu_tick_thread_gate(void) {}
 void wiiu_foreground_gate(int is_game_thread) { (void)is_game_thread; }
 void wiiu_study_tick_thread_report(void) {}
+void wiiu_study_tick_thread_job_report(void) {}
+int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes) { (void)entry; (void)stack_bytes; return 0; }
 void wiiu_tick_idle_set(int idle) { (void)idle; }
 void wiiu_game_waiting_set(int waiting) { (void)waiting; }
 void wiiu_tick_gate_register(int registered) { (void)registered; }
