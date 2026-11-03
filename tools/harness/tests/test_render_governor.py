@@ -143,6 +143,19 @@ int main(int argc, char **argv)
 		run(5, 40, 0);
 		printf("RESULT first %.0f\n", first_change);
 	}
+	else if (!strcmp(scenario, "ticks_only"))
+	{
+		/* a frame of 30 ms of which the drawing is 2: nothing the governor sheds is in it */
+		int index;
+
+		config_on = 1;
+		for (index = 0; index < 1500; index++)
+		{
+			render_governor_frame(30, 28, 2, now_ms);
+			now_ms += 30;
+		}
+		printf("RESULT step %d\n", render_governor_step());
+	}
 	else if (!strcmp(scenario, "mild"))
 	{
 		config_on = 1;
@@ -273,6 +286,11 @@ def test_the_worse_the_faster(tmp_path):
     # (40% over: one window; a little over: the dwell, a second, and two windows)
     assert severe["first"] < mild["first"]
     assert severe["first"] <= 700 and mild["first"] >= 1000
+
+
+def test_a_frame_of_ticks_is_not_drawings_to_shed(tmp_path):
+    transitions, results, _ = run_scenario(tmp_path, "ticks_only")
+    assert transitions == [] and results["step"] == 0
 
 
 def test_the_card_file_holds_a_step_and_tunes_the_values(tmp_path):

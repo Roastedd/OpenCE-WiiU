@@ -19,8 +19,8 @@ decal or a particle that is not drawn is still made and ages as it would. Where 
 
 halo/governor.txt (HALO_GOVERNOR on the host): a first word on/off/1/0 turns it on or off (display.dynamic_quality otherwise); then, one to a line or
 separated by semicolons, "name value": target (ms), step (hold this step, for a test: the governor then does not move), max_step, window (ms), down_dwell,
-up_dwell (ms), down_windows, up_windows, up_margin (the share of the target the frame must be under, with the step's saving added), log (ms between lines;
-0 for none) and sN.name for N the step (0 to 7) and name one of cull_scenery, cull_item, cull_unit, lod, shadow, decal_radius, decal_keep, particle_lod,
+up_dwell (ms), down_windows, up_windows, up_margin (the share of the target the frame must be under, with the step's saving added), min_render (ms of drawing a frame
+under which the governor does not step down: the frame is the ticks', 4), log (ms between lines; 0 for none) and sN.name for N the step (0 to 7) and name one of cull_scenery, cull_item, cull_unit, lod, shadow, decal_radius, decal_keep, particle_lod,
 particle_keep, grass, lens_flares, specular, contrails, save (the ms the step is estimated to save, for the step-up test).
 */
 
@@ -67,7 +67,7 @@ static struct
 	int configured_on, card_on, card_off; /* the setting, and the card file's word */
 	int forced;                         /* the step held (-1: the governor decides) */
 	int max_step;
-	double target_ms, window_ms, down_dwell_ms, up_dwell_ms, up_margin, log_ms;
+	double target_ms, window_ms, down_dwell_ms, up_dwell_ms, up_margin, log_ms, min_render_ms;
 	int down_windows, up_windows;
 } settings;
 
@@ -99,6 +99,7 @@ static void settings_defaults(void)
 	settings.up_dwell_ms = 8000.0;
 	settings.up_margin = 0.88;
 	settings.log_ms = 5000.0;
+	settings.min_render_ms = 4.0;
 	settings.down_windows = 2;
 	settings.up_windows = 6;
 	settings.card_on = settings.card_off = 0;
@@ -126,6 +127,8 @@ static int settings_value(char const *name, double number)
 		settings.up_margin = number;
 	else if (!strcmp(name, "log") && number >= 0.0)
 		settings.log_ms = number;
+	else if (!strcmp(name, "min_render") && number >= 0.0)
+		settings.min_render_ms = number;
 	else if (name[0] == 's' && name[1] >= '0' && name[1] < '0' + STEPS && name[2] == '.')
 	{
 		struct render_governor_values *step = &values[name[1] - '0'];
@@ -369,7 +372,8 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 		{
 			mean = governor.sum_work / (double)governor.frames;
 			severe = mean > target * 1.4;
-			governor.over_windows = mean > target ? governor.over_windows + 1 : 0;
+			/* (a frame that is mostly ticks, with next to no drawing, is not drawing's to shed: the ticks are the other agents' and the overlap's) */
+			governor.over_windows = mean > target && governor.sum_render / (double)governor.frames >= settings.min_render_ms ? governor.over_windows + 1 : 0;
 			if (governor.step > 0 && mean + (double)save_ms[governor.step] < target * settings.up_margin)
 				governor.under_windows++;
 			else
