@@ -73,6 +73,10 @@ boolean network_distributed_server_send_to_machine(long machine_index, void *mes
 boolean network_distributed_server_send_to_machine_reliably(long machine_index, void *message, word size);
 short network_distributed_server_machines(long *machine_indices, short maximum);
 int halo_push_to_talk_held(void);
+#ifdef HALO_WIIU
+/* wiiu_voice_audio.c's */
+int voice_audio_packet_ready(unsigned char *packet, int maximum);
+#endif
 void posix_random_bytes(void *buffer, unsigned int size);
 unsigned long system_milliseconds(void);
 
@@ -998,6 +1002,23 @@ void network_voice_update(
 		voice_talked = TRUE;
 		voice_talked_at = now;
 	}
+#ifdef HALO_WIIU
+	/* (the Wii U's voice thread encodes beside this one, and voice_audio_encode gives back the packet of the frame before: the packets
+	of the last frames given before the talking stopped, push to talk let go, were never taken back, and a word lost its last 20 to 60
+	ms. They are taken now, in the order they were made) */
+	while (voice_microphone_wanted && voice_may_talk())
+	{
+		byte packet[VOICE_MAXIMUM_PACKET];
+		long length = voice_audio_packet_ready(packet,
+			(int)MIN(voice_packet_limit(voice_settings.kbps), VOICE_MAXIMUM_PACKET));
+
+		if (length <= 0)
+			break;
+		voice_send(packet, length);
+		voice_talked = TRUE;
+		voice_talked_at = now;
+	}
+#endif
 }
 
 /* ---------- the menus and the scoreboard (network_voice.h) */

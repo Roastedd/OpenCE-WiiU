@@ -814,6 +814,14 @@ void wiiu_thread_off_game_core(void)
 {
 }
 
+/* wiiu_voice_audio.c's, which network_voice.c calls under HALO_WIIU: the desktop's voice_audio.c encodes at once, so no packet ever waits */
+int voice_audio_packet_ready(unsigned char *packet, int maximum)
+{
+	(void)packet;
+	(void)maximum;
+	return 0;
+}
+
 int wiiu_input_touch(float *x, float *y)
 {
 	*x = *y = 0.0f;

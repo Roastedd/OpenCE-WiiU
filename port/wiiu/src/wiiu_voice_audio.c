@@ -97,6 +97,9 @@ call takes one packet, of a frame given before, so at a slow frame rate one can 
 #define PROBE_RESULT_FILE WIIU_DATA_DIRECTORY "/mic_probe_result.txt"
 #define PROBE_WAV_FILE WIIU_DATA_DIRECTORY "/mic_probe.wav"
 #define CORE_FILE WIIU_DATA_DIRECTORY "/voice_core.txt"
+/* a number 0 to 10 in it is Opus's encoder complexity (5, the desktop's, without it): the console's encoder costs more than the
+instruction counts under qemu said, and this lets one run try a lower one without a build */
+#define COMPLEXITY_FILE WIIU_DATA_DIRECTORY "/voice_complexity.txt"
 
 enum
 {
@@ -152,6 +155,9 @@ static uint32_t microphone_open;
 static uint32_t session_ms;
 /* when the mixer last mixed (no mix lately: the voices sent here would never be heard) */
 static uint32_t mixed_ms;
+/* when the voice thread's loop last came round, and when the shell last asked it to give up the foreground (for the log of a HOME it
+answers late or not at all: the console's logs of 2026-10-31 had "did not answer in 100 ms" at every HOME) */
+static uint32_t last_turn_ms, suspend_asked_ms;
 static uint32_t forget_all_requests;
 static float voice_volume = 1.0f;
 /* debug.voice_test: -1 until the game thread has read it (the settings are not read before the game has started) */
@@ -454,9 +460,24 @@ static void tone_poll(uint32_t now)
 
 /* ---------- Opus */
 
+/* the encoder's complexity: halo/voice_complexity.txt (0 to 10) or the desktop's 5; read once, when the encoder is made */
+static int encoder_complexity(void)
+{
+	FILE *file = fopen(COMPLEXITY_FILE, "r");
+	int complexity = 5, value;
+
+	if (file)
+	{
+		if (fscanf(file, "%d", &value) == 1 && value >= 0 && value <= 10)
+			complexity = value;
+		fclose(file);
+	}
+	return complexity;
+}
+
 static int encoder_ready(void)
 {
-	int error = 0;
+	int error = 0, complexity;
 
 	if (encoder)
 		return 1;
@@ -469,9 +490,12 @@ static int encoder_ready(void)
 	/* (as voice_audio.c's: a lost frame made up from the next's redundancy; modest complexity) */
 	opus_encoder_ctl(encoder, OPUS_SET_INBAND_FEC(1));
 	opus_encoder_ctl(encoder, OPUS_SET_PACKET_LOSS_PERC(10));
-	opus_encoder_ctl(encoder, OPUS_SET_COMPLEXITY(5));
+	complexity = encoder_complexity();
+	opus_encoder_ctl(encoder, OPUS_SET_COMPLEXITY(complexity));
 	opus_encoder_ctl(encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
 	encoder_bitrate = 0;
+	if (complexity != 5)
+		wiiu_log("Voice chat: Opus complexity %d (halo/voice_complexity.txt)", complexity);
 	return 1;
 }
 
@@ -743,6 +767,7 @@ static int voice_main(int argc, const char **argv)
 		const uint32_t wanted = __atomic_load_n(&request, __ATOMIC_ACQUIRE);
 		int active;
 
+		__atomic_store_n(&last_turn_ms, now_ms(), __ATOMIC_RELAXED);
 		if ((wanted & 3u) == REQUEST_STOP)
 		{
 			microphone_close("the app closes");
@@ -864,6 +889,21 @@ int voice_audio_encode(const float *frame, int bitrate, unsigned char *packet, i
 	__atomic_add_fetch(&encode_dropped, wiiu_voice_queue_put_newest(&encode_queue, &job, ENCODE_KEEP), __ATOMIC_RELAXED);
 	/* (the packet of a frame given before: this one's is ready by the next call) */
 	length = wiiu_voice_packet_take(&packet_queue, now, VOICE_STALE_MS, maximum > 0 ? (uint32_t)maximum : 0u, packet, &dropped);
+	if (dropped)
+		__atomic_add_fetch(&stale_dropped, dropped, __ATOMIC_RELAXED);
+	return (int)length;
+}
+
+/* network_voice.c's (HALO_WIIU only): the oldest packet the voice thread has encoded that no later frame has taken back, if it is not stale.
+voice_audio_encode gives the packet of the frame before, so the last frames given before the talking stopped (push to talk let go) would
+never be sent: they are taken here, each update, and sent. 0 for none */
+int voice_audio_packet_ready(unsigned char *packet, int maximum)
+{
+	uint32_t dropped = 0, length;
+
+	if (!running())
+		return 0;
+	length = wiiu_voice_packet_take(&packet_queue, now_ms(), VOICE_STALE_MS, maximum > 0 ? (uint32_t)maximum : 0u, packet, &dropped);
 	if (dropped)
 		__atomic_add_fetch(&stale_dropped, dropped, __ATOMIC_RELAXED);
 	return (int)length;
@@ -995,7 +1035,22 @@ void wiiu_voice_suspend(void)
 
 	if (!running())
 		return;
+	__atomic_store_n(&suspend_asked_ms, now_ms(), __ATOMIC_RELAXED);
 	wanted = request_next(REQUEST_SUSPEND);
+	/* (no microphone open, and none being opened: the request is seen under the lock by any opening that follows, so there is nothing
+	for the thread to close and nothing to wait for. The console's logs showed the thread never answering within the 100 ms, each time
+	with the microphone closed: the release callback waited them out for nothing) */
+	if (OSTryLockMutex(&microphone_lock))
+	{
+		const int closed = microphone_handle < 0;
+
+		OSUnlockMutex(&microphone_lock);
+		if (closed)
+		{
+			wiiu_log("Voice chat: HOME with no microphone open: the voice thread is told, and not waited for");
+			return;
+		}
+	}
 	while (__atomic_load_n(&acknowledged, __ATOMIC_ACQUIRE) != wanted && waited < VOICE_SUSPEND_WAIT_MS)
 	{
 		OSSleepTicks(OSMillisecondsToTicks(2));
@@ -1018,13 +1073,14 @@ void wiiu_voice_suspend(void)
 			uninit = MICUninit(handle);
 		}
 		OSUnlockMutex(&microphone_lock);
-		wiiu_log("Voice chat: the voice thread did not answer in %u ms; %s (MICClose %d, MICUninit %d)", (unsigned)waited,
-			handle >= 0 ? "the microphone closed here" : "the microphone was not open", (int)closed, (int)uninit);
+		wiiu_log("Voice chat: the voice thread did not answer in %u ms; %s (MICClose %d, MICUninit %d); its loop last came round %u ms ago",
+			(unsigned)waited, handle >= 0 ? "the microphone closed here" : "the microphone was not open", (int)closed, (int)uninit,
+			(unsigned)(now_ms() - __atomic_load_n(&last_turn_ms, __ATOMIC_RELAXED)));
 	}
 	else
 	{
-		wiiu_log("Voice chat: the voice thread did not answer in %u ms, and is in a microphone call: the microphone is left to the system",
-			(unsigned)waited);
+		wiiu_log("Voice chat: the voice thread did not answer in %u ms, and is in a microphone call: the microphone is left to the system; its loop "
+			"last came round %u ms ago", (unsigned)waited, (unsigned)(now_ms() - __atomic_load_n(&last_turn_ms, __ATOMIC_RELAXED)));
 	}
 }
 
