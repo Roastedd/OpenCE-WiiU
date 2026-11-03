@@ -22,6 +22,10 @@ struct wiiu_drs_frame
 	was drawn at; gpu_lines 0: no frame's time was read since the last */
 	float gpu_ms;
 	unsigned gpu_lines;
+	/* how much of gpu_ms was still to run when the game thread had handed over the frame's last draw: gpu_ms less the time the game thread took
+	to hand the frame over (0 at least; wiiu_gx2.c's gpu_poll), or -1 if not known. A GPU that kept up with a game thread that was late reads
+	a gpu_ms as long as the thread's time and a backlog of about 0: lowering the lines would not make that frame faster */
+	float gpu_backlog_ms;
 	/* how long present() waited for the display's flip of the frame before */
 	float flip_wait_ms;
 	/* the time since the frame before */
@@ -37,7 +41,8 @@ struct wiiu_drs
 	unsigned ceiling; /* the lines of step 0 */
 	unsigned lowest; /* the lowest step allowed (display.dynamic_resolution_floor) */
 	unsigned step; /* the step decided, which the game draws at a frame or two later */
-	float gpu[WIIU_DRS_AVERAGED]; /* the GPU's latest times at that step */
+	float gpu[WIIU_DRS_AVERAGED]; /* the GPU's latest times at that step, and the part of each that was still to run when its frame was handed over */
+	float backlog[WIIU_DRS_AVERAGED];
 	unsigned gpu_count, gpu_next;
 	unsigned hold; /* frames until another change may be made */
 	float since_drop_ms; /* the time since the last drop */
@@ -53,5 +58,9 @@ unsigned wiiu_drs_lines(const struct wiiu_drs *drs, unsigned step);
 unsigned wiiu_drs_frame(struct wiiu_drs *drs, const struct wiiu_drs_frame *frame);
 /* the average of the GPU's times measured at the step (for the log), or -1 if none has been */
 float wiiu_drs_average(const struct wiiu_drs *drs);
+/* the median of the same times, which the controller decides by (one frame that took far longer, a hitch, does not move it), or -1; and the
+median of the backlogs (-1 if none, or if any of them was not known) */
+float wiiu_drs_median(const struct wiiu_drs *drs);
+float wiiu_drs_backlog(const struct wiiu_drs *drs);
 
 #endif

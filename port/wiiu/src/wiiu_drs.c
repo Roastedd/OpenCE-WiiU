@@ -30,6 +30,11 @@ leaves out: the blits to the TV and the GamePad, and the swap. */
 /* A time predicted at the step above within this share of the budget raises a step. It is well under DROP_SHARE, so that the step it
 rises to is not dropped again at once. */
 #define RISE_SHARE 0.75f
+/* The share of the budget that the GPU must have been behind by when the frame was handed over, in the median, to drop a step. It is the
+share of the GPU's time that the game thread's own pace cannot explain; 1.7 ms at 60 frames a second is above the jitter of the hand-over
+(the GPU starts a frame at the game thread's first hand-over of its draws, a stream's worth after the frame's first draw, which the measure
+counts as time the GPU had) and far under what a GPU that is behind has (the whole of its lateness). */
+#define BACKLOG_SHARE 0.1f
 /* A wait for the flip longer than this counts. A few turns of the wait's loop (200 us each) are the flip arriving as the frame is handed
 over, not the GPU behind. */
 #define FLIP_WAIT_MS 1.0f
@@ -90,9 +95,43 @@ float wiiu_drs_average(const struct wiiu_drs *drs)
 	return sum / (float)drs->gpu_count;
 }
 
+/* the median of count values (the mean of the middle two when the count is even); the values are not changed */
+static float median_of(const float *values, unsigned count)
+{
+	float sorted[WIIU_DRS_AVERAGED];
+	unsigned i, j;
+
+	for (i = 0; i < count; i++)
+	{
+		float value = values[i];
+
+		for (j = i; j > 0 && sorted[j - 1] > value; j--)
+			sorted[j] = sorted[j - 1];
+		sorted[j] = value;
+	}
+	return count & 1 ? sorted[count / 2] : 0.5f * (sorted[count / 2 - 1] + sorted[count / 2]);
+}
+
+float wiiu_drs_median(const struct wiiu_drs *drs)
+{
+	return drs->gpu_count ? median_of(drs->gpu, drs->gpu_count) : -1.0f;
+}
+
+float wiiu_drs_backlog(const struct wiiu_drs *drs)
+{
+	unsigned i;
+
+	if (!drs->gpu_count)
+		return -1.0f;
+	for (i = 0; i < drs->gpu_count; i++)
+		if (drs->backlog[i] < 0.0f)
+			return -1.0f;
+	return median_of(drs->backlog, drs->gpu_count);
+}
+
 unsigned wiiu_drs_frame(struct wiiu_drs *drs, const struct wiiu_drs_frame *frame)
 {
-	float average = -1.0f;
+	float typical = -1.0f, backlog = -1.0f;
 
 	drs->since_drop_ms += frame->frame_ms;
 	if (frame->menu)
@@ -107,6 +146,7 @@ unsigned wiiu_drs_frame(struct wiiu_drs *drs, const struct wiiu_drs_frame *frame
 	if (frame->gpu_lines && frame->gpu_lines == wiiu_drs_lines(drs, drs->step))
 	{
 		drs->gpu[drs->gpu_next] = frame->gpu_ms;
+		drs->backlog[drs->gpu_next] = frame->gpu_backlog_ms;
 		drs->gpu_next = (drs->gpu_next + 1) % WIIU_DRS_AVERAGED;
 		if (drs->gpu_count < WIIU_DRS_AVERAGED)
 			drs->gpu_count++;
@@ -119,8 +159,12 @@ unsigned wiiu_drs_frame(struct wiiu_drs *drs, const struct wiiu_drs_frame *frame
 	}
 	/* A step is not dropped, nor raised by its prediction, on the measures of fewer than 8 frames. */
 	if (drs->gpu_count == WIIU_DRS_AVERAGED)
-		average = wiiu_drs_average(drs);
-	if (drs->step < drs->lowest && average > DROP_SHARE * frame->budget_ms && frame->flip_wait_ms > FLIP_WAIT_MS)
+	{
+		typical = wiiu_drs_median(drs);
+		backlog = wiiu_drs_backlog(drs);
+	}
+	if (drs->step < drs->lowest && typical > DROP_SHARE * frame->budget_ms && backlog > BACKLOG_SHARE * frame->budget_ms &&
+		frame->flip_wait_ms > FLIP_WAIT_MS)
 	{
 		change(drs, drs->step + 1);
 		drs->since_drop_ms = 0.0f;
@@ -131,7 +175,7 @@ unsigned wiiu_drs_frame(struct wiiu_drs *drs, const struct wiiu_drs_frame *frame
 		/* The time at the step above, if it is the pixels that take it. */
 		const float ratio = step_fraction[drs->step - 1] / step_fraction[drs->step];
 
-		if ((average >= 0.0f && average * ratio * ratio <= RISE_SHARE * frame->budget_ms) || drs->calm >= CALM_FRAMES)
+		if ((typical >= 0.0f && typical * ratio * ratio <= RISE_SHARE * frame->budget_ms) || drs->calm >= CALM_FRAMES)
 		{
 			change(drs, drs->step - 1);
 			drs->rises++;
