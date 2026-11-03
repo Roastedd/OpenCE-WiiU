@@ -146,6 +146,9 @@ real_matrix4x3 const *tick_snapshot_previous_node_matrices(long object_index, sh
 int tick_snapshot_view_cameras(short local_player_index, struct observer_result const **previous, struct observer_result const **latest);
 void render_interpolation_camera_between(struct observer_result const *a, struct observer_result const *b, real t, struct observer_result *result);
 void render_interpolation_overlap_set(boolean on, long tick);
+/* the fine timers of the copies (tick_snapshot.c, render_interpolation.c): the game thread's reads, and the blends' numbers, said by the overlap's log */
+void tick_snapshot_reads_total(unsigned long *reads, unsigned long *fallbacks, unsigned long *applied);
+void render_interpolation_blend_log(double ticks_per_ms, unsigned long frames);
 
 /* the lights that fade (object_lights.c), once after the ticks of each job */
 void lights_fade_update(void);

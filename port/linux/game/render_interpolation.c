@@ -57,6 +57,7 @@ int config_boolean(const char *name);
 unsigned long config_changes(void);
 
 #include <math.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -188,6 +189,16 @@ struct overlap_object
 
 static struct overlap_object *overlap_objects;
 static struct observer_result overlap_cameras[MAXIMUM_LOCAL_PLAYERS];
+
+/* The blends' fine timers, in the console's clock ticks (tick_overlap_now), the game thread's: said with the overlap's log (render_interpolation_blend_log). A mark is a read of the time base. */
+static struct
+{
+	unsigned long long lookup, snap, rotations, blend, copy;
+	unsigned long asked, repeated, no_object, no_previous, blended, snapped, nodes, rotation_nodes, fixups;
+} blend_stats;
+
+uint32_t wiiu_crash_fixups_here(void);
+void platform_log(char const *format, ...);
 #endif
 
 /* ---------- blending */
@@ -557,7 +568,8 @@ static real_matrix4x3 *overlap_object_node_matrices(long object_index)
 	long absolute_index;
 	short node_count, node_index;
 	boolean snap;
-	unsigned long long started;
+	unsigned long long started, entered, looked_up, snap_tested, rotated;
+	unsigned long fixups_before;
 
 	if (object_index == NONE)
 		return NULL;
@@ -576,19 +588,32 @@ static real_matrix4x3 *overlap_object_node_matrices(long object_index)
 	}
 	record = &overlap_objects[absolute_index];
 	if (record->frame == interpolation_frame && record->object_index == object_index)
+	{
+		blend_stats.repeated++;
 		return record->blended ? record->nodes : NULL;
+	}
+	entered = tick_overlap_now();
+	fixups_before = wiiu_crash_fixups_here();
+	blend_stats.asked++;
 	object = object_try_and_get(object_index);
 	record->frame = interpolation_frame;
 	record->object_index = object_index;
 	record->blended = FALSE;
 	if (!object)
+	{
+		blend_stats.no_object++;
 		return NULL;
+	}
 	node_count = (short)(object->object.node_matrices.size / (short)sizeof(real_matrix4x3));
 	if (node_count <= 0 || node_count > MAXIMUM_INTERPOLATED_NODES || object->object.node_matrices.offset <= 0)
 		return NULL;
 	previous = tick_snapshot_previous_node_matrices(object_index, node_count);
 	if (!previous)
+	{
+		blend_stats.no_previous++;
+		blend_stats.lookup += tick_overlap_now() - entered;
 		return NULL;
+	}
 	started = tick_overlap_now();
 	latest = (real_matrix4x3 const *)((byte const *)object + object->object.node_matrices.offset);
 	if (record->capacity < node_count)
@@ -601,6 +626,7 @@ static real_matrix4x3 *overlap_object_node_matrices(long object_index)
 		record->capacity = node_count;
 	}
 	blended = record->nodes;
+	looked_up = tick_overlap_now();
 	/* (as the serial frames' blend above: a pose that moved too far for one tick is another, not this one moving; so written that a position not a
 	number snaps) */
 	snap = !(distance_squared(&previous[0].position, &latest[0].position) <= OBJECT_SNAP_DISTANCE * OBJECT_SNAP_DISTANCE);
@@ -612,9 +638,12 @@ static real_matrix4x3 *overlap_object_node_matrices(long object_index)
 		matrix4x3_inverse_transform_point(&latest[0], &latest[node_index].position, &latest_local);
 		snap = !(distance_squared(&previous_local, &latest_local) <= NODE_SNAP_DISTANCE * NODE_SNAP_DISTANCE);
 	}
+	snap_tested = tick_overlap_now();
 	if (snap)
 	{
 		memcpy(blended, latest, node_count * sizeof(real_matrix4x3));
+		rotated = snap_tested;
+		blend_stats.snapped++;
 	}
 	else
 	{
@@ -626,15 +655,63 @@ static real_matrix4x3 *overlap_object_node_matrices(long object_index)
 			rotation_from_matrix(&previous[node_index], &previous_rotations[node_index]);
 			rotation_from_matrix(&latest[node_index], &latest_rotations[node_index]);
 		}
+		rotated = tick_overlap_now();
 		for (node_index = 0; node_index < node_count; node_index++)
 		{
 			matrix_blend_rotations(&previous[node_index], &latest[node_index], &previous_rotations[node_index], &latest_rotations[node_index],
 				interpolation_fraction, &blended[node_index]);
 		}
+		blend_stats.rotation_nodes += (unsigned long)node_count;
 	}
 	record->blended = TRUE;
-	tick_overlap_note_blend(tick_overlap_now() - started);
+	{
+		const unsigned long long finished = tick_overlap_now();
+
+		blend_stats.lookup += looked_up - entered;
+		blend_stats.snap += snap_tested - looked_up;
+		if (snap)
+			blend_stats.copy += finished - snap_tested;
+		else
+		{
+			blend_stats.rotations += rotated - snap_tested;
+			blend_stats.blend += finished - rotated;
+		}
+		blend_stats.blended++;
+		blend_stats.nodes += (unsigned long)node_count;
+		blend_stats.fixups += wiiu_crash_fixups_here() - fixups_before;
+		tick_overlap_note_blend(finished - started);
+	}
 	return blended;
+}
+
+/* the blends' numbers, said with the overlap's log (the game thread's); frames is the frames of the window */
+void render_interpolation_blend_log(
+	double ticks_per_ms,
+	unsigned long frames)
+{
+	const double f = frames ? (double)frames : 1.0;
+	const unsigned long long total = blend_stats.lookup + blend_stats.snap + blend_stats.rotations + blend_stats.blend + blend_stats.copy;
+
+	platform_log("tick snapshot, blends, ms a frame (%lu): %.3f = look-up of both poses %.3f, snap test %.3f, rotations %.3f, blending %.3f, copying snapped poses %.3f",
+		frames, (double)total / ticks_per_ms / f, (double)blend_stats.lookup / ticks_per_ms / f, (double)blend_stats.snap / ticks_per_ms / f,
+		(double)blend_stats.rotations / ticks_per_ms / f, (double)blend_stats.blend / ticks_per_ms / f, (double)blend_stats.copy / ticks_per_ms / f);
+	platform_log("tick snapshot, blends, a frame: %.1f objects asked for, %.1f repeats in the frame, %.1f blended (%.1f snapped, %.1f without a pose before, %.1f not found), "
+		"%.1f nodes, %.1f nodes with rotations found; misaligned accesses taken inside them %.2f a frame",
+		(double)blend_stats.asked / f, (double)blend_stats.repeated / f, (double)blend_stats.blended / f, (double)blend_stats.snapped / f,
+		(double)blend_stats.no_previous / f, (double)blend_stats.no_object / f, (double)blend_stats.nodes / f, (double)blend_stats.rotation_nodes / f,
+		(double)blend_stats.fixups / f);
+	{
+		static unsigned long reads_before, fallbacks_before, applied_before;
+		unsigned long reads, fallbacks, applied;
+
+		tick_snapshot_reads_total(&reads, &fallbacks, &applied);
+		platform_log("tick snapshot, the frame's reads of the copies, a frame: %.1f object lookups, %.2f objects' kept fields put in, %.2f lookups the copies did not answer",
+			(double)(reads - reads_before) / f, (double)(applied - applied_before) / f, (double)(fallbacks - fallbacks_before) / f);
+		reads_before = reads;
+		fallbacks_before = fallbacks;
+		applied_before = applied;
+	}
+	memset(&blend_stats, 0, sizeof(blend_stats));
 }
 
 /* a frame of the overlap is being drawn, from the ring's pair of which the latest is tick (or no more: the end of the frame) */

@@ -975,6 +975,12 @@ unsigned long wiiu_ticks_per_second(void)
 	return 1000000UL;
 }
 
+/* wiiu_crash.c: the misaligned accesses the handler took on this core (the tick snapshot's timers) */
+uint32_t wiiu_crash_fixups_here(void)
+{
+	return 0;
+}
+
 /* wiiu_tick_parts.c: the console's timing of the parts of a tick */
 long long wiiu_tick_part_now(void)
 {

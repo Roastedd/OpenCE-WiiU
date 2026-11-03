@@ -66,6 +66,7 @@ port/wiiu/src/wiiu_tick_snapshot_timers.c, on the console, the milliseconds a fr
 #include "tick_ring.h"
 
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -132,6 +133,8 @@ enum
 	MODE_POISON_OBJECTS = 4,
 	MODE_VERIFY = 8,
 	MODE_POISON_CAMERAS = 16,
+	MODE_BENCH = 32, /* the copies measured against other ways of making them (tick_snapshot_bench), once in each log window */
+	MODE_MEASURE = 64, /* what changed in each object since the capture before (a host measure: it reads every block twice) */
 };
 
 /* an object copied at a capture if it was asked for within this many captures */
@@ -230,12 +233,52 @@ static struct
 	unsigned long captures, window_captures;
 	unsigned long objects_copied, bytes_copied, header_bytes, block_calls, partition_bytes, light_bytes;
 	unsigned long misses, catch_ups, fallbacks, reads, views, camera_copies, ring_full;
+	/* (the game thread's, never reset: the blends' log says the difference between its windows) */
+	unsigned long reads_total, fallbacks_total, applied_total;
 	/* verify */
 	unsigned long *verify_begin, *verify_end; /* [type][word]: blocks that differ from the game state's at the view's start and end */
 	unsigned long verify_objects_begin, verify_objects_end, verify_views;
 	unsigned long verify_size_differences;
 	unsigned long verify_partition_begin, verify_partition_end; /* lists' words that differ from the game state's, summed over the views */
 } s = { -1 };
+
+/* ---------- the fine timers
+
+What a capture does, split by part, in the console's clock ticks (tick_overlap_now), with the counts and bytes, so that one run says where the time of a capture goes. The tick
+thread's only (a capture is made by it); said with the capture log line, every LOG_CAPTURES captures. A mark is a read of the time base (mftb in an OS call: some tens of nanoseconds);
+a capture reads it about 3 times an object. The parts of the frame's blends (render_interpolation.c) are said by tick_snapshot_blend_log from the overlap's log. */
+
+#define SIZE_BUCKETS 6 /* the copies by size: under 128 bytes, 256, 512, 1024, 2048, more */
+
+static struct
+{
+	unsigned long captures;
+	/* ticks */
+	unsigned long long total, headers, blocks, copy, inputs, kept, alloc, partitions, lights, cameras, ring, bench;
+	/* counts and bytes, summed over the captures */
+	unsigned long objects, bytes, bytes_fixed, bytes_type, bytes_matrices, bytes_orientations;
+	unsigned long jumps, sequential; /* the copied objects' live blocks: the next one is the one after in memory, or is not */
+	unsigned long grown; /* a copy's buffer made or made larger */
+	unsigned long type_objects[16], type_bytes[16];
+	unsigned long long bucket_ticks[SIZE_BUCKETS];
+	unsigned long bucket_count[SIZE_BUCKETS], bucket_bytes[SIZE_BUCKETS];
+	unsigned long partition_bytes_first, partition_bytes_entries, partition_bytes_clusters;
+	/* the misaligned accesses the handler took on this core during the captures */
+	unsigned long fixups;
+	/* the change measure (mode bit 64): objects whose live block differs from the last capture's copy */
+	unsigned long compared, changed, changed_fixed, changed_type, changed_matrices, changed_orientations, changed_words;
+} cs;
+
+uint32_t wiiu_crash_fixups_here(void);
+unsigned long wiiu_ticks_per_second(void);
+
+static void tick_snapshot_bench(void);
+static void tick_snapshot_capture_log(void);
+
+static int size_bucket(long size)
+{
+	return size < 128 ? 0 : size < 256 ? 1 : size < 512 ? 2 : size < 1024 ? 3 : size < 2048 ? 4 : 5;
+}
 
 /* the view: the drawing thread's is the only one that ever has one (objects.h's tick_snapshot_headers finds the calling thread by its stack), so a tick
 on another thread reads the game state */
@@ -318,16 +361,140 @@ static void tick_snapshot_log(void)
 	s.misses = s.catch_ups = s.fallbacks = s.reads = s.views = s.camera_copies = s.ring_full = 0;
 }
 
+/* what an object's block holds, by its own references: the object structure, the type's own data, and the three blocks that follow (node matrices and the two orientation
+blocks, which only the ticks' animation reads: object_compute_node_matrices, object_start_interpolation, the preprocess functions). 0 sizes for a reference that is not valid. */
+struct block_parts
+{
+	long fixed, matrices, orientations, type;
+	long skip_offset[2], skip_size[2]; /* the orientation blocks, in order of offset (skips of them: 0, 1 or 2) */
+	int skips;
+};
+
+static boolean block_reference_valid(struct object_header_block_reference const *reference, long size)
+{
+	return reference->size > 0 && reference->offset >= (short)sizeof(struct object_datum) && (long)reference->offset + reference->size <= size;
+}
+
+static void tick_snapshot_block_parts(struct object_datum const *block, long size, struct block_parts *parts)
+{
+	struct object_header_block_reference const *matrices = &block->object.node_matrices;
+	struct object_header_block_reference const *current = &block->object.node_orientations;
+	struct object_header_block_reference const *original = &block->object.original_node_orientations;
+	const boolean current_valid = block_reference_valid(current, size), original_valid = block_reference_valid(original, size);
+
+	memset(parts, 0, sizeof(*parts));
+	parts->fixed = size < (long)sizeof(struct object_datum) ? size : (long)sizeof(struct object_datum);
+	if (block_reference_valid(matrices, size))
+		parts->matrices = matrices->size;
+	if (current_valid)
+		parts->orientations += current->size;
+	if (original_valid)
+		parts->orientations += original->size;
+	parts->type = size - parts->fixed - parts->matrices - parts->orientations;
+	if (current_valid && original_valid)
+	{
+		struct object_header_block_reference const *first = current->offset < original->offset ? current : original;
+		struct object_header_block_reference const *second = first == current ? original : current;
+
+		/* (two that overlap are not two blocks: none is skipped) */
+		if ((long)first->offset + first->size <= second->offset)
+		{
+			parts->skip_offset[0] = first->offset;
+			parts->skip_size[0] = first->size;
+			parts->skip_offset[1] = second->offset;
+			parts->skip_size[1] = second->size;
+			parts->skips = 2;
+		}
+	}
+	else if (current_valid || original_valid)
+	{
+		struct object_header_block_reference const *one = current_valid ? current : original;
+
+		parts->skip_offset[0] = one->offset;
+		parts->skip_size[0] = one->size;
+		parts->skips = 1;
+	}
+}
+
+/* whether a word of a copy is in a range that is not copied */
+static boolean tick_snapshot_word_skipped(struct block_parts const *parts, long offset)
+{
+	int skip;
+
+	for (skip = 0; skip < parts->skips; skip++)
+	{
+		if (offset >= parts->skip_offset[skip] && offset < parts->skip_offset[skip] + parts->skip_size[skip])
+			return TRUE;
+	}
+	return FALSE;
+}
+
+/* whether the orientation blocks are left out of the copies */
+static boolean tick_snapshot_skipping(void)
+{
+	return FALSE;
+}
+
+/* the change measure (mode bit 64): the live block against the copy the last capture made, by the part of the block, without the two words the renderer's side owns */
+static void tick_snapshot_measure_change(struct object_header_datum const *live, struct slot const *previous, long absolute_index, struct block_parts const *parts)
+{
+	struct object_header_datum const *before = &previous->headers[absolute_index];
+	unsigned long const *now_words = (unsigned long const *)live->datum;
+	unsigned long const *then_words;
+	long words, word;
+	boolean in_fixed = FALSE, in_type = FALSE, in_matrices = FALSE, in_orientations = FALSE;
+
+	if (!previous->copied[absolute_index] || !before->datum || before->identifier != live->identifier || before->data_size != live->data_size)
+		return;
+	then_words = (unsigned long const *)before->datum;
+	words = live->data_size / 4;
+	cs.compared++;
+	for (word = 0; word < words; word++)
+	{
+		const long offset = word * 4;
+
+		if (offset == (long)offsetof(struct object_datum, object.magic_number) || offset == (long)offsetof(struct object_datum, object.cached_render_state_index))
+			continue;
+		/* (ranges not copied are not in the copy to compare with) */
+		if (tick_snapshot_skipping() && tick_snapshot_word_skipped(parts, offset))
+			continue;
+		if (now_words[word] == then_words[word])
+			continue;
+		cs.changed_words++;
+		if (offset < parts->fixed)
+			in_fixed = TRUE;
+		else if (offset >= live->datum->object.node_matrices.offset && offset < live->datum->object.node_matrices.offset + live->datum->object.node_matrices.size)
+			in_matrices = TRUE;
+		else if (tick_snapshot_word_skipped(parts, offset))
+			in_orientations = TRUE;
+		else
+			in_type = TRUE;
+	}
+	if (in_fixed || in_type || in_matrices || in_orientations)
+	{
+		cs.changed++;
+		cs.changed_fixed += in_fixed;
+		cs.changed_type += in_type;
+		cs.changed_matrices += in_matrices;
+		cs.changed_orientations += in_orientations;
+	}
+}
+
 /* an object's block copied from the game state's into the slot's (a capture, or an asking for one not copied) */
+static struct slot const *measure_previous; /* (the capture before this one, when the change measure is on) */
+
 static void tick_snapshot_copy_block(struct slot *slot, long absolute_index, struct object_header_datum const *live, boolean keep_fields)
 {
 	struct object_header_datum *header = &slot->headers[absolute_index];
 	long size = live->data_size;
 	long field;
 	byte *block;
+	struct block_parts parts;
+	unsigned long long t0, t1, t2;
 
 	if (size <= 0 || !live->datum)
 		return;
+	t0 = tick_overlap_now();
 	if (slot->capacity[absolute_index] < size)
 	{
 		/* (the game's free takes no NULL) */
@@ -335,12 +502,19 @@ static void tick_snapshot_copy_block(struct slot *slot, long absolute_index, str
 			free(slot->blocks[absolute_index]);
 		slot->blocks[absolute_index] = (byte *)malloc((size_t)size);
 		slot->capacity[absolute_index] = slot->blocks[absolute_index] ? (unsigned short)size : 0;
+		cs.grown++;
 		if (!slot->blocks[absolute_index])
 			return;
+		cs.alloc += tick_overlap_now() - t0;
+		t0 = tick_overlap_now();
 	}
 	block = slot->blocks[absolute_index];
+	tick_snapshot_block_parts(live->datum, size, &parts);
+	if (measure_previous)
+		tick_snapshot_measure_change(live, measure_previous, absolute_index, &parts);
 	memcpy(block, live->datum, (size_t)size);
-	/* what the renderer wrote in the last copy of this object (not in the overlap's: the game thread writes the kept fields, and puts them in
+	t1 = tick_overlap_now();
+	/* what the renderer wrote in the last copy of this object (not in the overlap: the game thread writes the kept fields, and puts them in
 	when it first asks for the object in a frame) */
 	if (keep_fields && s.field_identifier[absolute_index] == live->identifier)
 	{
@@ -357,10 +531,222 @@ static void tick_snapshot_copy_block(struct slot *slot, long absolute_index, str
 		((struct object_datum *)block)->object.bounding_sphere_center.x += 5000.0f;
 	header->datum = (struct object_datum *)block;
 	slot->copied[absolute_index] = TRUE;
+	t2 = tick_overlap_now();
 	object_function_inputs_copy_to_snapshot((int)(slot - slots), absolute_index);
+	cs.copy += t1 - t0;
+	cs.kept += t2 - t1;
+	cs.inputs += tick_overlap_now() - t2;
+	{
+		const int bucket = size_bucket(size);
+
+		cs.bucket_ticks[bucket] += t1 - t0;
+		cs.bucket_count[bucket]++;
+		cs.bucket_bytes[bucket] += (unsigned long)size;
+		cs.objects++;
+		cs.bytes += (unsigned long)size;
+		cs.bytes_fixed += (unsigned long)parts.fixed;
+		cs.bytes_type += (unsigned long)parts.type;
+		cs.bytes_matrices += (unsigned long)parts.matrices;
+		cs.bytes_orientations += (unsigned long)parts.orientations;
+		cs.type_objects[live->type & 15]++;
+		cs.type_bytes[live->type & 15] += (unsigned long)size;
+	}
 	s.objects_copied++;
 	s.bytes_copied += (unsigned long)size;
 	s.block_calls++;
+}
+
+/* a block copied in the parts the renderer can read: with skip, the orientation blocks (only the ticks' animation reads them) are left out */
+static void tick_snapshot_copy_parts(byte *destination, byte const *source, long size, struct block_parts const *parts, boolean skip)
+{
+	long at = 0;
+	int which;
+
+	if (!skip || !parts->skips)
+	{
+		memcpy(destination, source, (size_t)size);
+		return;
+	}
+	for (which = 0; which < parts->skips; which++)
+	{
+		if (parts->skip_offset[which] > at)
+			memcpy(destination + at, source + at, (size_t)(parts->skip_offset[which] - at));
+		at = parts->skip_offset[which] + parts->skip_size[which];
+	}
+	if (at < size)
+		memcpy(destination + at, source + at, (size_t)(size - at));
+}
+
+/* the cache lines of a range asked for ahead (dcbt on the Espresso, which has no prefetching of its own) */
+static void tick_snapshot_prefetch(void const *address, long size)
+{
+	byte const *line = (byte const *)((uintptr_t)address & ~(uintptr_t)31);
+	byte const *end = (byte const *)address + size;
+
+	for (; line < end; line += 32)
+		__builtin_prefetch(line);
+}
+
+/* ---------- the capture's numbers and the copy bench */
+
+static double ticks_ms(unsigned long long ticks, unsigned long divisor)
+{
+	return (double)ticks / ((double)wiiu_ticks_per_second() / 1000.0) / (double)(divisor ? divisor : 1);
+}
+
+/* what the copies cost by part, said every LOG_CAPTURES captures (a log line holds 199 characters) */
+static void tick_snapshot_capture_log(void)
+{
+	static const char *const types[12] = { "biped", "vehicle", "weapon", "equipment", "garbage", "projectile", "scenery", "machine", "control",
+		"lightfix", "placeholder", "soundscn" };
+	const unsigned long n = cs.captures ? cs.captures : 1;
+	char line[256];
+	size_t used = 0;
+	int bucket, type;
+	static const char *const bucket_names[SIZE_BUCKETS] = { "<128", "<256", "<512", "<1K", "<2K", ">=2K" };
+
+	platform_log("tick snapshot capture, ms a capture (%lu): total %.3f = headers %.3f, blocks %.3f (copy %.3f, function inputs %.3f, kept fields %.3f, buffers made %.3f, the rest %.3f), "
+		"cluster lists %.3f, lights %.3f, cameras %.3f, ring %.3f",
+		cs.captures, ticks_ms(cs.total, n), ticks_ms(cs.headers, n), ticks_ms(cs.blocks, n), ticks_ms(cs.copy, n), ticks_ms(cs.inputs, n), ticks_ms(cs.kept, n),
+		ticks_ms(cs.alloc, n), ticks_ms(cs.blocks - cs.copy - cs.inputs - cs.kept - cs.alloc, n), ticks_ms(cs.partitions, n), ticks_ms(cs.lights, n),
+		ticks_ms(cs.cameras, n), ticks_ms(cs.ring, n));
+	platform_log("tick snapshot capture, a capture: %lu objects, %lu bytes in them (the structure %lu, the type's data %lu, node matrices %lu, orientation blocks %lu), "
+		"%lu buffers made, blocks in memory order %lu, not %lu; misaligned accesses taken on this core %lu a capture (%lu in all)",
+		cs.objects / n, cs.bytes / n, cs.bytes_fixed / n, cs.bytes_type / n, cs.bytes_matrices / n, cs.bytes_orientations / n, cs.grown, cs.sequential / n, cs.jumps / n,
+		cs.fixups / n, cs.fixups);
+	for (type = 0; type < 12; type++)
+	{
+		if (cs.type_objects[type] && used < sizeof(line) - 40)
+			used += (size_t)snprintf(line + used, sizeof(line) - used, "%s%s %lu/%lu", used ? ", " : "", types[type], cs.type_objects[type] / n, cs.type_bytes[type] / n);
+	}
+	platform_log("tick snapshot capture, a capture, objects/bytes by type: %s", line);
+	used = 0;
+	line[0] = 0;
+	for (bucket = 0; bucket < SIZE_BUCKETS; bucket++)
+	{
+		if (cs.bucket_count[bucket] && used < sizeof(line) - 40)
+		{
+			used += (size_t)snprintf(line + used, sizeof(line) - used, "%s%s: %lu a capture, %.2f us each (%lu bytes)", used ? "; " : "", bucket_names[bucket],
+				cs.bucket_count[bucket] / n, ticks_ms(cs.bucket_ticks[bucket], cs.bucket_count[bucket]) * 1000.0, cs.bucket_bytes[bucket] / cs.bucket_count[bucket]);
+		}
+	}
+	platform_log("tick snapshot capture, the copies by size of block: %s", line);
+	if (s.mode & MODE_MEASURE)
+	{
+		platform_log("tick snapshot capture, changed since the capture before (%lu blocks compared): %lu changed (%lu in the structure, %lu in the type's data, %lu in the node matrices, "
+			"%lu in the orientations), %lu words in all", cs.compared, cs.changed, cs.changed_fixed, cs.changed_type, cs.changed_matrices, cs.changed_orientations, cs.changed_words);
+	}
+	if (s.mode & MODE_BENCH)
+		tick_snapshot_bench();
+	memset(&cs, 0, sizeof(cs));
+}
+
+/* The copy bench (mode bit 32), once in each log window, on the tick thread after a capture, with the ticks quiet: the same objects copied into scratch buffers in other ways, each after the
+caches were swept with a read of 1.5 MB, so that every way starts with its source cold as the capture's was. It says which way is the fastest on this console, with the same data. */
+static void tick_snapshot_bench(void)
+{
+	static byte *scratch[4];
+	static long scratch_capacity;
+	static byte *sweep;
+	static long list[MAXIMUM_OBJECTS_PER_MAP];
+	static volatile unsigned long sink;
+	static unsigned long window;
+	struct data_array const *live = object_header_data;
+	struct object_header_datum const *headers;
+	void *pool_base;
+	long pool_used, count = 0, index, total = 0, aligned_total = 0, skipped = 0, variant;
+	double ms[6];
+	static const char *const names[6] = { "as now", "prefetching the next block", "without the orientation blocks", "both", "the pool in one copy", "as now again at once" };
+
+	if (!live || !live->valid)
+		return;
+	headers = (struct object_header_datum const *)live->data;
+	object_memory_pool_extent(&pool_base, &pool_used);
+	for (index = 0; index < live->count && index < MAXIMUM_OBJECTS_PER_MAP; index++)
+	{
+		struct block_parts parts;
+
+		if (!headers[index].identifier || !headers[index].datum || headers[index].data_size <= 0)
+			continue;
+		tick_snapshot_block_parts(headers[index].datum, headers[index].data_size, &parts);
+		list[count++] = index;
+		total += headers[index].data_size;
+		aligned_total += (headers[index].data_size + 31) & ~31L;
+		skipped += parts.orientations;
+	}
+	if (!count)
+		return;
+	if (scratch_capacity < aligned_total + 64 || scratch_capacity < pool_used + 64)
+	{
+		const long capacity = (aligned_total > pool_used ? aligned_total : pool_used) + 64;
+
+		for (variant = 0; variant < 4; variant++)
+		{
+			if (scratch[variant])
+				free(scratch[variant]);
+			scratch[variant] = (byte *)malloc((size_t)capacity);
+			if (!scratch[variant])
+			{
+				scratch_capacity = 0;
+				return;
+			}
+			memset(scratch[variant], 0, (size_t)capacity);
+		}
+		scratch_capacity = capacity;
+	}
+	if (!sweep)
+	{
+		sweep = (byte *)malloc(1536 * 1024);
+		if (!sweep)
+			return;
+		memset(sweep, 1, 1536 * 1024);
+	}
+	for (variant = 0; variant < 6; variant++)
+	{
+		byte *destination = scratch[(window + (unsigned long)variant) & 3];
+		unsigned long long started;
+		long at;
+
+		if (variant != 5)
+		{
+			unsigned long sum = 0;
+			unsigned long const *words = (unsigned long const *)sweep;
+
+			for (at = 0; at < 1536 * 1024 / 4; at += 8)
+				sum += words[at];
+			sink += sum;
+		}
+		started = tick_overlap_now();
+		if (variant == 4)
+		{
+			if (pool_base && pool_used > 0)
+				memcpy(destination, pool_base, (size_t)pool_used);
+		}
+		else
+		{
+			const boolean prefetch = variant == 1 || variant == 3, skip = variant == 2 || variant == 3;
+
+			for (at = 0, index = 0; index < count; index++)
+			{
+				struct object_header_datum const *header = &headers[list[index]];
+				struct block_parts parts;
+
+				if (prefetch && index + 1 < count)
+				{
+					struct object_header_datum const *next = &headers[list[index + 1]];
+
+					tick_snapshot_prefetch(next->datum, next->data_size > 1024 ? 1024 : next->data_size);
+				}
+				tick_snapshot_block_parts(header->datum, header->data_size, &parts);
+				tick_snapshot_copy_parts(destination + at, (byte const *)header->datum, header->data_size, &parts, skip);
+				at += (header->data_size + 31) & ~31L;
+			}
+		}
+		ms[variant] = ticks_ms(tick_overlap_now() - started, 1);
+	}
+	window++;
+	platform_log("tick snapshot bench, ms for %ld blocks, %ld bytes (orientation blocks %ld, pool %ld), sources cold: %s %.3f (%.0f MB/s), %s %.3f, %s %.3f, %s %.3f, %s %.3f, %s %.3f",
+		count, total, skipped, pool_used, names[0], ms[0], (double)total / ms[0] / 1000.0, names[1], ms[1], names[2], ms[2], names[3], ms[3], names[4], ms[4], names[5], ms[5]);
 }
 
 /* the object partitions' lists (the clusters' first references and the references in use), as the ticks left them */
@@ -475,12 +861,15 @@ void tick_snapshot_capture_tick(long tick, boolean commit)
 	struct object_header_datum const *live_headers;
 	struct slot *slot;
 	long count, previous_count, index;
-	unsigned long long started, headers_started, started_ticks;
+	unsigned long long started, headers_started, started_ticks, mark, mark2;
+	unsigned long fixups_before;
+	byte const *last_end = NULL;
 
 	if (!tick_snapshot_mode() || !live || !live->valid)
 		return;
 	started = CLOCK();
 	started_ticks = tick_overlap_now();
+	fixups_before = wiiu_crash_fixups_here();
 	slot = tick_snapshot_slot_for(tick);
 	if (!slot)
 	{
@@ -491,9 +880,19 @@ void tick_snapshot_capture_tick(long tick, boolean commit)
 	live_headers = (struct object_header_datum const *)live->data;
 	count = live->count;
 	previous_count = slot->array.count;
+	/* (the change measure compares with the capture before this one) */
+	measure_previous = NULL;
+	if ((s.mode & MODE_MEASURE) && s.ring.captured != NO_TICK)
+	{
+		struct slot const *before = tick_snapshot_slot_of(s.ring.captured);
+
+		if (before && before != slot)
+			measure_previous = before;
+	}
 	tick_ring_begin_write(&s.ring, (int)(slot - slots), tick);
 	s.serial++;
 	headers_started = CLOCK();
+	mark = tick_overlap_now();
 	/* the headers, whole */
 	if (count > MAXIMUM_OBJECTS_PER_MAP)
 		count = MAXIMUM_OBJECTS_PER_MAP;
@@ -505,6 +904,9 @@ void tick_snapshot_capture_tick(long tick, boolean commit)
 	s.header_bytes += (unsigned long)count * sizeof(slot->headers[0]);
 	ADD(PART_HEADERS, headers_started);
 	headers_started = CLOCK();
+	mark2 = tick_overlap_now();
+	cs.headers += mark2 - mark;
+	mark = mark2;
 	/* the blocks of the objects drawn lately (the overlap: all of them, a tick being free to change what a lazy copy would read) */
 	for (index = 0; index < count; index++)
 	{
@@ -513,22 +915,64 @@ void tick_snapshot_capture_tick(long tick, boolean commit)
 		if (!slot->headers[index].identifier)
 			continue;
 		if (s.all || (s.wanted[index] && s.serial - s.wanted[index] <= DRAWN_CAPTURES))
-			tick_snapshot_copy_block(slot, index, &live_headers[index], !s.overlap_requested);
+		{
+			struct object_header_datum const *from = &live_headers[index];
+
+			if (from->datum && from->data_size > 0)
+			{
+				/* (is the next copied block the next in memory? the blocks lie in the pool in the order they were made, compacted) */
+				if (last_end)
+				{
+					if ((byte const *)from->datum == last_end || (byte const *)from->datum == last_end + 24)
+						cs.sequential++;
+					else
+						cs.jumps++;
+				}
+				last_end = (byte const *)from->datum + from->data_size;
+			}
+			tick_snapshot_copy_block(slot, index, from, !s.overlap_requested);
+		}
 	}
 	for (; index < previous_count && index < MAXIMUM_OBJECTS_PER_MAP; index++)
 		slot->copied[index] = FALSE;
-	tick_snapshot_capture_partitions(slot);
+	mark2 = tick_overlap_now();
+	cs.blocks += mark2 - mark;
+	mark = mark2;
+	{
+		const unsigned long before_first = s.partition_bytes;
+
+		tick_snapshot_capture_partitions(slot);
+		cs.partition_bytes_first += s.partition_bytes - before_first;
+	}
+	mark2 = tick_overlap_now();
+	cs.partitions += mark2 - mark;
+	mark = mark2;
 	tick_snapshot_capture_lights(slot);
+	mark2 = tick_overlap_now();
+	cs.lights += mark2 - mark;
+	mark = mark2;
 	memset(slot->cameras, 0, sizeof(slot->cameras));
 	ADD(PART_BLOCKS, headers_started);
+	mark2 = tick_overlap_now();
+	cs.cameras += mark2 - mark;
+	mark = mark2;
 	tick_ring_end_write(&s.ring, (int)(slot - slots), commit);
 	s.dirty = FALSE;
 	s.captures++;
 	s.window_captures++;
 	ADD(PART_CAPTURE, started);
-	tick_overlap_note_capture(tick_overlap_now() - started_ticks);
+	mark2 = tick_overlap_now();
+	cs.ring += mark2 - mark;
+	cs.total += mark2 - started_ticks;
+	cs.captures++;
+	cs.fixups += wiiu_crash_fixups_here() - fixups_before;
+	measure_previous = NULL;
+	tick_overlap_note_capture(mark2 - started_ticks);
 	if (s.window_captures >= LOG_CAPTURES)
+	{
 		tick_snapshot_log();
+		tick_snapshot_capture_log();
+	}
 }
 
 /* the serial mode's catch-up (a view begun with no capture of this map's objects, or after objects were made or deleted): the world as it is, with
@@ -584,6 +1028,13 @@ void tick_snapshot_reset(void)
 	tick_snapshot_view_any = 0;
 }
 
+void tick_snapshot_reads_total(unsigned long *reads, unsigned long *fallbacks, unsigned long *applied)
+{
+	*reads = s.reads_total;
+	*fallbacks = s.fallbacks_total;
+	*applied = s.applied_total;
+}
+
 void tick_snapshot_objects_changed(void)
 {
 	s.dirty = TRUE;
@@ -622,6 +1073,7 @@ static void tick_snapshot_apply_fields(long absolute_index, struct object_header
 	long field;
 
 	s.applied[absolute_index] = s.view_serial;
+	s.applied_total++;
 	if (s.field_identifier[absolute_index] != header->identifier)
 		return;
 	for (field = 0; field < RENDER_FIELD_COUNT; field++)
@@ -637,10 +1089,12 @@ struct object_header_datum *tick_snapshot_object_header_get(long object_index)
 	struct object_header_datum *header = (struct object_header_datum *)datum_try_and_get(&s.view->array, object_index);
 
 	s.reads++;
+	s.reads_total++;
 	if (!header)
 	{
 		/* (an object the snapshot has not: made since it, and the view's start would have caught it) */
 		s.fallbacks++;
+		s.fallbacks_total++;
 		return (struct object_header_datum *)datum_get(object_header_data, object_index);
 	}
 	if (s.overlap_requested && header->datum)
@@ -662,12 +1116,16 @@ struct object_header_datum *tick_snapshot_object_header_try_and_get(long object_
 	struct object_header_datum *header = (struct object_header_datum *)datum_try_and_get(&s.view->array, object_index);
 
 	s.reads++;
+	s.reads_total++;
 	if (!header)
 	{
 		struct object_header_datum *live = (struct object_header_datum *)datum_try_and_get(object_header_data, object_index);
 
 		if (live)
+		{
 			s.fallbacks++;
+			s.fallbacks_total++;
+		}
 		return live;
 	}
 	if (s.overlap_requested && header->datum)

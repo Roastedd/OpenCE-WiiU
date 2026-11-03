@@ -477,6 +477,7 @@ object_function_inputs), when a load puts the objects back or a map starts */
 void object_function_inputs_forget(void);
 #ifdef HALO_WIIU
 void object_function_inputs_copy_to_snapshot(int slot, long absolute_index);
+void object_memory_pool_extent(void **base, long *used);
 void object_function_inputs_set_view(int slot);
 #endif
 short objects_in_clusters_by_indices(unsigned long class_flags, short cluster_count, short const *cluster_indices, short maximum_object_count, long *object_indices);

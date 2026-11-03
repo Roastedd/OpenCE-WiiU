@@ -755,6 +755,7 @@ void tick_overlap_log(
 		captures ? (double)capture_ticks / per_ms / (double)captures : 0.0, captures,
 		publishes ? (double)publish_ticks / per_ms / (double)publishes : 0.0, publishes, (double)o.blend_ticks / per_ms / active, o.blends,
 		push_waits);
+	render_interpolation_blend_log(per_ms, o.active_frames);
 	o.log_started_ticks = now;
 	o.frames = o.overlap_frames = o.serial_frames = o.primed_frames = o.held_frames = o.no_pair_frames = 0;
 	o.wait_ticks = o.wait_max_ticks = o.frame_ticks = o.frame_max_ticks = o.sync_ticks = o.sync_wait_ticks = o.post_ticks = o.draw_ticks = o.draw_max_ticks = 0;

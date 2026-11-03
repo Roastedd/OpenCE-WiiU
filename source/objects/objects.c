@@ -1705,6 +1705,20 @@ void object_function_inputs_copy_to_snapshot(
 		object_function_inputs_snapshot[slot][absolute_index] = object_function_inputs[absolute_index];
 }
 
+/* port: where the objects' blocks lie (the tick snapshot's copy bench, tick_snapshot.c): the pool's first byte and the bytes in use, 0 if there is no pool */
+void object_memory_pool_extent(
+	void **base,
+	long *used)
+{
+	*base = NULL;
+	*used = 0;
+	if (object_memory_pool)
+	{
+		*base = object_memory_pool->base_address;
+		*used = memory_pool_get_used_size(object_memory_pool);
+	}
+}
+
 /* the slot the drawing thread's view is of (tick_snapshot_view_begin) */
 void object_function_inputs_set_view(
 	int slot)

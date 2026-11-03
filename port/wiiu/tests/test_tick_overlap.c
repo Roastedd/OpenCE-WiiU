@@ -135,6 +135,7 @@ void tick_input_release(void) {}
 void player_control_sync_display_facing(void) {}
 void observer_sync_published(void) {}
 void render_interpolation_overlap_set(boolean on, long tick) { (void)on; (void)tick; }
+void render_interpolation_blend_log(double ticks_per_ms, unsigned long frames) { (void)ticks_per_ms; (void)frames; }
 
 #define SLOTS 4
 #define WORDS 128
