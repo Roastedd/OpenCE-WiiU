@@ -401,8 +401,16 @@ static void tick_overlap_late_judge(
 	const double ahead = (double)o.late_ahead_sum / 1000.0 / frames;
 	const double wait = (double)o.late_wait_sum / (per_second / 1000.0) / frames;
 	const double rate = (double)o.late_window_ticks / seconds;
-	const unsigned long fewest = tick_overlap_late_fewest_frames();
-	const boolean late = o.late_frames >= fewest && (ahead > 1.5 || wait > 8.0 || rate < 27.0);
+	/* (a window of fewer frames than that is a slow game, not a quiet one: the console drew 5 to 11 frames a second when the tick thread was far behind, 10 to 22 in the 2 s of a window, and
+	a window that needed 20 never judged the slowest. Past 4 s, 6 frames are enough; a window with fewer is kept going for up to 10 s) */
+	unsigned long fewest = tick_overlap_late_fewest_frames();
+	boolean late;
+
+	if (seconds >= 4.0 && fewest > 6)
+		fewest = 6;
+	if (o.late_frames < fewest && seconds < 10.0)
+		return; /* (the window goes on) */
+	late = o.late_frames >= fewest && (ahead > 1.5 || wait > 8.0 || rate < 27.0);
 
 	if (late)
 	{
@@ -501,6 +509,8 @@ boolean tick_overlap_enabled(
 				o.first_ticks = tick_overlap_now();
 				platform_log("tick overlap: on (halo/tick_overlap.txt): the ticks run beside the drawing, the frame drawn from the ring one tick behind the clock");
 				platform_log("tick overlap: the game thread is on core %u, the tick thread on core %u (halo/tick_core.txt, halo/game_core.txt)", wiiu_core_here(), wiiu_tick_thread_core_set());
+				platform_log("tick overlap: the fall back to serial frames when the tick thread is late is %s (halo/tick_overlap_late.txt: %s; a file holding 0 turns it off)",
+					tick_overlap_late_enabled() ? "on" : "OFF", tick_overlap_late_enabled() ? "absent or 1" : "0");
 			}
 		}
 	}
@@ -957,6 +967,7 @@ void tick_overlap_log(
 		publishes ? (double)publish_ticks / per_ms / (double)publishes : 0.0, publishes, (double)o.blend_ticks / per_ms / active, o.blends,
 		push_waits);
 	render_interpolation_blend_log(per_ms, o.active_frames);
+	tick_snapshot_view_log(per_ms);
 	if (tick_perf_on())
 	{
 		tick_overlap_counters_line("tick thread", o.perf_job_core, &o.perf_job, &o.perf_job_logged, o.ticks, "tick");
@@ -967,7 +978,6 @@ void tick_overlap_log(
 	o.wait_ticks = o.wait_max_ticks = o.frame_ticks = o.frame_max_ticks = o.sync_ticks = o.sync_wait_ticks = o.post_ticks = o.draw_ticks = o.draw_max_ticks = 0;
 	o.serial_wait_ticks = 0;
 	o.waits_long = o.serial_waits = o.active_frames = 0;
-	tick_snapshot_view_log(per_ms);
 	o.jobs = o.ticks = 0;
 	o.job_ticks = o.job_max_ticks = o.tick_work_ticks = 0;
 	o.ahead_sum = 0;
