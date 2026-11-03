@@ -877,3 +877,23 @@ and immutable vertices. Two deliberate faults must fail. It does not emulate
 GPU pixels. The fixed shader's sources and byte identity live in
 `shaders/mip.*`; regenerate the embedded GFD with
 `python3 port/wiiu/tools/embed_mip_shader.py --compiler <existing-glslcompiler>`.
+
+## Threading study files on the card
+
+These files of `wiiu/apps/halo/` hold one number each and are read once at start. **A negative number (-1) is the same as no file** (the default),
+so that a harness that must not delete a card file can write -1 to put one back. 0 and the positive numbers keep their meanings.
+
+| File | Absent or -1 | Meaning |
+| --- | --- | --- |
+| `tick_thread.txt` | 0 | 1: the game's ticks run on a thread of their own |
+| `tick_overlap.txt` | 0 | 1: the ticks run beside the drawing (needs `tick_thread.txt`, `tick_snapshot.txt` 1) |
+| `tick_snapshot.txt` | 0 | bits: 1 on, 128 the check of the objects left out, 256 to 2048 and 16384, 32768 turn one change off (the report `reports/research/2026-11-01/ticks-stage5-snapshot-cost.md`) |
+| `tick_core.txt` | 2 with the overlap on, else 0 | the core of the tick thread: 0, 1 or 2 |
+| `tick_priority.txt` | 1 below the game's when the tick thread shares the GX2 thread's core, else 0 | the tick thread's priority offset below the game's, 0 to 8 |
+| `gx2_idle_sleep.txt` | 100 | microseconds the GX2 thread sleeps between looks for work when the tick thread shares its core; 0 is the yield |
+| `tick_overlap_late.txt` | 1 | the fall back to serial frames when the tick thread is late: 0 off, 1 on, above 1 the fewest frames a window needs |
+| `tick_overlap_serialize.txt`, `tick_overlap_stall.txt` | 0 | test aids of the host runs |
+| `perf_counters.txt` | 0 | 1, 2 or 3: the event set of the cores' performance counters |
+| `tick_owners.txt` | 0 | the tick owners' queues, mode 1 or 2 |
+| `game_core.txt` | 1 | the core of the game thread: 0, 1 or 2 |
+| `gx2_thread.txt` | 7 | the GX2 thread's mode (0: the game thread makes the calls) |
