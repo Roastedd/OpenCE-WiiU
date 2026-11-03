@@ -417,14 +417,16 @@ static void tick_snapshot_capture_lights(struct slot *slot)
 	if (!s.overlap_requested || !light_data || !light_data->valid)
 		return;
 	needed = (long)light_data->count * (long)light_data->size;
-	if (slot->light_bytes_capacity < needed)
+	/* (never no buffer: an array of no lights, the main menu's scene, still has its data pointer, and data_verify halts the game on one that has none) */
+	if (slot->light_bytes_capacity < needed || !slot->light_bytes)
 	{
-		byte *grown = slot->light_bytes ? (byte *)realloc(slot->light_bytes, (size_t)needed) : (byte *)malloc((size_t)needed);
+		const long capacity = needed > light_data->size ? needed : light_data->size;
+		byte *grown = slot->light_bytes ? (byte *)realloc(slot->light_bytes, (size_t)capacity) : (byte *)malloc((size_t)capacity);
 
 		if (!grown)
 			return;
 		slot->light_bytes = grown;
-		slot->light_bytes_capacity = needed;
+		slot->light_bytes_capacity = capacity;
 	}
 	slot->lights = *light_data;
 	if (needed > 0)
