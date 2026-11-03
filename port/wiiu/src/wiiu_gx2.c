@@ -4629,7 +4629,14 @@ static int gx2_thread_main(int argc, const char **argv)
 			{
 				/* (in the background the app gets a little of core 2 and the system's own threads need the rest: a thread that spins there froze the console when the app was closed from the HOME menu) */
 				if (wiiu_in_foreground() && !wiiu_exit_requested())
-					OSYieldThread();
+				{
+					const uint32_t sleep_us = gx2_idle_sleep_us;
+
+					if (sleep_us)
+						OSSleepTicks(OSMicrosecondsToTicks(sleep_us));
+					else
+						OSYieldThread();
+				}
 				else
 					OSSleepTicks(OSMillisecondsToTicks(2));
 			}
@@ -4717,6 +4724,37 @@ static int procui_core_main(int argc, const char **argv)
 			OSSleepTicks(OSMillisecondsToTicks(2)); /* (it returned at once: it is not blocking here, and must not spin) */
 	}
 	return 0;
+}
+
+/* The core the GX2 thread will be on, read from halo/gx2_thread.txt as gt_start reads it (0, 1 or 2; -1 if there is none: the game thread makes the calls), and whether it waits for work
+by spinning. For the tick thread (wiiu_shell.c), which is made before the first stream starts the GX2 thread. */
+int wiiu_gx2_thread_core_planned(void);
+
+int wiiu_gx2_thread_core_planned(void)
+{
+	FILE *file = fopen(WIIU_DATA_DIRECTORY "/gx2_thread.txt", "r");
+	int on = 7;
+
+	if (file)
+	{
+		if (fscanf(file, "%d", &on) != 1)
+			on = 0;
+		fclose(file);
+	}
+	return on == 0 ? -1 : on == 2 ? 1 : (on == 3 || on == 5) ? 0 : 2;
+}
+
+/* The GX2 thread waits for work yielding (OSYieldThread), which lets only threads of its priority or above run, and a thread of its priority that holds the core for a time slice
+or a job (the tick thread, 14 ms a tick) keeps the GX2 thread from taking a stream the game thread has posted: the game thread then waits for a free stream slot inside its draws (the
+console, 2026-11-03: the draws 5.4 ms a frame with the tick thread on core 0, 8.5 on core 2 beside the GX2 thread). With the tick thread on this core, one priority below, the GX2 thread
+sleeps this many microseconds between looks instead (halo/gx2_idle_sleep.txt overrides; 0 is the yield), and a thread below it runs in the gaps. Set by the shell. */
+static volatile uint32_t gx2_idle_sleep_us;
+
+void wiiu_gx2_idle_sleep_set(uint32_t microseconds);
+
+void wiiu_gx2_idle_sleep_set(uint32_t microseconds)
+{
+	gx2_idle_sleep_us = microseconds;
 }
 
 /* starts the thread (or, with halo/gx2_thread.txt 0, only makes the context here) and waits for GX2 to be made: whether it was */

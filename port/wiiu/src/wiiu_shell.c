@@ -489,6 +489,47 @@ static void *(*tick_thread_entry)(void *);
 /* the core the tick thread is made on (halo/tick_core.txt: 0, 1 or 2; 0 if none), and the one it is on now (it is moved to the game thread's while the overlap is late) */
 static unsigned tick_core;
 static unsigned tick_core_now;
+/* the GX2 thread's core (-1: none), the tick thread's priority offset below the game's when it shares that core (halo/tick_priority.txt), and the GX2 thread's sleep between looks then
+(halo/gx2_idle_sleep.txt, microseconds): see wiiu_gx2.c's wiiu_gx2_idle_sleep_set */
+static int gx2_core = -1;
+static int tick_priority_offset = -1; /* -1: not set by the card (1 when sharing a core with the GX2 thread, else 0) */
+static long gx2_sleep_us = 100;
+int wiiu_gx2_thread_core_planned(void);
+void wiiu_gx2_idle_sleep_set(uint32_t microseconds);
+
+/* a number from a file of the app's card folder, or the fallback (-1 for no file) */
+static long card_number(char const *name, long fallback)
+{
+	char path[256];
+	FILE *file;
+	long value = fallback;
+
+	snprintf(path, sizeof(path), WIIU_DATA_DIRECTORY "/%s", name);
+	file = fopen(path, "r");
+	if (file)
+	{
+		if (fscanf(file, "%ld", &value) != 1)
+			value = fallback;
+		fclose(file);
+	}
+	return value;
+}
+
+/* the tick thread's priority and the GX2 thread's way of waiting for the tick thread on a core: shared with the GX2 thread, the tick thread is one priority below it and the GX2 thread sleeps
+in its gaps (it spins yielding otherwise, and then neither can run beside the other's quantum) */
+static void tick_core_settle(int log)
+{
+	const int shares = gx2_core >= 0 && (int)tick_core_now == gx2_core;
+	const int offset = tick_priority_offset >= 0 ? tick_priority_offset : shares ? 1 : 0;
+	const int priority = main_priority + offset > 31 ? 31 : (int)main_priority + offset;
+
+	if (tick_thread_stack)
+		OSSetThreadPriority(&tick_thread, priority);
+	wiiu_gx2_idle_sleep_set(shares && gx2_sleep_us > 0 ? (uint32_t)gx2_sleep_us : 0);
+	if (log)
+		wiiu_log("The tick thread is at priority %d (the game's %d)%s%s", priority, (int)main_priority, shares ? ", on the GX2 thread's core: the GX2 thread sleeps between looks for work (" : "",
+			shares ? (gx2_sleep_us > 0 ? "halo/gx2_idle_sleep.txt: microseconds)" : "0: it yields, halo/gx2_idle_sleep.txt)") : "");
+}
 
 static OSThreadAttributes core_attribute(unsigned core)
 {
@@ -515,17 +556,21 @@ int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes)
 	}
 	tick_thread_entry = entry;
 	{
-		FILE *file = fopen(WIIU_DATA_DIRECTORY "/tick_core.txt", "r");
+		/* (no file: core 2 when the ticks run beside the drawing and the game thread is not on it - core 0 has the audio mixer and the system's threads, and its L2 was 3 times as slow in
+		a heavy scene on 2026-11-03; core 2 has the GX2 thread, which sleeps between looks then - else core 0, as before) */
+		const long set = card_number("tick_core.txt", -1);
+		const int overlap = card_number("tick_overlap.txt", 0) > 0;
 
-		if (file)
-		{
-			if (fscanf(file, "%u", &tick_core) != 1 || tick_core > 2)
-				tick_core = 0;
-			fclose(file);
-		}
+		tick_core = set >= 0 && set <= 2 ? (unsigned)set : (set < 0 && overlap && OSGetCoreId() != 2) ? 2u : 0u;
 		tick_core_now = tick_core;
-		wiiu_log("The tick thread is made on core %u (halo/tick_core.txt: 0, 1 or 2), the game thread is on core %u (halo/game_core.txt)%s", tick_core, (unsigned)OSGetCoreId(),
-			tick_core == (unsigned)OSGetCoreId() ? ": the same core, and the two cannot run beside each other" : "");
+		gx2_core = wiiu_gx2_thread_core_planned();
+		tick_priority_offset = (int)card_number("tick_priority.txt", -1);
+		if (tick_priority_offset > 8)
+			tick_priority_offset = 8;
+		gx2_sleep_us = card_number("gx2_idle_sleep.txt", 100);
+		wiiu_log("The tick thread is made on core %u (halo/tick_core.txt: 0, 1 or 2%s), the game thread is on core %u (halo/game_core.txt), the GX2 thread on core %d%s", tick_core,
+			set < 0 ? "; absent: 2 with the overlap on, else 0" : "", (unsigned)OSGetCoreId(), gx2_core,
+			tick_core == (unsigned)OSGetCoreId() ? ": the tick thread is on the game thread's core, and the two cannot run beside each other" : "");
 	}
 	if (!OSCreateThread(&tick_thread, tick_thread_main, 0, NULL, tick_thread_stack + stack_bytes, stack_bytes, main_priority, core_attribute(tick_core)))
 	{
@@ -535,6 +580,7 @@ int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes)
 		return -1;
 	}
 	OSSetThreadName(&tick_thread, "ticks");
+	tick_core_settle(1);
 	OSResumeThread(&tick_thread);
 	return 1;
 }
@@ -551,6 +597,7 @@ void wiiu_tick_thread_move(int to_the_calling_core)
 	OSSetThreadAffinity(&tick_thread, core_attribute(target));
 	tick_core_now = target;
 	wiiu_log("The tick thread is moved to core %u", target);
+	tick_core_settle(1);
 }
 
 /* the core the tick thread is set to (tick_overlap.c's log), and the calling thread's */
