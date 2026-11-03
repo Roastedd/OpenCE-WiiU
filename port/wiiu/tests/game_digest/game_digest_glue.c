@@ -821,11 +821,12 @@ int wiiu_input_touch(float *x, float *y)
 }
 
 /* the shader cache's guest half (gx2_shaders.c): the keys a draw needs are the GX2 thread's to find */
+void replay_keys_program(uint64_t program_hash, const uint32_t *words, unsigned long count);
+
 void dk_shader_program_note(uint64_t program_hash, const uint32_t *words, unsigned long count)
 {
-	(void)program_hash;
-	(void)words;
-	(void)count;
+	/* (GAME_DIGEST_KEYS: replay_gx2.c keeps the program for the vertex keys' lines) */
+	replay_keys_program(program_hash, words, count);
 }
 
 void dk_shader_map_loaded(uint32_t map_hash)
