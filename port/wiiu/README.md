@@ -200,7 +200,9 @@ this was written). Pad n drives the game's port n - 1: pad 1 is the GamePad's po
 are ports 1 to 3 and are there as long as the count says, whatever is connected. The script is `"<seconds> <pad> <what>; ..."`, the seconds counted from
 when the network lobby first opens (the log says `Input: N virtual controllers (debug.virtual_gamepads): the script's clock starts`), `what` one of `a b x y
 start back up down left right lb rb lt rt` (the Xbox's buttons, whatever the face buttons' match is; pressed 150 ms and until the game has read them 8 times) or
-`walk` / `still` (the sticks move from then on, each pad its own way). Pad 0 is the desktop's keyboard: the Wii U has none, and its entries do nothing.
+`walk` / `still` (the sticks move from then on, each pad its own way). On the Wii U a button may be followed by a number of seconds to hold it for (`"60 2 rt 30"`:
+pad 2 fires for 30 s; the desktop's script does not have it), and a script has up to 256 entries (the desktop's 64). Pad 0 is the desktop's keyboard: the Wii U has none,
+and its entries do nothing.
 
 A game of 2, 3 or 4 from `config.toml` alone, with no hands (a LAN game this console hosts: `debug.network_test` hosts it as Create Game does, adds player 1,
 and starts it `debug.network_test_start` seconds after the lobby opens):

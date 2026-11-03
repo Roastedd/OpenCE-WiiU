@@ -9,12 +9,13 @@ entries, the same press of 150 ms and until read 8 times, the same walk), which 
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define PRESS_MS 150
 #define PRESS_POLLS 8
 /* the entries of a script that are given polls to be pressed for (the rest are never pressed) */
-#define ENTRIES 64
+#define ENTRIES 256
 
 static unsigned long started_at;
 static int started;
@@ -84,7 +85,7 @@ void wiiu_virtual_pads_update(int count, const char *script, unsigned long milli
 	memset(pressed, 0, sizeof(pressed));
 	for (entry_index = 0; pad_total && *entry; entry_index++)
 	{
-		double at = 0.0;
+		double at = 0.0, duration = 0.0;
 		int number = 0, consumed = 0, held;
 		char what[16];
 
@@ -95,7 +96,15 @@ void wiiu_virtual_pads_update(int count, const char *script, unsigned long milli
 		if (sscanf(entry, "%lf %d %15[a-z]%n", &at, &number, what, &consumed) == 3 && number >= 1 && number <= pad_total && now >= at)
 		{
 			const unsigned int button = button_named(what);
+			const char *rest = entry + consumed + strspn(entry + consumed, " ");
 
+			/* (a button, then how many seconds it is held for: "60 2 rt 30", which the desktop's script does not have) */
+			if (*rest && *rest != ';')
+			{
+				duration = strtod(rest, NULL);
+				if (!(duration > 0.0 && duration <= 3600.0))
+					duration = 0.0;
+			}
 			pad = number - 1;
 			if (!strcmp(what, "walk"))
 			{
@@ -107,7 +116,8 @@ void wiiu_virtual_pads_update(int count, const char *script, unsigned long milli
 			}
 			else if (button)
 			{
-				held = entry_index < ENTRIES && (now < at + PRESS_MS / 1000.0 || entry_polls[entry_index] < PRESS_POLLS);
+				held = entry_index < ENTRIES && (duration > 0.0 ? now < at + duration || entry_polls[entry_index] < 1 :
+					now < at + PRESS_MS / 1000.0 || entry_polls[entry_index] < PRESS_POLLS);
 				if (held)
 				{
 					entry_polls[entry_index]++;

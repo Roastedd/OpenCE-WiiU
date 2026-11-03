@@ -1,6 +1,6 @@
 """The Wii U's virtual controllers (port/wiiu/src/wiiu_virtual_pads.c), the unit itself compiled with cc against a made-up clock: nothing is pressed before the
 lobby opens (the clock's start), and a script with no pads does nothing; a pad n drives the port n - 1 and pads past the setting's count, the keyboard's 0 and
-malformed entries do nothing; an entry presses its button for 150 ms and until the game has read it 8 times, however slowly it reads; the sticks walk from "walk"
+malformed entries do nothing; an entry presses its button for 150 ms and until the game has read it 8 times, however slowly it reads; a button followed by seconds is held that long; the sticks walk from "walk"
 until "still", each pad its own way; the ports with a pad of the script's are 1 to count - 1, and at most 3. Each fault below must fail one of the checks."""
 import os
 import subprocess
@@ -20,9 +20,9 @@ FAULTS = {
     "before_start": ("const double now = started ? (double)(unsigned long)(milliseconds - started_at) / 1000.0 : -1.0;",
                      "const double now = (double)(unsigned long)(milliseconds - started_at) / 1000.0;"),
     # (a press lasts its 150 ms only, whether or not the game has read it)
-    "time_only": ("(now < at + PRESS_MS / 1000.0 || entry_polls[entry_index] < PRESS_POLLS)", "(now < at + PRESS_MS / 1000.0)"),
+    "time_only": ("now < at + PRESS_MS / 1000.0 || entry_polls[entry_index] < PRESS_POLLS", "now < at + PRESS_MS / 1000.0"),
     # (a press lasts until it has been read, however long that takes, and is never let go)
-    "never_released": ("(now < at + PRESS_MS / 1000.0 || entry_polls[entry_index] < PRESS_POLLS)", "1"),
+    "never_released": ("now < at + PRESS_MS / 1000.0 || entry_polls[entry_index] < PRESS_POLLS", "1"),
     # (pad n drives port n)
     "pad_is_port": ("pad = number - 1;", "pad = number;"),
     # (the start of the clock is taken again each time the lobby opens)
@@ -32,6 +32,8 @@ FAULTS = {
     # (the ports with a pad of the script's include the GamePad's)
     "ports_from_zero": ("for (port = 1; port < pad_count(count); port++)", "for (port = 0; port < pad_count(count); port++)"),
     # (more than four pads)
+    # (a number after a button does not hold it)
+    "no_duration": ("held = entry_index < ENTRIES && (duration > 0.0 ?", "held = entry_index < ENTRIES && (0 ?"),
     "no_clamp": ("return count < 0 ? 0 : count > WIIU_VIRTUAL_PADS ? WIIU_VIRTUAL_PADS : count;", "return count < 0 ? 0 : count;"),
 }
 
@@ -130,18 +132,36 @@ int main(void)
 	/* a port without a pad, or out of range, is at rest */
 	pad = get(9);
 	CHECK(pad.buttons == 0 && pad.left_x == 0, 23);
-	/* a long script: the entries past the 64th are never pressed */
+	/* a long script: the entries past the 256th are never pressed */
 	{
-		static char longer[4000];
+		static char longer[8000];
 		size_t used = 0;
 
-		for (index = 0; index < 70; index++)
+		for (index = 0; index < 300; index++)
 			used += (size_t)snprintf(longer + used, sizeof(longer) - used, "0 2 a; ");
 		wiiu_virtual_pads_reset();
 		wiiu_virtual_pads_start(2, 0);
 		read_pads(2, longer, 10, 1);
 		CHECK(get(1).buttons == WIIU_VPAD_A, 24);
 	}
+	/* a button with a number after it is held that many seconds from its time, then let go (however few times it was read), and read at least once */
+	wiiu_virtual_pads_reset();
+	wiiu_virtual_pads_start(3, 0);
+	read_pads(3, "5 3 rt 30; 5 2 a", 4900, 1);
+	CHECK(get(2).buttons == 0, 27);
+	read_pads(3, "5 3 rt 30; 5 2 a", 5000, 1);
+	CHECK(get(2).buttons == WIIU_VPAD_RT && get(1).buttons == WIIU_VPAD_A, 28);
+	read_pads(3, "5 3 rt 30; 5 2 a", 20000, 40);
+	CHECK(get(2).buttons == WIIU_VPAD_RT && get(1).buttons == 0, 29);
+	read_pads(3, "5 3 rt 30; 5 2 a", 35100, 1);
+	CHECK(get(2).buttons == 0, 30);
+	/* (a duration that is not a number, or not past 0, is an ordinary press) */
+	wiiu_virtual_pads_reset();
+	wiiu_virtual_pads_start(2, 0);
+	read_pads(2, "1 2 a bogus; 1 2 b -4", 1000, 1);
+	CHECK(get(1).buttons == (WIIU_VPAD_A | WIIU_VPAD_B), 31);
+	read_pads(2, "1 2 a bogus; 1 2 b -4", 1200, 30);
+	CHECK(get(1).buttons == 0, 32);
 	return 0;
 }
 '''
