@@ -15,6 +15,7 @@ SHELL.C
 #include "integer_math.h"
 #include "input.h"
 #include "sound_manager.h"
+#include "halo_startup.h" /* port: port/linux/include/halo_startup.h */
 
 /* ---------- globals */
 
@@ -37,18 +38,23 @@ boolean shell_initialize(
 		
 		errors_initialize();
 		tag_files_open();
+		STARTUP_MARK("tag_files");
 		/* port: Custom Edition maps live in custom_maps, beside maps.
 		Make that folder when this launch does not already have it. */
 		directory_create("custom_maps");
 		real_math_initialize();
 		game_state_initialize();
+		STARTUP_MARK("game_state");
 		
 		rasterizer_initialized = rasterizer_initialize();
+		STARTUP_MARK("rasterizer");
 		
 		if (rasterizer_initialized)
 		{
 			input_initialize();
+			STARTUP_MARK("input");
 			sound_initialize();
+			STARTUP_MARK("sound");
 			
 			success = TRUE;
 		}

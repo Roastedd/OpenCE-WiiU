@@ -65,6 +65,9 @@ uint32_t *dk_stream_buffer(unsigned slot);
 #include <stdlib.h>
 #include <string.h>
 
+/* port/linux/game/startup_timeline.c: the start-up's events, said in the log once the main menu is live */
+void startup_timeline_note(const char *name);
+
 extern const unsigned char wiiu_gx2_blit_gsh[];
 extern const unsigned long wiiu_gx2_blit_gsh_size;
 
@@ -4055,6 +4058,13 @@ static void present(const struct dk_command_present *command)
 	{
 		wiiu_log("GX2: first frame presented");
 		gx.started = now;
+	}
+	if (gx.frames <= 3)
+	{
+		/* (the GX2 thread's presents: the third is the main menu's first frame, which the TV shows) */
+		static const char *const names[] = { "gx2_present_1", "gx2_present_2", "gx2_present_3" };
+
+		startup_timeline_note(names[gx.frames - 1]);
 	}
 	if (gx.exit_after > 0.0 && (double)(now - gx.started) / (double)OSSecondsToTicks(1) >= gx.exit_after)
 	{

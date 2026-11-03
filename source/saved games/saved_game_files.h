@@ -54,6 +54,10 @@ void saved_game_files_release_mutex(
 	void);
 short saved_game_perform_file_system_checks(
 	void);
+#ifdef HALO_WIIU
+void saved_game_files_ask_free_space(
+	void);
+#endif
 boolean saved_game_file_name_unique(
 	wchar_t const *name);
 void saved_game_file_remember_player1_last_used_profile_directory(

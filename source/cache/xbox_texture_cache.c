@@ -121,6 +121,11 @@ symbols in this file:
 #include "text/draw_string.h"
 #include <xtl.h>
 #include "custom_edition_cache.h" /* port: port/linux/game/custom_edition_cache.c */
+#include "halo_startup.h" /* port: port/linux/include/halo_startup.h */
+
+#ifdef HALO_WIIU
+void platform_log(char const *format, ...);
+#endif
 
 #ifdef HALO_ANDROID
 #include "android_ce_texture_cache.h" /* port: port/linux/game/android_ce_texture_cache.c */
@@ -1089,6 +1094,9 @@ void *_texture_cache_bitmap_get_hardware_format(
 				xbox_texture_cache_globals.textures,
 				bitmap->cache_block_index);
 
+			STARTUP_TIMER(waiting);
+			boolean waited = block && !texture->loaded;
+
 			lruv_block_touch(
 				xbox_texture_cache_globals.cache,
 				bitmap->cache_block_index);
@@ -1122,6 +1130,23 @@ void *_texture_cache_bitmap_get_hardware_format(
 				}
 			}
 			while (!hardware_format && block);
+			/* port: (the start-up's timeline, startup_timeline.c: the time a bitmap's pixels were waited for, the reads of the card) */
+			if (waited)
+			{
+				/* (and a wait of 40 ms or more said, for the first few: which bitmaps the first frames wait for) */
+				static short said;
+				const unsigned long milliseconds = STARTUP_SINCE_MS(waiting);
+
+				if (milliseconds >= 40 && said < 12)
+				{
+					said++;
+#ifdef HALO_WIIU
+					platform_log("startup: waited %lu ms for the pixels of %s (%ld KB)", milliseconds, tag_get_name(bitmap->tag_index),
+						(long)(bitmap->pixels_size / 1024));
+#endif
+				}
+				STARTUP_ADD("texture_wait", waiting, 1, bitmap->pixels_size);
+			}
 		}
 	}
 	else

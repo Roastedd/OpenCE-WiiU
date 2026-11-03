@@ -214,6 +214,8 @@ struct widget_instance *ui_widget_load_by_name_or_tag(
 	short focused_child_index);
 void main_screen_shell_load(
 	void);
+void ui_widgets_start_filesystem_checks(
+	void);
 void network_game_reset_to_pregame_ui(
 	void);
 void display_error(

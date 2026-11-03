@@ -392,6 +392,7 @@ symbols in this file:
 #endif
 #include "map_share.h" /* port: port/linux/game/map_share.c */
 #include "profile_sections.h" /* port: port/linux/include/profile_sections.h */
+#include "halo_startup.h" /* port: port/linux/include/halo_startup.h */
 #ifdef HALO_PROFILE
 #include "profile_trace.h" /* port: port/linux/src/profile_trace.c */
 #endif
@@ -1150,8 +1151,11 @@ void main_menu_load(
 {
 	if (!main_globals.main_menu_scenario_loaded)
 		main_load_ui_scenario(FALSE);
+	STARTUP_MARK("ui_map");
 	main_screen_shell_load();
+	STARTUP_MARK("widgets");
 	main_menu_precache_resources();
+	STARTUP_MARK("precache");
 	update_server_delete();
 	update_server_new();
 	update_server_start();
@@ -3848,10 +3852,19 @@ void main_loop(
 
 	console_initialize();
 	debug_keys_initialize();
+	STARTUP_MARK("loop");
 	game_initialize();
+	STARTUP_MARK("game_init");
 	console_startup();
+#ifdef HALO_WIIU
+	/* port: the saved games' checks, which the main menu waits for, run beside its map being loaded, not after it (ui_widget.c) */
+	if (main_globals.want_to_be_at_main_menu && !main_globals.playback_last_recording)
+		ui_widgets_start_filesystem_checks();
+#endif
+	/* (the main menu is loaded here, its map and its widgets) */
 	main_setup_connection();
 	main_initialize_time();
+	STARTUP_MARK("connection");
 
 #ifdef HALO_WEB
 	emscripten_set_main_loop(main_loop_web_frame, 0, TRUE);
