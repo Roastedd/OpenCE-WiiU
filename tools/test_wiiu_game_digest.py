@@ -10,7 +10,7 @@ build draw every frame of the game the same. A change to the rendering that keep
 the first tick it changes (tools/wiiu/digest_compare.py, which also compares the traces' lines, and in any order within a frame or a span).
 
     tools/test_wiiu_game_digest.py build [--name NAME] [--rev REV] [--mutate PATH BEFORE AFTER]... [--poison]
-    tools/test_wiiu_game_digest.py run RUN [--name NAME] [--poison] [--ticks N] [--trace FIRST-LAST|all] [--detail TICK] [--random] [--mode host|local|solo|solo-bloodgulch|solo-deathless]
+    tools/test_wiiu_game_digest.py run RUN [--name NAME] [--poison] [--ticks N] [--trace FIRST-LAST|all] [--detail TICK] [--random] [--mode host|local|solo|solo-bloodgulch|solo-deathless|menu|menu-cycle|menu-campaign]
     tools/test_wiiu_game_digest.py compare RUN_A RUN_B [digest_compare.py's options]
     GAME_DIGEST=1 python3 -m unittest tools.test_wiiu_game_digest      (GAME_DIGEST_TICKS: the ticks each run plays, 300 by default)
 
@@ -18,7 +18,8 @@ The modes: host (b30 hosted as network co-op, no one joining: the ticks' referen
 tick overlap (port/linux/game/tick_overlap.h), which only a campaign game of one player on this machine can use: solo (b30 as the console's map_name starts it, from
 init.txt; it opens with a cinematic of about 1,070 ticks), solo-bloodgulch (a multiplayer map as a game of one player, no cinematic) and solo-deathless (b30 with
 cheat_deathless_player and cheat_infinite_ammo, so that the fight goes on). HALO_TICK_* in the environment, and GAME_DIGEST_ENV="NAME=VALUE,NAME=VALUE" for the others
-(HALO_RENDER_REPEAT=3), go to the game.
+(HALO_RENDER_REPEAT=3), go to the game. menu, menu-cycle and menu-campaign are the main menu and the way back to it (a game started from it, the main menu
+again, and so on: network_test.c's solo: and its main_menu cue); their --ticks counts frames.
 
 A build named here (the default) is this checkout's; another is a copy of the sources in build/game-digest/trees/NAME, of this checkout's files or of
 a commit's (--rev, git archive), with this checkout's game digest folder over it (a branch before it has none) and --mutate's changes made in it
@@ -58,10 +59,18 @@ GAME_ENVIRONMENT = {
 }
 # host: b30 hosted as network co-op, no one joining (the host runs'); local: the same as a local game of one player
 MODES = {"host": "host:levels\\b30\\b30:coop", "local": "local:levels\\b30\\b30:coop", "solo": "log", "solo-bloodgulch": "log", "solo-deathless": "log"}
+# the main menu and back: menu (the main menu alone, no network test), menu-cycle (from the main menu a game of one player on bloodgulch, the main menu
+# again 20 s in, as the pause menu's Quit goes, and so on: network_test.c's "solo:"), menu-campaign (the same with b30, 50 s in, past its opening
+# cinematic). Their --ticks is a count of frames (the menu has no game ticks), and their frames are not compared
+MODES.update({"menu": "", "menu-cycle": "solo:levels\\test\\bloodgulch\\bloodgulch", "menu-campaign": "solo:levels\\b30\\b30"})
+MENU_CUES = {"menu-cycle": "20 main_menu", "menu-campaign": "50 main_menu"}
+MENU_MODES = ("menu", "menu-cycle", "menu-campaign")
 # solo: a campaign game of one player on this machine, which init.txt starts as the console's map_name does (the tick overlap's, which a network game
 # or a split screen game never is); network_test.c's "log" mode logs it as it logs the others
 SOLO_INIT = {"solo": "map_name levels\\b30\\b30\n", "solo-bloodgulch": "map_name levels\\test\\bloodgulch\\bloodgulch\n",
              "solo-deathless": "cheat_deathless_player 1\ncheat_infinite_ammo 1\nmap_name levels\\b30\\b30\n"}
+# (menu-campaign: the player deathless, so that no revert to a checkpoint starts the cues' clock again; init.txt runs at the start, before the main menu)
+SOLO_INIT["menu-campaign"] = "cheat_deathless_player 1\ncheat_infinite_ammo 1\n"
 # a broken key: the told draw facts compared by whether any were told, not by what they are (the D3D8 replay's own control of the same), so a
 # draw whose textures' facts change is drawn with the last ones sent
 BROKEN_KEY = ("port/wiiu/src/d3d8_gx2.c", "|| !facts_known) && (!facts_known || !words_equal(&facts_now, &facts_told, sizeof(facts_now))))",
@@ -149,6 +158,8 @@ def start(program: Path, run: str, ticks: int, trace: str = None, detail: str = 
     environment = dict(GAME_ENVIRONMENT, HALO_NETWORK_TEST=MODES[mode], GAME_DIGEST_DIR="/out", GAME_DIGEST_TICKS=str(ticks),
                        GAME_DIGEST_TRACE={None: "0", "all": "1"}.get(trace, trace), GAME_DIGEST_DETAIL=detail or "",
                        GAME_DIGEST_RANDOM="1" if random else "0")
+    if mode in MENU_MODES:
+        environment.update(GAME_DIGEST_TICKS="0", GAME_DIGEST_FRAMES=str(ticks), HALO_NETWORK_TEST_CUES=MENU_CUES.get(mode, ""))
     # (the tick owners' settings of the environment, to compare the switch on and off: HALO_TICK_*)
     environment.update({key: value for key, value in os.environ.items() if key.startswith("HALO_TICK_")})
     # (and any others, "NAME=VALUE,NAME=VALUE": the render probe's HALO_RENDER_REPEAT=3)

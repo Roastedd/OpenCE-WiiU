@@ -24,6 +24,12 @@ Automated system link sessions for testing the netcode without the menus
   and then as "join". It logs what it lists.
 - "log" hosts and joins nothing: the game that runs (map_name, in init.txt,
   plays one without the menus) is logged, as below.
+- "solo:<map>" starts a campaign game of one player on that level (a path,
+  levels\b30\b30) from the main menu, as its New Game does (normal
+  difficulty), logs it as "log" does, and starts it again each time the game
+  is back at the main menu: with a cue "main_menu" (below), which goes to the
+  main menu as the pause menu's Quit does, the menu, a level's load and the
+  return to the menu, over and over.
 - "probe" (halo --probe [<invite>]: a list site's look at a server) searches
   as "join" does, joins nothing, and prints the first game it finds (with
   an invite, only its host's, over its tunnel; without, one on the LAN) on
@@ -50,7 +56,8 @@ button a second later, to pick it up).
 
 debug.network_test_cues: console lines the host (or a game of one machine)
 runs at their ticks, counted from the first tick every player of
-debug.network_test_cue_players has a unit (tools/stagekit's scenarios).
+debug.network_test_cue_players has a unit (tools/stagekit's scenarios); the
+line "main_menu" is not the console's: it goes to the main menu.
 
 Called from the main loop every frame (main.c).
 */
@@ -129,6 +136,7 @@ enum
 	_network_test_browse,
 	_network_test_log,
 	_network_test_probe,
+	_network_test_solo,
 };
 
 static struct
@@ -187,6 +195,9 @@ static struct
 	short next_cue;
 	long cue_players;
 	long cues_start;
+	/* "solo:": the game asked for from the main menu (until it is no longer there), and how many times */
+	boolean solo_requested;
+	long solo_games;
 } network_test;
 
 /* the variant at the index of the list (copied to name), FALSE past its end */
@@ -250,6 +261,11 @@ static void network_test_read_settings(
 	else if (!strcmp(setting, "probe"))
 	{
 		network_test.mode = _network_test_probe;
+	}
+	else if (!strncmp(setting, "solo:", 5) && setting[5])
+	{
+		network_test.mode = _network_test_solo;
+		snprintf(network_test.map_name, sizeof(network_test.map_name), "%s", setting + 5);
 	}
 	network_test.public_game = config_boolean("debug.network_test_public") != 0;
 	network_test.start_delay = (real)config_real("debug.network_test_start");
@@ -995,7 +1011,7 @@ tick (the host's, or a game of one machine: a client runs none) */
 static void network_test_run_cues(
 	void)
 {
-	if (network_test.mode != _network_test_host && network_test.mode != _network_test_log)
+	if (network_test.mode != _network_test_host && network_test.mode != _network_test_log && network_test.mode != _network_test_solo)
 		return;
 	if (network_test.cues_start == NONE)
 	{
@@ -1015,7 +1031,10 @@ static void network_test_run_cues(
 		game_time_get() >= network_test.cues_start + network_test.cues[network_test.next_cue].tick)
 	{
 		platform_log("network test: cue at tick %ld: %s", game_time_get(), network_test.cues[network_test.next_cue].line);
-		hs_compile_and_evaluate(network_test.cues[network_test.next_cue].line);
+		if (!strcmp(network_test.cues[network_test.next_cue].line + strspn(network_test.cues[network_test.next_cue].line, " "), "main_menu"))
+			main_goto_main_menu();
+		else
+			hs_compile_and_evaluate(network_test.cues[network_test.next_cue].line);
 		network_test.next_cue++;
 	}
 }
@@ -1496,6 +1515,12 @@ void network_test_update(
 		}
 	}
 
+	/* ("solo:": the next game is asked for once the game is back at the main menu, which it settles in first, as at the start) */
+	if (network_test.mode == _network_test_solo && !main_menu_loaded)
+	{
+		network_test.solo_requested = FALSE;
+		network_test.menu_seconds = 0.0f;
+	}
 	if (!main_menu_loaded)
 		return;
 	/* the intro movie skipped first, as a button press does: the movie
@@ -1567,6 +1592,20 @@ void network_test_update(
 		}
 		break;
 	}
+	case _network_test_solo:
+		if (!network_test.solo_requested)
+		{
+			/* (as the main menu's New Game does: start_new_game, ui_widget_event_handler_functions.c) */
+			network_test.solo_requested = TRUE;
+			network_test.solo_games++;
+			platform_log("network test: solo game %ld, %s, from the main menu", network_test.solo_games, network_test.map_name);
+			main_set_difficulty(1);
+			main_set_map_name(network_test.map_name);
+			game_connection_set(0);
+			main_menu_switch_to_single_player();
+			player_ui_remember_player1_profile(0);
+		}
+		break;
 	case _network_test_host:
 		if (network_test.set_up && !network_test.local && !network_test.invite_logged)
 		{
