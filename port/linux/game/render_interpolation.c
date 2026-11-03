@@ -218,6 +218,7 @@ static struct
 
 uint32_t wiiu_crash_fixups_here(void);
 void platform_log(char const *format, ...);
+void tick_snapshot_say(char const *format, ...);
 #endif
 
 /* ---------- blending */
@@ -784,10 +785,10 @@ void render_interpolation_blend_log(
 	const double f = frames ? (double)frames : 1.0;
 	const unsigned long long total = blend_stats.lookup + blend_stats.snap + blend_stats.rotations + blend_stats.blend + blend_stats.copy;
 
-	platform_log("tick snapshot, blends, ms a frame (%lu): %.3f = look-up of both poses %.3f, snap test %.3f, rotations %.3f, blending %.3f, copying snapped poses %.3f",
+	tick_snapshot_say("tick snapshot, blends, ms a frame (%lu): %.3f = look-up of both poses %.3f, snap test %.3f, rotations %.3f, blending %.3f, copying snapped poses %.3f",
 		frames, (double)total / ticks_per_ms / f, (double)blend_stats.lookup / ticks_per_ms / f, (double)blend_stats.snap / ticks_per_ms / f,
 		(double)blend_stats.rotations / ticks_per_ms / f, (double)blend_stats.blend / ticks_per_ms / f, (double)blend_stats.copy / ticks_per_ms / f);
-	platform_log("tick snapshot, blends, a frame: %.1f objects asked for, %.1f repeats in the frame, %.1f blended (%.1f snapped, %.1f without a pose before, %.1f not found), "
+	tick_snapshot_say("tick snapshot, blends, a frame: %.1f objects asked for, %.1f repeats in the frame, %.1f blended (%.1f snapped, %.1f without a pose before, %.1f not found), "
 		"%.1f nodes, %.1f rotations found, %.1f nodes' rotations kept from an earlier frame; misaligned accesses taken inside them %.2f a frame",
 		(double)blend_stats.asked / f, (double)blend_stats.repeated / f, (double)blend_stats.blended / f, (double)blend_stats.snapped / f,
 		(double)blend_stats.no_previous / f, (double)blend_stats.no_object / f, (double)blend_stats.nodes / f, (double)blend_stats.rotation_nodes / f,
@@ -797,7 +798,7 @@ void render_interpolation_blend_log(
 		unsigned long reads, fallbacks, applied;
 
 		tick_snapshot_reads_total(&reads, &fallbacks, &applied);
-		platform_log("tick snapshot, the frame's reads of the copies, a frame: %.1f object lookups, %.2f objects' kept fields put in, %.2f lookups the copies did not answer",
+		tick_snapshot_say("tick snapshot, the frame's reads of the copies, a frame: %.1f object lookups, %.2f objects' kept fields put in, %.2f lookups the copies did not answer",
 			(double)(reads - reads_before) / f, (double)(applied - applied_before) / f, (double)(fallbacks - fallbacks_before) / f);
 		reads_before = reads;
 		fallbacks_before = fallbacks;

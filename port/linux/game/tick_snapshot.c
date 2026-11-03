@@ -84,6 +84,7 @@ port/wiiu/src/wiiu_tick_snapshot_timers.c, on the console, the milliseconds a fr
 #include "tick_overlap.h"
 #include "tick_ring.h"
 
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -93,6 +94,36 @@ port/wiiu/src/wiiu_tick_snapshot_timers.c, on the console, the milliseconds a fr
 #undef fopen
 
 void platform_log(char const *format, ...);
+
+/* a line of the log holds 199 characters on the console (platform_log), and the numbers here are more: said in lines of up to 185, each broken after a comma or a semicolon, the next
+begun with "... " */
+void tick_snapshot_say(char const *format, ...)
+{
+	char text[1024];
+	char const *at = text;
+	boolean first = TRUE;
+	va_list arguments;
+
+	va_start(arguments, format);
+	vsnprintf(text, sizeof(text), format, arguments);
+	va_end(arguments);
+	while (*at)
+	{
+		size_t length = strlen(at), cut = length;
+
+		if (length > 185)
+		{
+			size_t back;
+
+			for (back = 185; back > 90 && !(at[back - 1] == ' ' && (at[back - 2] == ',' || at[back - 2] == ';')); back--)
+				;
+			cut = back > 90 ? back : 185;
+		}
+		platform_log("%s%.*s", first ? "" : "... ", (int)cut, at);
+		at += cut;
+		first = FALSE;
+	}
+}
 
 /* The timers are the console's (port/wiiu/src/wiiu_tick_snapshot_timers.c installs them when the program starts); the host's runs have none */
 static unsigned long long (*timer_clock)(void);
@@ -404,7 +435,7 @@ static void tick_snapshot_log(void)
 {
 	const unsigned long captures = s.window_captures ? s.window_captures : 1;
 
-	platform_log("tick snapshot (%lu captures, %lu frames): per capture %lu objects, %lu bytes in all (%lu in %lu object copies, headers %lu, "
+	tick_snapshot_say("tick snapshot (%lu captures, %lu frames): per capture %lu objects, %lu bytes in all (%lu in %lu object copies, headers %lu, "
 		"cluster lists %lu); rotations found per capture: %lu snapshots, %lu nodes; "
 		"in the window: %lu misses, %lu catch-ups, %lu fallbacks, %lu reads, %lu camera copies, %lu ring full",
 		s.window_captures, s.views, s.objects_copied / captures,
@@ -513,7 +544,14 @@ static void tick_snapshot_prefetch(void const *address, long size)
 	byte const *end = (byte const *)address + size;
 
 	for (; line < end; line += 32)
+	{
+#if defined(__powerpc__)
+		/* (the compiler's own prefetch is nothing for this target: the port asks for lines with the instruction, as wiiu_indices.c does) */
+		__asm__ volatile("dcbt 0,%0" : : "r"(line));
+#else
 		__builtin_prefetch(line);
+#endif
+	}
 }
 
 /* whether the orientation blocks are left out of the copies */
@@ -578,6 +616,7 @@ static void tick_snapshot_copy_block(struct slot *slot, long absolute_index, str
 	byte *block;
 	struct block_parts parts;
 	unsigned long long t0, t1, t2;
+	long left_out = 0; /* (bytes of the block not copied) */
 
 	if (size <= 0 || !live->datum)
 		return;
@@ -600,6 +639,13 @@ static void tick_snapshot_copy_block(struct slot *slot, long absolute_index, str
 	if (measure_previous)
 		tick_snapshot_measure_change(live, measure_previous, absolute_index, &parts);
 	tick_snapshot_copy_parts(block, (byte const *)live->datum, size, &parts, tick_snapshot_skipping());
+	if (tick_snapshot_skipping())
+	{
+		int which;
+
+		for (which = 0; which < parts.skips; which++)
+			left_out += parts.skip_size[which];
+	}
 	if ((s.mode & MODE_POISON_LEFT_OUT) && tick_snapshot_skipping())
 	{
 		int skip;
@@ -637,16 +683,16 @@ static void tick_snapshot_copy_block(struct slot *slot, long absolute_index, str
 		cs.bucket_count[bucket]++;
 		cs.bucket_bytes[bucket] += (unsigned long)size;
 		cs.objects++;
-		cs.bytes += (unsigned long)size;
+		cs.bytes += (unsigned long)size - (unsigned long)left_out;
 		cs.bytes_fixed += (unsigned long)parts.fixed;
 		cs.bytes_type += (unsigned long)parts.type;
 		cs.bytes_matrices += (unsigned long)parts.matrices;
 		cs.bytes_orientations += (unsigned long)parts.orientations;
 		cs.type_objects[live->type & 15]++;
-		cs.type_bytes[live->type & 15] += (unsigned long)size;
+		cs.type_bytes[live->type & 15] += (unsigned long)size - (unsigned long)left_out;
 	}
 	s.objects_copied++;
-	s.bytes_copied += (unsigned long)size;
+	s.bytes_copied += (unsigned long)size - (unsigned long)left_out;
 	s.block_calls++;
 }
 
@@ -718,7 +764,7 @@ static void tick_snapshot_check_skip(struct slot const *slot, long absolute_inde
 			cs.skipped_wrong++;
 			if (cs.skipped_wrong <= 20)
 			{
-				platform_log("tick snapshot CHECK: object %ld (type %d, %ld bytes) was left out of a capture but its game state differs at +%ld: copy %08lx, game state %08lx",
+				tick_snapshot_say("tick snapshot CHECK: object %ld (type %d, %ld bytes) was left out of a capture but its game state differs at +%ld: copy %08lx, game state %08lx",
 					absolute_index, (int)live->type, (long)live->data_size, offset, then_words[word], now_words[word]);
 			}
 			return;
@@ -857,21 +903,21 @@ static void tick_snapshot_capture_log(void)
 	int bucket, type;
 	static const char *const bucket_names[SIZE_BUCKETS] = { "<128", "<256", "<512", "<1K", "<2K", ">=2K" };
 
-	platform_log("tick snapshot capture, ms a capture (%lu): total %.3f = headers %.3f, blocks %.3f (copy %.3f, function inputs %.3f, kept fields %.3f, buffers made %.3f, the rest %.3f), "
+	tick_snapshot_say("tick snapshot capture, ms a capture (%lu): total %.3f = headers %.3f, blocks %.3f (copy %.3f, function inputs %.3f, kept fields %.3f, buffers made %.3f, the rest %.3f), "
 		"cluster lists %.3f, lights %.3f, cameras %.3f, ring %.3f",
 		cs.captures, ticks_ms(cs.total, n), ticks_ms(cs.headers, n), ticks_ms(cs.blocks, n), ticks_ms(cs.copy, n), ticks_ms(cs.inputs, n), ticks_ms(cs.kept, n),
 		ticks_ms(cs.alloc, n), ticks_ms(cs.blocks - cs.copy - cs.inputs - cs.kept - cs.alloc, n), ticks_ms(cs.partitions, n), ticks_ms(cs.lights, n),
 		ticks_ms(cs.cameras, n), ticks_ms(cs.ring, n));
-	platform_log("tick snapshot capture, a capture: %lu objects, %lu bytes in them (the structure %lu, the type's data %lu, node matrices %lu, orientation blocks %lu), "
+	tick_snapshot_say("tick snapshot capture, a capture: %lu objects, %lu bytes in them (the structure %lu, the type's data %lu, node matrices %lu, orientation blocks %lu%s), "
 		"%lu buffers made, blocks in memory order %lu, not %lu; misaligned accesses taken on this core %lu a capture (%lu in all)",
-		cs.objects / n, cs.bytes / n, cs.bytes_fixed / n, cs.bytes_type / n, cs.bytes_matrices / n, cs.bytes_orientations / n, cs.grown, cs.sequential / n, cs.jumps / n,
+		cs.objects / n, cs.bytes / n, cs.bytes_fixed / n, cs.bytes_type / n, cs.bytes_matrices / n, cs.bytes_orientations / n, s.skip_orientations ? " not copied" : "", cs.grown, cs.sequential / n, cs.jumps / n,
 		cs.fixups / n, cs.fixups);
 	for (type = 0; type < 12; type++)
 	{
 		if (cs.type_objects[type] && used < sizeof(line) - 40)
 			used += (size_t)snprintf(line + used, sizeof(line) - used, "%s%s %lu/%lu", used ? ", " : "", types[type], cs.type_objects[type] / n, cs.type_bytes[type] / n);
 	}
-	platform_log("tick snapshot capture, a capture, objects/bytes by type: %s", line);
+	tick_snapshot_say("tick snapshot capture, a capture, objects/bytes by type: %s", line);
 	used = 0;
 	line[0] = 0;
 	for (bucket = 0; bucket < SIZE_BUCKETS; bucket++)
@@ -882,10 +928,10 @@ static void tick_snapshot_capture_log(void)
 				cs.bucket_count[bucket] / n, ticks_ms(cs.bucket_ticks[bucket], cs.bucket_count[bucket]) * 1000.0, cs.bucket_bytes[bucket] / cs.bucket_count[bucket]);
 		}
 	}
-	platform_log("tick snapshot capture, the copies by size of block: %s", line);
+	tick_snapshot_say("tick snapshot capture, the copies by size of block: %s", line);
 	if (s.skip_unchanged)
 	{
-		platform_log("tick snapshot capture, a capture: %lu objects marked since the slot's copy and copied, %lu left out (%lu bytes not copied); %lu marked for good by the drawing thread", cs.marked / n,
+		tick_snapshot_say("tick snapshot capture, a capture: %lu objects marked since the slot's copy and copied, %lu left out (%lu bytes not copied); %lu marked for good by the drawing thread", cs.marked / n,
 			cs.skipped / n, cs.skipped_bytes / n, cs.marked_for_good / n);
 		{
 			char marked_line[240];
@@ -900,14 +946,14 @@ static void tick_snapshot_capture_log(void)
 				}
 			}
 			marked_line[marked_used < sizeof(marked_line) ? marked_used : sizeof(marked_line) - 1] = 0;
-			platform_log("tick snapshot capture, a capture, by type: %s", marked_line);
+			tick_snapshot_say("tick snapshot capture, a capture, by type: %s", marked_line);
 		}
 		if (s.mode & MODE_CHECK_SKIPS)
 			platform_log("tick snapshot capture, check of the objects left out: %lu of %lu were not the same as the game state (0 is the answer)", cs.skipped_wrong, cs.skipped);
 	}
 	if (s.mode & MODE_MEASURE)
 	{
-		platform_log("tick snapshot capture, changed since the capture before (%lu blocks compared): %lu changed (%lu in the structure, %lu in the type's data, %lu in the node matrices, "
+		tick_snapshot_say("tick snapshot capture, changed since the capture before (%lu blocks compared): %lu changed (%lu in the structure, %lu in the type's data, %lu in the node matrices, "
 			"%lu in the orientations), %lu words in all", cs.compared, cs.changed, cs.changed_fixed, cs.changed_type, cs.changed_matrices, cs.changed_orientations, cs.changed_words);
 	}
 	if (s.mode & MODE_BENCH)
@@ -1019,7 +1065,7 @@ static void tick_snapshot_bench(void)
 		ms[variant] = ticks_ms(tick_overlap_now() - started, 1);
 	}
 	window++;
-	platform_log("tick snapshot bench, ms for %ld blocks, %ld bytes (orientation blocks %ld, pool %ld), sources cold: %s %.3f (%.0f MB/s), %s %.3f, %s %.3f, %s %.3f, %s %.3f, %s %.3f",
+	tick_snapshot_say("tick snapshot bench, ms for %ld blocks, %ld bytes (orientation blocks %ld, pool %ld), sources cold: %s %.3f (%.0f MB/s), %s %.3f, %s %.3f, %s %.3f, %s %.3f, %s %.3f",
 		count, total, skipped, pool_used, names[0], ms[0], (double)total / ms[0] / 1000.0, names[1], ms[1], names[2], ms[2], names[3], ms[3], names[4], ms[4], names[5], ms[5]);
 }
 
