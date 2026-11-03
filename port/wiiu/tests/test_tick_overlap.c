@@ -64,8 +64,9 @@ void platform_log(char const *format, ...)
 
 long wiiu_study_number(const char *name, long fallback)
 {
-	(void)name;
-	(void)fallback;
+	/* (every study file is on, but the test aid that waits for each job: the hand-off is tested with the threads beside each other) */
+	if (!strcmp(name, "tick_overlap_serialize.txt"))
+		return fallback;
 	return 1;
 }
 
