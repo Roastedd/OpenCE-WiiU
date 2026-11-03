@@ -140,6 +140,7 @@ void player_control_sync_display_facing(void) {}
 void observer_sync_published(void) {}
 void render_interpolation_overlap_set(boolean on, long tick) { (void)on; (void)tick; }
 void render_interpolation_blend_log(double ticks_per_ms, unsigned long frames) { (void)ticks_per_ms; (void)frames; }
+void tick_snapshot_view_log(double ticks_per_ms) { (void)ticks_per_ms; }
 void tick_snapshot_say(char const *format, ...) { (void)format; }
 int wiiu_perfmon_set(void) { return 0; }
 void wiiu_perfmon_start(void) {}
