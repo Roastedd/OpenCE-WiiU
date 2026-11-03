@@ -13,7 +13,6 @@ The times are the log's own (the shell's clock): a mark is the log line's time. 
 made once, then the marks and timers do nothing.
 */
 
-#include "cseries.h"
 #include "halo_startup.h"
 
 #ifdef HALO_WIIU
