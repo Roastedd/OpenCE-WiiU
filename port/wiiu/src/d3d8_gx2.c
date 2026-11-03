@@ -235,6 +235,8 @@ void halo_screen_ui_offset_view(long view_width)
 
 	/* (a quarter's pause menu and dialogs are 320 wide: the Xbox's) */
 	ui_offset = view_width > 0 && view_width < width ? (view_width > 320 ? (view_width - 320) / 2 : 0) : (width - 640) / 2;
+	/* (the offset is one of the draws' facts, which are made again only when their serial changes: halo_screen_ui_offset's) */
+	facts_serial++;
 }
 
 long halo_screen_ui_offset_current(void)
