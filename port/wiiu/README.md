@@ -367,7 +367,9 @@ on 32-bit x86 and big-endian (`tools/harness/tests/test_wiiu_voice.py`: the queu
 - **Opus's cost**: the encoder's complexity is the desktop's 5 unless `halo/voice_complexity.txt` holds 0 to 10 ("Voice chat: Opus complexity N").
   The one console window measured (2026-10-31, `Voice:` line) had 29 frames encoded at a mean 4.33 ms and at most 10.71 ms, wall time on core 0
   including whatever preempted the voice thread, against the 1.4 to 2.3 ms estimated from instruction counts.
-- **The log**: "Voice chat:" lines when the microphone opens and closes and why, and every 10 s of a session two "Voice:" lines: frames encoded
+- **The log**: "Voice chat:" lines when the microphone opens and closes and why, and every 10 s of a session "Voice:" lines: first what the
+  microphone brought ("the microphone brought N samples in 10 s (32000 a second), level L, peak P of full scale": a rate far from 32000 says the
+  unit or the rate is wrong; a peak of exactly 0 says the ring is not being seen; the level rises as one speaks), then frames encoded
   and packets decoded with their mean and longest times, frames made up, speakers, the slowest turn, and what was dropped. The mixer's
   profile (`halo/audio_profile.txt` 1) times the voices' mix as its "chat" stage.
 - `debug.voice_test` works as on the other builds: a 440 Hz tone in place of the microphone, and a "voice test: speaker N level L gain G pan P

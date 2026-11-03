@@ -218,6 +218,10 @@ static struct
 {
 	uint32_t since_ms;
 	uint32_t encoded, decoded, concealed, late, no_slot, ring_full, frames_dropped;
+	/* what the microphone brought: samples, the sum of their squares and the largest (full scale 1) */
+	uint32_t mic_samples;
+	double mic_squares;
+	float mic_peak;
 	uint64_t encode_ticks, encode_max, decode_ticks, decode_max, turn_max;
 } report;
 
@@ -429,7 +433,18 @@ static void microphone_poll(void)
 		{
 			const uint32_t take = count < 512u ? count : 512u;
 
+			uint32_t index;
+
 			wiiu_mic_ring_samples(microphone_ring, MIC_RING_SAMPLES, first, take, samples);
+			for (index = 0; index < take; index++)
+			{
+				const float magnitude = samples[index] < 0.0f ? -samples[index] : samples[index];
+
+				report.mic_squares += (double)samples[index] * samples[index];
+				if (magnitude > report.mic_peak)
+					report.mic_peak = magnitude;
+			}
+			report.mic_samples += take;
 			wiiu_voice_capture_samples(&capture, samples, take);
 			first = (first + take) % MIC_RING_SAMPLES;
 			count -= take;
@@ -697,7 +712,7 @@ static void report_poll(uint32_t now, uint64_t turn_ticks)
 	report.frames_dropped = capture.dropped;
 	capture.dropped = 0;
 	/* (only a window that did something: a quiet one is not worth a line) */
-	if (report.encoded || report.decoded || report.frames_dropped)
+	if (report.encoded || report.decoded || report.frames_dropped || report.mic_samples)
 	{
 		int speakers = 0, index;
 
@@ -708,6 +723,12 @@ static void report_poll(uint32_t now, uint64_t turn_ticks)
 			report.encoded ? ticks_ms(report.encode_ticks) / report.encoded : 0.0, ticks_ms(report.encode_max), (unsigned)report.decoded,
 			report.decoded ? ticks_ms(report.decode_ticks) / report.decoded : 0.0, ticks_ms(report.decode_max), (unsigned)report.concealed,
 			speakers, ticks_ms(report.turn_max));
+		/* (what the microphone heard: about 32000 samples a second while it is open; the level rises as one speaks, and a peak of exactly 0 is a
+		ring that is not being seen) */
+		if (report.mic_samples)
+			wiiu_log("Voice: the microphone brought %u samples in %u s (%.0f a second), level %.4f, peak %.4f of full scale",
+				(unsigned)report.mic_samples, (unsigned)((now - report.since_ms) / 1000u),
+				report.mic_samples * 1000.0 / (double)(now - report.since_ms), sqrt(report.mic_squares / report.mic_samples), (double)report.mic_peak);
 		wiiu_log("Voice: dropped %u late, %u for want of a slot, %u to full rings, %u queued packets, %u stale packets, %u frames "
 			"given, %u microphone frames; the microphone's ring found full %u times, its read index elsewhere %u times",
 			(unsigned)report.late, (unsigned)report.no_slot, (unsigned)report.ring_full,

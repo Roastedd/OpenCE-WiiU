@@ -619,6 +619,8 @@ static void game_frame(int wanted, int talking, int speaker, int other_speaker)
 
 		while ((length = voice_audio_packet_ready(packet, 136)) > 0)
 		{
+			if (!game.packets)
+				game.first_packet_call = game.calls;
 			game.packets++;
 			if (speaker >= 0)
 				voice_audio_play(speaker, game.sequence, packet, length, 1.0f, 0.0f);
@@ -785,9 +787,14 @@ int main(int argc, char **argv)
 		CHECK(voice_audio_microphone(TRUE), "the microphone not said to be open");
 		CHECK(game.frames >= 95 && game.frames <= 101, "%u frames in 2 s", game.frames);
 		CHECK(fabs(mean_level() - TONE_LEVEL) < 0.02 * TONE_LEVEL, "the frames' level %.4f, the tone's %.4f", mean_level(), TONE_LEVEL);
-		/* (a frame's packet comes back at the next call, not its own: the second, or the third when two frames came at once) */
-		CHECK(game.first_packet_call == 2 || game.first_packet_call == 3, "the first packet came back at call %u", game.first_packet_call);
+		/* (a frame's packet comes back at the next call, not its own: the second, or the third when two frames came at once; or, when the
+		voice thread has encoded it before the game's frame is over, at the end of that frame, with the call that gave the frame) */
+		CHECK(game.first_packet_call >= 1 && game.first_packet_call <= 3, "the first packet came back at call %u", game.first_packet_call);
 		CHECK(game.packets + 2 >= game.calls, "%u packets for %u frames", game.packets, game.calls);
+		/* (and the report says what the microphone brought, once its window of 10 s is over: the tone's 0.25 of full scale is its peak) */
+		play_for(9000, TRUE, TRUE, 7, -1);
+		CHECK(logged("Voice: the microphone brought") == 1, "no line of the microphone's samples (%d)", logged("Voice: the microphone brought"));
+		CHECK(logged("level 0.1768, peak 0.2500 of full scale") == 1, "the level and peak are not the tone's");
 		CHECK(game.mixed > 0, "nothing played");
 		CHECK(fabs(sqrt(game.mixed_sum / game.mixed) - TONE_LEVEL) < 0.2 * TONE_LEVEL, "played back at %.4f, the tone at %.4f",
 			sqrt(game.mixed_sum / game.mixed), TONE_LEVEL);
