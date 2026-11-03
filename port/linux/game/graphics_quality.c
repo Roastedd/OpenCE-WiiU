@@ -16,6 +16,12 @@ frames a second, all the Xbox drew: dynamic resolution keeps the frames in their
 custom (the settings as they are). The menus write a mode's values when it is chosen, and custom when a setting a mode
 sets is changed by hand (menu_functions.c), so the settings always hold what is drawn and the menus show it.
 
+display.dynamic_quality (performance sets it) is the frame-time governor, port/linux/game/render_governor.c: it leaves out optional drawing, a step at a
+time, while the game thread's frames take longer than 22 ms, and puts it back when they do not. What the switches above cost on the console is small beside
+the objects: of a frame of 22 ms in Blood Gulch's and b30's fights the shadows are 1.1, the specular shine 0.2, the grass and lens flares under 0.1, and the
+objects 11 (2026-11-03, governor.md), so performance on its own took about a millisecond; the governor's steps are the ones that reach the objects, the decals
+and the particles.
+
 Split screen (the Wii U's settings). The game draws each view in turn, the whole scene again for each (render.c's
 render_window), so three or four views cost the game thread nearly three or four times one view's drawing: each view
 after the first is estimated at about 13 ms of the game thread's time on the console (two views about 30 ms a frame,
@@ -52,6 +58,7 @@ the split screen lobby's is, has the whole set.
 #include "render/render_particles.h"
 
 #include "graphics_quality.h"
+#include "render_governor.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -87,6 +94,7 @@ static struct
 	{ "display.render_lines", { "720", "720", "1080" } },
 	{ "display.dynamic_resolution", { "false", "false", "true" } },
 	{ "display.interpolation", { "true", "true", "false" } },
+	{ "display.dynamic_quality", { "true", "false", "false" } },
 	{ "display.grass", { "false", "true", "true" } },
 	{ "display.decals", { "true", "true", "true" } },
 	{ "display.particles", { "true", "true", "true" } },
@@ -160,28 +168,32 @@ int graphics_quality_split_screen_capped(void)
 void graphics_quality_apply(void)
 {
 	static unsigned long read_at = (unsigned long)-1;
-	static short views_at = NONE;
+	static short views_at = NONE, step_at = NONE;
 	short views = graphics_quality_views();
+	short step = (short)render_governor_step();
 	boolean particles, specular, reduced = FALSE;
+	struct render_governor_values const *shed = render_governor_values();
 
-	if (read_at == config_changes() && views_at == views)
+	if (read_at == config_changes() && views_at == views && step_at == step)
 		return;
 	read_at = config_changes();
 	views_at = views;
+	step_at = step;
 #ifdef HALO_WIIU
 	reduced = graphics_quality_reduced(views);
 	graphics_quality_capped = graphics_quality_split_screen_cap(views);
 #endif
-	rasterizer_debug_options.draw_detail_objects = config_boolean("display.grass") != 0;
+	/* (and the dynamic quality's step, render_governor.c: what the frames' time has it leave out for now, only ever less than the settings draw) */
+	rasterizer_debug_options.draw_detail_objects = config_boolean("display.grass") != 0 && shed->grass;
 	decals_enabled = config_boolean("display.decals") != 0;
 	particles = config_boolean("display.particles") != 0;
 	render_particles_enabled = particles;
 	render_particle_systems_enabled = particles;
-	render_contrails_enabled = particles;
+	render_contrails_enabled = particles && shed->contrails;
 	/* (and the reduced split screen's: what each view draws again, at a cost that grows with what it sees) */
-	render_shadows = config_boolean("display.object_shadows") != 0 && !reduced;
-	rasterizer_debug_options.draw_lens_flares = config_boolean("display.lens_flares") != 0 && !reduced;
-	specular = config_boolean("display.specular") != 0 && !reduced;
+	render_shadows = config_boolean("display.object_shadows") != 0 && !reduced && shed->shadow_min_pixels < 1e8f;
+	rasterizer_debug_options.draw_lens_flares = config_boolean("display.lens_flares") != 0 && !reduced && shed->lens_flares;
+	specular = config_boolean("display.specular") != 0 && !reduced && shed->specular;
 	rasterizer_debug_options.draw_environment_specular_lights = specular;
 	rasterizer_debug_options.draw_environment_reflections = specular;
 	rasterizer_debug_options.draw_environment_reflection_mirrors = specular;

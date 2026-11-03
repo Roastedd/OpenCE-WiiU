@@ -284,10 +284,14 @@ int halo_model_detail_stock(void)
 	return 1;
 }
 
+/* port/linux/game/render_governor.c's (the Direct3D layer is built without the game's headers): dynamic quality's model level of detail, 1 with it off */
+float render_governor_lod_scale(void);
+void render_governor_frame(double work_ms, double tick_ms, double render_ms, double now_ms);
+
 float halo_model_detail_scale(int level)
 {
-	(void)level;
-	return 1.0f;
+	/* (level 1: the size the level of detail is chosen by; 0: the size under which a model is not drawn at all, left to the objects' own culling) */
+	return level ? render_governor_lod_scale() : 1.0f;
 }
 
 void d3d8_gl_set_height_fade(float inverse_softness, float height, float offset, float scale)
@@ -4214,6 +4218,8 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 			platform_log("hitch: frame %lu took %.1f ms of work: %.1f in the game's %lu ticks, %.1f rendering (%.1f of it in the Direct3D layer's draws), %.1f waiting for the GX2 thread's "
 				"streams, %.1f in %lu waits for the renderer to be idle; present %.1f", device.frame, work, frame_tick_ms, frame_ticks, frame_render_ms, ticks_ms(frame_draw_ticks),
 				waits_ms - waits_before, idle_ms - idle_before, idle_calls - idle_calls_before, present);
+		/* dynamic quality (render_governor.c): the frame's work, and how it divides */
+		render_governor_frame(work, frame_tick_ms, frame_render_ms, start);
 		sum_tick_ms += frame_tick_ms;
 		sum_render_ms += frame_render_ms;
 		sum_ticks += frame_ticks;

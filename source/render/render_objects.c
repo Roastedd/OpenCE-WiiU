@@ -112,6 +112,7 @@ symbols in this file:
 #include "saved games/game_state.h"
 #include "rasterizer/rasterizer_console_vars.h"
 #include "rasterizer/rasterizer_model_types.h"
+#include "render_governor.h" /* port: port/linux/game/render_governor.c */
 
 /* ---------- constants */
 
@@ -1182,6 +1183,15 @@ static void render_object(
 		{
 			real level_of_detail_pixels;
 			real shadow_darkness;
+			/* port: dynamic quality (render_governor.c): the small cast no shadow while the frames run long */
+			real governed_shadow_pixels = render_governor_values()->shadow_min_pixels;
+
+			if (governed_shadow_pixels > OBJECT_SHADOW_MINIMUM_PIXELS &&
+				object_get_level_of_detail_pixels(data->object_index) < governed_shadow_pixels)
+			{
+				render_governor_counts[RENDER_GOVERNOR_COUNT_SHADOWS_SKIPPED]++;
+				return;
+			}
 
 			data->lighting = object_get_cached_render_lighting(
 				data->object_index,
@@ -1203,6 +1213,7 @@ static void render_object(
 
 				if (render_object_shadow_begin(data, darkness_fraction * size_fraction))
 				{
+					render_governor_counts[RENDER_GOVERNOR_COUNT_SHADOWS_DRAWN]++;
 					render_object_list(data, NULL, data->object_index);
 					render_object_shadow_end(data);
 				}
@@ -1213,6 +1224,22 @@ static void render_object(
 	{
 		struct object_datum *object = object_get(data->object_index);
 		boolean needs_lighting;
+
+		/* port: dynamic quality (render_governor.c): the small and far, by their kind, are neither lit nor drawn while the frames run long.
+		Never a projectile, and the first person camera's own unit and what a cinematic stars are not small */
+		{
+			struct render_governor_values const *shed = render_governor_values();
+			real cull_pixels = TEST_FLAG(_object_mask_unit, object->object.type) ? shed->cull_unit_pixels :
+				TEST_FLAG(_object_mask_item, object->object.type) ? shed->cull_item_pixels :
+				TEST_FLAG(_object_mask_projectile, object->object.type) ? 0.f : shed->cull_scenery_pixels;
+
+			if (cull_pixels > 0.f && object_get_level_of_detail_pixels(data->object_index) < cull_pixels)
+			{
+				render_governor_counts[RENDER_GOVERNOR_COUNT_OBJECTS_CULLED]++;
+				return;
+			}
+			render_governor_counts[RENDER_GOVERNOR_COUNT_OBJECTS_DRAWN]++;
+		}
 
 		if (!TEST_FLAG(object->object.flags, _object_invisible_bit) ||
 			object->object.first_child_object_index != NONE ||
