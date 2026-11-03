@@ -22,6 +22,8 @@ cheat_deathless_player and cheat_infinite_ammo, so that the fight goes on). HALO
 again, and so on: network_test.c's solo: and its main_menu cue); their --ticks counts frames. split2, split3 and split4 are Blood Gulch as a split screen game of two,
 three or four players, joined in the lobby by the virtual controllers of debug.virtual_gamepads' script (SPLIT_JOIN), with the program built --wiiu-input
 (tools/test_wiiu_game_digest.py build --wiiu-input: the Wii U's own controller layer, xinput_wiiu.c, in place of SDL's, with no console behind it).
+GAME_DIGEST_ENV="REPLAY_KEYS_FILE=/out/keys.txt" writes each pixel shader key the draws use, once, as the shader pack's manifest writes them ("P " and the wire
+bytes in hex) to the run's out folder, with keys.txt.at saying the frame and draw that first used each: `tools/wiiu/shader_coverage.py` checks them against a pack.
 
 A build named here (the default) is this checkout's; another is a copy of the sources in build/game-digest/trees/NAME, of this checkout's files or of
 a commit's (--rev, git archive), with this checkout's game digest folder over it (a branch before it has none) and --mutate's changes made in it

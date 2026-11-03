@@ -19,6 +19,7 @@ The decals' expansion is wiiu_gx2.c's own (decals_expand, taken from the source 
 #include <string.h>
 
 #include "replay_decals.inc"
+#include "shader_key_wire.h"
 
 #define COMPOSITE_LIMIT 32
 
@@ -61,6 +62,58 @@ static void line(const char *format, ...)
 	gx.lines++;
 	if (gx.trace)
 		fprintf(gx.trace, "%s\n", text);
+}
+
+/* REPLAY_KEYS_FILE=path: each pixel shader key the draws use, once, as the shader pack's manifest writes it ("P " and the key's wire bytes in hex: shader_key_wire.h),
+for tools/wiiu/shader_coverage.py to check against the pack. Appended as each is first met; no effect on a draw or a digest. */
+#define KEYS_MAXIMUM 4096
+static unsigned char keys_seen[KEYS_MAXIMUM][SHADER_KEY_WIRE_BYTES];
+static unsigned long keys_count;
+
+static void pixel_key_note(const struct nv2a_pixel_shader_key *key)
+{
+	static int wanted = -1;
+	unsigned char wire[SHADER_KEY_WIRE_BYTES];
+	unsigned long index;
+
+	if (wanted < 0)
+		wanted = getenv("REPLAY_KEYS_FILE") != NULL;
+	if (!wanted)
+		return;
+	shader_key_write(key, wire);
+	for (index = 0; index < keys_count; index++)
+	{
+		if (!memcmp(keys_seen[index], wire, sizeof(wire)))
+			return;
+	}
+	if (keys_count < KEYS_MAXIMUM)
+	{
+		FILE *file = fopen(getenv("REPLAY_KEYS_FILE"), "a");
+		unsigned int byte;
+
+		memcpy(keys_seen[keys_count++], wire, sizeof(wire));
+		if (file)
+		{
+			fputs("P ", file);
+			for (byte = 0; byte < SHADER_KEY_WIRE_BYTES; byte++)
+				fprintf(file, "%02x", wire[byte]);
+			fputc('\n', file);
+			fclose(file);
+		}
+	}
+	/* (and where, in REPLAY_KEYS_FILE's name with .at: the line of the key in the file, and the frame and the draw that first used it) */
+	{
+		char name[512];
+		FILE *where;
+
+		snprintf(name, sizeof(name), "%s.at", getenv("REPLAY_KEYS_FILE"));
+		where = fopen(name, "a");
+		if (where)
+		{
+			fprintf(where, "%lu frame %lu draw %lu\n", keys_count, gx.frame, gx.draw);
+			fclose(where);
+		}
+	}
 }
 
 static uint64_t hash_of(const void *data, unsigned long size)
@@ -202,6 +255,7 @@ static void draw(const struct dk_command_draw *command)
 	surface_text(depth, sizeof(depth), &gx.depth);
 	for (stage = 0; stage < 4; stage++)
 		stage_text(stages[stage], sizeof(stages[stage]), &dk_derive_textures(derive)->stages[stage]);
+	pixel_key_note(dk_derive_pixel_key(derive));
 	line("draw %lu.%lu: prim %u count %u offset %d indices %016llx%s; targets %s %s; state %016llx vertex key %016llx pixel key %016llx; textures %s %s %s %s; "
 		"vertex parameters %016llx pixel parameters %016llx constants %016llx format %016llx",
 		gx.frame, gx.draw, (unsigned)primitive, (unsigned)command->count, (int)vertex_offset, (unsigned long long)indices, streams, color, depth,
