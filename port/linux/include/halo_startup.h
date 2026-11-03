@@ -24,6 +24,8 @@ enum
 	STARTUP_PREFETCH_SHADER_PACK = 8,
 	/* the card's free space is asked on a thread of its own and the main menu does not wait for it (saved_game_files.c) */
 	STARTUP_FREE_SPACE_APART = 16,
+	/* and then the pictures of the screens that the main menu's items open, as far as the cache of ready images has room (xbox_textures_gx2.c) */
+	STARTUP_PREWARM_SCREENS = 32,
 };
 
 #ifdef HALO_WIIU

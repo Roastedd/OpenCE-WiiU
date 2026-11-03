@@ -1305,6 +1305,32 @@ static void preload_widget(struct halo_menus const *menus, long widget, unsigned
 	}
 }
 
+/* the screens that the widgets already visited open (an <on>'s open, replace and focus, its widget, and the conditional widgets): their pictures too, in the order
+the widgets come, until the cache of ready images is full (dk_texture_prewarm_png takes no more then) */
+static void preload_screens(struct halo_menus const *menus, unsigned char const *sources, unsigned char *visited)
+{
+	long widget;
+
+	for (widget = 0; widget < menus->widget_count; widget++)
+	{
+		long handler, conditional;
+
+		if (!sources[widget])
+			continue;
+		for (handler = menus->widgets[widget].first_handler; handler != HALO_MENU_NONE; handler = menus->handlers[handler].next)
+		{
+			const struct halo_menu_handler *on = &menus->handlers[handler];
+			char const *const targets[4] = { on->open, on->replace, on->focus, on->widget };
+			int target;
+
+			for (target = 0; target < 4; target++)
+				preload_widget(menus, preload_widget_named(menus, targets[target]), visited);
+		}
+		for (conditional = menus->widgets[widget].first_conditional; conditional != HALO_MENU_NONE; conditional = menus->conditionals[conditional].next)
+			preload_widget(menus, preload_widget_named(menus, menus->conditionals[conditional].widget), visited);
+	}
+}
+
 static void *preload_main(void *unused)
 {
 	struct halo_menus const *menus;
@@ -1320,7 +1346,22 @@ static void *preload_main(void *unused)
 		long root = preload_widget_named(menus, menus->root);
 
 		if (visited && root != HALO_MENU_NONE)
+		{
+			unsigned char *main_menu_only = NULL;
+
 			preload_widget(menus, root, visited);
+			if (STARTUP_OPTION(STARTUP_PREWARM_SCREENS))
+			{
+				/* (the widgets of the first pass are where the screens are opened from: the screens' own are not walked for theirs) */
+				main_menu_only = malloc((size_t)menus->widget_count + 1);
+				if (main_menu_only)
+				{
+					memcpy(main_menu_only, visited, (size_t)menus->widget_count + 1);
+					preload_screens(menus, main_menu_only, visited);
+					free(main_menu_only);
+				}
+			}
+		}
 		free(visited);
 		STARTUP_NOTE("menu_art_ready");
 	}

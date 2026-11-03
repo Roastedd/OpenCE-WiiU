@@ -902,6 +902,7 @@ Four things the start-up does differently from before, each switched off by its 
 | 4 | that thread then decodes the pictures of the main menu (every frame of each: the highlight's too) into the texture cache's chains |
 | 8 | the shader pack is read by a thread of its own, not by the GX2 thread at the first draw |
 | 16 | the card's free space is asked on a thread of its own, which the saved games' checks do not wait for |
+| 32 | after the main menu's pictures, those of the screens its items open, as far as 32 MB of ready images go (the first page of each costs about 45 ms a picture otherwise) |
 
 `halo/startup.txt` `0` is the old start-up (the menus' tags look their names up in hash tables, and the texture work is done a word at a time, in either).
 The drawn frames are the same with any of them (the digest harness: tools/test_wiiu_game_digest.py), but for the first two of the main menu, where the highlight is
