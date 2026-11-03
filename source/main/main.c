@@ -2133,7 +2133,12 @@ static void main_skip_private(
 static void main_saving_map_private(
 	void)
 {
+	/* port: how long a checkpoint takes (the whole game state, written to the card while the game stands still), for the frame pacing notes */
+	void platform_log(char const *format, ...);
+	const unsigned long save_start = system_milliseconds();
+
 	game_state_save();
+	platform_log("checkpoint: the game state saved in %lu ms", system_milliseconds() - save_start);
 	hud_autosave(FALSE);
 	main_globals.save_map_completed = FALSE;
 	return;
