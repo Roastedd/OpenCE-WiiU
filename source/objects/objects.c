@@ -413,6 +413,10 @@ void *object_iterator_next(
 				if (tick_snapshot_headers)
 					header = tick_snapshot_object_header_get(index);
 #endif
+#ifdef HALO_WIIU
+				if (!tick_snapshot_headers)
+					tick_snapshot_mark_object(index);
+#endif
 				result = header->datum;
 				break;
 			}
@@ -467,6 +471,9 @@ void objects_fix_for_deleted_object(
 	struct object_iterator iterator;
 	object_iterator_new(&iterator, _object_mask_all, 0);
 
+	/* port: a sweep of every object for each one that is deleted, which writes an object only if it names the deleted one (here, and unit_handle_deleted_object and
+	projectile_handle_deleted_object, which mark the object they write): not marked for the tick snapshot by the sweep */
+	OBJECTS_READ_ONLY_BEGIN();
 	for (object = (struct object_datum *)object_iterator_next(&iterator);
 		object;
 		object = (struct object_datum *)object_iterator_next(&iterator))
@@ -474,9 +481,11 @@ void objects_fix_for_deleted_object(
 		if (object->object.umbrella_shield_object_index==deleted_object_index)
 		{
 			object->object.umbrella_shield_object_index = NONE;
+			OBJECT_MARK_CHANGED(iterator.index);
 		}
 		object_type_handle_deleted_object(iterator.index, deleted_object_index);
 	}
+	OBJECTS_READ_ONLY_END();
 
 	return;
 }
@@ -760,6 +769,7 @@ static long object_header_new(
 		struct object_header_datum *header = (struct object_header_datum *)datum_get(data, index);
 #ifdef HALO_WIIU
 		tick_snapshot_objects_changed();
+		tick_snapshot_mark_object(index);
 #endif
 		if (memory_pool_block_allocate(object_memory_pool, (void**)&header->datum, size))
 		{
@@ -784,6 +794,7 @@ static void object_header_delete(
 
 #ifdef HALO_WIIU
 	tick_snapshot_objects_changed();
+	tick_snapshot_mark_object(object_index);
 #endif
 	if (object_header->datum)
 	{
@@ -897,10 +908,25 @@ void object_marker_end(
 	return;
 }
 
+#ifdef HALO_WIIU
+/* port: an object as the accessors give it, but not marked for the tick snapshot (tick_snapshot.c): the marker functions below read and write only the marker, which is not in the copies */
+static struct object_datum *object_get_for_marker(
+	long object_index)
+{
+	struct object_header_datum *header = tick_snapshot_headers ? tick_snapshot_object_header_get(object_index) :
+		(struct object_header_datum *)datum_get(object_header_data, object_index);
+
+	return header->datum;
+}
+#define object_get_marker(index) object_get_for_marker(index)
+#else
+#define object_get_marker(index) object_get(index)
+#endif
+
 boolean object_unmarked_function(
 	long object_index)
 {
-	struct object_datum *object = object_get(object_index);
+	struct object_datum *object = object_get_marker(object_index);
 	boolean result;
 
 #ifdef HALO_WIIU
@@ -921,7 +947,7 @@ boolean object_mark_function(
 	long object_index)
 {
 	boolean result;
-	struct object_datum *object = object_get(object_index);
+	struct object_datum *object = object_get_marker(object_index);
 
 #ifdef HALO_WIIU
 	if (OBJECT_MARKER_RENDER())
@@ -1717,6 +1743,20 @@ void object_memory_pool_extent(
 		*base = object_memory_pool->base_address;
 		*used = memory_pool_get_used_size(object_memory_pool);
 	}
+}
+
+/* port: a word of an object's inputs in a slot of the snapshot, for the test aid that hashes what a frame can read (tick_snapshot_hash.inc) */
+unsigned long object_function_inputs_checksum(
+	int slot,
+	long absolute_index)
+{
+	struct object_function_inputs const *inputs = &object_function_inputs_snapshot[slot][absolute_index];
+	unsigned long sum = (unsigned long)inputs->object_index;
+	long index;
+
+	for (index = 0; index < NUMBER_OF_INCOMING_OBJECT_FUNCTIONS; index++)
+		sum = sum * 31UL + (unsigned long)(((unsigned long const *)inputs->values)[index]);
+	return sum;
 }
 
 /* the slot the drawing thread's view is of (tick_snapshot_view_begin) */
@@ -4093,7 +4133,27 @@ boolean object_force_inside_bsp(
 	return result;
 }
 
+static boolean object_update_inner(
+	long object_index);
+
+/* port: an object is updated every tick whether or not anything about it changes; what the update does to its block is compared with what it was (tick_snapshot.c),
+so that the tick snapshot copies the objects that changed and not every one that was updated */
 static boolean object_update(
+	long object_index)
+{
+#ifdef HALO_WIIU
+	boolean result;
+
+	tick_snapshot_scope_enter(object_index);
+	result = object_update_inner(object_index);
+	tick_snapshot_scope_leave(object_index);
+	return result;
+#else
+	return object_update_inner(object_index);
+#endif
+}
+
+static boolean object_update_inner(
 	long object_index)
 {
 	/* port: the floor transform before this tick's device motion. */
@@ -4815,6 +4875,10 @@ void objects_update(
 				!TEST_FLAG(object_header->flags, _object_header_being_created_bit))
 			{
 				long object_index = DATUM_INDEX_NEW(i, object_header->identifier);
+#ifdef HALO_WIIU
+				/* port: the object's scope for the tick snapshot opens before anything is asked of it (object_update, above, is the scope of the children and siblings it updates) */
+				tick_snapshot_scope_enter(object_index);
+#endif
 				match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 416, object_get(object_index)->object.parent_object_index==NONE);
 				match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 417, object_get(object_index)->object.next_object_index==NONE);
 			
@@ -4822,8 +4886,15 @@ void objects_update(
 					TEST_FLAG(_object_mask_unit, object_header->type) &&
 					unit_get(object_index)->unit.player_index!=NONE)
 				{
+#ifdef HALO_WIIU
+					object_update_inner(object_index);
+#else
 					object_update(object_index);
+#endif
 				}
+#ifdef HALO_WIIU
+				tick_snapshot_scope_leave(object_index);
+#endif
 			}
 		}
 		++i;

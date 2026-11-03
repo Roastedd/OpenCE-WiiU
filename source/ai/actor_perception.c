@@ -5202,6 +5202,8 @@ static void actor_perception_refresh_test_object(
 
 	actor = actor_get(actor_index);
 
+	/* port: it reads objects, and writes actors and props, not objects: what it gets is not marked for the tick snapshot (objects.h) */
+	OBJECTS_READ_ONLY_BEGIN();
 	while (object_index != NONE)
 	{
 		current_object = actor_perception_object_get(object_index);
@@ -5472,6 +5474,7 @@ object_done:
 		}
 		object_index = current_object->object.next_object_index;
 	}
+	OBJECTS_READ_ONLY_END();
 
 	return;
 

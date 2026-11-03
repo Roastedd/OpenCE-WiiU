@@ -3699,16 +3699,19 @@ void unit_handle_deleted_object(
 	if (unit->unit.grenade_object_index==deleted_object_index)
 	{
 		unit->unit.grenade_object_index = NONE;
+		OBJECT_MARK_CHANGED(unit_index);
 	}
 
 	if (unit->unit.driver_object_index==deleted_object_index)
 	{
 		unit->unit.driver_object_index = NONE;
+		OBJECT_MARK_CHANGED(unit_index);
 	}
 
 	if (unit->unit.gunner_object_index==deleted_object_index)
 	{
 		unit->unit.gunner_object_index = NONE;
+		OBJECT_MARK_CHANGED(unit_index);
 	}
 
 	weapon_index = 0;
@@ -3718,6 +3721,7 @@ void unit_handle_deleted_object(
 		if (*weapon_object_index==deleted_object_index)
 		{
 			*weapon_object_index = NONE;
+			OBJECT_MARK_CHANGED(unit_index);
 			if (weapon_index==unit->unit.desired_weapon_index)
 			{
 				unit->unit.desired_weapon_index = NONE;
@@ -3736,17 +3740,30 @@ void unit_handle_deleted_object(
 
 	if (unit->unit.current_weapon_index==NONE)
 	{
+#ifdef HALO_WIIU
+		/* port: written only if it is another (the sweep of every object for a deleted one marks the objects it writes, objects.c) */
+		const short next_weapon_index = unit_weapon_next_index(unit_index, NONE, 0);
+
+		if (unit->unit.desired_weapon_index != next_weapon_index)
+		{
+			unit->unit.desired_weapon_index = next_weapon_index;
+			OBJECT_MARK_CHANGED(unit_index);
+		}
+#else
 		unit->unit.desired_weapon_index = unit_weapon_next_index(unit_index, NONE, 0);
+#endif
 	}
 
 	if (unit->unit.equipment_object_index==deleted_object_index)
 	{
 		unit->unit.equipment_object_index = NONE;
+		OBJECT_MARK_CHANGED(unit_index);
 	}
 
 	if (unit->unit.delayed_damage_attacker_object_index==deleted_object_index)
 	{
 		unit->unit.delayed_damage_attacker_object_index = NONE;
+		OBJECT_MARK_CHANGED(unit_index);
 	}
 
 	return;

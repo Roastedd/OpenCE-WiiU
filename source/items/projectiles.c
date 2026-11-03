@@ -427,7 +427,10 @@ void projectile_handle_deleted_object(
 
 	projectile = projectile_get(projectile_index);
 	if (projectile->projectile.target_object_index == deleted_object_index)
+	{
 		projectile->projectile.target_object_index = NONE;
+		OBJECT_MARK_CHANGED(projectile_index);
+	}
 
 	return;
 }

@@ -247,10 +247,72 @@ struct object_header_datum *tick_snapshot_object_header_get(long object_index);
 struct object_header_datum *tick_snapshot_object_header_try_and_get(long object_index);
 extern struct data_array *object_header_data;
 
+/* port: the objects the game state's accessors have given since the snapshot last copied them (tick_snapshot.c). Per object, the number of the first capture that can
+see an access (the captures are numbered over the whole run): a slot of the ring whose copy of the object was made in a capture of that number or a later one has seen it.
+An object no accessor has given since a slot's copy is the same as the copy holds, and the next capture into the slot leaves it be. Every way to the game state's object
+blocks is through the accessors here and the object iterator (objects.c); the thread that draws gets the copies, and marks nothing. An object being updated (object_update,
+objects.c) is not marked by what is done to it meanwhile: its block is compared with what it was when the update began, and marked if it is not the same
+(tick_snapshot_scope_end); a mark by the thread that draws, outside a frame's view, is for good. The flag is 0 unless the snapshot is on with the overlap (and not told to copy everything). */
+extern volatile int tick_snapshot_dirty_tracking;
+/* >0 while the ticks' thread is in code that only reads what the accessors give (the collision tests): nothing it gives is marked. Counted by the ticks' thread alone. */
+extern volatile int tick_snapshot_read_only;
+extern volatile unsigned long tick_snapshot_dirty[HALO_PORT_MAXIMUM_OBJECTS_PER_MAP];
+extern volatile unsigned long tick_snapshot_dirty_next;
+extern volatile unsigned char tick_snapshot_in_scope[HALO_PORT_MAXIMUM_OBJECTS_PER_MAP];
+void tick_snapshot_scope_begin(long object_index);
+void tick_snapshot_scope_end(long object_index);
+
+__inline void tick_snapshot_mark_object(long object_index)
+{
+	const unsigned long absolute_index = (unsigned long)DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
+
+	if (tick_snapshot_dirty_tracking && absolute_index < (unsigned long)HALO_PORT_MAXIMUM_OBJECTS_PER_MAP && !tick_snapshot_in_scope[absolute_index] &&
+		(!tick_snapshot_read_only || TICK_OVERLAP_ON_RENDER_STACK()))
+	{
+		/* (the thread that draws, outside a frame's view: for good, since its mark may be older than the capture it races with) */
+		tick_snapshot_dirty[absolute_index] = TICK_OVERLAP_ON_RENDER_STACK() ? ~0UL : tick_snapshot_dirty_next;
+	}
+}
+
+/* code that reads objects, in a place that is told it only reads (below), and sometimes writes one, marks the one it wrote with this */
+__inline void tick_snapshot_mark_changed(long object_index)
+{
+	const unsigned long absolute_index = (unsigned long)DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
+
+	if (tick_snapshot_dirty_tracking && absolute_index < (unsigned long)HALO_PORT_MAXIMUM_OBJECTS_PER_MAP)
+		tick_snapshot_dirty[absolute_index] = TICK_OVERLAP_ON_RENDER_STACK() ? ~0UL : tick_snapshot_dirty_next;
+}
+
+/* code that reads objects and writes none (but the marker, which is not in the copies) says so with these, around its work (collisions.c, aim_assist.c, actor_perception.c) */
+__inline void tick_snapshot_read_only_enter(void)
+{
+	if (tick_snapshot_dirty_tracking && !TICK_OVERLAP_ON_RENDER_STACK())
+		tick_snapshot_read_only++;
+}
+
+__inline void tick_snapshot_read_only_leave(void)
+{
+	if (tick_snapshot_dirty_tracking && !TICK_OVERLAP_ON_RENDER_STACK())
+		tick_snapshot_read_only--;
+}
+
+__inline void tick_snapshot_scope_enter(long object_index)
+{
+	if (tick_snapshot_dirty_tracking)
+		tick_snapshot_scope_begin(object_index);
+}
+
+__inline void tick_snapshot_scope_leave(long object_index)
+{
+	if (tick_snapshot_dirty_tracking)
+		tick_snapshot_scope_end(object_index);
+}
+
 __inline struct object_header_datum *object_header_get_view(long object_index)
 {
 	if (tick_snapshot_headers)
 		return tick_snapshot_object_header_get(object_index);
+	tick_snapshot_mark_object(object_index);
 	return (struct object_header_datum *)datum_get(object_header_data, object_index);
 }
 
@@ -258,8 +320,17 @@ __inline struct object_header_datum *object_header_try_and_get_view(long object_
 {
 	if (tick_snapshot_headers)
 		return tick_snapshot_object_header_try_and_get(object_index);
+	tick_snapshot_mark_object(object_index);
 	return (struct object_header_datum *)datum_try_and_get(object_header_data, object_index);
 }
+
+#define OBJECTS_READ_ONLY_BEGIN() tick_snapshot_read_only_enter()
+#define OBJECTS_READ_ONLY_END() tick_snapshot_read_only_leave()
+#define OBJECT_MARK_CHANGED(index) tick_snapshot_mark_changed(index)
+#else
+#define OBJECT_MARK_CHANGED(index) ((void)0)
+#define OBJECTS_READ_ONLY_BEGIN() ((void)0)
+#define OBJECTS_READ_ONLY_END() ((void)0)
 #endif
 
 struct location
@@ -477,6 +548,7 @@ object_function_inputs), when a load puts the objects back or a map starts */
 void object_function_inputs_forget(void);
 #ifdef HALO_WIIU
 void object_function_inputs_copy_to_snapshot(int slot, long absolute_index);
+unsigned long object_function_inputs_checksum(int slot, long absolute_index);
 void object_memory_pool_extent(void **base, long *used);
 void object_function_inputs_set_view(int slot);
 #endif
