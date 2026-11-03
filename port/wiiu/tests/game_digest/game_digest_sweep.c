@@ -37,6 +37,7 @@ It never changes how a frame is drawn when the variable is not set, so the diges
 #include "math/real_math.h"
 #include "objects/objects.h"
 #include "objects/damage.h"
+#include "objects/object_lights.h"
 #include "items/weapon_definitions.h"
 #include "objects/object_definitions.h"
 #include "render/render.h"
@@ -59,6 +60,8 @@ It never changes how a frame is drawn when the variable is not set, so the diges
 
 void game_digest_sweep_render_frame(struct render_window *windows, short window_count);
 unsigned long replay_keys_frame(void);
+static unsigned long const object_groups[] = { 'weap', 'bipd', 'vehi', 'eqip', 'garb', 'proj', 'scen', 'mach', 'ctrl', 'lifi', 'ssce', 'plac' };
+static void lights_collect(void);
 static void phase_weapons(void);
 static void phase_scripts(void);
 static void next_phase(void);
@@ -73,7 +76,8 @@ enum
 	PHASE_DAMAGE = 8,
 	PHASE_WEAPONS = 16,
 	PHASE_SCRIPTS = 32,
-	MAXIMUM_STOPS = 4096,
+	PHASE_LIT = 64,
+	MAXIMUM_STOPS = 16384,
 };
 
 struct stop
@@ -104,12 +108,21 @@ static struct
 	real_point3d stage_position;
 	real_vector3d stage_forward;
 	long list[8192];     /* the tags of an objects, effects or damage phase */
+	unsigned char camouflage[8192]; /* the objects' stops of a unit made active-camouflaged */
 	long list_count;
 	long census_done;
 	struct { int active; real_point3d position; real_vector3d forward; } cam;
-	struct { real_point3d position; real_vector3d forward; real floor; } candidates[64]; /* places in the first bsp for the objects and effects: open, mostly floors */
+	struct { real_point3d position; real_vector3d forward; real floor; int fogged; } candidates[64]; /* places in the first bsp for the objects and effects: open, mostly floors */
 	int candidate_count;
+	int leave_object;     /* the object of this stop is not deleted (a flag or a ball: the game halts on deleting one) */
 	int pass;            /* the effects' two goes */
+	int object_pass;     /* the objects' three goes: 0 as they are, 1 with a dynamic light beside each, 2 in a cluster with fog */
+	int stage_variant;   /* 0: the farthest floor; 1: the farthest floor of a cluster with fog (stage_find) */
+	long lights[256];    /* the map's light definitions, one of which each stop of the lit tour makes (a dynamic light, as a muzzle flash or a plasma bolt is) */
+	int light_count;
+	int lit_started;
+	long density;        /* GAME_DIGEST_SWEEP_DENSITY: surfaces looked at for each material (3: the first, the middle and the last) */
+	int flashlight;      /* GAME_DIGEST_SWEEP_FLASHLIGHT: the player's flashlight is kept on (the environment's dynamic light passes) */
 	int passes;          /* GAME_DIGEST_SWEEP_PASSES: 1 or 2 */
 	char *skip;          /* GAME_DIGEST_SWEEP_SKIP: a file of lines "object NAME", "effect NAME", "damage NAME", "weapon NAME" for the tags an earlier run did */
 	long skipped;
@@ -216,6 +229,8 @@ static void configure(void)
 		sweep.phases |= PHASE_WEAPONS;
 	if (strstr(phases, "scripts"))
 		sweep.phases |= PHASE_SCRIPTS;
+	if (strstr(phases, "lit"))
+		sweep.phases |= PHASE_LIT;
 	sweep.passes = getenv("GAME_DIGEST_SWEEP_PASSES") ? (int)strtol(getenv("GAME_DIGEST_SWEEP_PASSES"), NULL, 0) : 1;
 	if (getenv("GAME_DIGEST_SWEEP_SKIP"))
 	{
@@ -234,6 +249,8 @@ static void configure(void)
 			fclose(skip);
 		}
 	}
+	sweep.flashlight = getenv("GAME_DIGEST_SWEEP_FLASHLIGHT") && atoi(getenv("GAME_DIGEST_SWEEP_FLASHLIGHT"));
+	sweep.density = getenv("GAME_DIGEST_SWEEP_DENSITY") ? strtol(getenv("GAME_DIGEST_SWEEP_DENSITY"), NULL, 0) : 3;
 	sweep.wait = getenv("GAME_DIGEST_SWEEP_WAIT") ? strtol(getenv("GAME_DIGEST_SWEEP_WAIT"), NULL, 0) : 60;
 	sweep.hold = getenv("GAME_DIGEST_SWEEP_HOLD") ? strtol(getenv("GAME_DIGEST_SWEEP_HOLD"), NULL, 0) : 2;
 	snprintf(path, sizeof(path), "%s/sweep.txt", directory && *directory ? directory : ".");
@@ -468,7 +485,8 @@ static void bsp_stops_make(void)
 		{
 			struct structure_material *material = TAG_BLOCK_GET_ELEMENT(&lightmap->materials, material_index, struct structure_material);
 			long shader = material ? material->shader.index : NONE, key, entry = -1, i, sample;
-			long samples[3];
+			long samples[64];
+			long sample_count = sweep.density < 3 ? 3 : sweep.density > 64 ? 64 : sweep.density;
 
 			if (!material || shader == NONE || material->surface_count <= 0)
 				continue;
@@ -485,10 +503,10 @@ static void bsp_stops_make(void)
 				seen_keys[entry] = key;
 				seen_stops[entry] = 0;
 			}
-			samples[0] = 0;
-			samples[1] = material->surface_count / 2;
-			samples[2] = material->surface_count - 1;
-			for (sample = 0; sample < 3 && seen_stops[entry] < 4 && sweep.stop_count < MAXIMUM_STOPS - 200; sample++)
+			/* (surfaces spread over the material: the first, the last and between them) */
+			for (sample = 0; sample < sample_count; sample++)
+				samples[sample] = sample_count > 1 ? sample * (material->surface_count - 1) / (sample_count - 1) : 0;
+			for (sample = 0; sample < sample_count && seen_stops[entry] < sample_count + 1 && sweep.stop_count < MAXIMUM_STOPS - 200; sample++)
 			{
 				real_point3d points[3];
 				struct stop stop;
@@ -505,7 +523,7 @@ static void bsp_stops_make(void)
 					seen_stops[entry]++;
 					placed++;
 					/* (one stop for a material is enough while there are materials to come: the other samples are for a shader met once) */
-					if (lightmap->materials.count > 4)
+					if (lightmap->materials.count > 4 && sweep.density <= 3)
 						break;
 				}
 				else
@@ -578,6 +596,7 @@ static void bsp_stops_make(void)
 							sweep.candidates[sweep.candidate_count].position = stop.position;
 							sweep.candidates[sweep.candidate_count].forward = stop.forward;
 							sweep.candidates[sweep.candidate_count].floor = normal.k;
+							sweep.candidates[sweep.candidate_count].fogged = cluster->fog_designator != NONE;
 							sweep.candidate_count++;
 						}
 						found = 1;
@@ -638,7 +657,14 @@ static void list_make(unsigned long const *groups, int group_count, char const *
 
 				if (weapon && ((weapon->weapon.flags >> 3) & 1))
 				{
-					note("skipped %s (a flag)", tag_get_name(tag_index));
+					if (strcmp(kind, "object") || skipped_before(kind, tag_get_name(tag_index)))
+					{
+						note("skipped %s (a flag)", tag_get_name(tag_index));
+						continue;
+					}
+					/* (the objects' tour makes one and leaves it: only the weapons' tour, which carries and drops them, may not have one) */
+					sweep.camouflage[sweep.list_count] = 2;
+					sweep.list[sweep.list_count++] = tag_index;
 					continue;
 				}
 			}
@@ -647,7 +673,24 @@ static void list_make(unsigned long const *groups, int group_count, char const *
 				sweep.skipped++;
 				continue;
 			}
+			sweep.camouflage[sweep.list_count] = 0;
 			sweep.list[sweep.list_count++] = tag_index;
+		}
+	}
+	/* the units again, active-camouflaged (its pixel shaders are another's, and the tour of the objects is the only one that makes a unit): after the others */
+	if (!strcmp(kind, "object"))
+	{
+		long count = sweep.list_count, n;
+
+		for (n = 0; n < count && sweep.list_count < (long)(sizeof(sweep.list) / sizeof(sweep.list[0])); n++)
+		{
+			long group = tag_get_group_tag(sweep.list[n]);
+
+			if ((group == 'bipd' || group == 'vehi') && !skipped_before("camo", tag_get_name(sweep.list[n])))
+			{
+				sweep.camouflage[sweep.list_count] = 1;
+				sweep.list[sweep.list_count++] = sweep.list[n];
+			}
 		}
 	}
 }
@@ -675,7 +718,13 @@ static int stage_find(void)
 	first bsp the clusters' views found, else where the player stands) */
 	for (i = 0; i < sweep.candidate_count; i++)
 	{
-		real dx = sweep.candidates[i].position.x - origin.x, dy = sweep.candidates[i].position.y - origin.y, dz = sweep.candidates[i].position.z - origin.z;
+		real dx;
+		real dy;
+		real dz;
+
+		if (sweep.stage_variant == 1 && !sweep.candidates[i].fogged)
+			continue;
+		dx = sweep.candidates[i].position.x - origin.x, dy = sweep.candidates[i].position.y - origin.y, dz = sweep.candidates[i].position.z - origin.z;
 		real distance = dx * dx + dy * dy + dz * dz + (sweep.candidates[i].floor > 0.8f ? 1.0e9f : 0.0f);
 
 		if (distance > best_distance)
@@ -684,12 +733,17 @@ static int stage_find(void)
 			best = i;
 		}
 	}
+	if (best < 0 && sweep.stage_variant == 1)
+	{
+		note("stage: no cluster with fog among the %d views", sweep.candidate_count);
+		return 0;
+	}
 	if (best >= 0)
 	{
 		sweep.stage_position = sweep.candidates[best].position;
 		sweep.stage_position.z += 0.0f;
 		sweep.stage_forward = sweep.candidates[best].forward;
-		note("stage: cluster view %d of %d, floor %.2f", best, sweep.candidate_count, (double)sweep.candidates[best].floor);
+		note("stage: cluster view %d of %d, floor %.2f%s", best, sweep.candidate_count, (double)sweep.candidates[best].floor, sweep.candidates[best].fogged ? ", fog" : "");
 	}
 	else
 	{
@@ -827,7 +881,6 @@ static void phase_scripts(void)
 
 static void next_phase(void)
 {
-	static unsigned long const objects[] = { 'weap', 'bipd', 'vehi', 'eqip', 'garb', 'proj', 'scen', 'mach', 'ctrl', 'lifi', 'ssce', 'plac' };
 	static unsigned long const effects[] = { 'effe' };
 	static unsigned long const damages[] = { 'jpt!' };
 	static unsigned long const weapons[] = { 'weap' };
@@ -849,7 +902,7 @@ static void next_phase(void)
 		if (sweep.phase < PHASE_OBJECTS && (sweep.phases & PHASE_OBJECTS))
 		{
 			sweep.phase = PHASE_OBJECTS;
-			list_make(objects, (int)(sizeof(objects) / sizeof(objects[0])), "object");
+			list_make(object_groups, (int)(sizeof(object_groups) / sizeof(object_groups[0])), "object");
 			note("phase objects: %ld object tags (%ld done by an earlier run)", sweep.list_count, sweep.skipped);
 			return;
 		}
@@ -884,12 +937,34 @@ static void next_phase(void)
 			note("phase scripts: %s", sweep.script_names);
 			return;
 		}
+		if (sweep.phase < PHASE_LIT && (sweep.phases & PHASE_LIT))
+		{
+			sweep.phase = PHASE_LIT;
+			sweep.bsp_index = 0;
+			sweep.bsp_count = (short)global_scenario->structure_bsp_references.count;
+			lights_collect();
+			note("phase lit: the bsps again, a dynamic light at each stop (%d light definitions)", sweep.light_count);
+			return;
+		}
 		sweep.phase = -1;
 		note("sweep done at frame %ld", sweep.frames);
 		if (getenv("GAME_DIGEST_SWEEP_EXIT"))
 			sweep.exit_countdown = 4;
 		return;
 	}
+}
+
+/* the map's light definitions (the lit tour's, and the objects' second go's) */
+static void lights_collect(void)
+{
+	struct tag_iterator iterator;
+	long tag_index;
+
+	if (sweep.light_count)
+		return;
+	tag_iterator_new(&iterator, 'ligh');
+	for (tag_index = tag_iterator_next(&iterator); tag_index != NONE && sweep.light_count < 256; tag_index = tag_iterator_next(&iterator))
+		sweep.lights[sweep.light_count++] = tag_index;
 }
 
 static void phase_bsp(void)
@@ -931,8 +1006,20 @@ static void phase_bsp(void)
 		struct stop *stop = &sweep.stops[sweep.stop_index];
 
 		camera_target(&stop->position, &stop->forward);
+		if (sweep.frame_in_stop == 0 && sweep.phase == PHASE_LIT && sweep.light_count)
+		{
+			/* (between the camera and what it looks at, a hand's breadth from the surface it looks at when it looks at one) */
+			real_point3d at = stop->position;
+			real_vector3d direction = stop->forward;
+
+			vec_normalize(&direction);
+			at.x += direction.i * (stop->kind ? 0.4f : 0.7f);
+			at.y += direction.j * (stop->kind ? 0.4f : 0.7f);
+			at.z += direction.k * (stop->kind ? 0.4f : 0.7f);
+			light_new_unattached(sweep.lights[sweep.stop_index % sweep.light_count], NONE, 0, &at, &direction, 1.0f);
+		}
 		if (sweep.frame_in_stop == 0)
-			note("bsp %d stop %ld %s %s (%ld)", (int)stop->bsp_index, sweep.stop_index, stop->kind ? "cluster" : "shader",
+			note("%s %d stop %ld %s %s (%ld)", sweep.phase == PHASE_LIT ? "lit bsp" : "bsp", (int)stop->bsp_index, sweep.stop_index, stop->kind ? "cluster" : "shader",
 				stop->kind ? "up" : tag_get_name(stop->tag_index), stop->detail);
 		if (++sweep.frame_in_stop >= sweep.hold)
 		{
@@ -945,7 +1032,7 @@ static void phase_bsp(void)
 /* the object the stop made, if it is still there (a projectile may have ended at once; the game halts on a deleted object's index) */
 static void object_remove(void)
 {
-	if (sweep.object_index != NONE && object_try_and_get_and_verify_type(sweep.object_index, 0xFFFFFFFFul))
+	if (sweep.object_index != NONE && !sweep.leave_object && object_try_and_get_and_verify_type(sweep.object_index, 0xFFFFFFFFul))
 		object_delete(sweep.object_index);
 	sweep.object_index = NONE;
 }
@@ -955,17 +1042,50 @@ static void phase_list(int objects)
 	/* a stop per tag: made on the frame it starts, held, and taken away */
 	real_vector3d view;
 	real_point3d where;
-	long hold = objects ? sweep.hold + 1 : sweep.hold + (getenv("GAME_DIGEST_SWEEP_EFFECT_HOLD") ? (long)strtol(getenv("GAME_DIGEST_SWEEP_EFFECT_HOLD"), NULL, 0) : 8);
+	long camo = objects && sweep.stop_index < sweep.list_count && sweep.camouflage[sweep.stop_index] == 1;
+	long hold = objects ? sweep.hold + 1 + (camo ? 36 : 0) : sweep.hold + (getenv("GAME_DIGEST_SWEEP_EFFECT_HOLD") ? (long)strtol(getenv("GAME_DIGEST_SWEEP_EFFECT_HOLD"), NULL, 0) : 8);
 
+	if (objects && sweep.object_pass && sweep.stop_index < sweep.list_count && sweep.camouflage[sweep.stop_index])
+	{
+		/* (the second and third go make no unit camouflaged, and no flag) */
+		sweep.stop_index++;
+		return;
+	}
 	if (!sweep.stage_known)
 	{
 		if (!stage_find())
+		{
+			if (objects && sweep.stage_variant)
+			{
+				/* (no cluster with fog: the third go is left out) */
+				sweep.list_count = 0;
+				sweep.stop_index = 0;
+				sweep.stage_known = 1;
+				return;
+			}
 			return;
+		}
 		sweep.stage_known = 1;
 	}
 	if (sweep.stop_index >= sweep.list_count)
 	{
 		object_remove();
+		if (objects && sweep.object_pass < 2)
+		{
+			/* (the objects again: with a dynamic light beside each, then in a cluster with fog, where the models' lighting and fog take other paths) */
+			sweep.object_pass++;
+			sweep.stage_known = 0;
+			sweep.stage_variant = sweep.object_pass == 2;
+			lights_collect();
+			list_make(object_groups, (int)(sizeof(object_groups) / sizeof(object_groups[0])), sweep.object_pass == 1 ? "litobj" : "fogobj");
+			note("objects, go %d (%s): %ld object tags (%ld done by an earlier run)", sweep.object_pass + 1, sweep.object_pass == 1 ? "a light beside each" : "in a cluster with fog", sweep.list_count, sweep.skipped);
+			sweep.stop_index = 0;
+			sweep.frame_in_stop = 0;
+			return;
+		}
+		sweep.object_pass = 0;
+		sweep.stage_variant = 0;
+		sweep.stage_known = 0;
 		if (sweep.phase == PHASE_EFFECTS && sweep.pass == 0 && sweep.passes >= 2)
 		{
 			sweep.pass = 1;
@@ -999,12 +1119,27 @@ static void phase_list(int objects)
 		where.z = sweep.stage_position.z - 0.3f;
 		if (sweep.frame_in_stop == 0)
 		{
-			note("%s stop %ld %s%s", objects ? "object" : sweep.phase == PHASE_EFFECTS ? "effect" : "damage", sweep.stop_index, tag_get_name(tag_index),
+			sweep.leave_object = objects && sweep.camouflage[sweep.stop_index] == 2;
+			note("%s stop %ld %s%s", objects ? (camo ? "camo" : sweep.object_pass == 1 ? "litobj" : sweep.object_pass == 2 ? "fogobj" : "object") : sweep.phase == PHASE_EFFECTS ? "effect" : "damage", sweep.stop_index, tag_get_name(tag_index),
 				sweep.phase == PHASE_EFFECTS ? (sweep.pass ? " (air)" : " (floor)") : "");
 			if (objects)
 			{
 				struct object_placement_data data;
 
+				if (sweep.object_pass == 1 && sweep.light_count)
+				{
+					/* (above the object, a little toward the camera) */
+					real_point3d at = where;
+					real_vector3d down;
+
+					at.x -= sweep.stage_forward.i * 0.5f;
+					at.y -= sweep.stage_forward.j * 0.5f;
+					at.z += 0.9f;
+					down.i = 0.0f;
+					down.j = 0.0f;
+					down.k = -1.0f;
+					light_new_unattached(sweep.lights[sweep.stop_index % sweep.light_count], NONE, 0, &at, &down, 1.0f);
+				}
 				object_placement_data_new(&data, tag_index, NONE);
 				data.position = where;
 				data.position.z += 0.2f;
@@ -1017,6 +1152,13 @@ static void phase_list(int objects)
 				sweep.object_index = object_new(&data);
 				if (sweep.object_index == NONE)
 					note("  (not made)");
+				else if (camo)
+				{
+					struct unit_datum *unit = (struct unit_datum *)object_try_and_get_and_verify_type(sweep.object_index, 0xFFFFFFFFul);
+
+					if (unit)
+						unit->unit.flags |= 1UL << _unit_active_camouflaged_bit;
+				}
 			}
 			else if (sweep.phase == PHASE_EFFECTS)
 			{
@@ -1089,6 +1231,66 @@ static void phase_list(int objects)
 	}
 }
 
+/* ---------- the game's pixel shader sites
+
+Each call of rasterizer_set_pixel_shader (the game's own code sets a pixel shader at some sixty places: rasterizer_xbox_*.c) is noted by the place it is called from
+(its return address; addr2line says the function and line), with how often and the frame it was first made on. Written to GAME_DIGEST_DIR/pixel_sites.txt when the
+run ends, and the last site is what replay_gx2.c writes with each new key, so that a key is told by the code that set its shader. The sites a harvest reaches, against
+the sites there are, say what it has not reached. */
+
+void __real_rasterizer_set_pixel_shader(void const *definition);
+unsigned long game_digest_last_pixel_site(void);
+
+static struct { unsigned long address, count, first_frame; } pixel_sites[1024];
+static int pixel_site_count;
+static unsigned long last_pixel_site;
+
+void __wrap_rasterizer_set_pixel_shader(void const *definition)
+{
+	unsigned long caller = (unsigned long)__builtin_return_address(0);
+	int i;
+
+	for (i = 0; i < pixel_site_count && pixel_sites[i].address != caller; i++)
+		;
+	if (i == pixel_site_count && pixel_site_count < 1024)
+	{
+		pixel_sites[i].address = caller;
+		pixel_sites[i].first_frame = replay_keys_frame();
+		pixel_site_count++;
+	}
+	if (i < pixel_site_count)
+		pixel_sites[i].count++;
+	last_pixel_site = caller;
+	__real_rasterizer_set_pixel_shader(definition);
+}
+
+unsigned long game_digest_last_pixel_site(void)
+{
+	return last_pixel_site;
+}
+
+static void pixel_sites_write(void)
+{
+	char const *directory = getenv("GAME_DIGEST_DIR");
+	char path[512];
+	FILE *file;
+	int i;
+
+	snprintf(path, sizeof(path), "%s/pixel_sites.txt", directory && *directory ? directory : ".");
+	file = fopen(path, "w");
+	if (!file)
+		return;
+	for (i = 0; i < pixel_site_count; i++)
+		fprintf(file, "0x%lx %lu %lu\n", pixel_sites[i].address, pixel_sites[i].count, pixel_sites[i].first_frame);
+	fclose(file);
+}
+
+__attribute__((constructor)) static void pixel_sites_start(void)
+{
+	if (getenv("GAME_DIGEST_KEYS"))
+		atexit(pixel_sites_write);
+}
+
 /* The tour's step, once a frame, in the tick side of the loop (cheats_update is called there, and only there: the game's random numbers, its objects and its
 effects may be used from here, where the frame's drawing, which holds the random seed's lock, may not) */
 void __real_cheats_update(void);
@@ -1118,9 +1320,23 @@ void game_digest_sweep_tick(void)
 		next_phase();
 	}
 	sweep.cam.active = 0;
+	if (sweep.flashlight)
+	{
+		short local_player_index = local_player_get_next(NONE);
+		long player_index = local_player_index == NONE ? NONE : local_player_get_player_index(local_player_index);
+		long unit_index = player_index == NONE ? NONE : player_get(player_index)->unit_index;
+		struct unit_datum *unit = unit_index == NONE ? NULL : (struct unit_datum *)object_try_and_get_and_verify_type(unit_index, 0xFFFFFFFFul);
+
+		/* (turned on as the unit's own control would, and left on: the battery is kept full) */
+		if (unit && !(unit->unit.flags & (1UL << _unit_integrated_light_on_bit)))
+			unit->unit.flags |= 1UL << _unit_desired_integrated_light_on_bit;
+		if (unit)
+			unit->unit.integrated_light_battery = 1.0f;
+	}
 	switch (sweep.phase)
 	{
 	case PHASE_BSP:
+	case PHASE_LIT:
 		phase_bsp();
 		break;
 	case PHASE_OBJECTS:

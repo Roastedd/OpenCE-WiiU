@@ -230,13 +230,17 @@ unsigned long replay_keys_frame(void)
 
 static unsigned long keys_frame_written = ~0ul;
 
+/* the digest harness's (game_digest_sweep.c): the code that last set a pixel shader; the D3D8 replay has none */
+extern unsigned long game_digest_last_pixel_site(void) __attribute__((weak));
+
 static void keys_frame_comment(void)
 {
-	if (keys_frame_written != gx.frame)
-	{
+	/* (before every new key: the frame, and the code that set the shader the key is of) */
+	if (game_digest_last_pixel_site)
+		fprintf(keys.file, "# frame %lu site 0x%lx\n", gx.frame, game_digest_last_pixel_site());
+	else
 		fprintf(keys.file, "# frame %lu\n", gx.frame);
-		keys_frame_written = gx.frame;
-	}
+	keys_frame_written = gx.frame;
 }
 
 static void keys_note(const struct dk_vertex_key *vertex, const struct nv2a_pixel_shader_key *pixel)
