@@ -405,7 +405,7 @@ it was.
    but `consume samples`, the runs after it read by its finding.
 2. **A tone against an x86 build on the LAN.** On the Wii U: `debug.voice_test = true`, `audio.voice_chat = "open_mic"` (the tone is always above
    the open mic's level) and `debug.network_test = "host:bloodgulch"`. The x86 build of the same commit joins from the bridged Colima machine, as
-   `lan_test.sh` has it, with `HALO_VOICE_TEST=1 HALO_VOICE_CHAT=open_mic HALO_NETWORK_TEST=join`. Each side's log has a line each second, `voice
+   `lan_test.sh` has it, with `HALO_VOICE_TEST=1 HALO_VOICE_CHAT=open_mic HALO_NETWORK_TEST=join` (the tools repository's `tools/ppc-be/run.sh` passes the first two on to its container; until 2026-11-02 it did not, and the Mac side would have run without the tone). The same two machines' voice was run on the build machine in both byte orders (big-endian host with an x86 client, and the other way round) with `runs/mic-20261102/voice_cross.sh`: each side logged the other's tone at level 0.195 to 0.214. Each side's log has a line each second, `voice
    test: speaker N level 0.212 ...`, for the other's tone (0.212 is the tone's 0.3 over the square root of 2; `gain 1.00 pan 0.00` in the
    lobby, others when the game's proximity places the speaker), and the Wii U's "Voice:" lines count about 500 frames encoded and 500 packets
    decoded in 10 s. Then the other way round: the x86 build hosts and the Wii U joins (`debug.network_test = "join"`).
