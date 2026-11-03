@@ -845,6 +845,9 @@ unsigned long *get_global_local_random_seed_address(void);
 /* port: sets *seed to debug.random_seed and returns TRUE when HALO_MAP_START_SEED=1 (a host test aid, random_math.c); else FALSE and *seed is left */
 boolean random_math_test_seed(
 	unsigned long *seed);
+/* port: the same for a map's start (game.c), which the Wii U's scripted run also turns on (random_math.c) */
+boolean random_math_test_seed_at_map_start(
+	unsigned long *seed);
 void random_seed_debug_log(
 	boolean log);
 void random_math_initialize(
