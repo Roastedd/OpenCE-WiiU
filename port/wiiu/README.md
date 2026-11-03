@@ -478,6 +478,11 @@ percentiles are the line before it, `GX2:   frame times: median ..., 95th percen
 For the session that has the console. Copy the build's `halo.wuhb`/`halo.rpx`; keep the card's other notes as that session's practice has
 them. Each run: read `log.txt` afterwards.
 
+0. **The backlog, controller off.** Before any of the below, with `display.dynamic_resolution = false` and no note: the 5 s log has the line
+   `GX2:   of it still to run when the game thread had handed over the frame's last draw (the GPU's backlog ...): X ms on average, Y the longest,
+   N of M frames over 2 ms` after the GPU's time. Expected from the old logs (estimated, not measured): about 0 in Blood Gulch, a10, a50 and in
+   fights the game thread limits (a30 firefight, b30); 3 to 8 ms in c10, b40 and the a30 shore at 45 to 50 frames a second. The controller's
+   threshold (`BACKLOG_SHARE` in `src/wiiu_drs.c`, 0.15 of the budget, 2.5 ms at 60) is to be set from these figures.
 1. **Each forced step in a10, a30 and Blood Gulch.** At 720 lines (the default), put `648`, then `576`, then `540` in `halo/drs_lines.txt`
    (one run each), and once `1080` lines (`display.render_lines = 1080`, or `halo/render_height.txt` 1080) with `810`. In each map, look at:
    - the HUD (meters, motion sensor, reticle, the text and waypoints): where it is at 720 without the note, only softer;
