@@ -671,6 +671,20 @@ make the same bytes of every map's tags, BSPs and model data, and the C swap and
 (`map_validate --swap`, `--swap-xbox`, under qemu-ppc and qemu-i386); `map_validate` needs no correction of the StageKit maps, big-endian or
 x86, and fuzzes them the same; the big-endian Linux build plays them tick for tick as the x86 build does. Not run on a console.
 
+### Before the console: the shader keys, on the Mac
+
+A Custom Edition map's draws need pixel shader keys the pack may lack (below). The digest harness (`tools/test_wiiu_game_digest.py`) plays a map through the
+Wii U's Direct3D layer on the Mac and writes the keys the console's GX2 thread would look up, in the lines the missing-shader capture writes:
+
+    GAME_DIGEST_CUSTOM_MAPS=<folder of the maps with bitmaps.map, sounds.map, loc.map> GAME_DIGEST_CONFIG=<a copy of the card's config.toml> \
+      python3 tools/test_wiiu_game_digest.py run NAME --custom-map bloodgulch --ticks 1500 --keys
+    python3 tools/wiiu/key_diff.py build/game-digest/runs/NAME/out/keys.txt <tools/wiiu/shader_keys.txt> -o missing.txt
+
+`missing.txt` goes to `tools/wiiu/shader_pack.sh`. The run sees what the bot sees from where the map starts, so it finds the keys of what is in view (on Xbox Blood
+Gulch it found 6 the pack lacks; on b30's first 1,800 ticks 24), not every key the map will ask for: of the 117 keys the console missed at b30's start on
+2026-11-02 it had 4, but of their 35 shaders (canonical keys, as the branch `wiiu-shader-fallback` counts them) 23. The console's capture stays the way to the rest. Nothing is drawn by it, nothing is
+written to a console; a map's own scripts and sounds run as in any run of the digest harness.
+
 ### The Custom Edition test plan
 
 With the owner at the console and the card on the safe settings, one driver at a time; a Custom Edition map (stock `bloodgulch.map` first),
