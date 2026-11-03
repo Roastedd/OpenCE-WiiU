@@ -88,6 +88,7 @@ struct random_math_globals
 
 /* port: port/linux/src/port_config.c */
 long config_integer(const char *name);
+const char *config_string(const char *name);
 
 
 static real_vector3d *
@@ -176,6 +177,27 @@ boolean random_math_test_seed(
 	}
 
 	return enabled != 0;
+}
+
+/* port: the local random seed at a map's start, for the scripted run of the console: random_math_test_seed's, and also, on the Wii U, which has no environment
+to set HALO_MAP_START_SEED in, config.toml's debug.test_input "tickbot:<seed>" or "tickhunt:<seed>" (the scripted players timed by the game's ticks, port/wiiu/src/xinput_wiiu.c) with
+a debug.random_seed. A campaign game started from the menus then plays the fight a host run plays, whatever the menus drew from the local numbers before it
+(reports/research/2026-11-01/wiiu-scripted-input.md). Only game.c's map start asks, not the colour of a joining player (random_math_test_seed's other caller), and
+nothing else turns it on: a console with neither setting draws as it did. */
+boolean random_math_test_seed_at_map_start(
+	unsigned long *seed)
+{
+	if (random_math_test_seed(seed))
+		return TRUE;
+#ifdef HALO_WIIU
+	if (config_integer("debug.random_seed") &&
+		(!strncmp(config_string("debug.test_input"), "tickbot:", 8) || !strncmp(config_string("debug.test_input"), "tickhunt:", 9)))
+	{
+		*seed = (unsigned long)config_integer("debug.random_seed");
+		return TRUE;
+	}
+#endif
+	return FALSE;
 }
 
 void
