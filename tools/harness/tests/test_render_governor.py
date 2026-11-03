@@ -254,9 +254,9 @@ def test_down_by_steps_and_back_up_slowly(tmp_path):
     transitions, results, _ = run_scenario(tmp_path, "down_then_up")
     downs = [t for t in transitions if t[2] > t[1]]
     ups = [t for t in transitions if t[2] < t[1]]
-    # (a step at a time, none sooner than the dwell of a second after the one before, down to the last step the scene still runs over the target at)
+    # (a step at a time, none sooner than the dwell after the one before: a second, half of it when 40% over, down to the last step the scene still runs over the target at)
     assert all(abs(t[2] - t[1]) == 1 for t in transitions)
-    assert all(b[0] - a[0] >= 1000 for a, b in zip(downs, downs[1:]))
+    assert all(b[0] - a[0] >= 500 for a, b in zip(downs, downs[1:]))
     assert results["after_heavy"] == 7
     # (back up: a step each eight seconds at the soonest, all the way to the full picture in the light scene)
     assert all(b[0] - a[0] >= 8000 for a, b in zip(ups, ups[1:]))
