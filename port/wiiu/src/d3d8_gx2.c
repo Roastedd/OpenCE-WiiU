@@ -730,6 +730,11 @@ one of these ranges hands the stream over first, as the Xbox's runtime does for 
 static struct pending_reads pending_reads;
 
 static void stream_flush(void);
+/* the game thread's waits for a free stream slot (the GX2 thread has not retired the stream that used the slot the next stream goes in), in the time base's ticks and counted: [0] in the
+draws' hand-overs and the rest of the frame's work, [1] in the present's (where it is the frame's pacing: the GX2 thread waits for the display's flip). In the log with the draw statistics. */
+static OSTime slot_wait_ticks[2];
+static unsigned long slot_waits[2];
+static int in_present;
 /* why the stream was handed over, counted (in the log with the draw statistics): 0 a present, 1 the table of read ranges full, 2 a write into a range a draw reads, 3 the stream full, 4 too much
 waiting to be freed, 5 a resource in use asked for, 6 IsBusy, 7 KickPushBuffer */
 static unsigned long flush_reasons[9];
@@ -804,8 +809,15 @@ static void stream_flush(void)
 		submission++;
 		stream = stream_buffers[stream_queue_slot(&dk_stream_queue)];
 		/* (the slot to write next must be free: the stream that used it is retired) */
-		while (!stream_queue_slot_free(&dk_stream_queue))
-			host_gx2_pause();
+		if (!stream_queue_slot_free(&dk_stream_queue))
+		{
+			const OSTime waited_from = OSGetSystemTime();
+
+			while (!stream_queue_slot_free(&dk_stream_queue))
+				host_gx2_pause();
+			slot_wait_ticks[in_present] += OSGetSystemTime() - waited_from;
+			slot_waits[in_present]++;
+		}
 		async_frees(0);
 		pending_free_bytes = 0;
 		return;
@@ -4154,6 +4166,11 @@ static void draw_statistics_log(void)
 		platform_log("frame parts: the game's ticks %.1f ms a frame (%lu ticks in %lu of %lu frames, %.1f ms a tick, longest frame's ticks %.1f ms), rendering %.1f ms a frame",
 			sum_tick_ms / (double)profile.frames, sum_ticks, frames_with_ticks, profile.frames, sum_ticks ? sum_tick_ms / (double)sum_ticks : 0.0, longest_tick_ms,
 			sum_render_ms / (double)profile.frames);
+		platform_log("stream slots: the game thread waited for a free one %.2f ms a frame in %.2f waits a frame in the draws and the frame's work, and %.2f ms in %.2f waits a frame in the present",
+			ticks_ms(slot_wait_ticks[0]) / (double)profile.frames, (double)slot_waits[0] / (double)profile.frames, ticks_ms(slot_wait_ticks[1]) / (double)profile.frames,
+			(double)slot_waits[1] / (double)profile.frames);
+		slot_wait_ticks[0] = slot_wait_ticks[1] = 0;
+		slot_waits[0] = slot_waits[1] = 0;
 		sum_tick_ms = sum_render_ms = longest_tick_ms = 0.0;
 		sum_ticks = frames_with_ticks = 0;
 		memset(&profile, 0, sizeof(profile));
@@ -4200,7 +4217,9 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 	const double start = profile_now_ms();
 	double work = profile.last_exit_ms ? start - profile.last_exit_ms : 0.0, present;
 
+	in_present = 1;
 	D3DDevice_Present_inner(source_rectangle, destination_rectangle, unused, unused2);
+	in_present = 0;
 	present = profile_now_ms() - start;
 	profile.last_exit_ms = profile_now_ms();
 	profile.present_ms += present;
@@ -4209,11 +4228,12 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 	{
 		static double waits_before, idle_before;
 		static unsigned long idle_calls_before;
+		static OSTime slot_wait_before;
 
 		if (work > 34.0)
-			platform_log("hitch: frame %lu took %.1f ms of work: %.1f in the game's %lu ticks, %.1f rendering (%.1f of it in the Direct3D layer's draws), %.1f waiting for the GX2 thread's "
+			platform_log("hitch: frame %lu took %.1f ms of work: %.1f in the game's %lu ticks, %.1f rendering (%.1f of it in the Direct3D layer's draws, %.1f of those for a free stream slot), %.1f waiting for the GX2 thread's "
 				"streams, %.1f in %lu waits for the renderer to be idle; present %.1f", device.frame, work, frame_tick_ms, frame_ticks, frame_render_ms, ticks_ms(frame_draw_ticks),
-				waits_ms - waits_before, idle_ms - idle_before, idle_calls - idle_calls_before, present);
+				ticks_ms(slot_wait_ticks[0] - slot_wait_before), waits_ms - waits_before, idle_ms - idle_before, idle_calls - idle_calls_before, present);
 		sum_tick_ms += frame_tick_ms;
 		sum_render_ms += frame_render_ms;
 		sum_ticks += frame_ticks;
@@ -4226,6 +4246,7 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 		waits_before = waits_ms;
 		idle_before = idle_ms;
 		idle_calls_before = idle_calls;
+		slot_wait_before = slot_wait_ticks[0];
 	}
 	if (work > profile.longest_work_ms)
 		profile.longest_work_ms = work;
