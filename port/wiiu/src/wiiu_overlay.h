@@ -9,8 +9,12 @@ Numbers update four times a second. Drawn at the top of the TV and GamePad. */
 
 #include <stdint.h>
 
+#include "wiiu_perf.h"
+
 #define OVERLAY_WIDTH 256
 #define OVERLAY_HEIGHT 7
+/* the detailed panel (halo/overlay.txt 2): the same width, a taller texture; the compact strip is drawn from the texture's top rows */
+#define OVERLAY_DETAIL_HEIGHT 148
 #define OVERLAY_HISTORY 252 /* frame-time history, compressed for the graph */
 
 struct overlay_view
@@ -33,6 +37,11 @@ struct overlay
 	struct overlay_view view; /* what the panel shows, until overlay_update_view */
 };
 
+/* The overlay's modes: halo/overlay.txt's number, and what L + R + - cycles through. */
+enum { OVERLAY_MODE_OFF, OVERLAY_MODE_COMPACT, OVERLAY_MODE_DETAIL, OVERLAY_MODE_COUNT };
+int overlay_mode_next(int mode);
+int overlay_mode_from_file(int number);
+
 /* Whole-pixel scale that fits the strip alongside the two percent left margin. */
 unsigned overlay_scale(unsigned screen_width, unsigned preferred);
 void overlay_reset(struct overlay *overlay);
@@ -48,5 +57,8 @@ float overlay_percentile(const struct overlay *overlay, unsigned percent);
 void overlay_update_view(struct overlay *overlay);
 /* draws the panel into pixels (OVERLAY_WIDTH x OVERLAY_HEIGHT RGBA, rows OVERLAY_WIDTH * 4 bytes apart) */
 void overlay_render(const struct overlay *overlay, uint8_t *pixels);
+/* draws the detailed panel (wiiu_overlay_detail.c) into pixels (OVERLAY_WIDTH x OVERLAY_DETAIL_HEIGHT RGBA): the window's numbers in grouped lines, the
+frame-time bar with its 16.7, 22.2 and 33.3 ms marks, and the memory pools with their meters */
+void overlay_render_detail(const struct perf_view *view, uint8_t *pixels);
 
 #endif
