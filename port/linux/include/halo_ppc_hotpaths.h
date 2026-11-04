@@ -22,7 +22,7 @@ the usual ones for a CPU without a hardware prefetcher: the Espresso has dcbt/dc
 #define HALO_CACHE_LINE 32
 
 /* whether the touches are made: -1 until the first tick asks (halo_hotpaths_start, objects.c), then 1 or 0. On the Wii U the card file halo/hotpaths.txt
-says (absent or 1: made; 0: not, for a run that times the touches against none); on a host build the environment's HALO_HOTPATHS does (absent or 1, or 0) */
+says (1: made; absent, 0 or -1: not, so that a build with no card files is the build before this one); on a host build the environment's HALO_HOTPATHS does (1: made; absent or 0: not) */
 extern long halo_hotpaths_touches;
 void halo_hotpaths_start(void);
 #define HALO_TOUCHES_ON() (halo_hotpaths_touches > 0 || (halo_hotpaths_touches < 0 && (halo_hotpaths_start(), halo_hotpaths_touches > 0)))

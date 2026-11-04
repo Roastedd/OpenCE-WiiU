@@ -4831,11 +4831,11 @@ void halo_hotpaths_start(void)
 #ifdef HALO_WIIU
 	long wiiu_study_number(const char *name, long fallback);
 
-	halo_hotpaths_touches = wiiu_study_number("hotpaths.txt", 1) != 0;
+	halo_hotpaths_touches = wiiu_study_number("hotpaths.txt", 0) > 0; /* (rc1: off unless the card file says 1; -1 is the same as no file) */
 #else
 	char const *setting = getenv("HALO_HOTPATHS");
 
-	halo_hotpaths_touches = (setting && *setting) ? atol(setting) != 0 : 1;
+	halo_hotpaths_touches = (setting && *setting) ? atol(setting) > 0 : 0;
 #endif
 	platform_log("hot paths: the cache lines of the next object and actor are %s while one updates", halo_hotpaths_touches ? "asked for" : "not asked for");
 
