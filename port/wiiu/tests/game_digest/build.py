@@ -87,7 +87,7 @@ UNIT_RENAMES = {"source/interface/progress_bar.c": {"GetTickCount": "game_digest
 # stack cleared first)
 WRAPPED = ["host_gx2_submit", "cache_copy_get_status", "system_milliseconds", "cache_file_read", "_texture_cache_bitmap_get_hardware_format",
            "_sound_cache_sound_request", "get_global_local_random_seed_address", "network_game_get_random_player_name",
-           "game_initialize_for_new_map", "rasterizer_set_model_lighting", "render_governor_frame"]
+           "game_initialize_for_new_map", "rasterizer_set_model_lighting", "render_governor_frame", "texture_cache_bitmap_get_hardware_format_streaming"]
 # (and with --poison, the frame's rendering, whose stack is filled first)
 POISON_WRAPPED = ["render_frame"]
 # the bytes the program's data is moved by with --poison

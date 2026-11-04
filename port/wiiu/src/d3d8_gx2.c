@@ -842,6 +842,18 @@ static void pending_read_note(const void *address, unsigned long size)
 /* called by the memory watch (memory_watch_wiiu.c) before the game's write is announced */
 void halo_stream_before_write(const void *address, unsigned long size);
 
+/* texture streaming (xbox_texture_cache.c; halo/stream.txt): the cache file thread reads a texture into its block while the game thread draws, and does not hand the draws over (the
+stream is the game thread's); a block it writes is not one a draw reads (a block is given out only when the draws that used its texture, or its tail, are over), so that it
+waits only for what has been handed over, and for what has not for a moment, then goes on */
+int halo_texture_stream_on; /* (set by xbox_texture_cache.c when halo/stream.txt says so) */
+static pthread_t draw_thread;
+static int draw_thread_known;
+
+static int stream_write_from_another_thread(void)
+{
+	return halo_texture_stream_on && draw_thread_known && !pthread_equal(pthread_self(), draw_thread);
+}
+
 void halo_stream_before_write(const void *address, unsigned long size)
 {
 	if (dk_async > 0)
@@ -851,7 +863,19 @@ void halo_stream_before_write(const void *address, unsigned long size)
 		if (hazard)
 		{
 			if (hazard >= (uint32_t)submission)
-				flush_because(2); /* (the stream still being written is handed over first) */
+			{
+				if (stream_write_from_another_thread())
+				{
+					unsigned waited;
+
+					for (waited = 0; waited < 250 && hazard >= (uint32_t)*(volatile unsigned long *)&submission; waited++)
+						usleep(200);
+					if (hazard >= (uint32_t)*(volatile unsigned long *)&submission)
+						return;
+				}
+				else
+					flush_because(2); /* (the stream still being written is handed over first) */
+			}
 			async_wait_retired(hazard);
 		}
 		return;
@@ -1504,6 +1528,8 @@ HRESULT WINAPI Direct3D_CreateDevice(UINT adapter, D3DDEVTYPE device_type, void 
 	if (!device.created)
 	{
 		memset(&device, 0, sizeof(device));
+		draw_thread = pthread_self(); /* (the thread that makes the device draws with it) */
+		draw_thread_known = 1;
 		if (presentation_parameters)
 			device.presentation = *presentation_parameters;
 		width = device.presentation.BackBufferWidth ? device.presentation.BackBufferWidth : 640;
