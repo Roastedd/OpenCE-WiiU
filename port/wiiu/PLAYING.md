@@ -122,9 +122,9 @@ player even when you play alone; **Merged** is the old behaviour (the first cont
 - **System Link** (Multiplayer menu) finds and hosts games on your local network, with other Wii Us and with OpenCE on a computer built from the same
   network version (the Wii U port speaks protocol 41, the same as upstream OpenCE's PC builds of that version). A game that tells you the version is
   different is from another build: update that side.
-- **Internet games** find each other through the servers in `brokers.txt` and use UPnP on your router to open a port. Hosting from the Wii U has been
-  tried with a Mac standing in for the second computer, not with a crowd: large games (24 players and more) are not something the Wii U has been tested
-  with. The console has room for 27 network connections in all.
+- **Internet games** find each other through the servers in `brokers.txt` and use UPnP on your router to open a port. Playing over the internet, hosting
+  one from the Wii U, and large games (24 players and more) have **not been tried on a console**; a system link game with a computer standing in for the second
+  player has. The console has room for 27 network connections in all.
 - **Voice chat** uses the GamePad's microphone, or a headset in its headphone jack. Hold the GamePad's **TV** button to talk (Settings → your profile →
   Audio Setup → **Voice chat**: Push to talk is the default; **Open mic** talks whenever you speak, and wants a headset, because the GamePad's
   microphone also picks up its own speaker). The Pro Controller has no microphone or jack; USB headsets do not work. **Voice chat has not been tried
@@ -160,9 +160,9 @@ found that no Custom Edition map was available on the development machines, so t
 
 ## What is not done, and what to expect
 
-- **Frame rate**: the campaign is meant to run at 60 frames a second out of combat and at 50 or more in fights. Fights on the beach of the
-  campaign's Truth and Reconciliation level and in Blood Gulch are still the slowest places (the game's own logic, not the GPU, is the limit); the
-  detail steps above leave a few things out there on purpose. The game is not yet at a steady 60 in every fight. Heavy scenes can still have a hitch
+- **Frame rate**: the campaign is meant to run at 60 frames a second out of combat and at 50 or more in fights. The big fights (the beach of The
+  Silent Cartographer, the level Halo, Blood Gulch) are still the slowest places (the game's own logic, not the GPU, is the limit); auto detail leaves a
+  few things out there on purpose. The game is not yet at a steady 60 in every fight. Heavy scenes can still have a hitch
   the first time a room is drawn (the textures are read from the card then).
 - **Not tried on a console**: voice chat, Halo Custom Edition maps, split screen with three or four players, the gyro aim's sensitivity, mods, and
   anything with 24 or more players. Wii Remote with Nunchuk is not supported; USB headsets do not work.
@@ -215,15 +215,6 @@ Small text files in `wiiu/apps/halo/` that change what the game does. Each holds
 
 Files the game writes there: `log.txt`, `log-previous.txt`, `blackbox.txt`, `crash.txt`, `exit-trail.txt`, `shader-misses-*.txt`, and `data/debug.txt`.
 
-## Credits and licence
-
-The port is OpenCE's work on the decompilation of the Xbox build 2342 of Halo: Combat Evolved, which starts from [bnunu/halo-1](https://github.com/bnunu/halo-1),
-a fork of [punpckhdq/halo](https://github.com/punpckhdq/halo). The artists of the high-resolution HUD, buttons and cursor are named in
-[AUTHORS.md](../../AUTHORS.md); the menus' text is set in Overpass (SIL Open Font License) and the Wii U app's own icon and start-up pictures are
-drawn for this port by `tools/wiiu_app_art.py`. OpenCE is under the GNU Affero General Public License 3.0 or later; third-party code, fonts and art
-keep their own licences, next to them in the repository. The Wii U build uses wut and the devkitPro tools, Mbed TLS and Monocypher (for the updater)
-and Opus (voice chat) under their licences.
-
 ## Updates
 
 A release that was built with an update source (a repository and a signing key; the log says `Update: off` for one that was not, and such a
@@ -244,15 +235,6 @@ If the new version does not reach its main menu (it crashes before it gets there
 version you had back by itself and tells you at the main menu. That version is not offered again (press Y there if you want it offered
 again); a later one is. Without a network, the game starts as it always does.
 
-## If something goes wrong
-
-- If the game stops responding, press **HOME** and choose **Close Software**. If HOME does nothing, hold the console's power button.
-- To report a problem, include these files from `wiiu/apps/halo/` on the SD card: `log.txt`, `log-previous.txt`, `crash.txt`, `blackbox.txt`,
-  `exit-trail.txt` and `data/debug.txt`. Take them after the game is closed.
-- A map missing from `data/maps/` stops the game at the end of the level before it. Make sure every converted map is there.
-- A Custom Edition map that does not load takes you back to the menus; `data/debug.txt` says why, in its lines that start with
-  `custom edition:`.
-
 ### If an update went wrong
 
 The updater keeps its files in `wiiu/apps/halo/update/` on the SD card: `<name>.part` (a download not finished), `<name>.new` (downloaded
@@ -268,3 +250,12 @@ the next start finishes the update or undoes it. It cannot when Halo has gone fr
 
 That is the version you had, as it was. If there are no `.old` files, install a release by hand as in "Installing" and delete the
 `update` folder.
+
+## Credits and licence
+
+The port is OpenCE's work on the decompilation of the Xbox build 2342 of Halo: Combat Evolved, which starts from [bnunu/halo-1](https://github.com/bnunu/halo-1),
+a fork of [punpckhdq/halo](https://github.com/punpckhdq/halo). The artists of the high-resolution HUD, buttons and cursor are named in
+[AUTHORS.md](../../AUTHORS.md); the menus' text is set in Overpass (SIL Open Font License) and the Wii U app's own icon and start-up pictures are
+drawn for this port by `tools/wiiu_app_art.py`. OpenCE is under the GNU Affero General Public License 3.0 or later; third-party code, fonts and art
+keep their own licences, next to them in the repository. The Wii U build uses wut and the devkitPro tools, Mbed TLS and Monocypher (for the updater)
+and Opus (voice chat) under their licences.
