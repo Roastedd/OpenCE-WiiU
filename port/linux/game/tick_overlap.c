@@ -399,6 +399,7 @@ boolean tick_overlap_late(
 }
 
 static unsigned long tick_overlap_late_fewest_frames(void);
+static long tick_overlap_late_setting; /* (defined with its value below) */
 
 static void tick_overlap_late_judge(
 	unsigned long long now)
