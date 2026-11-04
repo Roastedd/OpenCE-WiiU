@@ -42,7 +42,6 @@ and presenting go there; a draw and a visibility test do nothing yet.
 void dk_shader_program_note(uint64_t program_hash, const uint32_t *words, unsigned long count);
 #include "../../linux/game/cache_file_formats.h"
 
-#include <malloc.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -659,9 +658,12 @@ static int async_on(void)
 
 			for (; made < slots; made++)
 			{
-				stream_extra[made - STREAM_SLOTS] = (uint32_t *)memalign(64, STREAM_SIZE);
-				if (!stream_extra[made - STREAM_SLOTS])
+				/* (malloc'd and aligned by hand to a cache line pair: never freed) */
+				void *block = malloc(STREAM_SIZE + 64);
+
+				if (!block)
 					break;
+				stream_extra[made - STREAM_SLOTS] = (uint32_t *)(((uintptr_t)block + 63) & ~(uintptr_t)63);
 			}
 			stream_queue_init(&dk_stream_queue, made < slots ? made : slots);
 		}
