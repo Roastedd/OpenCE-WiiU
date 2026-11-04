@@ -198,6 +198,14 @@ def bw_model_defines() -> List[str]:
     return []
 
 
+def hotpaths_defines() -> List[str]:
+    """HALO_PPC_HOTPATHS=1 in the environment of configure.py: the host build has the tick's memory hints
+    (port/linux/include/halo_ppc_hotpaths.h) that the Wii U build always has, to prove on the host that they change no tick."""
+    if os.environ.get("HALO_PPC_HOTPATHS"):
+        return ["-DHALO_PPC_HOTPATHS"]
+    return []
+
+
 def check_profile_options(profile: bool, pgo: str) -> None:
     """A profiling build is optimised with the committed profiles or none:
     trained, a profile would record the profiling code's own paths."""
@@ -576,7 +584,7 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
     # (a debug build checks its stack frames, and stops at the first one
     # overrun, as it stops at the first failed assertion; a release build
     # does not, so that an overrun nobody has met cannot end a game)
-    abi = " ".join(target_flags(sln, LINUX_ABI_FLAGS) + target + configuration_defines(sln) + bw_model_defines()
+    abi = " ".join(target_flags(sln, LINUX_ABI_FLAGS) + target + configuration_defines(sln) + bw_model_defines() + hotpaths_defines()
                    + ([] if getattr(sln, "port_release", False) else ["-fstack-protector-strong"]))
     port_include = PORT_DIR / "include"
     sdk_flags = f"-idirafter {XDK_INCLUDE}"
