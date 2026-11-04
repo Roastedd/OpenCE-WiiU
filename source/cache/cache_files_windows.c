@@ -1260,6 +1260,25 @@ static void cache_file_windows_thread_proc(
 				break;
 			}
 
+#ifdef HALO_WIIU
+			/* port: halo/stream_delay.txt (default 0): a test's wait, in ms, before each read that does not go first, as a slow card would make (the host has no card: its reads
+			are quick, and a texture is never drawn from its tail while the rest comes) */
+			{
+				static long delay = -1;
+
+				if (delay < 0)
+				{
+					extern long wiiu_study_number(const char *name, long fallback);
+
+					delay = wiiu_study_number("stream_delay.txt", 0);
+				}
+				if (delay > 0 && !cache_file_request_first[best_request - cache_file_globals.requests])
+				{
+					SleepEx(0, TRUE); /* (the completions of the reads before are run first: their flags are set when this thread next waits, as it always does) */
+					Sleep((DWORD)delay);
+				}
+			}
+#endif
 			file = cached_map_file_get_handle(cache_file_globals.open_map_file_index);
 			match_assert(
 				"c:\\halo\\SOURCE\\cache\\cache_files_windows.c",

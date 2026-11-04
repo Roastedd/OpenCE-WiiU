@@ -1085,7 +1085,7 @@ static boolean texture_cache_stream_start(
 static void texture_cache_stream_note(
 	unsigned long now)
 {
-	if (now - texture_stream_totals.last_note >= 10000 && (texture_stream_totals.cut || texture_stream_totals.not_cut))
+	if ((long)(now - texture_stream_totals.last_note) >= 10000 && (texture_stream_totals.cut || texture_stream_totals.not_cut))
 	{
 		texture_stream_totals.last_note = now;
 		platform_log(
@@ -1104,40 +1104,38 @@ void *texture_cache_bitmap_get_hardware_format_streaming(
 	struct bitmap_data *bitmap)
 {
 	void *hardware_format = _texture_cache_bitmap_get_hardware_format(bitmap, FALSE, TRUE);
-	unsigned long now = system_milliseconds();
 	long block_index = bitmap->cache_block_index;
 
-	if (hardware_format && !(TEST_FLAG(bitmap->flags, _bitmap_cached_bit) && block_index != NONE))
-	{
-		return hardware_format;
-	}
 	if (TEST_FLAG(bitmap->flags, _bitmap_cached_bit) && block_index != NONE)
 	{
 		struct texture_stream_state *stream = TEXTURE_STREAM_STATE(block_index);
 
+		if (hardware_format && !stream->active)
+		{
+			return hardware_format; /* (what nearly every ask is: nothing more is done) */
+		}
 		if (hardware_format)
 		{
-			if (stream->active)
-			{
-				if (stream->tail_used)
-				{
-					const unsigned long milliseconds = now - stream->first_ms;
+			const unsigned long now = system_milliseconds();
 
-					texture_stream_totals.tails_drawn++;
-					texture_stream_totals.whole_after_ms += milliseconds;
-					if (milliseconds > texture_stream_totals.longest_ms)
-					{
-						texture_stream_totals.longest_ms = milliseconds;
-					}
-					if (texture_stream_totals.said < 12)
-					{
-						texture_stream_totals.said++;
-						platform_log("stream: %s (%ld KB) was drawn from its tail (level %ld) for %lu ms until the whole of it was in", tag_get_name(bitmap->tag_index),
-							(long)(bitmap->pixels_size / 1024), stream->level, milliseconds);
-					}
+			if (stream->tail_used)
+			{
+				const unsigned long milliseconds = now - stream->first_ms;
+
+				texture_stream_totals.tails_drawn++;
+				texture_stream_totals.whole_after_ms += milliseconds;
+				if (milliseconds > texture_stream_totals.longest_ms)
+				{
+					texture_stream_totals.longest_ms = milliseconds;
 				}
-				stream->active = FALSE;
+				if (texture_stream_totals.said < 12)
+				{
+					texture_stream_totals.said++;
+					platform_log("stream: %s (%ld KB) was drawn from its tail (level %ld) for %lu ms until the whole of it was in", tag_get_name(bitmap->tag_index),
+						(long)(bitmap->pixels_size / 1024), stream->level, milliseconds);
+				}
 			}
+			stream->active = FALSE;
 			texture_cache_stream_note(now);
 
 			return hardware_format;
@@ -1150,6 +1148,8 @@ void *texture_cache_bitmap_get_hardware_format_streaming(
 
 			if (texture && texture->bitmap == bitmap)
 			{
+				const unsigned long now = system_milliseconds();
+
 				if (!stream->tail_loaded)
 				{
 					/* the tail goes before the other reads: a few ms; the sound is kept going as the game's wait keeps it */
@@ -1183,6 +1183,10 @@ void *texture_cache_bitmap_get_hardware_format_streaming(
 				}
 			}
 		}
+	}
+	else if (hardware_format)
+	{
+		return hardware_format;
 	}
 	/* the game's way: wait for all of it (a bitmap that was not cut, or whose tail did not come) */
 	{

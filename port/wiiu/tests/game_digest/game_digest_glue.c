@@ -665,11 +665,16 @@ left as it is.) */
 
 short __real_cache_file_read(long tag_index, long offset, long size, void *buffer, unsigned char *completion, unsigned char blocking);
 
+static int stream_free(void);
+
 short __wrap_cache_file_read(long tag_index, long offset, long size, void *buffer, unsigned char *completion, unsigned char blocking)
 {
 	short request = __real_cache_file_read(tag_index, offset, size, buffer, completion, blocking);
 
 	unsigned long spins = 0;
+
+	if (stream_free())
+		return request;
 
 	/* (the read's thread sets the completion flag, TRUE or failed, when it ends: waited for here without the game's clock, yielding to it, and
 	sleeping only for a read that takes long, as a sleep under qemu is a millisecond or more) */
@@ -684,18 +689,36 @@ short __wrap_cache_file_read(long tag_index, long offset, long size, void *buffe
 }
 
 void *__real__texture_cache_bitmap_get_hardware_format(void *bitmap, unsigned char block, unsigned char load);
+void *__real_texture_cache_bitmap_get_hardware_format_streaming(void *bitmap);
+
+/* GAME_DIGEST_STREAM_FREE=1: the asks go through as the game makes them (a test of texture streaming's own path: with HALO_STREAM=1 and HALO_STREAM_DELAY=ms, bitmaps are
+drawn from their tails while the rest is read; what is drawn then follows the time, so no digest means anything) */
+static int stream_free(void)
+{
+	static int free_asks = -1;
+
+	if (free_asks < 0)
+	{
+		const char *value = getenv("GAME_DIGEST_STREAM_FREE");
+
+		free_asks = value && *value == '1';
+	}
+	return free_asks;
+}
 
 /* texture streaming (halo/stream.txt, HALO_STREAM here): the renderer's ask draws a bitmap from its tail while the rest is read, which is the time of the read; here the whole of
 it is waited for, as without streaming, so that what is drawn does not follow the time. The bitmap's read is still cut in two and its tail read first (that is in the cache, not
 in the ask), so the digests of a run with HALO_STREAM=1 and of one without are the proof that the two reads put the bytes the one read put */
 void *__wrap_texture_cache_bitmap_get_hardware_format_streaming(void *bitmap)
 {
+	if (stream_free())
+		return __real_texture_cache_bitmap_get_hardware_format_streaming(bitmap);
 	return __real__texture_cache_bitmap_get_hardware_format(bitmap, 1, 1);
 }
 
 void *__wrap__texture_cache_bitmap_get_hardware_format(void *bitmap, unsigned char block, unsigned char load)
 {
-	return __real__texture_cache_bitmap_get_hardware_format(bitmap, load ? 1 : block, load);
+	return stream_free() ? __real__texture_cache_bitmap_get_hardware_format(bitmap, block, load) : __real__texture_cache_bitmap_get_hardware_format(bitmap, load ? 1 : block, load);
 }
 
 unsigned char __real__sound_cache_sound_request(void *sound, unsigned char block, unsigned char load, unsigned char reference);
@@ -934,7 +957,8 @@ long wiiu_study_number(const char *name, long fallback)
 {
 	const char *variable = !strcmp(name, "tick_thread.txt") ? "HALO_TICK_THREAD" : !strcmp(name, "tick_overlap.txt") ? "HALO_TICK_OVERLAP" :
 		!strcmp(name, "tick_overlap_stall.txt") ? "HALO_TICK_OVERLAP_STALL" : !strcmp(name, "startup.txt") ? "HALO_STARTUP" :
-		!strcmp(name, "stream.txt") ? "HALO_STREAM" : NULL;
+		!strcmp(name, "stream.txt") ? "HALO_STREAM" :
+		!strcmp(name, "stream_delay.txt") ? "HALO_STREAM_DELAY" : NULL;
 	const char *value = variable ? getenv(variable) : NULL;
 
 	return value && *value ? strtol(value, NULL, 10) : fallback;
