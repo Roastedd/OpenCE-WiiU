@@ -121,7 +121,7 @@ static struct
 	/* the numbers (the game thread's, but for the tick thread's, which it adds under the lock at a job's end) */
 	unsigned long long log_started_ticks;
 	unsigned long frames, overlap_frames, serial_frames, primed_frames, held_frames, no_pair_frames;
-	unsigned long long wait_ticks, wait_max_ticks, frame_ticks, frame_max_ticks, sync_ticks, sync_wait_ticks, post_ticks, draw_ticks, draw_max_ticks, serial_wait_ticks;
+	unsigned long long wait_total_ticks, wait_ticks, wait_max_ticks, frame_ticks, frame_max_ticks, sync_ticks, sync_wait_ticks, post_ticks, draw_ticks, draw_max_ticks, serial_wait_ticks;
 	unsigned long waits_long, serial_waits, active_frames, clock_disagreements;
 	unsigned long jobs, ticks, ticks_total;
 	unsigned long long job_ticks, job_max_ticks, tick_work_ticks;
@@ -309,6 +309,7 @@ static void tick_overlap_wait(void)
 		const unsigned long long took = tick_overlap_now() - started;
 
 		o.wait_ticks += took;
+		o.wait_total_ticks += took;
 		if (took > o.wait_max_ticks)
 			o.wait_max_ticks = took;
 		if (took > 4 * (unsigned long long)wiiu_ticks_per_second() / 1000)
@@ -334,6 +335,7 @@ void tick_overlap_run_and_wait(
 	void *argument)
 {
 	const unsigned long long wait_before = o.wait_ticks;
+	const unsigned long long total_before = o.wait_total_ticks;
 	const unsigned long long max_before = o.wait_max_ticks;
 	const unsigned long long long_before = o.waits_long;
 
@@ -342,6 +344,7 @@ void tick_overlap_run_and_wait(
 	o.serial_wait_ticks += o.wait_ticks - wait_before;
 	o.serial_waits++;
 	o.wait_ticks = wait_before;
+	o.wait_total_ticks = total_before;
 	o.wait_max_ticks = max_before;
 	o.waits_long = (unsigned long)long_before;
 }
@@ -500,6 +503,13 @@ static void tick_overlap_collect(void)
 		tick_owners_drain(TICK_OWNER_RENDER);
 		STORE(o.forcing, 0);
 	}
+}
+
+/* the milliseconds the game thread has waited for the tick thread's job in all, not counting the serial frames' (the dynamic quality governor reads it each frame:
+while the game thread waits, the frame is the tick thread's and drawing less shortens nothing) */
+double tick_overlap_wait_ms_total(void)
+{
+	return (double)o.wait_total_ticks / ((double)wiiu_ticks_per_second() / 1000.0);
 }
 
 void tick_overlap_sync_point(

@@ -39,6 +39,8 @@ struct render_governor_values
 	int particle_keep;
 	/* the detail objects (grass), lens flares, the level's specular shine and reflections, and the contrails (the shots' tracers) drawn */
 	int grass, lens_flares, specular, contrails;
+	/* the most decals, and the most particle sprites, drawn a frame (0: no limit) */
+	int decal_max, particle_max;
 };
 
 /* what the drawing counted for the governor's log (a frame's average is a count over the frames since the last line) */
@@ -55,6 +57,12 @@ enum
 	RENDER_GOVERNOR_COUNTS,
 };
 extern unsigned long render_governor_counts[RENDER_GOVERNOR_COUNTS];
+/* the decals and particle sprites drawn so far this frame, against the step's budgets (reset by render_governor_frame) */
+extern unsigned long render_governor_budget_used[2];
+enum { RENDER_GOVERNOR_BUDGET_DECALS, RENDER_GOVERNOR_BUDGET_PARTICLES };
+
+/* a map has started (game_initialize_for_new_map): the picture is the full one and the governor decides nothing for the first seconds (a cold start loads shaders and textures) */
+void render_governor_new_map(void);
 
 /* the governor is on, and the step it holds (0 when it is off) */
 int render_governor_active(void);

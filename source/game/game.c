@@ -118,6 +118,7 @@ struct game_options;
 
 /* ---------- headers */
 
+#include "render_governor.h" /* port: port/linux/game/render_governor.c */
 #include "cseries/cseries.h"
 #include "game/game.h"
 #include "game_modes.h" /* port: port/linux/game/game_modes.c */
@@ -673,6 +674,9 @@ void network_objects_placed(void);
 void game_initialize_for_new_map(
 	void)
 {
+	/* port: dynamic quality (render_governor.c): a map has started */
+	render_governor_new_map();
+
 	match_assert(
 		"c:\\halo\\SOURCE\\game\\game.c",
 		0x1D1,

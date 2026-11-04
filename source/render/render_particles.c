@@ -339,7 +339,9 @@ void render_particles(
 							if (diameter > definition->lod_cutoff &&
 								(diameter <= definition->lod_cutoff * shed->particle_lod_scale ||
 									(shed->particle_keep < 16 &&
-										(int)(((unsigned int)rendered_particle->particle_index * 2654435761u) >> 28) >= shed->particle_keep)))
+										(int)(((unsigned int)rendered_particle->particle_index * 2654435761u) >> 28) >= shed->particle_keep) ||
+									(shed->particle_max &&
+										render_governor_budget_used[RENDER_GOVERNOR_BUDGET_PARTICLES] >= (unsigned long)shed->particle_max)))
 							{
 								render_governor_counts[RENDER_GOVERNOR_COUNT_PARTICLES_SKIPPED]++;
 								particle->last_rendered_frame_index = render.frame_index;
@@ -353,6 +355,7 @@ void render_particles(
 								word particle_flags;
 
 								render_governor_counts[RENDER_GOVERNOR_COUNT_PARTICLES_DRAWN]++;
+								render_governor_budget_used[RENDER_GOVERNOR_BUDGET_PARTICLES]++;
 								fade = 1.0f;
 								built_particle_count++;
 								scale =
