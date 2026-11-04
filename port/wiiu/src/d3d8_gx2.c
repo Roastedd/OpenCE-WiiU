@@ -42,6 +42,7 @@ and presenting go there; a draw and a visibility test do nothing yet.
 void dk_shader_program_note(uint64_t program_hash, const uint32_t *words, unsigned long count);
 #include "../../linux/game/cache_file_formats.h"
 
+#include <malloc.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -577,11 +578,13 @@ int host_gx2_visibility_enabled(void);
 Six: a stream is handed over every 40 draws, about twenty a frame, and with three the game thread could be only two ahead of the GX2 thread - it waited
 for a slot whenever that thread waited for the display's flip or had a frame's worth of work queued (6% of the game thread standing) */
 #define STREAM_SLOTS 6
-/* (the most halo/stream_slots.txt can ask for: buffers in static memory, the slots beyond STREAM_SLOTS cost an address range and nothing more while unused) */
+/* (halo/stream_slots.txt can ask for up to STREAM_SLOTS_MAX: the slots beyond STREAM_SLOTS are made when asked for, in the heap - not static memory: 2 MB more of it moved the host's heap and
+changed the game's pictures in the digest harness, whose default path must not change) */
 #define STREAM_SLOTS_MAX 8
 int host_gx2_stream_slots(void);
+static uint32_t *stream_extra[STREAM_SLOTS_MAX - STREAM_SLOTS];
 /* (on cache lines: the lines made in a slot, stream_lines_make, are whole lines of it) */
-static uint32_t stream_buffers[STREAM_SLOTS_MAX][STREAM_SIZE / 4] __attribute__((aligned(64)));
+static uint32_t stream_buffers[STREAM_SLOTS][STREAM_SIZE / 4] __attribute__((aligned(64)));
 static uint32_t *stream = stream_buffers[0];
 static unsigned long stream_used;
 /* The stream's cache lines below this are made (dcbz) or written: those past it are made before anything is written in them. A write to a line that is not in the cache first
@@ -617,7 +620,7 @@ struct stream_queue dk_stream_queue;
 
 uint32_t *dk_stream_buffer(unsigned slot)
 {
-	return stream_buffers[slot];
+	return slot < STREAM_SLOTS ? stream_buffers[slot] : stream_extra[slot - STREAM_SLOTS];
 }
 /* Each handing over of the stream is one submission, numbered from 1 as the
 host numbers them: this is the number of the one being written. */
@@ -651,7 +654,17 @@ static int async_on(void)
 	{
 		dk_async = host_gx2_async();
 		if (dk_async)
-			stream_queue_init(&dk_stream_queue, host_gx2_stream_slots());
+		{
+			int slots = host_gx2_stream_slots(), made = STREAM_SLOTS;
+
+			for (; made < slots; made++)
+			{
+				stream_extra[made - STREAM_SLOTS] = (uint32_t *)memalign(64, STREAM_SIZE);
+				if (!stream_extra[made - STREAM_SLOTS])
+					break;
+			}
+			stream_queue_init(&dk_stream_queue, made < slots ? made : slots);
+		}
 	}
 	return dk_async;
 }
@@ -814,7 +827,7 @@ static void stream_flush(void)
 		stream_used = 0;
 		stream_lines_made = 0;
 		submission++;
-		stream = stream_buffers[stream_queue_slot(&dk_stream_queue)];
+		stream = dk_stream_buffer(stream_queue_slot(&dk_stream_queue));
 		/* (the slot to write next must be free: the stream that used it is retired) */
 		if (!stream_queue_slot_free(&dk_stream_queue))
 		{
