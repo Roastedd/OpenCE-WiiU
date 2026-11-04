@@ -3,9 +3,10 @@ WIIU_SQRTF.C
 
 sqrtf for the Espresso, which has no square root instruction: newlib's takes the root a bit at a time (24 passes of integer work), and the game asks
 for thousands a frame (2% of the game thread in a fight). This one is correctly rounded as newlib's is - the same float for every input, which network
-play, saved films and the deterministic tick need - by a different road: an estimate of 1/sqrt from the float's bits, four Newton steps in double
-precision (from the estimate's 3.5% to far below a float's last bit), the root as the nearest float, then a check of the two halfway points either side
-of it, squared exactly in double precision (a 25-bit number squared is exact there; neither can equal the input, a 24-bit float), which moves it to the
+play, saved films and the deterministic tick need - by a different road: an estimate of 1/sqrt from the float's bits, three Newton steps in double
+precision (from the estimate's 3.5% to 4e-11 of the root, 0.0006 of a float's last place, where a fourth only adds digits a double keeps and a float
+throws away), the root as the nearest float, then a check of the two halfway points either side
+of it (the rounding of an estimate that is 0.0006 of a place out is wrong only when the root is that close to a halfway point, and then it is one float away), squared exactly in double precision (a 25-bit number squared is exact there; neither can equal the input, a 24-bit float), which moves it to the
 correctly rounded float when the estimate's rounding landed one away. Zeros, infinities, NaNs and negatives give what newlib's gives.
 port/wiiu/tests/test_sqrtf.c checks every float against the host's correctly rounded sqrtf.
 */
@@ -61,7 +62,6 @@ float wiiu_sqrtf(float x)
 		unscale = 1.0 / 4096.0;
 	}
 	y = (double)bits_float(0x5f3759dfu - (estimate_bits >> 1));
-	y = y * (1.5 - 0.5 * scaled * y * y);
 	y = y * (1.5 - 0.5 * scaled * y * y);
 	y = y * (1.5 - 0.5 * scaled * y * y);
 	y = y * (1.5 - 0.5 * scaled * y * y);

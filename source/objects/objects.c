@@ -57,6 +57,7 @@ OBJECTS.C
 #include "sound/game_sound.h"
 #include "structures/structure_bsp_definitions.h"
 #include "units/units.h"
+#include "halo_ppc_hotpaths.h" /* port: memory hints for the tick (HALO_WIIU) */
 #ifdef HALO_WIIU
 #include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
 #include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
@@ -749,7 +750,15 @@ void *object_header_block_get(
 	struct object_header_block_reference *reference)
 {
 	struct object_header_datum *object_header = object_header_get(object_index);
+#ifdef HALO_PPC_HOTPATHS_ON
+	/* port: object_get(object_index) is this header's datum once the header has been found (the same datum_get, the same view), checked to be of a
+	type; the check is made here and, if it fails, object_get is asked, which says what it says */
+	struct object_datum *object = object_header->datum;
+	if (!TEST_FLAG(_object_mask_all, object->object.type))
+		object = object_get(object_index);
+#else
 	struct object_datum *object = object_get(object_index);
+#endif
 
 	match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 2443, reference->offset>0);
 	match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 2444, reference->offset+reference->size<=object_header->data_size);
@@ -2991,6 +3000,9 @@ void object_compute_node_matrices(
 		{
 			short node_stack_index = node_stack[node_index++];
 			short next_sibling_node_index;
+#ifdef HALO_PPC_HOTPATHS_ON
+			boolean root_matrix_is_valid = FALSE;
+#endif
 			struct model_node *node = TAG_BLOCK_GET_ELEMENT(&model->nodes, node_stack_index, struct model_node);
 			
 			if (node_stack_index==0)
@@ -3076,7 +3088,13 @@ void object_compute_node_matrices(
 					object_nodes[node_stack_index] = node_matrix;
 				}
 
-				if (!valid_real_matrix4x3(&object_nodes[node_stack_index]))
+				if (valid_real_matrix4x3(&object_nodes[node_stack_index]))
+				{
+#ifdef HALO_PPC_HOTPATHS_ON
+					root_matrix_is_valid = TRUE;
+#endif
+				}
+				else
 				{
 					real_matrix4x3 const *validated_root_node_matrix;
 
@@ -3199,7 +3217,12 @@ void object_compute_node_matrices(
 			if (node_stack_index==0)
 			{
 				real_matrix4x3 *final_matrix = &object_nodes[node_stack_index];
+#ifdef HALO_PPC_HOTPATHS_ON
+				/* port: this is the matrix the check above has just passed, unchanged (nothing between the two writes it): it passes again */
+				if (!root_matrix_is_valid && !valid_real_matrix4x3(final_matrix))
+#else
 				if (!valid_real_matrix4x3(final_matrix))
+#endif
 				{
 					char *name2 = tag_get_name(object->definition_index);
 					char *string = name2;
@@ -4799,6 +4822,115 @@ void objects_garbage_collection(
 }
 
 
+#ifdef HALO_PPC_HOTPATHS_ON
+long halo_hotpaths_touches = -1;
+
+void halo_hotpaths_start(void)
+{
+	void platform_log(const char *format, ...);
+#ifdef HALO_WIIU
+	long wiiu_study_number(const char *name, long fallback);
+
+	halo_hotpaths_touches = wiiu_study_number("hotpaths.txt", 1) != 0;
+#else
+	char const *setting = getenv("HALO_HOTPATHS");
+
+	halo_hotpaths_touches = (setting && *setting) ? atol(setting) != 0 : 1;
+#endif
+	platform_log("hot paths: the cache lines of the next object and actor are %s while one updates", halo_hotpaths_touches ? "asked for" : "not asked for");
+
+	return;
+}
+
+/* port: the next header after `from` of an object this pass will update (a live, active one that is not being created), or `count` */
+static short objects_update_next_active(
+	struct object_header_datum const *headers,
+	short count,
+	short from)
+{
+	short index;
+
+	for (index = from + 1; index < count; ++index)
+	{
+		if (headers[index].identifier &&
+			TEST_FLAG(headers[index].flags, _object_header_active_bit) &&
+			!TEST_FLAG(headers[index].flags, _object_header_being_created_bit))
+		{
+			break;
+		}
+	}
+
+	return index;
+}
+
+/* port: the cache lines an object's update reads first: the object's own fields (the first 500 bytes of every kind of object) */
+#define OBJECTS_UPDATE_BASE_BYTES 500
+/* and its node arrays, read and written by every update of an object with a model (a biped's are about 2 KB each), as far as the first 1.5 KB */
+#define OBJECTS_UPDATE_BLOCK_BYTES 1536
+
+static void objects_update_touch_blocks(
+	struct object_header_datum const *header)
+{
+	struct object_datum const *object = header->datum;
+
+	if (header->identifier && object)
+	{
+		struct object_header_block_reference const *matrices = &object->object.node_matrices;
+		struct object_header_block_reference const *orientations = &object->object.node_orientations;
+
+		if (matrices->offset > 0 && matrices->size > 0 && matrices->offset + matrices->size <= header->data_size)
+		{
+			halo_touch_for_write((byte const *)object + matrices->offset, MIN(matrices->size, OBJECTS_UPDATE_BLOCK_BYTES));
+		}
+		if (orientations->offset > 0 && orientations->size > 0 && orientations->offset + orientations->size <= header->data_size)
+		{
+			halo_touch((byte const *)object + orientations->offset, MIN(orientations->size, OBJECTS_UPDATE_BLOCK_BYTES));
+		}
+	}
+
+	return;
+}
+
+/* port: while the object at `index` updates, ask for the lines of the next two that will: the one after it has had its own fields asked for the
+last time (so they are in, or on the way, and say where its node arrays are), the one after that has not (a header's lines come to the
+cache here, its blocks one object later). The state is the two indices and the one whose own fields were asked for last */
+struct objects_update_look_ahead
+{
+	short next;
+	short after;
+	short touched;
+};
+
+static void objects_update_look_ahead(
+	struct objects_update_look_ahead *state,
+	struct object_header_datum const *headers,
+	short count,
+	short index)
+{
+	if (state->next <= index)
+	{
+		state->next = (state->after > index) ? state->after : objects_update_next_active(headers, count, index);
+		state->after = (state->next < count) ? objects_update_next_active(headers, count, state->next) : count;
+	}
+	else if (state->after <= state->next)
+	{
+		state->after = (state->next < count) ? objects_update_next_active(headers, count, state->next) : count;
+	}
+
+	if (state->next < count && state->touched == state->next)
+	{
+		objects_update_touch_blocks(&headers[state->next]);
+	}
+	if (state->after < count)
+	{
+		halo_touch(headers[state->after].datum, OBJECTS_UPDATE_BASE_BYTES);
+		state->touched = state->after;
+	}
+
+	return;
+}
+#endif
+
 void objects_update(
 	void)
 {
@@ -4809,6 +4941,9 @@ void objects_update(
 	short cluster_count;
 	short i;
 	struct object_header_datum *object_header;
+#ifdef HALO_PPC_HOTPATHS_ON
+	struct objects_update_look_ahead look_ahead;
+#endif
 
 	boolean dont_update_object = ((game_time_get()&1)!=0) && game_players_are_double_speed();
 
@@ -4867,6 +5002,9 @@ void objects_update(
 	}
 
 	object_header = (struct object_header_datum *)object_header_data->data;
+#ifdef HALO_PPC_HOTPATHS_ON
+	look_ahead.next = look_ahead.after = look_ahead.touched = -1;
+#endif
 	for (i = 0; i<object_header_data->count; ++object_header)
 	{
 		if (object_header->identifier)
@@ -4878,6 +5016,10 @@ void objects_update(
 #ifdef HALO_WIIU
 				/* port: the object's scope for the tick snapshot opens before anything is asked of it (object_update, above, is the scope of the children and siblings it updates) */
 				tick_snapshot_scope_enter(object_index);
+#endif
+#ifdef HALO_PPC_HOTPATHS_ON
+				if (HALO_TOUCHES_ON())
+					objects_update_look_ahead(&look_ahead, (struct object_header_datum *)object_header_data->data, object_header_data->count, i);
 #endif
 				match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 416, object_get(object_index)->object.parent_object_index==NONE);
 				match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 417, object_get(object_index)->object.next_object_index==NONE);

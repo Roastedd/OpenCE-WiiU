@@ -318,6 +318,7 @@ symbols in this file:
 #include "units/vehicle_definitions.h"
 #include "units/vehicles.h"
 #include "networking/network_game_globals.h"
+#include "halo_ppc_hotpaths.h" /* port: memory hints for the tick (HALO_WIIU) */
 
 /* ---------- constants */
 
@@ -4240,6 +4241,30 @@ static void actor_update(
 	return;
 }
 
+#ifdef HALO_PPC_HOTPATHS_ON
+/* port: while one actor updates, ask for the cache lines of the next live one (its whole datum is read: input, perception, situation,
+decisions, action and output are all in it) */
+static void actors_update_touch_next(
+	long actor_index)
+{
+	struct data_array *array = actor_data;
+	short index;
+
+	for (index = (short)actor_index + 1; index < array->count; ++index)
+	{
+		struct datum_header *header = (struct datum_header *)((byte *)array->data + array->size * index);
+
+		if (header->identifier)
+		{
+			halo_touch(header, array->size);
+			break;
+		}
+	}
+
+	return;
+}
+#endif
+
 void actors_update(
 	void)
 {
@@ -4253,6 +4278,10 @@ void actors_update(
 	actor_iterator_new(&iterator, TRUE);
 	while ((actor = actor_iterator_next(&iterator)) != NULL)
 	{
+#ifdef HALO_PPC_HOTPATHS_ON
+		if (HALO_TOUCHES_ON())
+			actors_update_touch_next(iterator.index);
+#endif
 		if (actor->meta.erase_next_tick)
 		{
 			actor_erase(iterator.index, FALSE);
