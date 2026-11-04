@@ -887,11 +887,13 @@ so that a harness that must not delete a card file can write -1 to put one back.
 | --- | --- | --- |
 | `tick_thread.txt` | 0 | 1: the game's ticks run on a thread of their own |
 | `tick_overlap.txt` | 0 | 1: the ticks run beside the drawing (needs `tick_thread.txt`, `tick_snapshot.txt` 1) |
-| `tick_snapshot.txt` | 0 | bits: 1 on, 128 the check of the objects left out, 256 to 2048 and 16384, 32768 turn one change off (the report `reports/research/2026-11-01/ticks-stage5-snapshot-cost.md`) |
+| `tick_snapshot.txt` | 0 | bits: 1 on, 128 the check of the objects left out, 256 to 2048 turn one change off, 16384 the tick thread writes its copies back to memory, 32768 the game thread asks for the newest copies' cache lines when a frame begins (the last two are off unless set; the report `reports/research/2026-11-01/ticks-stage5-snapshot-cost.md`) |
 | `tick_core.txt` | 2 with the overlap on, else 0 | the core of the tick thread: 0, 1 or 2 |
-| `tick_priority.txt` | 1 below the game's when the tick thread shares the GX2 thread's core, else 0 | the tick thread's priority offset below the game's, 0 to 8 |
-| `gx2_idle_sleep.txt` | 100 | microseconds the GX2 thread sleeps between looks for work when the tick thread shares its core; 0 is the yield |
-| `tick_overlap_late.txt` | 1 | the fall back to serial frames when the tick thread is late: 0 off, 1 on, above 1 the fewest frames a window needs |
+| `tick_priority.txt` | 0 | the tick thread's priority offset below the game's, 0 to 8 |
+| `gx2_idle_sleep.txt` | 0 | microseconds the GX2 thread sleeps between looks for work when the tick thread shares its core; 0 is the yield |
+| `tick_quantum.txt` | the system's | microseconds: the tick thread's run quantum (`OSSetThreadRunQuantum`), untouched if absent |
+| `stream_slots.txt` | 6 | 2 to 8: the stream slots the Direct3D layer uses (the game thread waits for a free one) |
+| `tick_overlap_late.txt` | 1 | the answer to a late tick thread (under 25 ticks a second over 5 s, and the thread busy over 95% or the picture 1.5 ticks behind): the clock held to one tick a frame, and the serial loop only if the game is then under 20 ticks a second. 0 off, 1 on, above 1 the fewest frames a window needs, for tests (the clock alone then makes a window late) |
 | `tick_overlap_serialize.txt`, `tick_overlap_stall.txt` | 0 | test aids of the host runs |
 | `perf_counters.txt` | 0 | 1, 2 or 3: the event set of the cores' performance counters |
 | `tick_owners.txt` | 0 | the tick owners' queues, mode 1 or 2 |
