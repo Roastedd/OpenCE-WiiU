@@ -165,6 +165,11 @@ a job runs, so that the drawing thread meets the game state at all the moments a
 and so on. It does nothing on any other thread, outside a job, and with the file absent. */
 void tick_overlap_jitter(void);
 
+/* Something the tick thread's job does that cannot be done beside a frame being drawn - a structure bsp switched (a campaign script's switch_bsp: the bsp's tag data is let go of and another
+loaded, and every cluster number the frame's copies hold is another's) - is done by the game thread instead, at its sync point, where it waits for the job, while the tick thread waits here for
+it to be done: the script goes on after it as it did with the ticks on one thread. FALSE (nothing done, nothing waited for) if the caller is not the tick thread in an overlap job: it does it itself. */
+boolean tick_overlap_game_thread_do(void (*function)(void *), void *argument);
+
 /* the lights that fade (object_lights.c), once after the ticks of each job */
 void lights_fade_update(void);
 

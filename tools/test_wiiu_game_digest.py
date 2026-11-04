@@ -75,6 +75,13 @@ SOLO_INIT["menu-campaign"] = "cheat_deathless_player 1\ncheat_infinite_ammo 1\n"
 # menu-solo: the console's start (debug.network_test "solo:", config.toml only) with nothing in init.txt, and no cue to go back to the menu: what the cheats and the
 # scripted player do is the cues' (GAME_DIGEST_ENV="HALO_NETWORK_TEST_CUES=0 cheat_deathless_player 1|0 cheat_infinite_ammo 1")
 SOLO_INIT["menu-solo"] = ""
+# the campaign's ten levels as games of one player (the "levels" regression: the console's campaign sweep, tickbot, deathless): solo-a10 ... solo-d40, each the level
+# as map_name starts it, with the player deathless and the ammunition infinite. What matters is the level's first frames (the player's weapon is made in the first
+# ticks, the first overlapped frame is drawn from a ring that has just been made); about 400 ticks are enough (tools/test_wiiu_game_digest_levels.py runs them all)
+LEVELS = ("a10", "a30", "a50", "b30", "b40", "c10", "c20", "c40", "d20", "d40")
+for _level in LEVELS:
+    MODES["solo-" + _level] = "log"
+    SOLO_INIT["solo-" + _level] = "cheat_deathless_player 1\ncheat_infinite_ammo 1\nmap_name levels\\%s\\%s\n" % (_level, _level)
 # a broken key: the told draw facts compared by whether any were told, not by what they are (the D3D8 replay's own control of the same), so a
 # draw whose textures' facts change is drawn with the last ones sent
 BROKEN_KEY = ("port/wiiu/src/d3d8_gx2.c", "|| !facts_known) && (!facts_known || !words_equal(&facts_now, &facts_told, sizeof(facts_now))))",
@@ -297,6 +304,53 @@ class DigestCompareTest(unittest.TestCase):
             # (a draw moved out of its span is a change even where the order in a span is not)
             self.assertEqual(self.compare(a, c, traces=True, how="markers", pattern=re.compile(".")), 1)
             self.assertEqual(self.compare(a, c, traces=True, how="unordered"), 0)
+
+
+def tick_lines(out: Path):
+    """the game's tick lines of a run ("network test: tick N ..."), the camera and the network counts left out, in order"""
+    import re
+
+    lines = []
+    for line in (out / "stderr.txt").read_text(errors="replace").splitlines():
+        found = re.search(r"network test: tick (\d+) (.*)", line)
+        if found:
+            rest = re.sub(r"camera \([^)]*\)", "camera", found.group(2))
+            lines.append((int(found.group(1)), re.sub(r"sent \d+ received \d+", "sent _ received _", rest)))
+    return lines
+
+
+@unittest.skipUnless(os.environ.get("GAME_DIGEST_LEVELS"), "the campaign's ten levels, each as a game of one player, the plain loop and the tick overlap: GAME_DIGEST_LEVELS=1 (and Docker's opence-ppc-be image, data-be's maps)")
+class LevelsTest(unittest.TestCase):
+    """The regression of the campaign's ten levels (the console's sweep, solo:levels\\X\\X, tickbot, deathless): each level as a game of one player, the first
+    GAME_DIGEST_LEVELS_TICKS ticks (400), with the tick overlap's switches on (the ticks on a thread of their own, the snapshot, the overlap) and with none. The pass
+    condition: no run halts, and the game's ticks are the same in both. The first frames of a level are what matters: the player's weapon is made in them, the first
+    overlapped frame is drawn from a ring that has just been made, and a campaign script can switch the structure bsp in the first tick (a30 and d20 did, and the
+    drawing met a bsp let go of: the console halted). GAME_DIGEST_LEVELS_ONLY=a30,d20 runs those only; GAME_DIGEST_LEVELS_NAME is the build's name."""
+
+    def test_every_level_runs_overlapped_without_a_halt_and_with_the_plain_loops_ticks(self):
+        program = build(os.environ.get("GAME_DIGEST_LEVELS_NAME", "here"))
+        ticks = int(os.environ.get("GAME_DIGEST_LEVELS_TICKS", "400"))
+        only = [name for name in os.environ.get("GAME_DIGEST_LEVELS_ONLY", "").split(",") if name] or list(LEVELS)
+        overlap = {"HALO_TICK_THREAD": "1", "HALO_TICK_OVERLAP": "1", "HALO_TICK_SNAPSHOT": "1"}
+        for level in only:
+            with self.subTest(level=level):
+                plain = start(program, f"levels-{level}-plain", ticks, mode="solo-" + level)
+                saved = {key: os.environ.get(key) for key in overlap}
+                os.environ.update(overlap)
+                try:
+                    overlapped = start(program, f"levels-{level}-overlap", ticks, mode="solo-" + level)
+                finally:
+                    for key, value in saved.items():
+                        if value is None:
+                            os.environ.pop(key, None)
+                        else:
+                            os.environ[key] = value
+                finish(*plain)
+                finish(*overlapped)
+                a, b = tick_lines(plain[1]), tick_lines(overlapped[1])
+                self.assertGreater(len(a), ticks // 2, f"{level}: the plain loop played {len(a)} ticks")
+                count = min(len(a), len(b))
+                self.assertEqual(a[:count], b[:count], f"{level}: the overlapped game's ticks differ from the plain loop's")
 
 
 def main() -> int:

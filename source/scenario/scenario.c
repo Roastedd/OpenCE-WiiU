@@ -1057,7 +1057,52 @@ long scenario_fog_region_get_fog_index(
 	return NONE;
 }
 
+#ifdef HALO_WIIU
+#include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
+void lights_port_forget(void);
+
+static boolean scenario_switch_structure_bsp_inner(
+	short structure_bsp_index);
+
+struct scenario_switch_request
+{
+	short structure_bsp_index;
+	boolean result;
+};
+
+/* A bsp switched is made by the game thread when the ticks run beside the drawing (tick_overlap.h): the tag data the frame was drawn from is let go of, the clusters are another's. And what the
+snapshot holds of the old one - the ring's copies, the lights' kept cluster lists - is forgotten: the next frame is drawn from a ring that has just been made, as at a map's start. */
+static void scenario_switch_structure_bsp_made(
+	void *argument)
+{
+	struct scenario_switch_request *request = (struct scenario_switch_request *)argument;
+
+	request->result = scenario_switch_structure_bsp_inner(request->structure_bsp_index);
+	if (request->result)
+	{
+		tick_snapshot_reset();
+		lights_port_forget();
+	}
+}
+
 boolean scenario_switch_structure_bsp(
+	short structure_bsp_index)
+{
+	struct scenario_switch_request request;
+
+	request.structure_bsp_index = structure_bsp_index;
+	request.result = FALSE;
+	if (!tick_overlap_game_thread_do(scenario_switch_structure_bsp_made, &request))
+		scenario_switch_structure_bsp_made(&request);
+	return request.result;
+}
+#endif
+
+#ifdef HALO_WIIU
+static boolean scenario_switch_structure_bsp_inner(
+#else
+boolean scenario_switch_structure_bsp(
+#endif
 	short structure_bsp_index)
 {
 	boolean result = FALSE;

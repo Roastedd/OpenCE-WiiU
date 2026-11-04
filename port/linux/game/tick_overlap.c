@@ -307,6 +307,44 @@ boolean tick_overlap_start_thread(
 the tick thread, is the only one that can (tick_owners.c) */
 long tick_owners_drain_waited(void);
 
+/* the tick thread's request for the game thread (tick_overlap_game_thread_do) */
+static struct
+{
+	void (*function)(void *);
+	void *argument;
+	volatile int pending, done;
+} o_request;
+
+boolean tick_overlap_game_thread_do(
+	void (*function)(void *),
+	void *argument)
+{
+	if (o.enabled <= 0 || !LOAD(o.in_overlap_job) || !tick_overlap_thread_is_tick())
+		return FALSE;
+	o_request.function = function;
+	o_request.argument = argument;
+	__atomic_store_n(&o_request.done, 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&o_request.pending, 1, __ATOMIC_RELEASE);
+	while (!__atomic_load_n(&o_request.done, __ATOMIC_ACQUIRE))
+	{
+		struct timespec pause = { 0, 100000 };
+
+		nanosleep(&pause, NULL);
+	}
+	return TRUE;
+}
+
+/* the game thread, at its wait for the job: serves the tick thread's request, if it has one */
+static void tick_overlap_serve_request(void)
+{
+	if (__atomic_load_n(&o_request.pending, __ATOMIC_ACQUIRE))
+	{
+		__atomic_store_n(&o_request.pending, 0, __ATOMIC_RELAXED);
+		o_request.function(o_request.argument);
+		__atomic_store_n(&o_request.done, 1, __ATOMIC_RELEASE);
+	}
+}
+
 /* waits for the work in flight to end. Between looks the game thread serves the queues that are full and the HOME gate: it is not drawing, so it may
 be held, and the tick thread, held at its own gate, would never end the work otherwise. (It looks rather than sleeps on a condition: the platform's
 time functions are not the game's, and a look every 100 microseconds costs a wait no more than that late.) */
@@ -324,6 +362,7 @@ static void tick_overlap_wait(void)
 	{
 		struct timespec pause = { 0, 100000 };
 
+		tick_overlap_serve_request();
 		/* (a few quick looks first: a job that is nearly over ends within them) */
 		if (++looks > 20)
 		{

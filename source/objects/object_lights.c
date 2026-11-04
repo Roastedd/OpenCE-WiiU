@@ -1049,6 +1049,14 @@ long light_new_unattached(
 }
 
 #ifdef HALO_WIIU
+/* port: the kept cluster lists forgotten (a bsp switched: the clusters are another's, and the generations they were kept under may come round again) */
+void lights_port_forget(
+	void)
+{
+	memset(&lights_port_live, 0, sizeof(lights_port_live));
+	memset(&lights_port_view, 0, sizeof(lights_port_view));
+}
+
 /* port: the lights that fade (a light a moment after the effect that made it, light_port_glow and the game's own passing lights: parent_light_index is
 the time it began to fade) let go of when they have, and the ones that follow an object moved with it. Done by lights_preprocess_scene at each frame
 of the serial loop's; in a frame drawn beside the tick thread (tick_overlap.h) the drawing changes none of the light data, so the tick thread does it,
