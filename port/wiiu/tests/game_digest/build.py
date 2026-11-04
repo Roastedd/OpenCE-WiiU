@@ -130,7 +130,7 @@ class DigestWriter(Writer):
 
 
 def generate(build_dir: Path, poison: bool = False) -> str:
-    sln = SimpleNamespace(build_dir=build_dir, linux_cc=None, linux_target="ppc", compiler_launcher=None, port_release=False,
+    sln = SimpleNamespace(build_dir=build_dir, linux_cc=None, linux_target="ppc", compiler_launcher=None, port_release=os.environ.get("GAME_DIGEST_RELEASE") == "1",
                           port_profile=False, port_lto="off", port_portable=False, port_pgo="off", port_pgo_profile=None)
     text = StringIO()
     n = DigestWriter(text, build_dir)
