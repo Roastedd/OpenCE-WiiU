@@ -3003,6 +3003,7 @@ static BOOL stage_facts_make(int stage, const unsigned long serials[STAGE_SERIAL
 		made.mipmapped = description.levels > 1;
 		made.hires = description.hires != FALSE;
 		made.hires_coverage = description.hires_coverage != FALSE;
+		made.hires_point_threshold = description.hires_point_threshold != FALSE;
 		stage_memos[stage].lasting = !target && lasting;
 		stage_memos[stage].texture = texture;
 		stage_memos[stage].words[0] = texture->Data;

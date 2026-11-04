@@ -441,6 +441,12 @@ int hud_hires_override_coverage(long asset)
 	return 0;
 }
 
+int hud_hires_override_point_threshold(long asset)
+{
+	(void)asset;
+	return 0;
+}
+
 long hud_hires_placeholder_asset(unsigned long data)
 {
 	return data && data == replay_hud_placeholder_data ? 0 : -1;

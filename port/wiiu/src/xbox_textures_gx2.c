@@ -1063,6 +1063,7 @@ static uint32_t texture_entry_result(struct texture_entry *entry, int *kind, str
 			description->levels = levels;
 			description->hires = TRUE;
 			description->hires_coverage = hud_hires_override_coverage(asset);
+			description->hires_point_threshold = hud_hires_override_point_threshold(asset);
 			return id;
 		}
 	}
@@ -1072,6 +1073,7 @@ static uint32_t texture_entry_result(struct texture_entry *entry, int *kind, str
 		description->levels = levels;
 		description->hires = TRUE;
 		description->hires_coverage = hud_hires_override_coverage(entry->override);
+		description->hires_point_threshold = hud_hires_override_point_threshold(entry->override);
 		return id;
 	}
 	return entry->id;
