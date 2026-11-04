@@ -431,7 +431,7 @@ static boolean hud_bad_bitmap_reported = FALSE;
 
 /* ---------- public code */
 
-#ifdef HALO_RELEASE
+#if defined(HALO_RELEASE) || defined(HALO_NO_HUD_SENTINEL)
 #undef get_return_eip
 #endif
 /* Inspect the guarded caller's frame, not the return site of this helper.
@@ -442,7 +442,7 @@ __attribute__((noinline)) long get_return_eip(
 	/* the caller's return address, as [ebp+4] is in the naked original */
 	return (long)(__INTPTR_TYPE__)__builtin_return_address(1);
 }
-#ifdef HALO_RELEASE
+#if defined(HALO_RELEASE) || defined(HALO_NO_HUD_SENTINEL)
 #define get_return_eip() 0L
 #endif
 

@@ -691,7 +691,7 @@ void custom_render_nav_point(
 	real a, b, ab, bx, ay;
 	real theta;
 
-#ifndef HALO_RELEASE
+#if !defined(HALO_RELEASE) && !defined(HALO_NO_HUD_SENTINEL)
 	memset(stack_buffer, 0x62, sizeof(stack_buffer));
 #endif
 	arrow = TAG_BLOCK_GET_ELEMENT(&hud_globals->waypoint.arrows, nav_index, struct hud_waypoint_arrow);

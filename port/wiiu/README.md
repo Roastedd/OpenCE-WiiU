@@ -64,6 +64,8 @@ No link-time optimisation across the whole program and no profile: devkitPPC's l
 - **The HUD's stack sentinel is left out** (`hud_draw.h`): each of the 25 guarded HUD functions of the Xbox's development build fills a 512-byte local
   with 0x62 and checks it and its own return address when it ends. Nothing can change either, so the checks only cost the HUD's draw calls their
   instructions; in a release build they fold away. The picture is the same.
+  `HALO_NO_HUD_SENTINEL=1` in `configure.py`'s environment (`LEAN=1` in `build_game.sh`) leaves it out of a build that is not a release one, so the
+  default flavour's assertions keep stopping the game: the one measurable saving without the change of what a failed assertion does.
 - `-DDEBUG` **stays**: it is the Xbox development build's own define (every port's compile line has it), not the flavour. The network's join
   token is made `#ifndef DEBUG` from the build's compile time and the tags' checksum (`network_server_manager.c`), so a build without it could join no
   game of any other build; what else it turns on is the checks of zlib's compressor and a dump of the network games' state, which a game does not

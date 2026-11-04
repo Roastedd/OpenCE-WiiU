@@ -2,10 +2,12 @@
 sources, so these checks read them. The behaviour itself is proved by the game digest harness (GAME_DIGEST_RELEASE=1: the same frames as the default
 build; a mutated save-path assertion halts, a mutated other one is noted and carried on), which needs Docker and the maps."""
 import re
+import sys
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 SAVED_GAMES = ["saved_game_files.c", "game_state.c", "game_state_xbox.c", "player_profile.c", "playlist_profile.c"]
 
 
@@ -31,15 +33,34 @@ class ReleaseFlavourTest(unittest.TestCase):
             text = (ROOT / "source/interface" / name).read_text(errors="replace")
             for match in re.finditer(r"memset\(\s*stack_buffer,\s*0x62", text):
                 before = text[max(0, match.start() - 40):match.start()]
-                self.assertIn("#ifndef HALO_RELEASE", text[max(0, match.start() - 60):match.start()], f"{name}: {before!r}")
+                self.assertIn("#if !defined(HALO_RELEASE) && !defined(HALO_NO_HUD_SENTINEL)", text[max(0, match.start() - 90):match.start()], f"{name}: {before!r}")
 
     def test_the_release_sentinel_macros_leave_nothing_to_run(self):
         text = (ROOT / "source/interface/hud_draw.h").read_text()
-        release = text[text.index("#ifdef HALO_RELEASE"):text.index("#else", text.index("#ifdef HALO_RELEASE"))]
+        start = text.index("#if defined(HALO_RELEASE) || defined(HALO_NO_HUD_SENTINEL)")
+        release = text[start:text.index("#else", start)]
         self.assertIn("#define hud_stack_sentinel_fill(buffer) ((void)(buffer))", release)
         self.assertIn("#define check_stack_buffer(buffer) ((void)(buffer), (short)NONE)", release)
         self.assertIn("#define get_return_eip() 0L", release)
-        self.assertIn("csmemset(buffer, 0x62, sizeof(buffer))", text[text.index("#else", text.index("#ifdef HALO_RELEASE")):])
+        self.assertIn("csmemset(buffer, 0x62, sizeof(buffer))", text[text.index("#else", start):])
+
+    def test_the_sentinel_can_be_left_out_of_a_default_build_alone(self):
+        import os
+        from tools import linux_build
+        from types import SimpleNamespace
+
+        sln = SimpleNamespace(port_release=False, port_profile=False)
+        saved = os.environ.pop("HALO_NO_HUD_SENTINEL", None)
+        try:
+            self.assertNotIn("-DHALO_NO_HUD_SENTINEL", linux_build.configuration_defines(sln))
+            os.environ["HALO_NO_HUD_SENTINEL"] = "1"
+            self.assertEqual(linux_build.configuration_defines(sln), ["-DHALO_NO_HUD_SENTINEL"])
+            self.assertEqual(linux_build.configuration_defines(SimpleNamespace(port_release=True, port_profile=False)),
+                             ["-DHALO_RELEASE", "-DHALO_NO_HUD_SENTINEL"])
+        finally:
+            os.environ.pop("HALO_NO_HUD_SENTINEL", None)
+            if saved is not None:
+                os.environ["HALO_NO_HUD_SENTINEL"] = saved
 
     def test_debug_stays_defined_for_the_join_token(self):
         # (the network's join token is made #ifndef DEBUG from the build's compile time: a build without -DDEBUG could join no other build's game)

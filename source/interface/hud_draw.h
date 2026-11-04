@@ -166,8 +166,9 @@ __inline short check_stack_buffer(
 	return NONE;
 }
 
-#ifdef HALO_RELEASE
-/* port: release builds (configure.py --release) leave out the HUD's stack sentinel: the 512 bytes each guarded function fills with 0x62 and
+#if defined(HALO_RELEASE) || defined(HALO_NO_HUD_SENTINEL)
+/* port: release builds (configure.py --release), and a build with HALO_NO_HUD_SENTINEL=1 in configure.py's environment (the default flavour
+otherwise, its assertions still stopping the game), leave out the HUD's stack sentinel: the 512 bytes each guarded function fills with 0x62 and
 checks at its end (check_stack_buffer, 128 compares), and the paired reads of its return address (get_return_eip). They are a development
 build's check of the function's own frame, which a release build only noted in debug.txt and carried on past (cseries.h), and the HUD asks
 for them hundreds to thousands of times a frame. What they check is true by construction here (return_eip is get_return_eip() of the same
