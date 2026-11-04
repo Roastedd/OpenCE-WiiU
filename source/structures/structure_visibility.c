@@ -781,23 +781,6 @@ static long planes_intersect_rectangle(
 	return _intersection_in;
 }
 
-#ifdef HALO_WIIU
-/* port: what the object searches considered (an object of a rendered cluster not yet met this frame) and found (inside the cluster's view frustum): counts
-the performance overlay reads (port/wiiu/src/wiiu_perf.h); the render's own, written by the game thread, 32 bits so that another thread reads them whole */
-static volatile unsigned long structure_visibility_objects_considered = 0;
-static volatile unsigned long structure_visibility_objects_found = 0;
-
-void structure_visibility_object_counts(
-	unsigned long *considered,
-	unsigned long *found)
-{
-	*considered = structure_visibility_objects_considered;
-	*found = structure_visibility_objects_found;
-
-	return;
-}
-#endif
-
 short structure_visibility_find_objects(
 	long *result_indices,
 	short maximum_count,
@@ -810,9 +793,6 @@ short structure_visibility_find_objects(
 	struct structure_bsp *structure = global_structure_bsp_get();
 	short found_count = 0;
 	long rendered_cluster_index;
-#ifdef HALO_WIIU
-	unsigned long considered_count = 0;
-#endif
 
 	for (rendered_cluster_index = 0;
 		(short)rendered_cluster_index < render.rendered_cluster_count;
@@ -835,9 +815,6 @@ short structure_visibility_find_objects(
 			}
 
 			get_bounding_sphere(object_index, &center, &radius);
-#ifdef HALO_WIIU
-			considered_count++;
-#endif
 			if (found_count < maximum_count &&
 				(render.cluster_index == NONE ||
 				render_frustum_sphere_visible(&rendered_cluster->frustum, &center, radius)))
@@ -849,10 +826,6 @@ short structure_visibility_find_objects(
 	}
 
 	(void)structure;
-#ifdef HALO_WIIU
-	structure_visibility_objects_considered += considered_count;
-	structure_visibility_objects_found += (unsigned long)found_count;
-#endif
 	return found_count;
 }
 

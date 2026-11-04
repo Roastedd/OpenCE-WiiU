@@ -175,8 +175,12 @@ static struct perf_view sample_view(int stressed)
 		view.draw_part_ms[4] = 1.9f;
 		view.draw_part_ms[5] = 0.4f;
 		view.draws = 612.0f;
-		view.objects_found = 184.0f;
+		view.objects_found = 190.0f;
+		view.objects_drawn = 184.0f;
 		view.objects_culled = 226.0f;
+		view.fps_average = 58.7f;
+		view.low_fps = 49.3f;
+		view.tick_thread_tick_ms = 4.8f;
 		view.state.render_width = 1280;
 		view.state.render_height = 720;
 		view.state.drs_lines = 720;
@@ -199,10 +203,12 @@ static struct perf_view sample_view(int stressed)
 		view.pool[PERF_POOL_STATE].fixed = 1;
 		view.pool[PERF_POOL_STATE].used_kib = 17u * 1024u + 300u;
 		view.pool[PERF_POOL_STATE].capacity_kib = 20u * 1024u;
+		view.pool[PERF_POOL_TAGS].fixed = 1;
 		view.pool[PERF_POOL_TAGS].used_kib = 16u * 1024u;
 		view.pool[PERF_POOL_TAGS].capacity_kib = 22u * 1024u;
 		view.pool[PERF_POOL_MEM2].used_kib = 693u * 1024u + 700u;
 		view.pool[PERF_POOL_MEM2].capacity_kib = 1536u * 1024u;
+		view.pool[PERF_POOL_MEM2].largest_kib = 512u * 1024u;
 		view.pool[PERF_POOL_EDRAM].used_kib = 17u * 1024u + 600u;
 		view.pool[PERF_POOL_EDRAM].capacity_kib = 32u * 1024u;
 		return view;
@@ -228,7 +234,11 @@ static struct perf_view sample_view(int stressed)
 		view.draw_part_ms[i] = 1.0f + (float)i;
 	view.draws = 1840.0f;
 	view.objects_found = 410.0f;
+	view.objects_drawn = 300.0f;
 	view.objects_culled = 1200.0f;
+	view.fps_average = 31.2f;
+	view.low_fps = 19.0f;
+	view.tick_thread_tick_ms = 21.0f;
 	view.state.render_width = 960;
 	view.state.render_height = 540;
 	view.state.drs_lines = 540;
@@ -256,8 +266,11 @@ static struct perf_view sample_view(int stressed)
 	view.pool[PERF_POOL_STATE].capacity_kib = 20u * 1024u;
 	view.pool[PERF_POOL_TAGS].used_kib = 22u * 1024u;
 	view.pool[PERF_POOL_TAGS].capacity_kib = 22u * 1024u;
-	view.pool[PERF_POOL_MEM2].used_kib = 1500u * 1024u;
-	view.pool[PERF_POOL_MEM2].capacity_kib = 1536u * 1024u;
+	view.pool[PERF_POOL_MEM2].used_kib = 865u * 1024u + 300u;
+	view.pool[PERF_POOL_MEM2].capacity_kib = 865u * 1024u + 300u;
+	view.pool[PERF_POOL_MEM2].reserved = 1;
+	view.pool[PERF_POOL_MEM2].fixed = 1;
+	view.pool[PERF_POOL_TAGS].fixed = 1;
 	view.pool[PERF_POOL_EDRAM].known = 0;
 	return view;
 }
@@ -333,6 +346,7 @@ static struct perf_totals totals(double ticks_per_ms, unsigned frame, int overla
 	t.decoder_ticks = (uint32_t)(frame * 0.1 * ticks_per_ms);
 	t.objects_considered = frame * 400;
 	t.objects_found = frame * 180;
+	t.objects_drawn = frame * 100;
 	return t;
 }
 
@@ -372,7 +386,8 @@ static void test_window(void)
 	CHECK(NEAR(view.audio_ms, 0.5f, 0.01f));
 	CHECK(NEAR(view.tick_thread_ms, 2.9f, 0.01f) && NEAR(view.tick_thread_busy_percent, 17.4f, 0.2f));
 	CHECK(NEAR(view.ticks_per_second, 59.88f, 0.1f) && view.overlap == 1);
-	CHECK(NEAR(view.draws, 612.0f, 0.1f) && NEAR(view.objects_found, 180.0f, 0.1f) && NEAR(view.objects_culled, 220.0f, 0.1f));
+	CHECK(NEAR(view.draws, 612.0f, 0.1f) && NEAR(view.objects_found, 180.0f, 0.1f) && NEAR(view.objects_drawn, 100.0f, 0.1f) && NEAR(view.objects_culled, 300.0f, 0.1f));
+	CHECK(NEAR(view.tick_thread_tick_ms, 2.9f, 0.01f)); /* (a tick a frame: a job's time is a tick's) */
 	CHECK(NEAR(view.draw_part_ms[0], 0.4f, 0.01f) && NEAR(view.draw_part_ms[2], 2.0f, 0.02f) && NEAR(view.draw_part_ms[3], 0.8f, 0.01f));
 	/* the window began again: a second window is made from the change */
 	for (i = 0; i < 10; i++)
@@ -407,6 +422,24 @@ static void test_window(void)
 	CHECK(t1.game_work < t0.game_work);
 	t1.game_present = t0.game_present;
 	CHECK(perf_meter_close(&meter, &t1, tpm, &state, pools, &view) && NEAR(view.work_ms, 10.0f, 0.02f));
+}
+
+static void test_average(void)
+{
+	struct perf_average average;
+	unsigned i;
+
+	perf_average_reset(&average);
+	CHECK(perf_average_fps(&average) == 0.0f);
+	for (i = 0; i < 20; i++)
+		perf_average_push(&average, 15, 0.25f); /* 60 a second */
+	CHECK(NEAR(perf_average_fps(&average), 60.0f, 0.01f));
+	for (i = 0; i < 10; i++)
+		perf_average_push(&average, 7, 0.25f); /* 28 a second for the last half of the five seconds' windows */
+	CHECK(NEAR(perf_average_fps(&average), 44.0f, 0.01f));
+	for (i = 0; i < 20; i++)
+		perf_average_push(&average, 7, 0.25f);
+	CHECK(NEAR(perf_average_fps(&average), 28.0f, 0.01f)); /* (the older windows are gone) */
 }
 
 static void test_pools(void)
@@ -479,15 +512,19 @@ static void test_log(void)
 	CHECK(!perf_log_line(line, sizeof(line), &view, PERF_LOG_LINES));
 	perf_log_line(line, sizeof(line), &view, 0);
 	CHECK(strstr(line, "frame 16.7 ms") && strstr(line, "work 9.8") && strstr(line, "gpu 7.1") && strstr(line, "vsync 6.3"));
-	perf_log_line(line, sizeof(line), &view, 2);
-	CHECK(strstr(line, "tex 13.4/22.0") && strstr(line, "mem2 free 842.3") && strstr(line, "edram 17.6/32.0"));
-	perf_log_line(line, sizeof(line), &stressed, 2);
-	CHECK(strstr(line, "edram ?"));
+	CHECK(strstr(line, "5 s 58.7") && strstr(line, "1% low 49.3"));
+	perf_log_line(line, sizeof(line), &view, 3);
+	CHECK(strstr(line, "tex 13.4/22.0") && strstr(line, "mem2 free 842.3 (largest 512.0)") && strstr(line, "edram 17.6/32.0"));
+	perf_log_line(line, sizeof(line), &stressed, 3);
+	CHECK(strstr(line, "edram ?") && strstr(line, "mem2 reserved"));
 	perf_log_line(line, sizeof(line), &stressed, 1);
-	CHECK(strstr(line, "overlap serial") && strstr(line, "gov 4/7") && strstr(line, "30hz"));
+	CHECK(strstr(line, "overlap serial") && strstr(line, "21.0/tick") && strstr(line, "300 drawn"));
+	perf_log_line(line, sizeof(line), &stressed, 2);
+	CHECK(strstr(line, "gov 4/7") && strstr(line, "30hz"));
 	printf("%s\n", (perf_log_line(line, sizeof(line), &view, 0), line));
 	printf("%s\n", (perf_log_line(line, sizeof(line), &view, 1), line));
 	printf("%s\n", (perf_log_line(line, sizeof(line), &view, 2), line));
+	printf("%s\n", (perf_log_line(line, sizeof(line), &view, 3), line));
 	printf("%s\n", (perf_log_line(line, sizeof(line), &stressed, 1), line));
 }
 
@@ -523,8 +560,8 @@ static void test_panel(const char *png, int stressed)
 			break;
 		}
 		lit += alpha == 255;
-		/* a meter's red or green, in the pools' rows (y 91 to 147) */
-		if (i / OVERLAY_WIDTH >= 91 && i % OVERLAY_WIDTH >= 112 && i % OVERLAY_WIDTH < 208 && alpha == 255 && guarded.pixels[i * 4 + 1] > 0xa0)
+		/* a meter's red or green, in the pools' rows (y 99 to 155) */
+		if (i / OVERLAY_WIDTH >= 99 && i % OVERLAY_WIDTH >= 112 && i % OVERLAY_WIDTH < 208 && alpha == 255 && guarded.pixels[i * 4 + 1] > 0xa0)
 			meters++;
 	}
 	CHECK(lit > 1500 && meters > 100);
@@ -593,6 +630,7 @@ static void test_panel(const char *png, int stressed)
 int main(int argc, char **argv)
 {
 	test_window();
+	test_average();
 	test_pools();
 	test_log();
 	test_modes();

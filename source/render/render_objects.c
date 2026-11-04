@@ -446,6 +446,41 @@ static boolean render_object_visit(
 	return first;
 }
 
+#ifdef HALO_WIIU
+/* port: what the render's object search considered (a candidate of a rendered cluster it had not met this frame), found inside the view, and what the render
+then drew (after the governor's size cull): counts for the performance overlay (port/wiiu/src/wiiu_perf.h), written by the game thread, 32 bits so that another
+thread reads them whole. Only this search: the lights' (object_lights.c) is another call of the same function */
+static volatile unsigned long render_object_perf_considered = 0;
+static volatile unsigned long render_object_perf_found = 0;
+static volatile unsigned long render_object_perf_drawn = 0;
+
+void render_objects_perf(
+	unsigned long *considered,
+	unsigned long *found,
+	unsigned long *drawn)
+{
+	*considered = render_object_perf_considered;
+	*found = render_object_perf_found;
+	*drawn = render_object_perf_drawn;
+
+	return;
+}
+
+static void render_object_counted_bounding_sphere(
+	long object_index,
+	real_point3d *center,
+	real *radius)
+{
+	render_object_perf_considered++;
+	object_get_render_bounding_sphere(object_index, center, radius);
+
+	return;
+}
+#define RENDER_OBJECT_BOUNDING_SPHERE render_object_counted_bounding_sphere
+#else
+#define RENDER_OBJECT_BOUNDING_SPHERE object_get_render_bounding_sphere
+#endif
+
 static void find_rendered_objects(
 	void)
 {
@@ -456,7 +491,7 @@ static void find_rendered_objects(
 		MAXIMUM_RENDERED_OBJECTS,
 		cluster_get_first_collideable_object,
 		cluster_get_next_collideable_object,
-		object_get_render_bounding_sphere,
+		RENDER_OBJECT_BOUNDING_SPHERE,
 		render_object_unvisited,
 		render_object_visit);
 
@@ -466,9 +501,13 @@ static void find_rendered_objects(
 		MAXIMUM_RENDERED_OBJECTS - render_object_globals.rendered_object_count,
 		cluster_get_first_noncollideable_object,
 		cluster_get_next_noncollideable_object,
-		object_get_render_bounding_sphere,
+		RENDER_OBJECT_BOUNDING_SPHERE,
 		render_object_unvisited,
 		render_object_visit);
+
+#ifdef HALO_WIIU
+	render_object_perf_found += (unsigned long)render_object_globals.rendered_object_count;
+#endif
 
 	if (render_object_globals.rendered_object_count == MAXIMUM_RENDERED_OBJECTS &&
 		!reported_rendered_object_overflow)
@@ -1239,6 +1278,9 @@ static void render_object(
 				return;
 			}
 			render_governor_counts[RENDER_GOVERNOR_COUNT_OBJECTS_DRAWN]++;
+#ifdef HALO_WIIU
+			render_object_perf_drawn++;
+#endif
 		}
 
 		if (!TEST_FLAG(object->object.flags, _object_invisible_bit) ||

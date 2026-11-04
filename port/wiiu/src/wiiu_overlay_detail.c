@@ -204,6 +204,15 @@ static void draw_pool(canvas *canvas, const struct perf_view *view, int pool, in
 	perf_mib_text(used, sizeof(used), p->used_kib);
 	perf_mib_text(capacity, sizeof(capacity), p->capacity_kib);
 	x = 3 + 5 * FONT_CELL_W;
+	if (p->reserved)
+	{
+		/* (the heap has nothing free by design: the game takes all of it; the capacity is what is there, no use is shown) */
+		put(canvas, &x, y, grey, "RESERVED");
+		put(canvas, &x, y, white, "%7s", capacity);
+		put(canvas, &x, y, grey, " MIB");
+		fill_rect(canvas, meter_x, y, meter_w, 5, slate);
+		return;
+	}
 	if (pool == PERF_POOL_MEM2)
 	{
 		/* (the heap's free memory is what matters: the text says it, the meter says how much of the heap is gone) */
@@ -300,9 +309,20 @@ void overlay_render_detail(const struct perf_view *view, uint8_t *pixels)
 		}
 	}
 
-	/* the split of the work: the game's ticks (with the wait for the tick thread when the overlap is on), the rendering, the GX2 thread, the audio */
+	/* the frame rate over the last five seconds, the 1 percent low of the last frames (the compact strip's), the game's ticks a second */
 	x = 3;
 	y = 41;
+	put(&canvas, &x, y, grey, "AVG 5 S ");
+	put(&canvas, &x, y, view->fps_average >= 55.0f ? green : view->fps_average >= 28.0f ? amber : red, "%5.1f", (double)(view->fps_average > 999.9f ? 999.9f : view->fps_average));
+	put(&canvas, &x, y, grey, " FPS   1%% LOW ");
+	put(&canvas, &x, y, view->low_fps >= 55.0f ? green : view->low_fps >= 28.0f ? amber : red, "%5.1f", (double)(view->low_fps > 999.9f ? 999.9f : view->low_fps));
+	put(&canvas, &x, y, grey, " FPS   ");
+	put(&canvas, &x, y, white, "%.0f", (double)(view->ticks_per_second > 999.0f ? 999.0f : view->ticks_per_second));
+	put(&canvas, &x, y, grey, " T/S");
+
+	/* the split of the work: the game's ticks (with the wait for the tick thread when the overlap is on), the rendering without what it waited for, the GX2 thread, the audio */
+	x = 3;
+	y = 49;
 	put(&canvas, &x, y, grey, "SIM ");
 	put(&canvas, &x, y, white, "%4.1f", ms_field(view->sim_ms));
 	put(&canvas, &x, y, grey, "  DRAW ");
@@ -313,28 +333,28 @@ void overlay_render_detail(const struct perf_view *view, uint8_t *pixels)
 	put(&canvas, &x, y, white, "%4.1f", ms_field(view->audio_ms));
 	put(&canvas, &x, y, grey, " MS");
 
-	/* the tick thread, and what the overlap is doing */
+	/* the tick thread: its time in a job (a frame's) and in a tick, how busy it was, the game thread's wait for it, and what the overlap is doing */
 	x = 3;
-	y = 49;
+	y = 57;
 	put(&canvas, &x, y, grey, "TICK THREAD ");
 	if (view->overlap)
 	{
 		put(&canvas, &x, y, white, "%4.1f", ms_field(view->tick_thread_ms));
-		put(&canvas, &x, y, grey, " MS ");
+		put(&canvas, &x, y, grey, " MS/JOB ");
+		put(&canvas, &x, y, white, "%4.1f", ms_field(view->tick_thread_tick_ms));
+		put(&canvas, &x, y, grey, "/TICK ");
 		put(&canvas, &x, y, view->tick_thread_busy_percent > 85.0f ? amber : white, "%3.0f%%", (double)(view->tick_thread_busy_percent > 999.0f ? 999.0f : view->tick_thread_busy_percent));
 		put(&canvas, &x, y, grey, " WAIT ");
-		put(&canvas, &x, y, view->sim_wait_ms > 1.0f ? amber : white, "%4.1f", ms_field(view->sim_wait_ms));
+		put(&canvas, &x, y, view->sim_wait_ms > 1.0f ? amber : white, "%3.1f", ms_field(view->sim_wait_ms));
 	}
 	else
 		put(&canvas, &x, y, dim, " --");
-	put(&canvas, &x, y, grey, "  OVERLAP ");
+	put(&canvas, &x, y, grey, " OVERLAP ");
 	put(&canvas, &x, y, view->overlap == 1 ? green : view->overlap == 2 ? amber : dim, "%s", view->overlap == 1 ? "ON" : view->overlap == 2 ? "SERIAL" : "OFF");
-	put(&canvas, &x, y, white, " %.0f", (double)(view->ticks_per_second > 999.0f ? 999.0f : view->ticks_per_second));
-	put(&canvas, &x, y, grey, " T/S");
 
 	/* the rendering, as its passes: visibility, begin (which waits for room in the GX2 thread's queue), objects, decals, effects, HUD */
 	x = 3;
-	y = 57;
+	y = 65;
 	put(&canvas, &x, y, grey, "DRAW");
 	{
 		static const char *const names[6] = { " VIS ", " BEG ", " OBJ ", " DEC ", " FX ", " HUD " };
@@ -349,18 +369,18 @@ void overlay_render_detail(const struct perf_view *view, uint8_t *pixels)
 
 	/* what was drawn: the draws a frame, the objects the visibility search found and the ones it left out */
 	x = 3;
-	y = 65;
+	y = 73;
 	put(&canvas, &x, y, grey, "DRAWS ");
 	put(&canvas, &x, y, white, "%.0f", (double)(view->draws > 99999.0f ? 99999.0f : view->draws));
 	put(&canvas, &x, y, grey, "  OBJECTS ");
-	put(&canvas, &x, y, white, "%.0f", (double)(view->objects_found > 9999.0f ? 9999.0f : view->objects_found));
+	put(&canvas, &x, y, white, "%.0f", (double)(view->objects_drawn > 9999.0f ? 9999.0f : view->objects_drawn));
 	put(&canvas, &x, y, grey, " DRAWN ");
 	put(&canvas, &x, y, white, "%.0f", (double)(view->objects_culled > 9999.0f ? 9999.0f : view->objects_culled));
 	put(&canvas, &x, y, grey, " CULLED");
 
 	/* the resolution, dynamic resolution, the frame rate of the game, the governor if there is one */
 	x = 3;
-	y = 73;
+	y = 81;
 	snprintf(text, sizeof(text), "%ux%u", view->state.render_width > 9999 ? 9999u : view->state.render_width,
 		view->state.render_height > 9999 ? 9999u : view->state.render_height);
 	put(&canvas, &x, y, white, "%s", text);
@@ -382,9 +402,9 @@ void overlay_render_detail(const struct perf_view *view, uint8_t *pixels)
 	}
 
 	/* the memory */
-	draw_text(&canvas, 3, 81, grey, "MEMORY");
-	fill_rect(&canvas, 3, 87, OVERLAY_WIDTH - 6, 1, dim);
+	draw_text(&canvas, 3, 89, grey, "MEMORY");
+	fill_rect(&canvas, 3, 95, OVERLAY_WIDTH - 6, 1, dim);
 	for (pool = 0; pool < PERF_POOL_COUNT; pool++)
-		draw_pool(&canvas, view, pool, 91 + pool * 8);
-	draw_text(&canvas, 3, 148, dim, "PALE = IN USE NOW; TEX AND SOUND COLOUR BY IT");
+		draw_pool(&canvas, view, pool, 99 + pool * 8);
+	draw_text(&canvas, 3, 156, dim, "PALE = IN USE NOW (TEX, SOUND COLOUR BY IT); GREY = FIXED");
 }

@@ -50,8 +50,8 @@ struct perf_totals
 	uint32_t pass_windows;
 	/* the audio threads (wiiu_audio.c's mixer, dsound_sdl.c's decoder) */
 	uint32_t mixer_ticks, mixer_chunks, decoder_ticks;
-	/* the objects the visibility search considered and found (structure_visibility.c) */
-	uint32_t objects_considered, objects_found;
+	/* the objects the render's visibility search considered, found inside the view and drew (render_objects.c; not the lights' search) */
+	uint32_t objects_considered, objects_found, objects_drawn;
 };
 
 /* the pools (an instant, in KiB so that 4 GiB fits a word); `known` 0: not read (the panel says so) */
@@ -67,6 +67,8 @@ struct perf_pool
 	uint32_t hot_kib;  /* of used: what was touched lately (the caches that keep what they last held), else 0 */
 	int fixed;         /* the pool's use is set when the game starts and does not move in play (the game state's allocations): it is never amber or red, and its meter is neutral */
 	int lru;           /* a cache that keeps what it last held, so that it fills and stays full: its level follows hot_kib, what is in use, not used_kib */
+	int reserved;      /* MEM2: the C heap has nothing free by design (the game takes all of it): the panel says RESERVED and shows no use */
+	uint32_t largest_kib; /* MEM2: the largest free block */
 	int known;
 	int full;          /* the pool turned a request away since it was last read (red whatever its level) */
 };
@@ -99,10 +101,13 @@ struct perf_view
 	float frame_ms, fps, worst_ms;
 	float work_ms, gpu_ms, gpu_wait_ms, vsync_ms;   /* gpu_ms 0: no sample */
 	float sim_ms, sim_wait_ms, draw_ms, gx2_ms, gx2_busy_percent, audio_ms, audio_percent;
-	float tick_thread_ms, tick_thread_busy_percent, ticks_per_second;
+	float tick_thread_ms, tick_thread_busy_percent, ticks_per_second; /* tick_thread_ms: a job (one a frame the overlap runs) */
 	int overlap;                                    /* 0 off, 1 on, 2 serial fallback (on, but this window's frames were the serial loop's) */
 	float draw_part_ms[6];                          /* vis, begin, objects, decals, effects, hud (the passes grouped) */
-	float draws, objects_found, objects_culled;     /* a frame's */
+	float draws, objects_drawn, objects_culled;     /* a frame's: the render's objects drawn, and the candidates in the visible clusters it did not draw (outside the view, or too small while the governor sheds) */
+	float objects_found;                            /* of the candidates, those inside the view */
+	float tick_thread_tick_ms;                      /* the tick thread's time a tick (a job runs a part of a tick or more than one) */
+	float fps_average, low_fps;                     /* the frame rate over the last five seconds, and the 1 percent low of the last frames (the compact strip's) */
 	struct perf_state state;
 	struct perf_pool pool[PERF_POOL_COUNT];
 };
@@ -129,6 +134,19 @@ begins again. The first call only takes the totals and returns 0. */
 int perf_meter_close(struct perf_meter *meter, const struct perf_totals *now, double ticks_per_ms, const struct perf_state *state,
 	const struct perf_pool pools[PERF_POOL_COUNT], struct perf_view *view);
 
+/* the frame rate over the last five seconds, from the panel's windows (20 of a quarter of a second) */
+#define PERF_AVERAGE_WINDOWS 20
+struct perf_average
+{
+	float frames[PERF_AVERAGE_WINDOWS], seconds[PERF_AVERAGE_WINDOWS];
+	unsigned head, count;
+};
+
+void perf_average_reset(struct perf_average *average);
+void perf_average_push(struct perf_average *average, unsigned frames, float seconds);
+/* frames a second over the windows kept (0 with none) */
+float perf_average_fps(const struct perf_average *average);
+
 /* ---------- pools */
 
 enum { PERF_LEVEL_OK, PERF_LEVEL_AMBER, PERF_LEVEL_RED };
@@ -143,9 +161,9 @@ void perf_mib_text(char *out, size_t size, uint32_t kib);
 
 /* ---------- text */
 
-/* The log's lines every five seconds from a view, each under 199 characters: 0 the frame, work and waits, 1 the split and the rest ("overlay: ..."), 2 the
-pools ("overlay pools: ..."). Returns 0 for a line number past the last. */
-#define PERF_LOG_LINES 3
+/* The log's lines every five seconds from a view, each under 199 characters: 0 the frame, work and waits, 1 the tick thread and the draws, 2 the render passes and the screen
+("overlay: ..."), 3 the pools ("overlay pools: ..."). Returns 0 for a line number past the last. */
+#define PERF_LOG_LINES 4
 int perf_log_line(char *out, size_t size, const struct perf_view *view, int index);
 
 #endif

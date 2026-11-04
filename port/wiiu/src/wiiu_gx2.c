@@ -78,7 +78,7 @@ void tick_overlap_perf_read(struct perf_totals *totals);
 unsigned wiiu_render_pass_totals(uint32_t *out, unsigned count, uint32_t *windows_made);
 void wiiu_audio_perf(uint32_t *mixer_ticks, uint32_t *mixer_chunks);
 uint32_t wiiu_decoder_perf_ticks(void);
-void structure_visibility_object_counts(unsigned long *considered, unsigned long *found);
+void render_objects_perf(unsigned long *considered, unsigned long *found, unsigned long *drawn);
 unsigned char texture_cache_usage(unsigned long *resident_kib, unsigned long *hot_kib, unsigned long *capacity_kib);
 unsigned char sound_cache_usage(unsigned long *resident_kib, unsigned long *hot_kib, unsigned long *capacity_kib);
 unsigned char game_state_usage(unsigned long *used_kib, unsigned long *capacity_kib);
@@ -228,6 +228,7 @@ static struct
 	struct perf_meter perf_fast, perf_slow;
 	struct perf_view perf_view, perf_log;
 	OSTime perf_view_time;
+	struct perf_average perf_average; /* the panel's windows of the last five seconds, for its AVG 5 S */
 	int perf_fast_active; /* the detailed panel is the mode and its meter is taking frames */
 	/* the GX2 thread's own time, a monotonic count of ticks: what its streams (and the presents in them) took, less what they waited for (the display's flip, a ring segment's GPU
 	work: perf_job_wait, added up while a job runs); and the count at the last frame, and the unsaid rest of a pool that turned a request away */
@@ -4136,7 +4137,7 @@ static struct blit_vertex *blit_quad(void)
 /* every thread's totals, as one read of each (the game thread's under its sequence number, the rest single words) */
 static void perf_read_totals(struct perf_totals *totals)
 {
-	unsigned long considered = 0, found = 0;
+	unsigned long considered = 0, found = 0, drawn = 0;
 
 	memset(totals, 0, sizeof(*totals));
 	host_gx2_perf_game(totals);
@@ -4144,9 +4145,10 @@ static void perf_read_totals(struct perf_totals *totals)
 	wiiu_render_pass_totals(totals->pass, PERF_PASSES, &totals->pass_windows);
 	wiiu_audio_perf(&totals->mixer_ticks, &totals->mixer_chunks);
 	totals->decoder_ticks = wiiu_decoder_perf_ticks();
-	structure_visibility_object_counts(&considered, &found);
+	render_objects_perf(&considered, &found, &drawn);
 	totals->objects_considered = (uint32_t)considered;
 	totals->objects_found = (uint32_t)found;
+	totals->objects_drawn = (uint32_t)drawn;
 }
 
 static void perf_state_make(struct perf_state *state)
@@ -4200,6 +4202,7 @@ static void perf_game_pools_sample(void)
 	if (cache_file_tag_usage(&used, &capacity))
 	{
 		pools[PERF_POOL_TAGS].known = 1;
+		pools[PERF_POOL_TAGS].fixed = 1; /* (a block of the size of the largest map, which a map fills as it loads: nothing moves in play) */
 		pools[PERF_POOL_TAGS].used_kib = (uint32_t)used;
 		pools[PERF_POOL_TAGS].capacity_kib = (uint32_t)capacity;
 	}
@@ -4261,15 +4264,43 @@ static void perf_pools_read(struct perf_pool pools[PERF_POOL_COUNT])
 	pools[PERF_POOL_GEOMETRY].used_kib = cache.chunk_count ? (uint32_t)((((uint64_t)cache.chunk_count - 1) * STATIC_CHUNK_BYTES + cache.chunk_used) / 1024u) : 0;
 	pools[PERF_POOL_GEOMETRY].full = cache.full > gx.perf_geometry_full_before;
 	gx.perf_geometry_full_before = cache.full;
-	/* MEM2's heap (the application's memory): free, and the whole */
-	if (heap && heap->tag == MEM_EXPANDED_HEAP_TAG)
+	/* MEM2: the heap the C library's malloc takes from (found once, from a block it gave; the base heap of MEM2 is taken whole at the start, "MEM2 heap: 0 KB free"), its free memory and
+	its largest free block. With under a megabyte free the pool is RESERVED: the game takes all of the heap by design, and the panel shows no use */
 	{
-		const uint32_t total = (uint32_t)(((uintptr_t)heap->dataEnd - (uintptr_t)heap->dataStart) / 1024u);
-		const uint32_t free_kib = (uint32_t)(MEMGetTotalFreeSizeForExpHeap(heap) / 1024u);
+		static MEMHeapHandle c_heap;
+		static int probed;
 
-		pools[PERF_POOL_MEM2].known = 1;
-		pools[PERF_POOL_MEM2].capacity_kib = total;
-		pools[PERF_POOL_MEM2].used_kib = total > free_kib ? total - free_kib : 0;
+		if (!probed)
+		{
+			void *block = malloc(64);
+
+			probed = 1;
+			if (block)
+			{
+				c_heap = MEMFindContainHeap(block);
+				free(block);
+			}
+			if (c_heap && c_heap->tag == MEM_EXPANDED_HEAP_TAG)
+				wiiu_log("GX2: the overlay's MEM2: the C library's heap is %s the MEM2 base heap, %u KB, %u KB free, %u KB in the largest block", c_heap == heap ? "the same as" : "not",
+					(unsigned)(((uintptr_t)c_heap->dataEnd - (uintptr_t)c_heap->dataStart) / 1024u), (unsigned)(MEMGetTotalFreeSizeForExpHeap(c_heap) / 1024u),
+					(unsigned)(MEMGetAllocatableSizeForExpHeapEx(c_heap, 4) / 1024u));
+			else
+				wiiu_log("GX2: the overlay's MEM2: the C library's heap is %s (%s)", c_heap ? "not an expanded heap" : "not found", c_heap == heap ? "the base heap" : "another");
+		}
+		if (!c_heap || c_heap->tag != MEM_EXPANDED_HEAP_TAG)
+			c_heap = heap;
+		if (c_heap && c_heap->tag == MEM_EXPANDED_HEAP_TAG)
+		{
+			const uint32_t total = (uint32_t)(((uintptr_t)c_heap->dataEnd - (uintptr_t)c_heap->dataStart) / 1024u);
+			const uint32_t free_kib = (uint32_t)(MEMGetTotalFreeSizeForExpHeap(c_heap) / 1024u);
+
+			pools[PERF_POOL_MEM2].known = 1;
+			pools[PERF_POOL_MEM2].capacity_kib = total;
+			pools[PERF_POOL_MEM2].used_kib = total > free_kib ? total - free_kib : 0;
+			pools[PERF_POOL_MEM2].largest_kib = (uint32_t)(MEMGetAllocatableSizeForExpHeapEx(c_heap, 4) / 1024u);
+			pools[PERF_POOL_MEM2].reserved = free_kib < 1024u;
+			pools[PERF_POOL_MEM2].fixed = free_kib < 1024u;
+		}
 	}
 	pools[PERF_POOL_EDRAM].known = 1;
 	pools[PERF_POOL_EDRAM].capacity_kib = MEM1_BYTES / 1024u;
@@ -4290,6 +4321,12 @@ static void perf_log_emit(void)
 	perf_state_make(&state);
 	perf_pools_read(pools);
 	perf_meter_close(&gx.perf_slow, &totals, (double)OSTimerClockSpeed / 1000.0, &state, pools, &gx.perf_log);
+	if (gx.perf_log.valid)
+	{
+		/* (this window is the five seconds: its own rate is the average) */
+		gx.perf_log.fps_average = gx.perf_log.fps;
+		gx.perf_log.low_fps = gx.overlay.view.low_fps;
+	}
 	for (index = 0; index < PERF_LOG_LINES; index++)
 		if (perf_log_line(line, sizeof(line), &gx.perf_log, index))
 			wiiu_log("GX2:   %s", line);
@@ -4311,6 +4348,7 @@ static void perf_windows(OSTime now)
 	{
 		/* (the panel has just been chosen: its window begins here) */
 		perf_meter_reset(&gx.perf_fast);
+		perf_average_reset(&gx.perf_average);
 		memset(&gx.perf_view, 0, sizeof(gx.perf_view));
 		gx.perf_fast_active = 1;
 		gx.perf_view_time = now;
@@ -4327,6 +4365,12 @@ static void perf_windows(OSTime now)
 	perf_state_make(&state);
 	perf_pools_read(pools);
 	perf_meter_close(&gx.perf_fast, &totals, (double)OSTimerClockSpeed / 1000.0, &state, pools, &gx.perf_view);
+	if (gx.perf_view.valid)
+	{
+		perf_average_push(&gx.perf_average, gx.perf_view.frames, gx.perf_view.seconds);
+		gx.perf_view.fps_average = perf_average_fps(&gx.perf_average);
+		gx.perf_view.low_fps = gx.overlay.view.low_fps;
+	}
 	overlay_refresh_detail();
 }
 

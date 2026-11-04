@@ -690,6 +690,9 @@ static struct perf_totals perf_game;
 static struct perf_totals perf_game_published;
 static volatile uint32_t perf_game_sequence;
 static OSTime perf_part_started, perf_last_exit;
+/* (the slot waits the game thread had made when a part began: a part's time is counted without the waits for the GX2 thread made inside it, which are GPU WAIT's, so that DRAW and SIM are
+what the game thread did and never more than WORK) */
+static uint32_t perf_part_waited;
 
 void host_gx2_perf_game(struct perf_totals *out);
 
@@ -732,6 +735,9 @@ void wiiu_frame_part(int part, int ticks)
 		perf_part_started = ticks_now;
 		return;
 	}
+	/* (a part's span less the waits for the GX2 thread within it) */
+#define PERF_PART_SPAN() ((uint32_t)(ticks_now - perf_part_started) > perf_game.game_slot_wait - perf_part_waited ? \
+	(uint32_t)(ticks_now - perf_part_started) - (perf_game.game_slot_wait - perf_part_waited) : 0u)
 	if (part == 5)
 	{
 		perf_game.game_throttle += (uint32_t)(ticks_now - perf_part_started);
@@ -741,19 +747,20 @@ void wiiu_frame_part(int part, int ticks)
 	{
 		part_start = now;
 		perf_part_started = ticks_now;
+		perf_part_waited = perf_game.game_slot_wait;
 		return;
 	}
 	if (part == 1)
 	{
 		frame_tick_ms += now - part_start;
 		frame_ticks += (unsigned long)(ticks > 0 ? ticks : 0);
-		perf_game.game_sim += (uint32_t)(ticks_now - perf_part_started);
+		perf_game.game_sim += PERF_PART_SPAN();
 		perf_game.game_ticks += (uint32_t)(ticks > 0 ? ticks : 0);
 	}
 	else
 	{
 		frame_render_ms += now - part_start;
-		perf_game.game_render += (uint32_t)(ticks_now - perf_part_started);
+		perf_game.game_render += PERF_PART_SPAN();
 	}
 }
 
