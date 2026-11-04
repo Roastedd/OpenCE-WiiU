@@ -53,6 +53,7 @@ class LookupTests(unittest.TestCase):
             self.assertEqual(source.count(PACK_DEFINE), 1)
             (directory / 'gx2_shaders.c').write_text(source.replace(PACK_DEFINE, '#define PACK_FILE TEST_PACK_FILE'))
             (directory / 'xgpu.h').write_text(stand_in_xgpu())
+            (directory / 'halo_startup.h').write_text((ROOT / 'port/linux/include/halo_startup.h').read_text())  # (the start-up timeline's marks, nothing on a host)
             command = [os.environ.get('CC', 'cc'), *shlex.split(os.environ.get('SHADER_FALLBACK_TARGET', '')),
                        '-std=gnu11', '-O2', '-g', '-Wall', '-Wextra', '-Werror', '-I' + str(directory), '-I' + str(SRC),
                        '-DSHADERS_SOURCE="' + str(directory / 'gx2_shaders.c') + '"',
@@ -115,7 +116,7 @@ class GeneratorCheckTests(unittest.TestCase):
                      '-D_GNU_SOURCE -DHALO_LINUX_PLATFORM_LAYER -DHALO_GLES -w').split()
             command = ['clang-i686', *flags, '-include', str(ROOT / 'port/linux/include/halo_linux_prefix.h'),
                        '-include', str(directory / 'platform_msvc_semantics.h'), '-I' + str(directory), '-I' + str(ROOT / 'port/linux/src'),
-                       '-I' + str(ROOT / 'port/linux/include'), '-I' + str(ROOT / 'source'), '-I' + str(ROOT / 'source/cseries'),
+                       '-I' + str(ROOT / 'source'), '-I' + str(ROOT / 'source/cseries'),
                        '-idirafter', str(ROOT / 'port/include/xdk'),
                        *(str(directory / name) for name in ['pack_gen.c', 'nv2a_vsh.c', 'nv2a_psh.c', 'xgpu_text.c']),
                        '-no-pie', '-Wl,--gc-sections', '-Wl,--unresolved-symbols=ignore-all', '-o', str(directory / 'pack_gen')]
