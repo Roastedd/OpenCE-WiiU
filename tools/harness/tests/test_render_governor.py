@@ -54,8 +54,9 @@ unsigned long render_governor_pass_milliseconds(double milliseconds[13])
 }
 
 /* the milliseconds a frame each step takes off the one before, in a fight (render_governor.c's default_save_ms, less a little: the model is worse) */
-static const double saved_up_to[RENDER_GOVERNOR_STEPS] = { 0, 0.9, 2.1, 3.3, 4.8, 6.9, 8.2, 9.4 };
+static const double saved_up_to[RENDER_GOVERNOR_STEPS] = { 0, 1.0, 3.2, 4.4, 5.2, 7.0, 8.3, 9.5 };
 static double now_ms = 1000.0;
+static double saved_scale = 1.0;
 static unsigned long noise_state = 12345;
 static int last_step;
 static double first_change = -1;
@@ -73,7 +74,7 @@ static void run(double seconds, double base, double jitter)
 
 	while (now_ms < end)
 	{
-		double work = base - saved_up_to[render_governor_step()] + noise() * jitter;
+		double work = base - saved_up_to[render_governor_step()] * saved_scale + noise() * jitter;
 
 		render_governor_frame(work, work * 0.4, work * 0.6, now_ms);
 		now_ms += work > 16.7 ? work : 16.7;
@@ -230,12 +231,13 @@ int main(int argc, char **argv)
 	}
 	else if (!strcmp(scenario, "probe"))
 	{
-		/* at the cap, the scene gets lighter to 21 ms at step 3: the estimate says taking a step back would be 22.2, but the frame has been under the target a
-		long time: it tries, and takes it back (a longer wait for the next) */
+		/* a scene where each step saves twice what the table says: at the cap the frame is 20.0 ms, under 93% of the target, and the estimate says a step
+		back would be 21.2, over the 88% it needs; after 20 s under it tries, finds 22.4, and takes it back (a longer wait for the next) */
 		config_on = 1;
-		run(30, 40, 0);
+		saved_scale = 2.0;
+		run(30, 28.8, 0);
 		printf("RESULT at_cap %d\n", render_governor_step());
-		run(120, 24.3, 0);
+		run(150, 28.8, 0);
 	}
 	else if (!strcmp(scenario, "low_target"))
 	{
@@ -425,7 +427,7 @@ def test_a_step_back_is_tried_when_the_frame_has_been_under_long(tmp_path):
     assert ups, transitions
     # (the first try about 20 s after the cap was reached; taken back; the next one waits twice as long)
     first = ups[0][0]
-    assert 40000 <= first <= 60000
+    assert 20000 <= first <= 35000
     later = [t for t in ups[1:]]
     assert not later or later[0][0] - first >= 38000
 

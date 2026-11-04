@@ -59,12 +59,12 @@ static struct render_governor_values const default_values[STEPS] =
 	/* 1 */ { "far props",    12.f,  0.f,  0.f, 1.00f,  45.f, 120.f, 14, 1.25f, 14, 1, 1, 1, 1, 200, 300 },
 	/* 2 */ { "small things", 22.f,  0.f,  0.f, 0.85f,  60.f,  90.f, 12, 1.50f, 12, 1, 1, 1, 1, 130, 200 },
 	/* 3 */ { "grass, flares", 32.f, 0.f,  0.f, 0.70f,  80.f,  60.f,  9, 2.00f,  8, 0, 0, 1, 1, 100, 140 },
-	/* 4 */ { "shine, units", 28.f, 28.f,  8.f, 0.55f, 110.f,  40.f,  6, 3.00f,  6, 0, 0, 0, 1,  70, 100 },
-	/* 5 */ { "no shadows",   40.f, 40.f, 14.f, 0.45f,  1e9f,  25.f,  4, 4.00f,  4, 0, 0, 0, 0,  50,  70 },
-	/* 6 */ { "minimum",      56.f, 56.f, 22.f, 0.35f,  1e9f,  15.f,  2, 6.00f,  2, 0, 0, 0, 0,  30,  40 },
+	/* 4 */ { "shine, units", 36.f, 28.f,  8.f, 0.55f, 110.f,  40.f,  6, 3.00f,  6, 0, 0, 0, 1,  70, 100 },
+	/* 5 */ { "no shadows",   44.f, 40.f, 14.f, 0.45f,  1e9f,  25.f,  4, 4.00f,  4, 0, 0, 0, 0,  50,  70 },
+	/* 6 */ { "minimum",      60.f, 56.f, 22.f, 0.35f,  1e9f,  15.f,  2, 6.00f,  2, 0, 0, 0, 0,  30,  40 },
 	/* 7 */ { "emergency",    80.f, 80.f, 32.f, 0.25f,  1e9f,  10.f,  1, 8.00f,  1, 0, 0, 0, 0,  15,  20 },
 };
-static float const default_save_ms[STEPS] = { 0.f, 0.9f, 1.2f, 1.2f, 1.5f, 2.1f, 1.3f, 1.2f };
+static float const default_save_ms[STEPS] = { 0.f, 1.0f, 2.2f, 1.2f, 0.8f, 1.8f, 1.3f, 1.2f };
 /* the most steps the governor goes down by default (the card file's max_step; the Performance mode: all) */
 #define DEFAULT_MAX_STEP 3
 
@@ -501,7 +501,7 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 			governor.under_windows = governor.step > 0 && predicted < target * settings.up_margin ? governor.under_windows + 1 : 0;
 			/* and a step up tried when the frame has been comfortably under the target a long time, whatever the estimate says: it is taken back (and the
 			next try waits longer) if it was wrong */
-			governor.probe_windows = governor.step > 0 && mean < target * 0.97 ? governor.probe_windows + 1 : 0;
+			governor.probe_windows = governor.step > 0 && mean < target * 0.93 ? governor.probe_windows + 1 : 0;
 			if (governor.over_windows >= (severe ? 1 : settings.down_windows) && governor.step < governor_max_step() &&
 				now_ms - governor.last_change >= settings.down_dwell_ms)
 			{
@@ -523,7 +523,7 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 			{
 				char why[64];
 
-				snprintf(why, sizeof(why), "a try after %.0f s under %.1f (%.1f ms)", settings.probe_ms / 1000.0, target * 0.97, mean);
+				snprintf(why, sizeof(why), "a try after %.0f s under %.1f (%.1f ms)", settings.probe_ms / 1000.0, target * 0.93, mean);
 				governor_set_step(governor.step - 1, now_ms, why);
 			}
 			else if (now_ms - governor.last_change > 60000.0 && governor.up_backoff > 1)
