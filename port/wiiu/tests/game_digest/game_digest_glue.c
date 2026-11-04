@@ -920,6 +920,17 @@ int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes)
 	return 0;
 }
 
+/* wiiu_gpu_offload.c: halo/gpu_offload.txt's bits; here HALO_GPU_OFFLOAD (a number) in the environment, 0 if none (GAME_DIGEST_ENV="HALO_GPU_OFFLOAD=1") */
+unsigned wiiu_gpu_offload_bits(void);
+
+unsigned wiiu_gpu_offload_bits(void)
+{
+	const char *value = getenv("HALO_GPU_OFFLOAD");
+	const long bits = value && *value ? strtol(value, NULL, 0) : 0;
+
+	return bits > 0 ? (unsigned)bits & 3u : 0;
+}
+
 /* wiiu_study.c: a study switch's number from a file on the card; here from the environment (tick_thread.txt: HALO_TICK_THREAD,
 tick_overlap.txt: HALO_TICK_OVERLAP, startup.txt: HALO_STARTUP), so that a run can have the ticks on a thread of their own, and overlapped */
 long wiiu_study_number(const char *name, long fallback)
