@@ -459,7 +459,9 @@ void wiiu_request_exit(void)
 		do
 		{
 			wiiu_missing_keys_counts_get(&counts);
-			if ((!counts.queue_pending && !counts.batch_records && counts.phase == 0) || counts.failed || waited >= 5000u)
+			/* (all the accepted records are written, and nothing is pending: the first look came before the writer had taken the records the always flag
+			releases, saw nothing pending and left after 0 ms, so a session's 13 missing keys were lost: 2026-11-04) */
+			if ((counts.written >= counts.accepted && !counts.queue_pending && !counts.batch_records && counts.phase == 0) || counts.failed || waited >= 5000u)
 				break;
 			sleep_ms(5);
 			waited += 5u;
