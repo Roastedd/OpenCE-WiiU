@@ -4246,7 +4246,18 @@ static boolean main_loop_iteration(
 			}
 
 			if (!halo_server_mode())
+			{
+#ifdef HALO_WIIU
+				/* port: the throttle's time, for the detailed overlay's VSYNC (port/wiiu/src/d3d8_gx2.c) */
+				void wiiu_frame_part(int part, int ticks);
+
+				wiiu_frame_part(4, 0);
+#endif
 				profile_scope(main_throttle_section, main_rasterizer_throttle();)
+#ifdef HALO_WIIU
+				wiiu_frame_part(5, 0);
+#endif
+			}
 
 			if (render_frame && !debug_no_drawing)
 			{

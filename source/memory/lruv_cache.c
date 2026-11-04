@@ -312,6 +312,34 @@ boolean lruv_block_touched(
 	return block->last_used_tick == cache->tick;
 }
 
+void lruv_cache_usage(
+	struct lruv_cache *cache,
+	long recent_ticks,
+	long *resident_pages,
+	long *hot_pages,
+	long *page_count)
+{
+	long resident = 0, hot = 0, block_index, steps = 0;
+
+	if (cache && cache->blocks)
+	{
+		for (block_index = cache->first_block_index; block_index != NONE && steps < 65536; steps++)
+		{
+			struct lruv_cache_block *block = datum_get(cache->blocks, block_index);
+
+			resident += block->page_count;
+			if (cache->tick - block->last_used_tick < recent_ticks)
+				hot += block->page_count;
+			block_index = block->next_block_index;
+		}
+	}
+	*resident_pages = resident;
+	*hot_pages = hot;
+	*page_count = cache ? cache->page_count : 0;
+
+	return;
+}
+
 void lruv_cache_get_page_usage(
 	struct lruv_cache *cache,
 	byte *page_usage)

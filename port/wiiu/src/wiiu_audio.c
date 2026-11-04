@@ -47,6 +47,17 @@ static int ax_owned; /* this output initialized AX and must shut it down */
 static int mixer_profile_enabled;
 static struct wiiu_audio_mix_pressure mix_pressure;
 
+/* the mixer's time, for the detailed overlay (wiiu_perf.h): monotonic counts, written by the audio thread only, 32 bits so that another thread reads them whole */
+static volatile uint32_t perf_mixer_ticks, perf_mixer_chunks;
+
+void wiiu_audio_perf(uint32_t *mixer_ticks, uint32_t *mixer_chunks);
+
+void wiiu_audio_perf(uint32_t *mixer_ticks, uint32_t *mixer_chunks)
+{
+	*mixer_ticks = perf_mixer_ticks;
+	*mixer_chunks = perf_mixer_chunks;
+}
+
 int wiiu_audio_profile_is_enabled(void)
 {
 	return mixer_profile_enabled;
@@ -186,7 +197,14 @@ static int audio_thread(int argc, const char **argv)
 				memset(&mix_pressure, 0, sizeof(mix_pressure));
 				render_started = OSGetSystemTime();
 			}
-			render(mixed, CHUNK_FRAMES);
+			{
+				/* (two reads of the time base a chunk, 750 chunks a second: the detailed overlay's AUDIO) */
+				const OSTime mix_started = OSGetSystemTime();
+
+				render(mixed, CHUNK_FRAMES);
+				perf_mixer_ticks += (uint32_t)(OSGetSystemTime() - mix_started);
+				perf_mixer_chunks++;
+			}
 			if (mixer_profile_enabled)
 				wiiu_mixer_profile_chunk(&profile, (uint64_t)(OSGetSystemTime() - render_started), budget, &mix_pressure);
 			for (i = 0; i < CHUNK_FRAMES; i++)

@@ -246,3 +246,18 @@ void overlay_render(const struct overlay *overlay, uint8_t *pixels)
 				ms <= 17.5f ? 0x50 : ms <= 34.0f ? 0x38 : 0x40, 255);
 	}
 }
+
+/* ---------- the modes */
+
+int overlay_mode_next(int mode)
+{
+	return (mode + 1) % OVERLAY_MODE_COUNT;
+}
+
+/* halo/overlay.txt's number: 0 off, 1 the compact strip, 2 the detailed panel; anything else is the compact one if it is above 0 (as 1 was the only on) and off if not */
+int overlay_mode_from_file(int number)
+{
+	if (number <= 0)
+		return OVERLAY_MODE_OFF;
+	return number == 2 ? OVERLAY_MODE_DETAIL : OVERLAY_MODE_COMPACT;
+}

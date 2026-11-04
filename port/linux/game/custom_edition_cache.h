@@ -184,6 +184,9 @@ struct custom_edition_string_list *custom_edition_locale_strings(
 	char const *name);
 boolean custom_edition_cache_tags_loaded(
 	void);
+/* the bytes of the tag cache the loaded map's tags use; 0 when none is loaded */
+unsigned long custom_edition_cache_loaded_bytes(
+	void);
 /* Whether the structure bsp reference (of the loaded map's scenario) names
 bytes of the map that load to the top of its tag cache, above its tags:
 logged when not. */
