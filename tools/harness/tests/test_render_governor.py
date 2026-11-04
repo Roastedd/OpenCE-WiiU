@@ -214,6 +214,20 @@ int main(int argc, char **argv)
 		}
 		printf("RESULT step %d\n", render_governor_step());
 	}
+	else if (!strcmp(scenario, "wait_some"))
+	{
+		/* a frame of 33 ms that waits 6 for the tick thread (18%): drawing is most of it, and is shed */
+		int index;
+
+		config_on = 1;
+		for (index = 0; index < 1500; index++)
+		{
+			wait_total += 6;
+			render_governor_frame(33, 10, 21, now_ms);
+			now_ms += 33;
+		}
+		printf("RESULT step %d\n", render_governor_step());
+	}
 	else if (!strcmp(scenario, "probe"))
 	{
 		/* at the cap, the scene gets lighter to 21 ms at step 3: the estimate says taking a step back would be 22.2, but the frame has been under the target a
@@ -397,6 +411,11 @@ def test_a_window_with_a_long_frame_is_not_evidence(tmp_path):
 def test_a_frame_the_tick_thread_holds_is_not_drawings_to_shed(tmp_path):
     _, results, _ = run_scenario(tmp_path, "tick_bound")
     assert results["step"] == 0
+
+
+def test_a_frame_that_waits_a_little_for_the_tick_thread_is_still_drawings(tmp_path):
+    _, results, _ = run_scenario(tmp_path, "wait_some")
+    assert results["step"] == 3
 
 
 def test_a_step_back_is_tried_when_the_frame_has_been_under_long(tmp_path):

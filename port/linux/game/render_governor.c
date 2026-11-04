@@ -20,8 +20,10 @@ decal or a particle that is not drawn is still made and ages as it would. Where 
 halo/governor.txt (HALO_GOVERNOR on the host): a first word on/off/1/0 turns it on or off (display.dynamic_quality otherwise); then, one to a line or
 separated by semicolons, "name value": target (ms), step (hold this step, for a test: the governor then does not move), max_step, window (ms), down_dwell,
 up_dwell (ms), down_windows, up_windows, up_margin (the share of the target the frame must be under, with the step's saving added), min_render (ms of drawing a frame
-under which the governor does not step down: the frame is the ticks', 4), log (ms between lines; 0 for none) and sN.name for N the step (0 to 7) and name one of cull_scenery, cull_item, cull_unit, lod, shadow, decal_radius, decal_keep, particle_lod,
-particle_keep, grass, lens_flares, specular, contrails, save (the ms the step is estimated to save, for the step-up test).
+under which the governor does not step down: the frame is the ticks', 4), tick_bound (ms a frame waited for the tick thread, 3, and tick_bound_share, 0.35 of the
+frame: over both, the frame is the tick thread's and the governor does not step down), quiet (ms after a map starts that decide nothing, 20000), probe (ms under
+the target before a step up is tried whatever the estimate, 20000), worst (a window with a frame over this many ms decides nothing, 80), log (ms between lines; 0 for none) and sN.name for N the step (0 to 7) and name one of cull_scenery, cull_item, cull_unit, lod, shadow, decal_radius, decal_keep, particle_lod,
+particle_keep, decal_max, particle_max, grass, lens_flares, specular, contrails, save (the ms the step is estimated to save, for the step-up test).
 */
 
 #include "render_governor.h"
@@ -54,9 +56,9 @@ static struct render_governor_values const default_values[STEPS] =
 	Steps 4 to 7 cull units and items by size and are for the Performance graphics mode, or max_step in the card file. */
 	/* name           scenery item unit  lod   shadow  decal: radius keep  particle: lod keep  grass flares specular contrails  decal_max particle_max */
 	/* 0 */ { "full",          0.f,  0.f,  0.f, 1.00f,   0.f,   0.f, 16, 1.00f, 16, 1, 1, 1, 1,   0,   0 },
-	/* 1 */ { "far props",    10.f,  0.f,  0.f, 1.00f,  45.f, 120.f, 14, 1.25f, 14, 1, 1, 1, 1, 200, 300 },
-	/* 2 */ { "small things", 18.f,  0.f,  0.f, 0.85f,  60.f,  90.f, 12, 1.50f, 12, 1, 1, 1, 1, 130, 200 },
-	/* 3 */ { "grass, flares", 26.f, 0.f,  0.f, 0.70f,  80.f,  60.f,  9, 2.00f,  8, 0, 0, 1, 1, 100, 140 },
+	/* 1 */ { "far props",    12.f,  0.f,  0.f, 1.00f,  45.f, 120.f, 14, 1.25f, 14, 1, 1, 1, 1, 200, 300 },
+	/* 2 */ { "small things", 22.f,  0.f,  0.f, 0.85f,  60.f,  90.f, 12, 1.50f, 12, 1, 1, 1, 1, 130, 200 },
+	/* 3 */ { "grass, flares", 32.f, 0.f,  0.f, 0.70f,  80.f,  60.f,  9, 2.00f,  8, 0, 0, 1, 1, 100, 140 },
 	/* 4 */ { "shine, units", 28.f, 28.f,  8.f, 0.55f, 110.f,  40.f,  6, 3.00f,  6, 0, 0, 0, 1,  70, 100 },
 	/* 5 */ { "no shadows",   40.f, 40.f, 14.f, 0.45f,  1e9f,  25.f,  4, 4.00f,  4, 0, 0, 0, 0,  50,  70 },
 	/* 6 */ { "minimum",      56.f, 56.f, 22.f, 0.35f,  1e9f,  15.f,  2, 6.00f,  2, 0, 0, 0, 0,  30,  40 },
@@ -76,7 +78,7 @@ static struct
 	int configured_on, card_on, card_off; /* the setting, and the card file's word */
 	int forced;                         /* the step held (-1: the governor decides) */
 	int max_step, max_step_set, performance_mode;
-	double target_ms, window_ms, down_dwell_ms, up_dwell_ms, up_margin, log_ms, min_render_ms, tick_bound_ms, quiet_ms, probe_ms, worst_ms;
+	double target_ms, window_ms, down_dwell_ms, up_dwell_ms, up_margin, log_ms, min_render_ms, tick_bound_ms, tick_bound_share, quiet_ms, probe_ms, worst_ms;
 	int down_windows, up_windows;
 } settings;
 
@@ -113,7 +115,8 @@ static void settings_defaults(void)
 	settings.up_margin = 0.88;
 	settings.log_ms = 5000.0;
 	settings.min_render_ms = 4.0;
-	settings.tick_bound_ms = 1.5;
+	settings.tick_bound_ms = 3.0;
+	settings.tick_bound_share = 0.35;
 	settings.quiet_ms = 20000.0;
 	settings.probe_ms = 20000.0;
 	settings.worst_ms = 80.0;
@@ -141,6 +144,8 @@ static int settings_value(char const *name, double number)
 	}
 	else if (!strcmp(name, "tick_bound") && number >= 0.0)
 		settings.tick_bound_ms = number;
+	else if (!strcmp(name, "tick_bound_share") && number >= 0.0 && number <= 1.0)
+		settings.tick_bound_share = number;
 	else if (!strcmp(name, "quiet") && number >= 0.0)
 		settings.quiet_ms = number;
 	else if (!strcmp(name, "probe") && number >= 1000.0)
@@ -463,7 +468,9 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 		{
 			const double wait = governor.sum_wait / (double)governor.frames;
 			const double saving = (double)save_ms[governor.step];
-			const int tick_bound = wait > settings.tick_bound_ms;
+			/* (waiting 3 ms a frame and a third of it or more: the frame is the tick thread's; a frame that waits a little, as a heavy fight's does for the
+			frames with two ticks in them, is still drawing's) */
+			const int tick_bound = wait > settings.tick_bound_ms && wait > settings.tick_bound_share * governor.sum_work / (double)governor.frames;
 			double predicted;
 
 			mean = governor.sum_work / (double)governor.frames;
