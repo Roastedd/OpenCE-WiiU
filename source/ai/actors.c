@@ -4279,7 +4279,8 @@ void actors_update(
 	while ((actor = actor_iterator_next(&iterator)) != NULL)
 	{
 #ifdef HALO_PPC_HOTPATHS_ON
-		actors_update_touch_next(iterator.index);
+		if (HALO_TOUCHES_ON())
+			actors_update_touch_next(iterator.index);
 #endif
 		if (actor->meta.erase_next_tick)
 		{

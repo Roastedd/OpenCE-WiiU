@@ -21,6 +21,12 @@ the usual ones for a CPU without a hardware prefetcher: the Espresso has dcbt/dc
 (halo_touch_for_write); an address that is not mapped is ignored by the hardware (dcbt and dcbtst never fault), and a null pointer is not asked for */
 #define HALO_CACHE_LINE 32
 
+/* whether the touches are made: -1 until the first tick asks (halo_hotpaths_start, objects.c), then 1 or 0. On the Wii U the card file halo/hotpaths.txt
+says (absent or 1: made; 0: not, for a run that times the touches against none); on a host build the environment's HALO_HOTPATHS does (absent or 1, or 0) */
+extern long halo_hotpaths_touches;
+void halo_hotpaths_start(void);
+#define HALO_TOUCHES_ON() (halo_hotpaths_touches > 0 || (halo_hotpaths_touches < 0 && (halo_hotpaths_start(), halo_hotpaths_touches > 0)))
+
 /* (dcbt and dcbtst by name: the compiler's own prefetch is dropped for a generic 32-bit PowerPC target, which the host loop is built for) */
 #if defined(__powerpc__) || defined(__PPC__)
 #define HALO_TOUCH_LINE(line) __asm__ volatile("dcbt 0,%0" : : "r"(line))

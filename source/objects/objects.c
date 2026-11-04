@@ -4749,6 +4749,25 @@ void objects_garbage_collection(
 
 
 #ifdef HALO_PPC_HOTPATHS_ON
+long halo_hotpaths_touches = -1;
+
+void halo_hotpaths_start(void)
+{
+	void platform_log(const char *format, ...);
+#ifdef HALO_WIIU
+	long wiiu_study_number(const char *name, long fallback);
+
+	halo_hotpaths_touches = wiiu_study_number("hotpaths.txt", 1) != 0;
+#else
+	char const *setting = getenv("HALO_HOTPATHS");
+
+	halo_hotpaths_touches = (setting && *setting) ? atol(setting) != 0 : 1;
+#endif
+	platform_log("hot paths: the cache lines of the next object and actor are %s while one updates", halo_hotpaths_touches ? "asked for" : "not asked for");
+
+	return;
+}
+
 /* port: the next header after `from` of an object this pass will update (a live, active one that is not being created), or `count` */
 static short objects_update_next_active(
 	struct object_header_datum const *headers,
@@ -4921,7 +4940,8 @@ void objects_update(
 			{
 				long object_index = DATUM_INDEX_NEW(i, object_header->identifier);
 #ifdef HALO_PPC_HOTPATHS_ON
-				objects_update_look_ahead(&look_ahead, (struct object_header_datum *)object_header_data->data, object_header_data->count, i);
+				if (HALO_TOUCHES_ON())
+					objects_update_look_ahead(&look_ahead, (struct object_header_datum *)object_header_data->data, object_header_data->count, i);
 #endif
 				match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 416, object_get(object_index)->object.parent_object_index==NONE);
 				match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 417, object_get(object_index)->object.next_object_index==NONE);
