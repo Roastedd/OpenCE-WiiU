@@ -362,6 +362,7 @@ static int size_bucket(long size)
 /* the view: the drawing thread's is the only one that ever has one (objects.h's tick_snapshot_headers finds the calling thread by its stack), so a tick
 on another thread reads the game state */
 volatile int tick_snapshot_view_any;
+volatile int tick_snapshot_lights_in_view; /* a frame drawn from a pinned pair reads the lights from the ring (tick_snapshot_light_array) */
 struct data_array *volatile tick_snapshot_view_array;
 
 /* the accessors' marks (objects.h): set while the snapshot skips the objects nothing has accessed since a slot's copy */
@@ -1316,11 +1317,16 @@ static void tick_snapshot_capture_lights(struct slot *slot)
 }
 
 /* the lights a frame reads: the view's copy (the game state's if the capture has none) */
+/* The lights a frame reads are the copy of the ring's only in a frame drawn from a pinned pair (the overlap's: the tick thread changes the lights meanwhile). A serial frame, drawn with the tick
+thread idle and the lights as the last tick left them, reads and CHANGES the game state's own: lights_preprocess_scene lets go of the lights that have faded (datum_delete on the game state's
+array) and moves the ones that follow an object (light_disconnect_from_map and light_reconnect_to_map, which write a light's place in its clusters), and a frame drawn from the capture of the
+last tick would do each again from the same capture in the next frame (the frames come faster than the ticks, and the capture is of the tick): the game halted on "lights index ... is unused or
+changed" in the console's run of 2026-11-03 (G2, 4.3 s into the serial frames of a save), and the light that followed its object was moved in the copy and not in the game state. */
 struct data_array *tick_snapshot_light_array(void)
 {
 	struct slot *view = s.view;
 
-	if (view && view->lights_valid)
+	if (view && view->lights_valid && s.pair_view)
 		return &view->lights;
 	return light_data;
 }
@@ -1334,7 +1340,8 @@ struct cluster_partition const *tick_snapshot_cluster_partition(struct cluster_p
 		return live;
 	for (partition_index = 0; partition_index < PARTITION_COUNT; partition_index++)
 	{
-		if (view->partitions[partition_index].live == live && view->partitions[partition_index].valid)
+		/* (the lights' partition, as the lights themselves, only in a frame drawn from a pinned pair: tick_snapshot_light_array) */
+		if (view->partitions[partition_index].live == live && view->partitions[partition_index].valid && (partition_index != 2 || s.pair_view))
 			return &view->partitions[partition_index].view;
 	}
 	return live;
@@ -1579,6 +1586,7 @@ void tick_snapshot_reset(void)
 	s.pair_view = FALSE;
 	tick_snapshot_view_array = NULL;
 	tick_snapshot_view_any = 0;
+	tick_snapshot_lights_in_view = 0;
 }
 
 void tick_snapshot_reads_total(unsigned long *reads, unsigned long *fallbacks, unsigned long *applied)
@@ -2171,6 +2179,7 @@ void tick_snapshot_view_begin(void)
 	/* (the headers last: from here the accessors on this core give the copies) */
 	tick_snapshot_view_array = &latest->array;
 	tick_snapshot_view_any = 1;
+	tick_snapshot_lights_in_view = s.pair_view && latest->lights_valid;
 	s.views++;
 	vs_stats.frames++;
 	vs_stats.begin += tick_overlap_now() - entered;
@@ -2219,6 +2228,7 @@ void tick_snapshot_view_end(void)
 	}
 	tick_snapshot_view_array = NULL;
 	tick_snapshot_view_any = 0;
+	tick_snapshot_lights_in_view = 0;
 	s.view = NULL;
 	s.previous = NULL;
 	s.pair_view = FALSE;

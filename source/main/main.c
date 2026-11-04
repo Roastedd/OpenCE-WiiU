@@ -3754,6 +3754,18 @@ boolean main_overlap_eligible(
 		reason = "a save";
 	else if (tick_overlap_late())
 		reason = "the tick thread was late";
+	else
+	{
+		/* (a test aid: halo/tick_overlap_force_serial.txt 1 makes every frame the serial loop's, with the overlap's switches on, so that the serial frames of the overlap's build are
+		run for as long as a test wants: they are the frames of a save, a pause, a cinematic. HALO_TICK_OVERLAP_FORCE_SERIAL on the host.) */
+		static long forced = -1;
+		long wiiu_study_number(const char *name, long fallback);
+
+		if (forced < 0)
+			forced = wiiu_study_number("tick_overlap_force_serial.txt", 0);
+		if (forced > 0)
+			reason = "forced by halo/tick_overlap_force_serial.txt (a test)";
+	}
 	/* (the reason for a frame of the serial loop's, said when it changes: the log is where a run says why the overlap was not used) */
 	if (reason != last_reason)
 	{

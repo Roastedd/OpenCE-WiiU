@@ -586,7 +586,7 @@ static struct lights_port_cache lights_port_live;
 #ifdef HALO_WIIU
 /* (the drawing thread's, when it draws beside the tick thread: kept for the capture it draws from) */
 static struct lights_port_cache lights_port_view;
-#define lights_port (*(tick_snapshot_headers ? &lights_port_view : &lights_port_live))
+#define lights_port (*(tick_snapshot_lights_in_view && tick_snapshot_headers ? &lights_port_view : &lights_port_live))
 #else
 #define lights_port lights_port_live
 #endif

@@ -240,6 +240,7 @@ struct object_header_datum
 draws, found by its stack (tick_stack.h; the ticks may run on another thread, beside the drawing: they must read the game state): the plain
 flag says whether any thread has one, so that the ticks' reads, which are most of the game's, cost a load and a branch when none does. */
 extern volatile int tick_snapshot_view_any;
+extern volatile int tick_snapshot_lights_in_view;
 extern struct data_array *volatile tick_snapshot_view_array;
 #include "tick_stack.h"
 #define tick_snapshot_headers (tick_snapshot_view_any && TICK_OVERLAP_ON_RENDER_STACK() ? tick_snapshot_view_array : (struct data_array *)0)
