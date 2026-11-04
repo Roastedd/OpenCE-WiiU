@@ -44,6 +44,13 @@ void *texture_cache_steal_memory(
 	long size);
 void texture_cache_debug_render(
 	void);
+#ifdef HALO_WIIU
+/* port: texture streaming (halo/stream.txt; port/linux/game/texture_stream.h) */
+boolean texture_cache_stream_enabled(
+	void);
+void *texture_cache_bitmap_get_hardware_format_streaming(
+	struct bitmap_data *bitmap);
+#endif
 
 /* ---------- globals */
 

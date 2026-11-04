@@ -1948,6 +1948,14 @@ boolean rasterizer_set_texture_bitmap_data(
 		D3DBaseTexture *d3d_texture;
 
 		profile_texture_start();
+#ifdef HALO_WIIU
+		/* port: with halo/stream.txt a bitmap that is not in yet is drawn from its tail (the small mipmaps, read first) instead of waited for (xbox_texture_cache.c) */
+		if (texture_cache_stream_enabled())
+		{
+			d3d_texture = texture_cache_bitmap_get_hardware_format_streaming((struct bitmap_data *)bitmap);
+		}
+		else
+#endif
 		d3d_texture = _texture_cache_bitmap_get_hardware_format(bitmap, TRUE, TRUE);
 		profile_texture_end();
 		IDirect3DDevice8_SetTexture(global_d3d_device, stage, d3d_texture);

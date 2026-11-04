@@ -186,6 +186,15 @@ short cache_file_read(
 	void *buffer,
 	boolean *completion_flag_reference,
 	boolean blocking);
+#ifdef HALO_WIIU
+/* port: the same read, taken before the reads that are waiting (texture streaming) */
+short cache_file_read_first(
+	long tag_index,
+	long offset,
+	long size,
+	void *buffer,
+	boolean *completion_flag_reference);
+#endif
 
 unsigned long tag_get_group_tag(long tag_index);
 /* port: whether size bytes at address lie in the tag cache the loaded map's

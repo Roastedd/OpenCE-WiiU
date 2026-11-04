@@ -423,6 +423,12 @@ static short cached_map_files_find_map(
 
 static struct cache_file_runtime_globals cache_file_globals;
 
+#ifdef HALO_WIIU
+/* port: the reads that go before the others (cache_file_read_first: the small tail of a texture's mipmaps, which the texture streaming draws from while the rest is
+read); a byte a request, set as the request is made, so a read that asks for none leaves the order as the game had it */
+static byte cache_file_request_first[MAXIMUM_SIMULTANEOUS_CACHE_REQUESTS];
+#endif
+
 /* ---------- public code */
 
 void tags_header_register_vertex_and_index_buffers(
@@ -846,6 +852,16 @@ boolean cache_file_open(
 	return TRUE;
 }
 
+#ifdef HALO_WIIU
+static short cache_file_read_request(
+	long tag_index,
+	long offset,
+	long size,
+	void *buffer,
+	boolean *completion_flag_reference,
+	boolean blocking,
+	boolean first);
+
 short cache_file_read(
 	long tag_index,
 	long offset,
@@ -853,6 +869,38 @@ short cache_file_read(
 	void *buffer,
 	boolean *completion_flag_reference,
 	boolean blocking)
+{
+	return cache_file_read_request(tag_index, offset, size, buffer, completion_flag_reference, blocking, FALSE);
+}
+
+/* port: a read that goes before the reads that are waiting (texture streaming, port/linux/game/texture_stream.h) */
+short cache_file_read_first(
+	long tag_index,
+	long offset,
+	long size,
+	void *buffer,
+	boolean *completion_flag_reference)
+{
+	return cache_file_read_request(tag_index, offset, size, buffer, completion_flag_reference, FALSE, TRUE);
+}
+
+static short cache_file_read_request(
+	long tag_index,
+	long offset,
+	long size,
+	void *buffer,
+	boolean *completion_flag_reference,
+	boolean blocking,
+	boolean first)
+#else
+short cache_file_read(
+	long tag_index,
+	long offset,
+	long size,
+	void *buffer,
+	boolean *completion_flag_reference,
+	boolean blocking)
+#endif
 {
 	short request_index = cache_request_next_free_index();
 	struct cache_file_request *request = cache_request_get(request_index);
@@ -906,6 +954,9 @@ short cache_file_read(
 	request->overlapped.OffsetHigh = 0;
 	request->overlapped.Offset = offset;
 	request->buffer = buffer;
+#ifdef HALO_WIIU
+	cache_file_request_first[request_index] = first ? 1 : 0;
+#endif
 	request->pending = TRUE;
 	request->blocking = blocking;
 	request->running = FALSE;
@@ -1183,11 +1234,22 @@ static void cache_file_windows_thread_proc(
 			{
 				struct cache_file_request *request = cache_request_get(request_index);
 
+#ifdef HALO_WIIU
+				/* port: a read that is to go first is taken before any that is not (and the others as before) */
+				if (request->pending &&
+					!request->running &&
+					(!best_request ||
+						cache_file_request_first[request_index] > cache_file_request_first[best_request - cache_file_globals.requests] ||
+						(cache_file_request_first[request_index] == cache_file_request_first[best_request - cache_file_globals.requests] &&
+						best_request->blocking > request->blocking &&
+						best_request->overlapped.Offset > request->overlapped.Offset)))
+#else
 				if (request->pending &&
 					!request->running &&
 					(!best_request ||
 						(best_request->blocking > request->blocking &&
 						best_request->overlapped.Offset > request->overlapped.Offset)))
+#endif
 				{
 					best_request = request;
 				}
