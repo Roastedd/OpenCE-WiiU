@@ -83,6 +83,7 @@ static pthread_mutex_t mixer_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct sdl_stream *streams, *mixer_walk_next;
 static int mixer_lock_wanted;
 static unsigned long packet_serial, decoder_voices_waited, decoder_profile_fallbacks;
+static volatile uint32_t wiiu_decoder_perf_ticks_value; /* (the detailed overlay's count of the decoder's time, dsound_sdl.c) */
 static void resampler_reset(struct sdl_stream *stream) { stream->cursor=0;stream->center=0;stream->phase=0;resets++; }
 static HRESULT STDMETHODCALLTYPE stream_flush(IDirectSoundStream *object);
 static pthread_mutex_t barrier_lock = PTHREAD_MUTEX_INITIALIZER;
