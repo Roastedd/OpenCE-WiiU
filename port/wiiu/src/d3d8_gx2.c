@@ -758,7 +758,7 @@ void halo_stream_before_write(const void *address, unsigned long size);
 /* texture streaming (xbox_texture_cache.c; halo/stream.txt): the cache file thread reads a texture into its block while the game thread draws, and does not hand the draws over (the
 stream is the game thread's); a block it writes is not one a draw reads (a block is given out only when the draws that used its texture, or its tail, are over), so that it
 waits only for what has been handed over, and for what has not for a moment, then goes on */
-extern int halo_texture_stream_on;
+int halo_texture_stream_on; /* (set by xbox_texture_cache.c when halo/stream.txt says so) */
 static pthread_t draw_thread;
 static int draw_thread_known;
 

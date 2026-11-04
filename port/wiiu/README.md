@@ -904,6 +904,27 @@ Four things the start-up does differently from before, each switched off by its 
 | 16 | the card's free space is asked on a thread of its own, which the saved games' checks do not wait for |
 | 32 | after the main menu's pictures, those of the screens its items open, as far as 32 MB of ready images go (the first page of each costs about 45 ms a picture otherwise) |
 
+## Texture streaming (`halo/stream.txt`, default 0)
+
+The game thread waits for a bitmap's pixels the first time the renderer draws with it (`rasterizer_set_texture_bitmap_data` asks the texture cache to block): the
+map's file is read by the cache file thread and the game thread spins until the read is in. On the console that is 50 ms or more for a 350 KB bitmap (the card gives
+about 14 MB a second for big reads and takes 4 ms for a small one), a second and more when a room's worth is drawn for the first time. With `halo/stream.txt` set to 1:
+
+- a 2D bitmap with at least 48 KB of pixels before its small mipmaps (`port/linux/game/texture_stream.h`: swizzled or compressed, power of two, three or more
+  levels, not palettized) is read in two reads that write no byte twice: the tail (the levels of 32 by 32 texels and under, 0.5 to 8 KB) first, before the reads that
+  are waiting (`cache_file_read_first`), then the rest as the read always was;
+- while the rest is not in, the renderer draws with the tail: a second texture header (`xbox_texture_cache.c`, `texture_streams`) whose data pointer is at the tail's first
+  level and whose size and level count are the tail's. The picture is the texture at 32 texels or less, and the full one from the frame after the rest is in;
+- a bitmap that is not cut (small, cube, 3D, linear, palettized), or whose tail has not come in 100 ms, is waited for as before;
+- the fences are the layer's own: a texture's block is not given to another while the draws that used the texture or its tail are not over (`texture_cache_locked_block_proc`
+  asks both headers' `Lock`, the GX2 thread's retired submission), and the cache file thread's writes announced to the layer (`halo_stream_before_write`) never hand the
+  draws over, which are the game thread's.
+
+`halo/stream_delay.txt` (milliseconds, default 0) makes the cache file thread wait before each read that does not go first, to test the path on a machine whose reads are
+quick. The log says `stream: <bitmap> is read in two ...` for the first six, `stream: <bitmap> was drawn from its tail ... until the whole of it was in` for the first twelve
+that were, and every 10 s the totals (bitmaps cut and not, drawn from tails, the time to the whole bitmap, the waits). With the file absent or 0 the code does what it
+did (the digest harness's `game-digest` is `ceb14fd37a6d23ee` over 1,400 ticks, as before).
+
 `halo/startup.txt` `0` is the old start-up (the menus' tags look their names up in hash tables, and the texture work is done a word at a time, in either).
 The drawn frames are the same with any of them (the digest harness: tools/test_wiiu_game_digest.py), but for the first two of the main menu, where the highlight is
 there a frame or two sooner with bit 1.

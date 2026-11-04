@@ -397,7 +397,7 @@ static struct
 } texture_stream_totals;
 
 /* the thread that draws is told (d3d8_gx2.c) that a block of the cache is read for a texture by another one, which must not hand the draws over */
-int halo_texture_stream_on;
+extern int halo_texture_stream_on;
 
 boolean texture_cache_stream_enabled(
 	void)
