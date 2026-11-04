@@ -302,9 +302,15 @@ int render_governor_step(void)
 /* the values the drawing reads, one pointer (the drawing asks for it for every object, decal and particle): the step's, set whenever the step or the switch changes */
 static struct render_governor_values const *published;
 
+/* the detailed overlay's field (wiiu_gx2.c): the step and the deepest step, -1 when the governor is off */
+void wiiu_overlay_governor(int step, int max_step);
+
 static void governor_publish(void)
 {
-	published = &values[governor_on() ? governor.step : 0];
+	const int on = governor_on();
+
+	published = &values[on ? governor.step : 0];
+	wiiu_overlay_governor(on ? governor.step : -1, on ? governor_max_step() : -1);
 }
 
 struct render_governor_values const *render_governor_values(void)
