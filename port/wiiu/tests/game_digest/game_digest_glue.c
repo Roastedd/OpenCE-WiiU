@@ -1036,6 +1036,15 @@ int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes)
 	return 0;
 }
 
+/* wiiu_gx2.c: the detailed overlay's field for the governor's step (render_governor.c calls it whenever the step changes); no overlay here */
+void wiiu_overlay_governor(int step, int max_step);
+
+void wiiu_overlay_governor(int step, int max_step)
+{
+	(void)step;
+	(void)max_step;
+}
+
 /* wiiu_gpu_offload.c: halo/gpu_offload.txt's bits; here HALO_GPU_OFFLOAD (a number) in the environment, 0 if none (GAME_DIGEST_ENV="HALO_GPU_OFFLOAD=1") */
 unsigned wiiu_gpu_offload_bits(void);
 
