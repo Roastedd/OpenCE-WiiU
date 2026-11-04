@@ -943,6 +943,9 @@ long light_new(
 		|| definition->lens_flare.index != NONE)
 	{
 		light_index = datum_new(light_data);
+#ifdef HALO_WIIU
+		tick_overlap_jitter(); /* (test aid) */
+#endif
 		/* port: no light if the new one can't be had (data.c's data_usable) */
 		if (light_index != NONE && !datum_try_and_get(light_data, light_index))
 			light_index = NONE;
@@ -1074,11 +1077,13 @@ void lights_fade_update(
 					&light_cluster_partition,
 					light_index,
 					&light_get(light_index)->cluster_reference);
+				tick_overlap_jitter(); /* (test aid) */
 				datum_delete(light_data, light_index);
 			}
 			else if (object_try_and_get(light->object_index))
 			{
 				light_disconnect_from_map(light_index);
+				tick_overlap_jitter(); /* (test aid) */
 				light_reconnect_to_map(light_index);
 			}
 		}
@@ -1498,6 +1503,9 @@ void light_delete(
 		&light_cluster_partition,
 		light_index,
 		&light->cluster_reference);
+#ifdef HALO_WIIU
+	tick_overlap_jitter(); /* (test aid) */
+#endif
 	datum_delete(light_data, light_index);
 
 	return;

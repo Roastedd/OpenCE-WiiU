@@ -1022,6 +1022,7 @@ long wiiu_study_number(const char *name, long fallback)
 {
 	const char *variable = !strcmp(name, "tick_thread.txt") ? "HALO_TICK_THREAD" : !strcmp(name, "tick_overlap.txt") ? "HALO_TICK_OVERLAP" :
 		!strcmp(name, "tick_overlap_stall.txt") ? "HALO_TICK_OVERLAP_STALL" : !strcmp(name, "tick_overlap_serialize.txt") ? "HALO_TICK_OVERLAP_SERIALIZE" :
+		!strcmp(name, "tick_overlap_jitter.txt") ? "HALO_TICK_OVERLAP_JITTER" :
 		!strcmp(name, "startup.txt") ? "HALO_STARTUP" : NULL;
 	const char *value;
 

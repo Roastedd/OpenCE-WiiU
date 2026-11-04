@@ -70,6 +70,8 @@ long wiiu_study_number(const char *name, long fallback)
 	/* (nor the fall back to the serial loop when the tick thread is late: the test's frames are not a game's) */
 	if (!strcmp(name, "tick_overlap_late.txt"))
 		return 0;
+	if (!strcmp(name, "tick_overlap_jitter.txt"))
+		return 0;
 	return 1;
 }
 

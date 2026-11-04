@@ -704,6 +704,30 @@ void tick_overlap_sync_point(
 	o.sync_wait_ticks += o.wait_ticks - wait_before;
 }
 
+/* see tick_overlap.h */
+void tick_overlap_jitter(
+	void)
+{
+	static long jitter = -1;
+	static unsigned long state = 0x9E3779B9UL;
+
+	if (jitter < 0)
+		jitter = wiiu_study_number("tick_overlap_jitter.txt", 0);
+	if (jitter <= 0 || !LOAD(o.in_overlap_job) || !tick_overlap_thread_is_tick())
+		return;
+	/* (xorshift: the sequence is the same in each run, the interleaving with the drawing is not) */
+	state ^= state << 13;
+	state ^= state >> 17;
+	state ^= state << 5;
+	if ((state & 3) == 0)
+	{
+		const long microseconds = (long)(((state >> 8) % (unsigned long)jitter) * 1000UL + ((state >> 4) & 0x3FF));
+		struct timespec pause = { microseconds / 1000000L, (microseconds % 1000000L) * 1000L };
+
+		nanosleep(&pause, NULL);
+	}
+}
+
 /* the tick thread's job */
 static void tick_overlap_job_work(
 	void *argument)

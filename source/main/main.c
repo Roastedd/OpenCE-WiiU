@@ -3785,8 +3785,10 @@ long main_overlap_tick_side(
 	tick_owners_drain(TICK_OWNER_TICK);
 	player_control_update(dt);
 	ticks_run = game_time_overlap_run(ticks_elapsed, leftover_after);
+	tick_overlap_jitter(); /* (test aid) */
 	/* port: the lights that fade, which the drawing of the serial loop's frames lets go of (object_lights.c) */
 	lights_fade_update();
+	tick_overlap_jitter(); /* (test aid) */
 	director_update(dt);
 	observer_update(dt);
 	game_engine_update_non_deterministic(dt);
@@ -3794,6 +3796,7 @@ long main_overlap_tick_side(
 	and the cameras attached to the capture of the last tick and the ring's new ticks made visible (tick_snapshot.c) */
 	player_control_publish_display_facing();
 	tick_input_release();
+	tick_overlap_jitter(); /* (test aid) */
 	tick_snapshot_job_end(game_time_overlap_time(), ticks_run, previous_job_tick);
 
 	return ticks_run;

@@ -157,6 +157,11 @@ void tick_snapshot_reads_total(unsigned long *reads, unsigned long *fallbacks, u
 void render_interpolation_blend_log(double ticks_per_ms, unsigned long frames);
 void tick_snapshot_view_log(double ticks_per_ms);
 
+/* a test aid (halo/tick_overlap_jitter.txt, milliseconds; the host: HALO_TICK_OVERLAP_JITTER): the tick thread sleeps a random time up to that, at a quarter of the places it calls this from, while
+a job runs, so that the drawing thread meets the game state at all the moments a tick leaves it in: between a light's leaving its clusters and its being let go of, between a tick and the capture,
+and so on. It does nothing on any other thread, outside a job, and with the file absent. */
+void tick_overlap_jitter(void);
+
 /* the lights that fade (object_lights.c), once after the ticks of each job */
 void lights_fade_update(void);
 
