@@ -191,10 +191,12 @@ static struct perf_view sample_view(int stressed)
 		view.pool[PERF_POOL_TEXTURE].used_kib = 13722u;
 		view.pool[PERF_POOL_TEXTURE].capacity_kib = 22u * 1024u;
 		view.pool[PERF_POOL_TEXTURE].hot_kib = 9u * 1024u;
+		view.pool[PERF_POOL_TEXTURE].lru = 1;
 		view.pool[PERF_POOL_GEOMETRY].used_kib = 41u * 1024u;
 		view.pool[PERF_POOL_GEOMETRY].capacity_kib = 128u * 1024u;
 		view.pool[PERF_POOL_SOUND].used_kib = 3u * 1024u + 300u;
 		view.pool[PERF_POOL_SOUND].capacity_kib = 4u * 1024u;
+		view.pool[PERF_POOL_STATE].fixed = 1;
 		view.pool[PERF_POOL_STATE].used_kib = 17u * 1024u + 300u;
 		view.pool[PERF_POOL_STATE].capacity_kib = 20u * 1024u;
 		view.pool[PERF_POOL_TAGS].used_kib = 16u * 1024u;
@@ -243,11 +245,13 @@ static struct perf_view sample_view(int stressed)
 	}
 	view.pool[PERF_POOL_TEXTURE].used_kib = 21u * 1024u + 500u; /* 97.6 percent: red */
 	view.pool[PERF_POOL_TEXTURE].capacity_kib = 22u * 1024u;
-	view.pool[PERF_POOL_TEXTURE].hot_kib = 20u * 1024u;
+	view.pool[PERF_POOL_TEXTURE].hot_kib = 21u * 1024u + 200u; /* (97 percent of the cache in use now: red) */
+	view.pool[PERF_POOL_TEXTURE].lru = 1;
 	view.pool[PERF_POOL_GEOMETRY].used_kib = 100u * 1024u;
 	view.pool[PERF_POOL_GEOMETRY].capacity_kib = 128u * 1024u;
 	view.pool[PERF_POOL_SOUND].used_kib = 3u * 1024u + 800u; /* 92.2 percent: amber */
 	view.pool[PERF_POOL_SOUND].capacity_kib = 4u * 1024u;
+	view.pool[PERF_POOL_STATE].fixed = 1;
 	view.pool[PERF_POOL_STATE].used_kib = 19u * 1024u + 900u;
 	view.pool[PERF_POOL_STATE].capacity_kib = 20u * 1024u;
 	view.pool[PERF_POOL_TAGS].used_kib = 22u * 1024u;
@@ -407,7 +411,7 @@ static void test_window(void)
 
 static void test_pools(void)
 {
-	struct perf_pool pool = { 0, 0, 0, 1, 0 };
+	struct perf_pool pool = { .known = 1 };
 	char text[16];
 
 	/* 20 MiB: 85 percent is 17408 KiB, 95 percent 19456 */
@@ -432,7 +436,22 @@ static void test_pools(void)
 	pool.capacity_kib = 4u * 1024u * 1024u;
 	pool.used_kib = 0xffffffffu;
 	CHECK(perf_pool_level(&pool) == PERF_LEVEL_RED); /* (4 GiB of 4 GiB in KiB: no overflow of the products) */
-	CHECK(NEAR(perf_pool_percent(&(struct perf_pool){ 2048, 4096, 0, 1, 0 }), 50.0f, 0.01f));
+	CHECK(NEAR(perf_pool_percent(&(struct perf_pool){ .used_kib = 2048, .capacity_kib = 4096, .known = 1 }), 50.0f, 0.01f));
+	/* a cache that keeps what it last held is full by design: its level is its hot part's */
+	pool.known = 1;
+	pool.capacity_kib = 20u * 1024u;
+	pool.used_kib = 20u * 1024u;
+	pool.lru = 1;
+	pool.hot_kib = 10u * 1024u;
+	CHECK(perf_pool_level(&pool) == PERF_LEVEL_OK);
+	pool.hot_kib = 18u * 1024u;
+	CHECK(perf_pool_level(&pool) == PERF_LEVEL_AMBER);
+	pool.hot_kib = 19u * 1024u + 600u;
+	CHECK(perf_pool_level(&pool) == PERF_LEVEL_RED);
+	pool.hot_kib = 0;
+	CHECK(perf_pool_level(&pool) == PERF_LEVEL_OK); /* (a full cache with nothing in use is not short of room) */
+	pool.lru = 0;
+	CHECK(perf_pool_level(&pool) == PERF_LEVEL_RED);
 	perf_mib_text(text, sizeof(text), 13722u);
 	CHECK(!strcmp(text, "13.4"));
 	perf_mib_text(text, sizeof(text), 22u * 1024u);
@@ -504,7 +523,7 @@ static void test_panel(const char *png, int stressed)
 			break;
 		}
 		lit += alpha == 255;
-		/* a meter's red or green, in the pools' rows (y 91 to 143) */
+		/* a meter's red or green, in the pools' rows (y 91 to 147) */
 		if (i / OVERLAY_WIDTH >= 91 && i % OVERLAY_WIDTH >= 112 && i % OVERLAY_WIDTH < 208 && alpha == 255 && guarded.pixels[i * 4 + 1] > 0xa0)
 			meters++;
 	}

@@ -234,7 +234,7 @@ static void draw_pool(canvas *canvas, const struct perf_view *view, int pool, in
 		if (hot > filled)
 			hot = filled;
 		fill_rect(canvas, meter_x, y, meter_w, 5, track);
-		fill_rect(canvas, meter_x, y, filled, 5, level_color(level));
+		fill_rect(canvas, meter_x, y, filled, 5, p->fixed ? slate : level_color(level));
 		/* (the part touched in the last frames, where a cache keeps what it last held, is brighter) */
 		if (hot > 0 && level == PERF_LEVEL_OK)
 			fill_rect(canvas, meter_x, y, hot, 5, pale_green);
@@ -386,4 +386,5 @@ void overlay_render_detail(const struct perf_view *view, uint8_t *pixels)
 	fill_rect(&canvas, 3, 87, OVERLAY_WIDTH - 6, 1, dim);
 	for (pool = 0; pool < PERF_POOL_COUNT; pool++)
 		draw_pool(&canvas, view, pool, 91 + pool * 8);
+	draw_text(&canvas, 3, 148, dim, "PALE = IN USE NOW; TEX AND SOUND COLOUR BY IT");
 }

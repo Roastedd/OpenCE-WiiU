@@ -4043,6 +4043,7 @@ static void perf_game_pools_sample(void)
 	if (texture_cache_usage(&used, &hot, &capacity))
 	{
 		pools[PERF_POOL_TEXTURE].known = 1;
+		pools[PERF_POOL_TEXTURE].lru = 1;
 		pools[PERF_POOL_TEXTURE].used_kib = (uint32_t)used;
 		pools[PERF_POOL_TEXTURE].hot_kib = (uint32_t)hot;
 		pools[PERF_POOL_TEXTURE].capacity_kib = (uint32_t)capacity;
@@ -4050,6 +4051,7 @@ static void perf_game_pools_sample(void)
 	if (sound_cache_usage(&used, &hot, &capacity))
 	{
 		pools[PERF_POOL_SOUND].known = 1;
+		pools[PERF_POOL_SOUND].lru = 1;
 		pools[PERF_POOL_SOUND].used_kib = (uint32_t)used;
 		pools[PERF_POOL_SOUND].hot_kib = (uint32_t)hot;
 		pools[PERF_POOL_SOUND].capacity_kib = (uint32_t)capacity;
@@ -4057,6 +4059,7 @@ static void perf_game_pools_sample(void)
 	if (game_state_usage(&used, &capacity))
 	{
 		pools[PERF_POOL_STATE].known = 1;
+		pools[PERF_POOL_STATE].fixed = 1;
 		pools[PERF_POOL_STATE].used_kib = (uint32_t)used;
 		pools[PERF_POOL_STATE].capacity_kib = (uint32_t)capacity;
 	}

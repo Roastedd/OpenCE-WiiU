@@ -149,9 +149,9 @@ float perf_pool_percent(const struct perf_pool *pool)
 int perf_pool_level(const struct perf_pool *pool)
 {
 	/* (compared as integers: 85 percent of 20 MiB is 17408 KiB exactly) */
-	const uint64_t used = (uint64_t)pool->used_kib * 100u, capacity = pool->capacity_kib;
+	const uint64_t used = (uint64_t)(pool->lru ? pool->hot_kib : pool->used_kib) * 100u, capacity = pool->capacity_kib;
 
-	if (!pool->known || !pool->capacity_kib)
+	if (!pool->known || !pool->capacity_kib || pool->fixed)
 		return PERF_LEVEL_OK;
 	if (pool->full || used > capacity * 95u)
 		return PERF_LEVEL_RED;

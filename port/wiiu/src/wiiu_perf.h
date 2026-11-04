@@ -64,7 +64,9 @@ enum
 struct perf_pool
 {
 	uint32_t used_kib, capacity_kib;
-	uint32_t hot_kib;  /* of used: what was touched in the last frames (the caches that keep what they last held), else 0 */
+	uint32_t hot_kib;  /* of used: what was touched lately (the caches that keep what they last held), else 0 */
+	int fixed;         /* the pool's use is set when the game starts and does not move in play (the game state's allocations): it is never amber or red, and its meter is neutral */
+	int lru;           /* a cache that keeps what it last held, so that it fills and stays full: its level follows hot_kib, what is in use, not used_kib */
 	int known;
 	int full;          /* the pool turned a request away since it was last read (red whatever its level) */
 };
@@ -132,7 +134,8 @@ int perf_meter_close(struct perf_meter *meter, const struct perf_totals *now, do
 enum { PERF_LEVEL_OK, PERF_LEVEL_AMBER, PERF_LEVEL_RED };
 
 const char *perf_pool_name(int pool);
-/* used as a part of 100 of capacity (0 if there is none); amber over 85 percent and red over 95 (or when the pool turned a request away) */
+/* used as a part of 100 of capacity (0 if there is none); the level is amber over 85 percent and red over 95 (or when the pool turned a request away), of
+used, or of hot for a cache that keeps what it last held (it is full by design: what is in use is what can run out) */
 float perf_pool_percent(const struct perf_pool *pool);
 int perf_pool_level(const struct perf_pool *pool);
 /* KiB as MiB text with one decimal ("13.4"), at most 9 characters */
