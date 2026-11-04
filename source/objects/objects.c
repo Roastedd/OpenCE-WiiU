@@ -741,7 +741,15 @@ void *object_header_block_get(
 	struct object_header_block_reference *reference)
 {
 	struct object_header_datum *object_header = object_header_get(object_index);
+#ifdef HALO_PPC_HOTPATHS_ON
+	/* port: object_get(object_index) is this header's datum once the header has been found (the same datum_get, the same view), checked to be of a
+	type; the check is made here and, if it fails, object_get is asked, which says what it says */
+	struct object_datum *object = object_header->datum;
+	if (!TEST_FLAG(_object_mask_all, object->object.type))
+		object = object_get(object_index);
+#else
 	struct object_datum *object = object_get(object_index);
+#endif
 
 	match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 2443, reference->offset>0);
 	match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 2444, reference->offset+reference->size<=object_header->data_size);
