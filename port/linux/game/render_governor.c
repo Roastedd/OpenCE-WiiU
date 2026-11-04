@@ -292,11 +292,23 @@ int render_governor_step(void)
 	return governor_on() ? governor.step : 0;
 }
 
+/* the values the drawing reads, one pointer (the drawing asks for it for every object, decal and particle): the step's, set whenever the step or the switch changes */
+static struct render_governor_values const *published;
+
+static void governor_publish(void)
+{
+	published = &values[governor_on() ? governor.step : 0];
+}
+
 struct render_governor_values const *render_governor_values(void)
 {
-	if (!settings.loaded)
-		settings_load();
-	return &values[governor_on() ? governor.step : 0];
+	if (!published)
+	{
+		if (!settings.loaded)
+			settings_load();
+		governor_publish();
+	}
+	return published;
 }
 
 float render_governor_lod_scale(void)
@@ -319,6 +331,7 @@ void render_governor_new_map(void)
 	governor.new_map_pending = 1;
 	if (settings.forced < 0)
 		governor.step = 0;
+	governor_publish();
 }
 
 static void governor_log(double now_ms)
@@ -377,6 +390,7 @@ static void governor_set_step(int step, double now_ms, char const *why)
 	governor.frames = 0;
 	governor.window_worst = 0.0;
 	governor.window_start = now_ms;
+	governor_publish();
 	governor_log(now_ms);
 }
 
@@ -395,8 +409,10 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 		{
 			memset(&governor, 0, sizeof(governor));
 		}
+		governor_publish();
 		return;
 	}
+	governor_publish();
 	if (!governor.up_backoff)
 		governor.up_backoff = 1;
 	if (governor.step > governor_max_step() && settings.forced < 0)
@@ -407,6 +423,7 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 		{
 			governor.step = settings.forced;
 			governor.last_change = now_ms;
+			governor_publish();
 			governor_log(now_ms);
 		}
 	}
@@ -517,6 +534,7 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 		governor.frames = 0;
 		governor.window_worst = 0.0;
 	}
+	governor_publish();
 	if (settings.log_ms > 0.0 && now_ms - governor.last_log >= settings.log_ms)
 		governor_log(now_ms);
 }
