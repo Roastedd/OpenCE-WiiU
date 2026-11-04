@@ -15,10 +15,10 @@ recognise them as memcpy and call it. dcbz is used only on addresses of the appl
 
 #define CACHE_LINE 32u
 
-/* whether the copy asks for the source's lines ahead with dcbt (halo/memcpy_touch.txt: 0 no, anything else and no file yes, as the copy always did). The memory probe of 2026-11-04 found
+/* whether the copy asks for the source's lines ahead with dcbt (halo/memcpy_touch.txt: 1 or more yes, 0, -1 and no file no: off by default since 2026-11-04, when alternating fight runs on the console were faster without it). The memory probe of 2026-11-04 found
 sequential loads with dcbt at the copy's own distance (96 bytes) at 0.6 of the speed of the same loads without it, so the console can time the copy both ways; dcbz is not affected. A host
 (qemu) cannot time it: dcbt does nothing there, and the copy's bytes are the same either way (wiiu_memcpy_selftest, run with the switch both ways by tools/test_wiiu_memcpy.py). */
-volatile int wiiu_memcpy_touch = 1;
+volatile int wiiu_memcpy_touch = 0;
 
 static int zeroable(const void *address)
 {

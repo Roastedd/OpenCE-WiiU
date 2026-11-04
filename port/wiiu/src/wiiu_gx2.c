@@ -2835,12 +2835,14 @@ static int initialize(void)
 		}
 	}
 	{
-		/* halo/memcpy_touch.txt: 0 leaves the copy's dcbt out (a run that times the copy both ways); absent, -1 or any other number: as it always was */
+		/* halo/memcpy_touch.txt: 1 or more asks for the source's lines ahead with dcbt (as the copy did until 2026-11-04); absent, 0 or -1: not (on the console, alternating
+		runs of the fight, 2026-11-04: the copy's dcbt 96 bytes ahead slowed the tick thread by 0.7 to 1.8 ms and the objects pass by 0.5 to 1.4 ms: the memory probe had
+		found sequential loads with dcbt at 0.6 of the speed without) */
 		extern volatile int wiiu_memcpy_touch;
 		long wiiu_study_number(const char *name, long fallback);
 
-		wiiu_memcpy_touch = wiiu_study_number("memcpy_touch.txt", 1) != 0;
-		wiiu_log("memcpy: the copy asks for the source's lines ahead (dcbt) %s (halo/memcpy_touch.txt: 0 leaves it out)", wiiu_memcpy_touch ? "- yes" : "- no");
+		wiiu_memcpy_touch = wiiu_study_number("memcpy_touch.txt", 0) > 0;
+		wiiu_log("memcpy: the copy asks for the source's lines ahead (dcbt) %s (halo/memcpy_touch.txt: 1 asks for them)", wiiu_memcpy_touch ? "- yes" : "- no");
 	}
 	wiiu_log("memcpy/memset self-test (wiiu_memcpy.c): %d wrong", wiiu_memcpy_selftest());
 	wiiu_bw_start();
