@@ -492,8 +492,9 @@ static unsigned tick_core_now;
 /* the GX2 thread's core (-1: none), the tick thread's priority offset below the game's when it shares that core (halo/tick_priority.txt), and the GX2 thread's sleep between looks then
 (halo/gx2_idle_sleep.txt, microseconds): see wiiu_gx2.c's wiiu_gx2_idle_sleep_set */
 static int gx2_core = -1;
-static int tick_priority_offset = -1; /* -1: not set by the card (1 when sharing a core with the GX2 thread, else 0) */
-static long gx2_sleep_us = 100;
+static int tick_priority_offset = -1; /* -1: not set by the card (0: the game's priority) */
+static long gx2_sleep_us = 0; /* 0: the GX2 thread waits for work yielding, as always */
+static long tick_quantum_us = -1; /* -1: the thread's own run quantum is left as the system made it */
 int wiiu_gx2_thread_core_planned(void);
 void wiiu_gx2_idle_sleep_set(uint32_t microseconds);
 
@@ -516,20 +517,25 @@ static long card_number(char const *name, long fallback)
 	return value < 0 ? fallback : value;
 }
 
-/* the tick thread's priority and the GX2 thread's way of waiting for the tick thread on a core: shared with the GX2 thread, the tick thread is one priority below it and the GX2 thread sleeps
-in its gaps (it spins yielding otherwise, and then neither can run beside the other's quantum) */
+/* the tick thread's priority (the game's, plus halo/tick_priority.txt), its run quantum (halo/tick_quantum.txt, microseconds, left alone if absent), and the GX2 thread's way of waiting for work when the
+tick thread shares its core (halo/gx2_idle_sleep.txt: microseconds, 0 is the yield). The defaults are the plain core-2 setting of the console's first matrix (30 ticks a second, 14 ms a tick): the second
+matrix (2026-11-03) found the priority one below with a sleep of 100 microseconds fixed the stream slot waits (0.06 ms a frame against 2.9) and slowed the tick (28 ms against 16), a loss. */
 static void tick_core_settle(int log)
 {
 	const int shares = gx2_core >= 0 && (int)tick_core_now == gx2_core;
-	const int offset = tick_priority_offset >= 0 ? tick_priority_offset : shares ? 1 : 0;
+	const int offset = tick_priority_offset >= 0 ? tick_priority_offset : 0;
 	const int priority = main_priority + offset > 31 ? 31 : (int)main_priority + offset;
 
 	if (tick_thread_stack)
+	{
 		OSSetThreadPriority(&tick_thread, priority);
+		if (tick_quantum_us > 0)
+			OSSetThreadRunQuantum(&tick_thread, (uint32_t)tick_quantum_us);
+	}
 	wiiu_gx2_idle_sleep_set(shares && gx2_sleep_us > 0 ? (uint32_t)gx2_sleep_us : 0);
 	if (log)
-		wiiu_log("The tick thread is at priority %d (the game's %d)%s%s", priority, (int)main_priority, shares ? ", on the GX2 thread's core: the GX2 thread sleeps between looks for work (" : "",
-			shares ? (gx2_sleep_us > 0 ? "halo/gx2_idle_sleep.txt: microseconds)" : "0: it yields, halo/gx2_idle_sleep.txt)") : "");
+		wiiu_log("The tick thread is at priority %d (the game's %d, halo/tick_priority.txt), run quantum %ld us (halo/tick_quantum.txt; -1: as made)%s%s", priority, (int)main_priority, tick_quantum_us,
+			shares ? ", on the GX2 thread's core; the GX2 thread's wait for work: " : "", shares ? (gx2_sleep_us > 0 ? "a sleep of that many microseconds (halo/gx2_idle_sleep.txt)" : "a yield (halo/gx2_idle_sleep.txt 0)") : "");
 }
 
 static OSThreadAttributes core_attribute(unsigned core)
@@ -568,7 +574,8 @@ int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes)
 		tick_priority_offset = (int)card_number("tick_priority.txt", -1);
 		if (tick_priority_offset > 8)
 			tick_priority_offset = 8;
-		gx2_sleep_us = card_number("gx2_idle_sleep.txt", 100);
+		gx2_sleep_us = card_number("gx2_idle_sleep.txt", 0);
+		tick_quantum_us = card_number("tick_quantum.txt", -1);
 		wiiu_log("The tick thread is made on core %u (halo/tick_core.txt: 0, 1 or 2%s), the game thread is on core %u (halo/game_core.txt), the GX2 thread on core %d%s", tick_core,
 			set < 0 ? "; absent: 2 with the overlap on, else 0" : "", (unsigned)OSGetCoreId(), gx2_core,
 			tick_core == (unsigned)OSGetCoreId() ? ": the tick thread is on the game thread's core, and the two cannot run beside each other" : "");
