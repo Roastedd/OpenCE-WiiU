@@ -1092,8 +1092,17 @@ boolean scenario_switch_structure_bsp(
 
 	request.structure_bsp_index = structure_bsp_index;
 	request.result = FALSE;
-	if (!tick_overlap_game_thread_do(scenario_switch_structure_bsp_made, &request))
+	if (tick_overlap_game_thread_do(scenario_switch_structure_bsp_made, &request))
+	{
+		void platform_log(char const *format, ...);
+
+		platform_log("tick overlap: structure bsp #%d switched to by the ticks' script: made by the game thread at its sync point (%s), the snapshot's ring forgotten", (int)structure_bsp_index,
+			request.result ? "done" : "refused");
+	}
+	else
+	{
 		scenario_switch_structure_bsp_made(&request);
+	}
 	return request.result;
 }
 #endif

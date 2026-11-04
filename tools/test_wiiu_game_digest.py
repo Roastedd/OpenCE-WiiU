@@ -329,10 +329,12 @@ class LevelsTest(unittest.TestCase):
 
     def test_every_level_runs_overlapped_without_a_halt_and_with_the_plain_loops_ticks(self):
         program = build(os.environ.get("GAME_DIGEST_LEVELS_NAME", "here"))
-        ticks = int(os.environ.get("GAME_DIGEST_LEVELS_TICKS", "400"))
+        default_ticks = int(os.environ.get("GAME_DIGEST_LEVELS_TICKS", "400"))
         only = [name for name in os.environ.get("GAME_DIGEST_LEVELS_ONLY", "").split(",") if name] or list(LEVELS)
         overlap = {"HALO_TICK_THREAD": "1", "HALO_TICK_OVERLAP": "1", "HALO_TICK_SNAPSHOT": "1"}
         for level in only:
+            # (b30 opens with a cinematic of about 1,070 ticks, serial frames: its first overlapped frames are past it)
+            ticks = max(default_ticks, 1150) if level == "b30" else default_ticks
             with self.subTest(level=level):
                 plain = start(program, f"levels-{level}-plain", ticks, mode="solo-" + level)
                 saved = {key: os.environ.get(key) for key in overlap}
