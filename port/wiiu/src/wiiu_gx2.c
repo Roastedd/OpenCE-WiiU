@@ -37,6 +37,8 @@ uint32_t *dk_stream_buffer(unsigned slot);
 #include <coreinit/cache.h>
 #include <coreinit/core.h>
 #include <coreinit/memdefaultheap.h>
+#include <coreinit/memexpheap.h>
+#include <coreinit/memheap.h>
 #include <coreinit/semaphore.h>
 #include <proc_ui/procui.h>
 #include <coreinit/thread.h>
@@ -67,6 +69,18 @@ uint32_t *dk_stream_buffer(unsigned slot);
 
 /* port/linux/game/startup_timeline.c: the start-up's events, said in the log once the main menu is live */
 void startup_timeline_note(const char *name);
+
+/* the detailed overlay's sources (wiiu_perf.h): each thread's totals, and the pools the game thread reads (the game's own functions: their booleans are bytes) */
+void host_gx2_perf_game(struct perf_totals *out);
+void tick_overlap_perf_read(struct perf_totals *totals);
+unsigned wiiu_render_pass_totals(uint32_t *out, unsigned count, uint32_t *windows_made);
+void wiiu_audio_perf(uint32_t *mixer_ticks, uint32_t *mixer_chunks);
+uint32_t wiiu_decoder_perf_ticks(void);
+void structure_visibility_object_counts(unsigned long *considered, unsigned long *found);
+unsigned char texture_cache_usage(unsigned long *resident_kib, unsigned long *hot_kib, unsigned long *capacity_kib);
+unsigned char sound_cache_usage(unsigned long *resident_kib, unsigned long *hot_kib, unsigned long *capacity_kib);
+unsigned char game_state_usage(unsigned long *used_kib, unsigned long *capacity_kib);
+unsigned char cache_file_tag_usage(unsigned long *used_kib, unsigned long *capacity_kib);
 
 extern const unsigned char wiiu_gx2_blit_gsh[];
 extern const unsigned long wiiu_gx2_blit_gsh_size;
@@ -198,7 +212,23 @@ static struct
 	submitted for it is retired */
 	struct overlay overlay;
 	int overlay_on; /* its numbers are taken (and logged every 5 s) */
-	volatile int overlay_shown; /* and it is drawn: halo/overlay.txt 1, or L + R + - on the GamePad (wiiu_overlay_toggle) */
+	volatile int overlay_mode; /* and what is drawn: OVERLAY_MODE_OFF, _COMPACT or _DETAIL: halo/overlay.txt 0, 1 or 2, or L + R + - on the GamePad, which goes round them (wiiu_overlay_toggle) */
+	/* the detailed panel's numbers (wiiu_perf.h): the GX2 thread's frames and the other threads' totals over a quarter of a second (the panel) and over five seconds (the log) */
+	struct perf_meter perf_fast, perf_slow;
+	struct perf_view perf_view, perf_log;
+	OSTime perf_view_time;
+	int perf_fast_active; /* the detailed panel is the mode and its meter is taking frames */
+	/* the GX2 thread's own time, a monotonic count of ticks: what its streams (and the presents in them) took, less what they waited for (the display's flip, a ring segment's GPU
+	work: perf_job_wait, added up while a job runs); and the count at the last frame, and the unsaid rest of a pool that turned a request away */
+	uint32_t perf_busy_ticks, perf_busy_before;
+	OSTime perf_job_wait;
+	unsigned perf_geometry_full_before;
+	/* the pools the game thread reads (the caches are its own), published to the GX2 thread under a sequence number; and the governor's step if one is running (wiiu_overlay_governor) */
+	struct perf_pool perf_game_pools[PERF_POOL_COUNT];
+	struct perf_pool perf_game_pools_published[PERF_POOL_COUNT];
+	volatile uint32_t perf_game_pools_sequence;
+	OSTime perf_pools_time;
+	volatile int governor_step, governor_max;
 	GX2Texture overlay_texture;
 	GX2Sampler overlay_sampler;
 	struct blit_vertex *overlay_quad;
@@ -727,6 +757,7 @@ static void gt_log(unsigned frames);
 static void gpu_poll(void);
 static void gpu_frame_begin(void);
 static int overlay_make(void);
+static const char *overlay_mode_name(int mode);
 static int panel_make(void);
 
 /* room in the ring, noted as written to (the caller writes it before it is flushed, which is at the end of the stream or the present) */
@@ -809,7 +840,12 @@ static void ring_next(void)
 	gx.ring[gx.ring_current].stamp = GX2GetLastSubmittedTimeStamp();
 	gx.ring_current = (gx.ring_current + 1) % RING_SEGMENTS;
 	if (gx.ring[gx.ring_current].stamp && wiiu_in_foreground() && !wiiu_exit_requested())
+	{
+		const OSTime wait_started = OSGetSystemTime();
+
 		GX2WaitTimeStamp(gx.ring[gx.ring_current].stamp); /* (not once HOME is pressed: the GPU may be taken, and the wait never ends) */
+		gx.perf_job_wait += OSGetSystemTime() - wait_started;
+	}
 	gx.ring[gx.ring_current].offset = 0;
 }
 
@@ -2597,8 +2633,9 @@ static int initialize(void)
 			fclose(file);
 		}
 		gx.overlay_on = 1;
-		gx.overlay_shown = on != 0;
-		wiiu_log("GX2: the performance overlay is %s (halo/overlay.txt 1 shows it from the start; L + R + - on the GamePad shows or hides it)", gx.overlay_shown ? "shown" : "hidden");
+		gx.overlay_mode = overlay_mode_from_file(on);
+		wiiu_log("GX2: the performance overlay is %s (halo/overlay.txt: 0 off, 1 the compact strip, 2 the detailed panel; L + R + - on the GamePad goes round off, compact, detailed)",
+			overlay_mode_name(gx.overlay_mode));
 	}
 	gx.panel_made = panel_make();
 	if (!gx.panel_made)
@@ -2701,6 +2738,8 @@ int platform_screen_mode(long *width, long *height)
 	return 1;
 }
 
+static void perf_game_pools_sample(void);
+
 /* "creates the window and makes its OpenGL context current": the GX2 context was made by initialize */
 int platform_video_initialize(unsigned long width, unsigned long height);
 
@@ -2723,6 +2762,8 @@ void platform_pump_events(void);
 
 void platform_pump_events(void)
 {
+	/* (the game thread, once a frame: the caches are its own, so it reads their pools for the detailed overlay) */
+	perf_game_pools_sample();
 }
 
 void platform_menus_set_active(int active);
@@ -2763,8 +2804,19 @@ void wiiu_overlay_toggle(void);
 
 void wiiu_overlay_toggle(void)
 {
-	gx.overlay_shown = !gx.overlay_shown;
-	wiiu_log("GX2: the performance overlay is %s (L + R + -)", gx.overlay_shown ? "shown" : "hidden");
+	gx.overlay_mode = overlay_mode_next(gx.overlay_mode);
+	/* (the detailed panel is drawn when its window closes: it is made at once, so that the first press does not show the last one's numbers) */
+	gx.perf_view_time = 0;
+	wiiu_log("GX2: the performance overlay is %s (L + R + -)", overlay_mode_name(gx.overlay_mode));
+}
+
+/* the governor's step, when one runs (a build that has the frame-time governor calls this with its step and its deepest step; -1 for none): the detailed panel and the log say it */
+void wiiu_overlay_governor(int step, int max_step);
+
+void wiiu_overlay_governor(int step, int max_step)
+{
+	gx.governor_max = max_step;
+	gx.governor_step = step;
 }
 
 /* HOME (the shell's release callback): the system takes the eDRAM, and libwhb makes its own heap and buffers again when the app is back */
@@ -3291,6 +3343,9 @@ static void gpu_poll(void)
 				const OSTime ticks = (OSTime)((ended - begun) * (uint64_t)OSSecondsToTicks(1) / GPU_TIMER_HZ);
 
 				gx.gpu_ms = (float)OSTicksToMicroseconds(ticks) / 1000.0f;
+				perf_meter_gpu(&gx.perf_slow, gx.gpu_ms);
+				if (gx.perf_fast_active)
+					perf_meter_gpu(&gx.perf_fast, gx.gpu_ms);
 				gx.gpu_lines = gx.gpu_slot_lines[slot];
 				gx.gpu_reads++;
 				gx.gpu_window_ticks += ticks;
@@ -3308,13 +3363,19 @@ static void gpu_poll(void)
 	}
 }
 
+static const char *overlay_mode_name(int mode)
+{
+	return mode == OVERLAY_MODE_DETAIL ? "the detailed panel" : mode == OVERLAY_MODE_COMPACT ? "the compact strip" : "off";
+}
+
 static int overlay_make(void)
 {
 	GX2Surface *surface = &gx.overlay_texture.surface;
 
+	/* (the texture holds the detailed panel; the compact strip is drawn from its top rows) */
 	surface->dim = GX2_SURFACE_DIM_TEXTURE_2D;
 	surface->width = OVERLAY_WIDTH;
-	surface->height = OVERLAY_HEIGHT;
+	surface->height = OVERLAY_DETAIL_HEIGHT;
 	surface->depth = 1;
 	surface->mipLevels = 1;
 	surface->format = GX2_SURFACE_FORMAT_UNORM_R8_G8_B8_A8;
@@ -3333,6 +3394,9 @@ static int overlay_make(void)
 	GX2InitTextureRegs(&gx.overlay_texture);
 	GX2InitSampler(&gx.overlay_sampler, GX2_TEX_CLAMP_MODE_CLAMP, GX2_TEX_XY_FILTER_MODE_POINT);
 	overlay_reset(&gx.overlay);
+	perf_meter_reset(&gx.perf_fast);
+	perf_meter_reset(&gx.perf_slow);
+	gx.governor_step = -1;
 	return 1;
 }
 
@@ -3349,14 +3413,30 @@ static void overlay_refresh(void)
 	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, surface->image, surface->imageSize);
 }
 
-/* the overlay over the top left of a screen's picture, in the context blit_to has just drawn it in (a scale of whole pixels per texel, so that the text is sharp) */
-static void overlay_draw(GX2ColorBuffer *screen, GX2ContextState *context, unsigned scale)
+/* the detailed panel drawn again into the texture, from the last window's numbers (four times a second: a draw costs a few tenths of a millisecond on the console) */
+static void overlay_refresh_detail(void)
+{
+	static uint8_t pixels[OVERLAY_WIDTH * OVERLAY_DETAIL_HEIGHT * 4];
+	GX2Surface *surface = &gx.overlay_texture.surface;
+	unsigned y;
+
+	overlay_render_detail(&gx.perf_view, pixels);
+	for (y = 0; y < OVERLAY_DETAIL_HEIGHT; y++)
+		memcpy((uint8_t *)surface->image + (size_t)y * surface->pitch * 4, pixels + (size_t)y * OVERLAY_WIDTH * 4, OVERLAY_WIDTH * 4);
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, surface->image, surface->imageSize);
+}
+
+/* the overlay over the top left of a screen's picture, in the context blit_to has just drawn it in (a scale of whole pixels per texel, so that the text is sharp); `rows`: how much of
+the texture is drawn, its top rows (the compact strip's OVERLAY_HEIGHT, or the detailed panel's OVERLAY_DETAIL_HEIGHT) */
+static void overlay_draw(GX2ColorBuffer *screen, GX2ContextState *context, unsigned scale, unsigned rows)
 {
 	const float screen_width = (float)screen->surface.width, screen_height = (float)screen->surface.height;
 	const float margin_x = screen_width * 0.02f;
 	static unsigned told;
 
 	scale = overlay_scale((unsigned)screen_width, scale);
+	while (scale > 1 && rows * scale > (unsigned)screen_height)
+		scale--;
 
 	if (told < 2)
 	{
@@ -3364,7 +3444,8 @@ static void overlay_draw(GX2ColorBuffer *screen, GX2ContextState *context, unsig
 		wiiu_log("GX2: the overlay on a %ux%u screen, %u pixels to a texel", (unsigned)screen_width, (unsigned)screen_height, scale);
 	}
 	const float x0 = -1.0f + 2.0f * margin_x / screen_width, x1 = x0 + 2.0f * (float)(OVERLAY_WIDTH * scale) / screen_width;
-	const float y1 = 1.0f, y0 = y1 - 2.0f * (float)(OVERLAY_HEIGHT * scale) / screen_height;
+	const float y1 = 1.0f, y0 = y1 - 2.0f * (float)(rows * scale) / screen_height;
+	const float v_end = (float)rows / (float)OVERLAY_DETAIL_HEIGHT;
 	static const unsigned corner_x[6] = { 0, 1, 0, 1, 1, 0 };
 	static const unsigned corner_y[6] = { 0, 0, 1, 0, 1, 1 };
 	unsigned i;
@@ -3376,7 +3457,7 @@ static void overlay_draw(GX2ColorBuffer *screen, GX2ContextState *context, unsig
 		v->x = corner_x[i] ? x1 : x0;
 		v->y = corner_y[i] ? y0 : y1;
 		v->u = (float)corner_x[i];
-		v->v = (float)corner_y[i];
+		v->v = corner_y[i] ? v_end : 0.0f;
 		v->r = v->g = v->b = v->a = 1.0f;
 	}
 	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER, gx.overlay_quad, 6 * sizeof(struct blit_vertex));
@@ -3916,6 +3997,202 @@ static struct blit_vertex *blit_quad(void)
 
 	return quad ? quad : gx.quad;
 }
+/* ---------- the detailed overlay's windows (wiiu_perf.h): where its numbers are read, a quarter of a second and five seconds at a time */
+
+/* every thread's totals, as one read of each (the game thread's under its sequence number, the rest single words) */
+static void perf_read_totals(struct perf_totals *totals)
+{
+	unsigned long considered = 0, found = 0;
+
+	memset(totals, 0, sizeof(*totals));
+	host_gx2_perf_game(totals);
+	tick_overlap_perf_read(totals);
+	wiiu_render_pass_totals(totals->pass, PERF_PASSES, &totals->pass_windows);
+	wiiu_audio_perf(&totals->mixer_ticks, &totals->mixer_chunks);
+	totals->decoder_ticks = wiiu_decoder_perf_ticks();
+	structure_visibility_object_counts(&considered, &found);
+	totals->objects_considered = (uint32_t)considered;
+	totals->objects_found = (uint32_t)found;
+}
+
+static void perf_state_make(struct perf_state *state)
+{
+	state->render_width = gx.overlay.render_width;
+	state->render_height = gx.overlay.render_height;
+	state->drs_on = gx.drs_on || gx.drs_forced;
+	state->drs_lines = gx.drs_lines;
+	state->drs_full_lines = gx.render_height;
+	state->drs_step = (int)gx.drs.step;
+	state->interpolation = gx.overlay.interpolation;
+	state->governor_step = gx.governor_step;
+	state->governor_max = gx.governor_max;
+}
+
+/* the pools of the caches the game thread owns, read by it (platform_pump_events, a quarter of a second or a second apart) and published here under a sequence number */
+static void perf_game_pools_sample(void)
+{
+	const OSTime now = OSGetSystemTime();
+	const OSTime every = OSMillisecondsToTicks(gx.overlay_mode == OVERLAY_MODE_DETAIL ? 250 : 1000);
+	struct perf_pool pools[PERF_POOL_COUNT];
+	unsigned long used = 0, hot = 0, capacity = 0;
+
+	if (!gx.overlay_on || (gx.perf_pools_time && now - gx.perf_pools_time < every))
+		return;
+	gx.perf_pools_time = now;
+	memset(pools, 0, sizeof(pools));
+	if (texture_cache_usage(&used, &hot, &capacity))
+	{
+		pools[PERF_POOL_TEXTURE].known = 1;
+		pools[PERF_POOL_TEXTURE].used_kib = (uint32_t)used;
+		pools[PERF_POOL_TEXTURE].hot_kib = (uint32_t)hot;
+		pools[PERF_POOL_TEXTURE].capacity_kib = (uint32_t)capacity;
+	}
+	if (sound_cache_usage(&used, &hot, &capacity))
+	{
+		pools[PERF_POOL_SOUND].known = 1;
+		pools[PERF_POOL_SOUND].used_kib = (uint32_t)used;
+		pools[PERF_POOL_SOUND].hot_kib = (uint32_t)hot;
+		pools[PERF_POOL_SOUND].capacity_kib = (uint32_t)capacity;
+	}
+	if (game_state_usage(&used, &capacity))
+	{
+		pools[PERF_POOL_STATE].known = 1;
+		pools[PERF_POOL_STATE].used_kib = (uint32_t)used;
+		pools[PERF_POOL_STATE].capacity_kib = (uint32_t)capacity;
+	}
+	if (cache_file_tag_usage(&used, &capacity))
+	{
+		pools[PERF_POOL_TAGS].known = 1;
+		pools[PERF_POOL_TAGS].used_kib = (uint32_t)used;
+		pools[PERF_POOL_TAGS].capacity_kib = (uint32_t)capacity;
+	}
+	gx.perf_game_pools_sequence++;
+	__atomic_thread_fence(__ATOMIC_RELEASE);
+	memcpy(gx.perf_game_pools_published, pools, sizeof(pools));
+	__atomic_thread_fence(__ATOMIC_RELEASE);
+	gx.perf_game_pools_sequence++;
+}
+
+/* the eDRAM (MEM1) in use: the game's render targets that are in it, and libwhb's screens' buffers if their memory is in its range (0xF4000000, 32 MiB) */
+#define MEM1_BASE 0xF4000000u
+#define MEM1_BYTES (32u * 1024u * 1024u)
+
+static uint32_t perf_mem1_kib(void)
+{
+	uint64_t bytes = 0;
+	unsigned i;
+	const GX2Surface *whb[4] = { &WHBGfxGetTVColourBuffer()->surface, &WHBGfxGetTVDepthBuffer()->surface, &WHBGfxGetDRCColourBuffer()->surface, &WHBGfxGetDRCDepthBuffer()->surface };
+
+	for (i = 0; i < gx.target_count && i < TARGET_LIMIT; i++)
+	{
+		const struct target *target = &gx.targets[i];
+
+		if (target->in_mem1 && !target->unusable)
+			bytes += target->surface.kind == DK_SURFACE_DEPTH ? target->depth.surface.imageSize : target->color.surface.imageSize;
+	}
+	for (i = 0; i < 4; i++)
+	{
+		const uintptr_t address = (uintptr_t)whb[i]->image;
+
+		if (address >= MEM1_BASE && address < MEM1_BASE + MEM1_BYTES)
+			bytes += whb[i]->imageSize;
+	}
+	return (uint32_t)(bytes / 1024u);
+}
+
+/* all the pools: the game thread's published ones, and the GX2 thread's static geometry cache, MEM2's heap and the eDRAM */
+static void perf_pools_read(struct perf_pool pools[PERF_POOL_COUNT])
+{
+	unsigned attempt;
+	MEMHeapHandle heap = MEMGetBaseHeapHandle(MEM_BASE_HEAP_MEM2);
+
+	for (attempt = 0; attempt < 8; attempt++)
+	{
+		const uint32_t before = gx.perf_game_pools_sequence;
+
+		if (before & 1u)
+			continue;
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
+		memcpy(pools, gx.perf_game_pools_published, sizeof(gx.perf_game_pools_published));
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
+		if (gx.perf_game_pools_sequence == before)
+			break;
+	}
+	/* the geometry cache: the map's vertex and index data copied once for the GPU (up to 8 chunks of 16 MiB); full: it turned a copy away since the last look */
+	pools[PERF_POOL_GEOMETRY].known = 1;
+	pools[PERF_POOL_GEOMETRY].capacity_kib = (uint32_t)(((uint64_t)STATIC_CHUNKS * STATIC_CHUNK_BYTES) / 1024u);
+	pools[PERF_POOL_GEOMETRY].used_kib = cache.chunk_count ? (uint32_t)((((uint64_t)cache.chunk_count - 1) * STATIC_CHUNK_BYTES + cache.chunk_used) / 1024u) : 0;
+	pools[PERF_POOL_GEOMETRY].full = cache.full > gx.perf_geometry_full_before;
+	gx.perf_geometry_full_before = cache.full;
+	/* MEM2's heap (the application's memory): free, and the whole */
+	if (heap && heap->tag == MEM_EXPANDED_HEAP_TAG)
+	{
+		const uint32_t total = (uint32_t)(((uintptr_t)heap->dataEnd - (uintptr_t)heap->dataStart) / 1024u);
+		const uint32_t free_kib = (uint32_t)(MEMGetTotalFreeSizeForExpHeap(heap) / 1024u);
+
+		pools[PERF_POOL_MEM2].known = 1;
+		pools[PERF_POOL_MEM2].capacity_kib = total;
+		pools[PERF_POOL_MEM2].used_kib = total > free_kib ? total - free_kib : 0;
+	}
+	pools[PERF_POOL_EDRAM].known = 1;
+	pools[PERF_POOL_EDRAM].capacity_kib = MEM1_BYTES / 1024u;
+	pools[PERF_POOL_EDRAM].used_kib = perf_mem1_kib();
+}
+
+/* the five seconds' lines in the log: the window of the log's meter closed, and said */
+static void perf_log_emit(void)
+{
+	struct perf_totals totals;
+	struct perf_state state;
+	struct perf_pool pools[PERF_POOL_COUNT];
+	char line[256];
+	int index;
+
+	memset(pools, 0, sizeof(pools));
+	perf_read_totals(&totals);
+	perf_state_make(&state);
+	perf_pools_read(pools);
+	perf_meter_close(&gx.perf_slow, &totals, (double)OSTimerClockSpeed / 1000.0, &state, pools, &gx.perf_log);
+	for (index = 0; index < PERF_LOG_LINES; index++)
+		if (perf_log_line(line, sizeof(line), &gx.perf_log, index))
+			wiiu_log("GX2:   %s", line);
+}
+
+/* each frame: the panel's window, if it is up and a quarter of a second is over, and the panel drawn again from it */
+static void perf_windows(OSTime now)
+{
+	struct perf_totals totals;
+	struct perf_state state;
+	struct perf_pool pools[PERF_POOL_COUNT];
+
+	if (gx.overlay_mode != OVERLAY_MODE_DETAIL)
+	{
+		gx.perf_fast_active = 0;
+		return;
+	}
+	if (!gx.perf_fast_active)
+	{
+		/* (the panel has just been chosen: its window begins here) */
+		perf_meter_reset(&gx.perf_fast);
+		memset(&gx.perf_view, 0, sizeof(gx.perf_view));
+		gx.perf_fast_active = 1;
+		gx.perf_view_time = now;
+		perf_read_totals(&totals);
+		perf_meter_close(&gx.perf_fast, &totals, (double)OSTimerClockSpeed / 1000.0, NULL, NULL, &gx.perf_view);
+		overlay_refresh_detail();
+		return;
+	}
+	if (now - gx.perf_view_time < OSMillisecondsToTicks(250))
+		return;
+	gx.perf_view_time = now;
+	memset(pools, 0, sizeof(pools));
+	perf_read_totals(&totals);
+	perf_state_make(&state);
+	perf_pools_read(pools);
+	perf_meter_close(&gx.perf_fast, &totals, (double)OSTimerClockSpeed / 1000.0, &state, pools, &gx.perf_view);
+	overlay_refresh_detail();
+}
+
 /* (port/linux/game/graphics_quality.c's: whether the split screen's views hold the frames to 30 a second, for the overlay's 30HZ) */
 int graphics_quality_split_screen_capped(void);
 
@@ -3943,8 +4220,10 @@ static void present(const struct dk_command_present *command)
 			overlay_update_view(&gx.overlay);
 			gx.overlay_view_time = now;
 		}
-		if (gx.overlay_shown && !(gx.overlay_frame++ & 1))
+		if (gx.overlay_mode == OVERLAY_MODE_COMPACT && !(gx.overlay_frame++ & 1))
 			overlay_refresh();
+		/* (the detailed panel: its window closes four times a second, and it is drawn again then; the window of five seconds is the log's) */
+		perf_windows(now);
 	}
 	panel_update();
 	if (gx.test_armed == 2)
@@ -3963,8 +4242,8 @@ static void present(const struct dk_command_present *command)
 	if (back)
 	{
 		blit_to(back, drawn, blit_quad(), WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState());
-		if (gx.overlay_shown)
-			overlay_draw(WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState(), 3); /* (768 pixels of the TV's 1920) */
+		if (gx.overlay_mode != OVERLAY_MODE_OFF)
+			overlay_draw(WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState(), 3, gx.overlay_mode == OVERLAY_MODE_DETAIL ? OVERLAY_DETAIL_HEIGHT : OVERLAY_HEIGHT); /* (768 pixels of the TV's 1920) */
 		if (skip_progress > 0.0f)
 			skip_bar_draw(WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState(), skip_progress);
 		if (gx.panel_shown)
@@ -3974,8 +4253,8 @@ static void present(const struct dk_command_present *command)
 	if (back)
 	{
 		blit_to(back, gamepad, blit_quad(), WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState());
-		if (gx.overlay_shown)
-			overlay_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState(), 2); /* (512 of the GamePad's 854) */
+		if (gx.overlay_mode != OVERLAY_MODE_OFF)
+			overlay_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState(), 2, gx.overlay_mode == OVERLAY_MODE_DETAIL ? OVERLAY_DETAIL_HEIGHT : OVERLAY_HEIGHT); /* (512 of the GamePad's 854) */
 		if (skip_progress > 0.0f)
 			skip_bar_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState(), skip_progress);
 		if (gx.panel_shown)
@@ -4010,6 +4289,7 @@ static void present(const struct dk_command_present *command)
 		}
 		gx.wait_ticks += OSGetSystemTime() - wait_start;
 		wait_ticks = OSGetSystemTime() - wait_start;
+		gx.perf_job_wait += wait_ticks;
 	}
 	drs_present(command, wait_ticks, gx.last_present ? OSGetSystemTime() - gx.last_present : 0);
 	if (gx.overlay_on)
@@ -4032,6 +4312,19 @@ static void present(const struct dk_command_present *command)
 			overlay_push(&gx.overlay, (float)OSTicksToMicroseconds(end - gx.overlay_previous_end) / 1000.0f, (float)OSTicksToMicroseconds(cpu_ticks) / 1000.0f,
 				(float)OSTicksToMicroseconds(end - present_start) / 1000.0f, (float)OSTicksToMicroseconds(wait_ticks) / 1000.0f, gx.gpu_ms, (unsigned)draws,
 				(unsigned)(ring / 1024));
+			{
+				/* (the detailed panel's: this frame as the GX2 thread saw it, for the window of a quarter of a second, if the panel is up, and for the log's of five seconds) */
+				struct perf_frame frame;
+
+				frame.frame_ms = (float)OSTicksToMicroseconds(end - gx.overlay_previous_end) / 1000.0f;
+				frame.flip_wait_ms = (float)OSTicksToMicroseconds(wait_ticks) / 1000.0f;
+				frame.gx2_busy_ms = (float)OSTicksToMicroseconds(perf_delta(gx.perf_busy_before, gx.perf_busy_ticks)) / 1000.0f;
+				frame.draws = (unsigned)draws;
+				gx.perf_busy_before = gx.perf_busy_ticks;
+				perf_meter_frame(&gx.perf_slow, &frame);
+				if (gx.perf_fast_active)
+					perf_meter_frame(&gx.perf_fast, &frame);
+			}
 		}
 		gx.overlay_previous_end = end;
 		gx.overlay_ring_previous = gx.ring_total;
@@ -4114,6 +4407,8 @@ static void present(const struct dk_command_present *command)
 				gx.frame_buckets[0], gx.frame_buckets[1], gx.frame_buckets[2], gx.frame_buckets[3]);
 			memset(gx.frame_buckets, 0, sizeof(gx.frame_buckets));
 		}
+		if (gx.overlay_on)
+			perf_log_emit();
 		if (gx.overlay_on)
 			wiiu_log("GX2:   overlay: %.1f frames a second, longest of 120 %.1f ms, cpu %.1f gpu %.1f wait %.1f ms, %ux%u, interpolation %d", (double)overlay_fps(&gx.overlay),
 				(double)overlay_longest(&gx.overlay, 120), (double)gx.overlay.cpu_average, (double)gx.overlay.gpu_average, (double)gx.overlay.wait_average,
@@ -4459,6 +4754,7 @@ static void submit_job(uint32_t commands, uint32_t size)
 	if (!gx.ready)
 		return;
 	submit_start = OSGetSystemTime();
+	gx.perf_job_wait = 0;
 	if (gx.test_armed == 2 && gx.test_log_used + 4 + ((size + 3u) & ~3u) <= TEST_LOG_BYTES)
 	{
 		/* (the GPU test: this frame's streams are kept, each with its size, to be run again at the frame's present) */
@@ -4469,6 +4765,12 @@ static void submit_job(uint32_t commands, uint32_t size)
 	run_stream(at, at + size);
 	ring_flush();
 	gx.submit_ticks += OSGetSystemTime() - submit_start;
+	{
+		/* (the detailed overlay's GX2 time: the job's, less its waits for the flip and for the GPU's work on a ring segment) */
+		const OSTime spent = OSGetSystemTime() - submit_start;
+
+		gx.perf_busy_ticks += (uint32_t)(spent > gx.perf_job_wait ? spent - gx.perf_job_wait : 0);
+	}
 }
 
 /* the highest submission the GPU has finished: everything handed over is waited for at its present, so all of it */

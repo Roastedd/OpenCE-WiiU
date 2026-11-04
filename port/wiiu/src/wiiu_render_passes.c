@@ -11,6 +11,7 @@ is most of a frame (15.6 ms a window at 60 frames a second, 2026-10-31). A mark 
 
 #include <coreinit/time.h>
 
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -26,6 +27,10 @@ static const char *const pass_names[] =
 #define PASS_COUNT ((int)(sizeof(pass_names) / sizeof(pass_names[0])))
 
 static OSTime pass_ticks[PASS_COUNT];
+/* the same parts as monotonic counts of the time base's ticks (32 bits, which wrap in 68 seconds: another thread reads them whole and takes differences), and the
+windows made, for the detailed overlay (wiiu_perf.h); the log's sums above are reset every five seconds, these are not */
+static volatile uint32_t pass_totals[PASS_COUNT];
+static volatile uint32_t pass_windows_total;
 static OSTime pass_started, logged_at;
 static int current_pass = -1;
 static unsigned long windows;
@@ -50,12 +55,16 @@ void wiiu_render_pass(int pass)
 	const OSTime now = OSGetSystemTime();
 
 	if (current_pass >= 0)
+	{
 		pass_ticks[current_pass] += now - pass_started;
+		pass_totals[current_pass] += (uint32_t)(now - pass_started);
+	}
 	pass_started = now;
 	current_pass = pass >= 0 && pass < PASS_COUNT ? pass : -1;
 	if (pass != PASS_COUNT)
 		return;
 	windows++;
+	pass_windows_total++;
 	if (!logged_at)
 		logged_at = now;
 	if (now - logged_at < (OSTime)OSSecondsToTicks(5))
@@ -65,4 +74,17 @@ void wiiu_render_pass(int pass)
 	memset(pass_ticks, 0, sizeof(pass_ticks));
 	windows = 0;
 	logged_at = now;
+}
+
+/* the detailed overlay's read (wiiu_gx2.c): the parts' totals in the order of pass_names, and the windows made */
+unsigned wiiu_render_pass_totals(uint32_t *out, unsigned count, uint32_t *windows_made);
+
+unsigned wiiu_render_pass_totals(uint32_t *out, unsigned count, uint32_t *windows_made)
+{
+	unsigned i;
+
+	for (i = 0; i < count && i < (unsigned)PASS_COUNT; i++)
+		out[i] = pass_totals[i];
+	*windows_made = pass_windows_total;
+	return (unsigned)PASS_COUNT;
 }

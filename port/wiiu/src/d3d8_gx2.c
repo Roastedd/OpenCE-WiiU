@@ -29,6 +29,7 @@ and presenting go there; a draw and a visibility test do nothing yet.
 #include "wiiu_indices.h"
 #include "wiiu_pending_reads.h"
 #include "wiiu_stream_queue.h"
+#include "wiiu_perf.h"
 #include "dk_shaders.h"
 #include "dk_derive.h"
 
@@ -657,22 +658,78 @@ static unsigned long frame_ticks, sum_ticks, frames_with_ticks;
 
 void wiiu_frame_part(int part, int ticks);
 
+/* The game thread's totals for the detailed overlay (wiiu_perf.h, halo/overlay.txt 2), in the time base's ticks and 32 bits: the frame's parts, and its waits for
+the GX2 thread's slots, for the 30 Hz throttle and for a refresh. They are the game thread's own to write; each frame's end publishes a copy under a sequence
+number that the GX2 thread reads (host_gx2_perf_game) without a lock, so that the fields it reads are of one frame. Counts only: nothing here is read back by the game. */
+static struct perf_totals perf_game;
+static struct perf_totals perf_game_published;
+static volatile uint32_t perf_game_sequence;
+static OSTime perf_part_started, perf_last_exit;
+
+void host_gx2_perf_game(struct perf_totals *out);
+
+void host_gx2_perf_game(struct perf_totals *out)
+{
+	unsigned attempt;
+
+	for (attempt = 0; attempt < 8; attempt++)
+	{
+		const uint32_t before = perf_game_sequence;
+
+		if (before & 1u)
+			continue;
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
+		*out = perf_game_published;
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
+		if (perf_game_sequence == before)
+			return;
+	}
+	/* (written all the time: what was read is a few frames' fields that do not all agree, once in a while; the panel's window takes it as it is) */
+}
+
+static void perf_game_publish(void)
+{
+	perf_game_sequence++;
+	__atomic_thread_fence(__ATOMIC_RELEASE);
+	perf_game_published = perf_game;
+	__atomic_thread_fence(__ATOMIC_RELEASE);
+	perf_game_sequence++;
+}
+
 void wiiu_frame_part(int part, int ticks)
 {
 	const double now = profile_now_ms();
+	const OSTime ticks_now = OSGetSystemTime();
 
+	/* (parts 4 and 5: the 30 Hz throttle, main_rasterizer_throttle, which the overlay's VSYNC counts) */
+	if (part == 4)
+	{
+		perf_part_started = ticks_now;
+		return;
+	}
+	if (part == 5)
+	{
+		perf_game.game_throttle += (uint32_t)(ticks_now - perf_part_started);
+		return;
+	}
 	if (part == 0 || part == 2)
 	{
 		part_start = now;
+		perf_part_started = ticks_now;
 		return;
 	}
 	if (part == 1)
 	{
 		frame_tick_ms += now - part_start;
 		frame_ticks += (unsigned long)(ticks > 0 ? ticks : 0);
+		perf_game.game_sim += (uint32_t)(ticks_now - perf_part_started);
+		perf_game.game_ticks += (uint32_t)(ticks > 0 ? ticks : 0);
 	}
 	else
+	{
 		frame_render_ms += now - part_start;
+		perf_game.game_render += (uint32_t)(ticks_now - perf_part_started);
+	}
 }
 
 static double waits_ms; /* the game thread's time in async_wait_retired and halo_switch_renderer_idle, for the hitch notes (D3DDevice_Present) */
@@ -686,9 +743,11 @@ static void async_wait_retired(uint32_t number)
 {
 	static int said;
 	const double start = profile_now_ms();
+	OSTime perf_started;
 
 	if (stream_queue_retired(&dk_stream_queue) >= number)
 		return;
+	perf_started = OSGetSystemTime();
 	while (stream_queue_retired(&dk_stream_queue) < number)
 	{
 		host_gx2_pause();
@@ -700,6 +759,7 @@ static void async_wait_retired(uint32_t number)
 		}
 	}
 	waits_ms += profile_now_ms() - start;
+	perf_game.game_slot_wait += (uint32_t)(OSGetSystemTime() - perf_started);
 }
 
 /* frees what the retired streams' commands named */
@@ -805,8 +865,14 @@ static void stream_flush(void)
 		submission++;
 		stream = stream_buffers[stream_queue_slot(&dk_stream_queue)];
 		/* (the slot to write next must be free: the stream that used it is retired) */
-		while (!stream_queue_slot_free(&dk_stream_queue))
-			host_gx2_pause();
+		if (!stream_queue_slot_free(&dk_stream_queue))
+		{
+			const OSTime perf_started = OSGetSystemTime();
+
+			while (!stream_queue_slot_free(&dk_stream_queue))
+				host_gx2_pause();
+			perf_game.game_slot_wait += (uint32_t)(OSGetSystemTime() - perf_started);
+		}
 		async_frees(0);
 		pending_free_bytes = 0;
 		return;
@@ -829,12 +895,15 @@ void halo_switch_renderer_idle(void);
 void halo_switch_renderer_idle(void)
 {
 	const double start = profile_now_ms();
+	const OSTime perf_started = OSGetSystemTime();
+	const uint32_t perf_before = perf_game.game_slot_wait; /* (async_wait_retired adds its own wait: the whole of this one is added instead) */
 
 	stream_flush();
 	if (dk_async > 0)
 		async_wait_retired((uint32_t)(submission - 1));
 	host_gx2_idle();
 	idle_ms += profile_now_ms() - start;
+	perf_game.game_slot_wait = perf_before + (uint32_t)(OSGetSystemTime() - perf_started);
 	idle_calls++;
 }
 
@@ -4199,6 +4268,7 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 	void *unused, void *unused2)
 {
 	const double start = profile_now_ms();
+	const OSTime perf_started = OSGetSystemTime();
 	double work = profile.last_exit_ms ? start - profile.last_exit_ms : 0.0, present;
 
 	D3DDevice_Present_inner(source_rectangle, destination_rectangle, unused, unused2);
@@ -4214,6 +4284,15 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 		STARTUP_FRAME();
 	}
 	profile.last_exit_ms = profile_now_ms();
+	{
+		/* (the detailed overlay's: this frame's work, from the last present's end to this one's start, and its time in Present) */
+		const OSTime perf_ended = OSGetSystemTime();
+
+		if (perf_last_exit)
+			perf_game.game_work += (uint32_t)(perf_started - perf_last_exit);
+		perf_game.game_present += (uint32_t)(perf_ended - perf_started);
+		perf_last_exit = perf_ended;
+	}
 	profile.present_ms += present;
 	profile.work_ms += work;
 	/* a frame whose work took more than two refreshes: where it went (the draws, waiting for the GX2 thread, waiting for the renderer to be idle; the rest is the game's) */
@@ -4247,6 +4326,8 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 		profile.over_17++;
 	if (work + present > 34.0)
 		profile.over_34++;
+	perf_game.game_frames++;
+	perf_game_publish();
 }
 
 static void D3DDevice_Present_inner(CONST RECT *source_rectangle, CONST RECT *destination_rectangle, void *unused, void *unused2)
@@ -4324,8 +4405,14 @@ static void D3DDevice_Present_inner(CONST RECT *source_rectangle, CONST RECT *de
 	}
 	else
 	{
-		while (pending_flips >= 2)
-			pthread_cond_wait(&vertical_blank_condition, &vertical_blank_lock);
+		if (pending_flips >= 2)
+		{
+			const OSTime perf_started = OSGetSystemTime();
+
+			while (pending_flips >= 2)
+				pthread_cond_wait(&vertical_blank_condition, &vertical_blank_lock);
+			perf_game.game_vsync_hold += (uint32_t)(OSGetSystemTime() - perf_started);
+		}
 		pending_flips++;
 	}
 	pthread_mutex_unlock(&vertical_blank_lock);
