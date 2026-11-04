@@ -2657,8 +2657,8 @@ static int initialize(void)
 
 		if (file)
 		{
-			if (fscanf(file, "%d", &on) != 1)
-				on = 1;
+			if (fscanf(file, "%d", &on) != 1 || on < 0)
+				on = 1; /* (a negative number, -1, is the same as no file) */
 			fclose(file);
 		}
 		gx.mem1 = on;
@@ -2669,8 +2669,8 @@ static int initialize(void)
 		file = fopen(WIIU_DATA_DIRECTORY "/hiz.txt", "r");
 		if (file)
 		{
-			if (fscanf(file, "%d", &on) != 1)
-				on = 0;
+			if (fscanf(file, "%d", &on) != 1 || on < 0)
+				on = 0; /* (a negative number, -1, is the same as no file: it was "yes" before) */
 			fclose(file);
 		}
 		gx.hiz = on;
