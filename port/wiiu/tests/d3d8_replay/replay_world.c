@@ -7,6 +7,7 @@ every run. Built as the platform layer is (the game's ABI and the Xbox headers).
 */
 
 #include "replay.h"
+#include "platform.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -98,6 +99,12 @@ void *physical_memory_get_tag_cache_base_address(void)
 void *halo_custom_edition_tag_cache(void)
 {
 	return NULL;
+}
+
+/* the layer's note of the card's files (xbox_files.c's counters, which the replay does not link): none were read */
+void platform_file_io_snapshot(struct platform_file_io *out)
+{
+	memset(out, 0, sizeof(*out));
 }
 
 /* ---------- the log: counted, and the lines that say a state was found changed with no setter are counted apart */

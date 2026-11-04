@@ -26,6 +26,7 @@ Not run on a console.
 #include "wiiu_font.h"
 #include "wiiu_gx2_mip.h"
 #include "wiiu_overlay.h"
+#include "wiiu_pacing.h"
 #include "wiiu_stream_queue.h"
 #include "wiiu_update.h"
 #include "wiiu_gpu_offload.h"
@@ -243,6 +244,13 @@ static struct
 	GX2Sampler overlay_sampler;
 	struct blit_vertex *overlay_quad;
 	OSTime overlay_previous_end, overlay_view_time;
+	/* frame pacing (wiiu_pacing.h): the policy (halo/pacing.txt), the numbers for the 5 s note, the end of the last present and the display's flips seen so far, the swap interval
+	last set (99: none), and the time this thread spent waiting for the game thread's streams (the GX2 thread's loop adds to it; idle_measured: it is the loop that counts) */
+	struct wiiu_pacing_policy pace;
+	struct wiiu_pacing_stats pace_stats;
+	OSTime pace_previous_end, pace_last_flip, pace_last_swap, idle_ticks, pace_idle_previous;
+	uint32_t pace_flips_seen, pace_interval_set;
+	int idle_measured;
 	unsigned long ring_total, draw_total, overlay_ring_previous, overlay_draw_previous;
 	/* the updater's panel (wiiu_update.c): its text drawn into a texture when it changes, over the middle of both screens while the main menu
 	has it */
@@ -2736,6 +2744,25 @@ static int initialize(void)
 		wiiu_log("GX2: the performance overlay is %s (halo/overlay.txt: 0 off, 1 the compact strip, 2 the detailed panel; L + R + - on the GamePad goes round off, compact, detailed)",
 			overlay_mode_name(gx.overlay_mode));
 	}
+	{
+		/* halo/pacing.txt: the swap policy (wiiu_pacing.h); missing, 0 or not a mode: the game as it has been */
+		FILE *file = fopen(WIIU_DATA_DIRECTORY "/pacing.txt", "r");
+		char text[64] = "";
+
+		if (file)
+		{
+			if (!fgets(text, sizeof(text), file))
+				text[0] = 0;
+			fclose(file);
+		}
+		gx.pace_interval_set = 99;
+		wiiu_pacing_reset(&gx.pace_stats);
+		if (wiiu_pacing_parse(&gx.pace, text) && gx.pace.mode)
+			wiiu_log("GX2: frame pacing (halo/pacing.txt): %s, at most %u swaps wait for their flip", gx.pace.mode == 1 ? "tear when late (the swap does not wait for the vsync when the frame is late)" :
+				"never wait for the vsync (frames held to a refresh each at the fastest)", gx.pace.depth);
+		else
+			wiiu_log("GX2: frame pacing (halo/pacing.txt): off, every swap waits for the vsync%s", config_boolean("display.vsync") ? "" : " (display.vsync is false: it does not)");
+	}
 	gx.panel_made = panel_make();
 	if (!gx.panel_made)
 		wiiu_log("GX2: no memory for the updater's panel: it is not drawn");
@@ -4365,6 +4392,35 @@ static void present(const struct dk_command_present *command)
 	GX2CopyColorBufferToScanBuffer(WHBGfxGetDRCColourBuffer(), GX2_SCAN_TARGET_DRC);
 	/* (the frame's work is handed to the GPU before the swap, whose wait for the display is then not in the time the work is said to have taken) */
 	GX2Flush();
+	{
+		/* the swap's interval (halo/pacing.txt: the policy; off: whatever GX2 has, which is 1, or 0 with display.vsync false) and, for mode 2, the frames held to a refresh each */
+		const OSTime swap_time = OSGetSystemTime();
+
+		if (gx.pace.mode)
+		{
+			uint32_t swaps, flips, interval;
+			OSTime last_flip, last_vsync;
+			float hold = wiiu_pacing_hold_ms(&gx.pace, gx.pace_last_swap ? (float)OSTicksToMicroseconds(swap_time - gx.pace_last_swap) / 1000.0f : 1000.0f);
+
+			if (hold > 0.0f && wiiu_in_foreground() && !wiiu_exit_requested())
+				OSSleepTicks(OSMicrosecondsToTicks((int64_t)(hold * 1000.0f)));
+			GX2GetSwapStatus(&swaps, &flips, &last_flip, &last_vsync);
+			interval = wiiu_pacing_interval(&gx.pace, last_flip ? (float)OSTicksToMicroseconds(OSGetSystemTime() - last_flip) / 1000.0f : 0.0f, swaps - flips);
+			if (interval != gx.pace_interval_set)
+			{
+				GX2SetSwapInterval(interval);
+				gx.pace_interval_set = interval;
+			}
+			gx.pace_stats.swaps_tearing += interval == 0;
+			gx.pace_stats.swaps_synced += interval != 0;
+		}
+		else
+		{
+			gx.pace_stats.swaps_tearing += GX2GetSwapInterval() == 0;
+			gx.pace_stats.swaps_synced += GX2GetSwapInterval() != 0;
+		}
+		gx.pace_last_swap = OSGetSystemTime();
+	}
 	GX2SwapScanBuffers();
 	GX2Flush();
 	if (!gx.screens_enabled)
@@ -4381,7 +4437,7 @@ static void present(const struct dk_command_present *command)
 		for (;;)
 		{
 			GX2GetSwapStatus(&swaps, &flips, &last_flip, &last_vsync);
-			if (swaps - flips <= 1)
+			if (swaps - flips <= (gx.pace.mode ? gx.pace.depth : 1u))
 				break;
 			/* (the flip does not come in the background, nor when the system is closing the app: no waiting for it then) */
 			if (!wiiu_in_foreground() || wiiu_exit_requested() || OSGetSystemTime() - wait_start > OSMillisecondsToTicks(250))
@@ -4394,6 +4450,38 @@ static void present(const struct dk_command_present *command)
 		gx.perf_job_wait += wait_ticks;
 	}
 	drs_present(command, wait_ticks, gx.last_present ? OSGetSystemTime() - gx.last_present : 0);
+	{
+		/* frame pacing's numbers (wiiu_pacing.h): the time since the end of the present before, the part of it the flip and the game thread took, and the display's flips since */
+		const OSTime pace_end = OSGetSystemTime();
+		uint32_t swaps, flips;
+		OSTime last_flip, last_vsync;
+
+		if (gx.pace_previous_end)
+		{
+			wiiu_pacing_frame(&gx.pace_stats, (float)OSTicksToMicroseconds(pace_end - gx.pace_previous_end) / 1000.0f, (float)OSTicksToMicroseconds(wait_ticks) / 1000.0f,
+				gx.idle_measured ? (float)OSTicksToMicroseconds(gx.idle_ticks - gx.pace_idle_previous) / 1000.0f : -1.0f);
+		}
+		gx.pace_idle_previous = gx.idle_ticks;
+		gx.pace_previous_end = pace_end;
+		GX2GetSwapStatus(&swaps, &flips, &last_flip, &last_vsync);
+		if (last_flip && flips != gx.pace_flips_seen)
+		{
+			const uint32_t made = flips - gx.pace_flips_seen;
+
+			/* (the flips since the last look share the time since the flip then: if more than one, they were not seen one by one) */
+			if (gx.pace_last_flip && made < 8)
+			{
+				uint32_t i;
+				const float since = (float)OSTicksToMicroseconds(last_flip - gx.pace_last_flip) / 1000.0f / (float)made;
+				const float after = (float)OSTicksToMicroseconds((int64_t)last_flip - (int64_t)last_vsync) / 1000.0f;
+
+				for (i = 0; i < made; i++)
+					wiiu_pacing_flip(&gx.pace_stats, since, after);
+			}
+			gx.pace_last_flip = last_flip;
+			gx.pace_flips_seen = flips;
+		}
+	}
 	if (gx.overlay_on)
 	{
 		const OSTime end = OSGetSystemTime();
@@ -4509,6 +4597,18 @@ static void present(const struct dk_command_present *command)
 				(double)overlay_percentile(&gx.overlay, 50), (double)overlay_percentile(&gx.overlay, 95), (double)overlay_percentile(&gx.overlay, 99), gx.overlay.count,
 				gx.frame_buckets[0], gx.frame_buckets[1], gx.frame_buckets[2], gx.frame_buckets[3]);
 			memset(gx.frame_buckets, 0, sizeof(gx.frame_buckets));
+		}
+		{
+			char pace_line[400];
+
+			/* (the pacing lines: the frame times, where this thread's time went, and what the display did) */
+			if (wiiu_pacing_format_frames(&gx.pace_stats, pace_line, sizeof(pace_line)))
+				wiiu_log("%s", pace_line);
+			if (wiiu_pacing_format_threads(&gx.pace_stats, pace_line, sizeof(pace_line)))
+				wiiu_log("%s", pace_line);
+			if (wiiu_pacing_format_display(&gx.pace_stats, pace_line, sizeof(pace_line)))
+				wiiu_log("%s", pace_line);
+			wiiu_pacing_reset(&gx.pace_stats);
 		}
 		if (gx.overlay_on)
 			perf_log_emit();
@@ -5069,6 +5169,9 @@ static int gx2_thread_main(int argc, const char **argv)
 				stream_queue_retire(&dk_stream_queue);
 				continue;
 			}
+			const OSTime idle_from = OSGetSystemTime();
+
+			gx.idle_measured = 1;
 			while (gt.posted == seen && !gt.release_request && !(gt.async && __atomic_load_n(&dk_stream_queue.posted, __ATOMIC_ACQUIRE) != dk_stream_queue.taken))
 			{
 				/* (in the background the app gets a little of core 2 and the system's own threads need the rest: a thread that spins there froze the console when the app was closed from the HOME menu) */
@@ -5084,6 +5187,7 @@ static int gx2_thread_main(int argc, const char **argv)
 				else
 					OSSleepTicks(OSMillisecondsToTicks(2));
 			}
+			gx.idle_ticks += OSGetSystemTime() - idle_from;
 			if (gt.release_request)
 			{
 				gt_release_here();

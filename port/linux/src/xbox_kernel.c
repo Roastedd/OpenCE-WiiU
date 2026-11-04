@@ -38,7 +38,7 @@ void platform_log(const char *format, ...)
 {
 	va_list arguments;
 #ifdef __WIIU__
-	char line[200];
+	char line[230]; /* (the log's line is 240 with its time, which is what wiiu_log keeps; 200 cut the hitch notes before their last numbers) */
 
 	va_start(arguments, format);
 	vsnprintf(line, sizeof(line), format, arguments);

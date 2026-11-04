@@ -17,6 +17,7 @@ and presenting go there; a draw and a visibility test do nothing yet.
 */
 
 #include "xgpu.h"
+#include "platform.h"
 #include "sdl_platform.h"
 #include "halo_ui_pointer.h"
 #include "halo_startup.h"
@@ -677,6 +678,8 @@ static int async_on(void)
 /* the frame's parts (source/main/main.c): the game's ticks and its rendering, for the frame time note and the hitch notes */
 static double part_start, frame_tick_ms, frame_render_ms, sum_tick_ms, sum_render_ms, longest_tick_ms;
 static unsigned long frame_ticks, sum_ticks, frames_with_ticks;
+/* the game thread's waits for a stream slot, and its time in the card's files, over the frames of the note */
+static double sum_slot_ms, sum_file_ms;
 
 void wiiu_frame_part(int part, int ticks);
 
@@ -2710,6 +2713,17 @@ static double ticks_ms(OSTime ticks)
 	return (double)ticks * 1000.0 / (double)OSTimerClockSpeed;
 }
 
+/* the game thread's waits for a free stream slot, in the draws and in the present together, from the monotonic arrays (stream_flush): milliseconds and times */
+static double slot_wait_ms_total(void)
+{
+	return ticks_ms(slot_wait_ticks[0] + slot_wait_ticks[1]);
+}
+
+static unsigned long slot_waits_total(void)
+{
+	return slot_waits[0] + slot_waits[1];
+}
+
 /* a draw's time, to the frame's and to the log's (each draw counted in the note it is made before, as when they were milliseconds) */
 static inline void draw_ticks_add(OSTime spent)
 {
@@ -4279,11 +4293,44 @@ static void draw_statistics_log(void)
 		platform_log("frame parts: the game's ticks %.1f ms a frame (%lu ticks in %lu of %lu frames, %.1f ms a tick, longest frame's ticks %.1f ms), rendering %.1f ms a frame",
 			sum_tick_ms / (double)profile.frames, sum_ticks, frames_with_ticks, profile.frames, sum_ticks ? sum_tick_ms / (double)sum_ticks : 0.0, longest_tick_ms,
 			sum_render_ms / (double)profile.frames);
-		platform_log("stream slots: the game thread waited for a free one %.2f ms a frame in %.2f waits a frame in the draws and the frame's work, and %.2f ms in %.2f waits a frame in the present",
-			ticks_ms(slot_wait_ticks[0]) / (double)profile.frames, (double)slot_waits[0] / (double)profile.frames, ticks_ms(slot_wait_ticks[1]) / (double)profile.frames,
-			(double)slot_waits[1] / (double)profile.frames);
-		slot_wait_ticks[0] = slot_wait_ticks[1] = 0;
-		slot_waits[0] = slot_waits[1] = 0;
+		{
+			/* (one set of slot-wait counts: the monotonic arrays; this line and the frame notes each take their own differences) */
+			static OSTime slot_log_ticks[2];
+			static unsigned long slot_log_waits[2];
+
+			platform_log("stream slots: the game thread waited for a free one %.2f ms a frame in %.2f waits a frame in the draws and the frame's work, and %.2f ms in %.2f waits a frame in the present",
+				ticks_ms(slot_wait_ticks[0] - slot_log_ticks[0]) / (double)profile.frames, (double)(slot_waits[0] - slot_log_waits[0]) / (double)profile.frames,
+				ticks_ms(slot_wait_ticks[1] - slot_log_ticks[1]) / (double)profile.frames, (double)(slot_waits[1] - slot_log_waits[1]) / (double)profile.frames);
+			slot_log_ticks[0] = slot_wait_ticks[0];
+			slot_log_ticks[1] = slot_wait_ticks[1];
+			slot_log_waits[0] = slot_waits[0];
+			slot_log_waits[1] = slot_waits[1];
+		}
+		{
+			/* (the waits inside the rendering's time: for a stream slot, and in the card's files; the GX2 thread's own times are in its pacing notes) */
+			static unsigned long slot_waits_before;
+			static double waits_before_note, idle_before_note;
+			struct platform_file_io io;
+
+			platform_file_io_snapshot(&io);
+			platform_log("frame waits: a frame %.2f ms for a stream slot (%lu waits in %lu frames), %.2f for the GX2 thread's streams, %.2f for the renderer to be idle, %.2f in files (%lu reads, "
+				"%lu writes since the start, the longest %.0f ms)", sum_slot_ms / (double)profile.frames, slot_waits_total() - slot_waits_before, profile.frames,
+				(waits_ms - waits_before_note) / (double)profile.frames, (idle_ms - idle_before_note) / (double)profile.frames, sum_file_ms / (double)profile.frames, io.reads, io.writes,
+				io.longest_ms);
+			{
+				/* (the shares of the game thread's frame: the 5 s note's answer to "why was it slow" for a frame that was slow all through) */
+				const double work = profile.work_ms > 0.0 ? profile.work_ms : 1.0, frames = (double)profile.frames;
+
+				platform_log("frame shares of %.1f ms: ticks %.0f%%, rendering %.0f%% (stream slot wait %.0f%%, GX2 streams wait %.0f%%, idle wait %.0f%%), rest of the loop %.0f%%, "
+					"files (all threads) %.1f ms a frame", work / frames, 100.0 * sum_tick_ms / work, 100.0 * sum_render_ms / work,
+					100.0 * sum_slot_ms / work, 100.0 * (waits_ms - waits_before_note) / work, 100.0 * (idle_ms - idle_before_note) / work,
+					100.0 * (work - sum_tick_ms - sum_render_ms) / work, sum_file_ms / frames);
+			}
+			slot_waits_before = slot_waits_total();
+			waits_before_note = waits_ms;
+			idle_before_note = idle_ms;
+			sum_slot_ms = sum_file_ms = 0.0;
+		}
 		sum_tick_ms = sum_render_ms = longest_tick_ms = 0.0;
 		sum_ticks = frames_with_ticks = 0;
 		memset(&profile, 0, sizeof(profile));
@@ -4357,22 +4404,27 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 	}
 	profile.present_ms += present;
 	profile.work_ms += work;
-	/* a frame whose work took more than two refreshes: where it went (the draws, waiting for the GX2 thread, waiting for the renderer to be idle; the rest is the game's) */
+	/* a frame whose work took more than two refreshes: where it went (the draws, waiting for the GX2 thread, for a stream slot, for the renderer to be idle, the card's files;
+	the rest is the game's: the checkpoints' writes, a menu's changes). The note is kept under the log's 230 characters. */
 	{
-		static double waits_before, idle_before;
+		static double waits_before, idle_before, slot_before, file_before;
 		static unsigned long idle_calls_before;
-		static OSTime slot_wait_before;
+		struct platform_file_io io;
+		const double file_ms = (platform_file_io_snapshot(&io), io.read_ms + io.write_ms);
 
 		if (work > 34.0)
-			platform_log("hitch: frame %lu took %.1f ms of work: %.1f in the game's %lu ticks, %.1f rendering (%.1f of it in the Direct3D layer's draws, %.1f of those for a free stream slot), %.1f waiting for the GX2 thread's "
-				"streams, %.1f in %lu waits for the renderer to be idle; present %.1f", device.frame, work, frame_tick_ms, frame_ticks, frame_render_ms, ticks_ms(frame_draw_ticks),
-				ticks_ms(slot_wait_ticks[0] - slot_wait_before), waits_ms - waits_before, idle_ms - idle_before, idle_calls - idle_calls_before, present);
+			platform_log("hitch: frame %lu took %.1f ms of work: %.1f in the game's %lu ticks, %.1f rendering (%.1f draws, %.1f stream slot wait), %.1f other, %.1f file time, present %.1f, "
+				"%.1f GX2 streams wait, %.1f idle waits (%lu)", device.frame, work, frame_tick_ms, frame_ticks, frame_render_ms, ticks_ms(frame_draw_ticks),
+				slot_wait_ms_total() - slot_before, work - frame_tick_ms - frame_render_ms, file_ms - file_before, present, waits_ms - waits_before, idle_ms - idle_before,
+				idle_calls - idle_calls_before);
 		/* dynamic quality (render_governor.c): the frame's work, and how it divides */
 		render_governor_frame(work, frame_tick_ms, frame_render_ms, start);
 		sum_tick_ms += frame_tick_ms;
 		sum_render_ms += frame_render_ms;
 		sum_ticks += frame_ticks;
 		frames_with_ticks += frame_ticks ? 1 : 0;
+		sum_slot_ms += slot_wait_ms_total() - slot_before;
+		sum_file_ms += file_ms - file_before;
 		if (frame_tick_ms > longest_tick_ms)
 			longest_tick_ms = frame_tick_ms;
 		frame_tick_ms = frame_render_ms = 0.0;
@@ -4380,8 +4432,9 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 		frame_draw_ticks = 0;
 		waits_before = waits_ms;
 		idle_before = idle_ms;
+		slot_before = slot_wait_ms_total();
+		file_before = file_ms;
 		idle_calls_before = idle_calls;
-		slot_wait_before = slot_wait_ticks[0];
 	}
 	if (work > profile.longest_work_ms)
 		profile.longest_work_ms = work;

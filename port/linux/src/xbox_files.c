@@ -27,7 +27,9 @@ matched case-insensitively, like the Xbox's FATX volumes.
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <pthread.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 /* ---------- paths */
@@ -688,15 +690,73 @@ static unsigned long long overlapped_offset(LPOVERLAPPED overlapped)
 	return ((unsigned long long)overlapped->OffsetHigh << 32) | overlapped->Offset;
 }
 
+/* port: the time the game's file reads and writes take, for the frame pacing notes: a frame that took long (a checkpoint's 20 MB, a map's data) says it was the card. An
+operation of 30 ms or more is logged with its file (the first 200 of a run); the totals are read by platform_file_io_snapshot and counted from the start. */
+
+static struct platform_file_io file_io;
+static pthread_mutex_t file_io_lock = PTHREAD_MUTEX_INITIALIZER;
+static unsigned file_io_slow_said;
+
+static double file_io_now_ms(void)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (double)now.tv_sec * 1000.0 + (double)now.tv_nsec / 1000000.0;
+}
+
+static void file_io_note(const struct platform_file *file, int write, DWORD bytes, double start_ms)
+{
+	const double ms = file_io_now_ms() - start_ms;
+	int slow;
+
+	pthread_mutex_lock(&file_io_lock);
+	if (write)
+	{
+		file_io.write_ms += ms;
+		file_io.writes++;
+		file_io.bytes_written += bytes;
+	}
+	else
+	{
+		file_io.read_ms += ms;
+		file_io.reads++;
+		file_io.bytes_read += bytes;
+	}
+	if (ms > file_io.longest_ms)
+		file_io.longest_ms = ms;
+	slow = ms >= 30.0 && file_io_slow_said < 200;
+	if (slow)
+		file_io_slow_said++;
+	pthread_mutex_unlock(&file_io_lock);
+	if (slow)
+	{
+		const size_t length = strlen(file->path);
+
+		platform_log("File: %s of %lu KB, %s%s, took %.0f ms", write ? "a write" : "a read", (unsigned long)bytes / 1024, length > 70 ? "..." : "",
+			file->path + (length > 70 ? length - 70 : 0), ms);
+	}
+}
+
+void platform_file_io_snapshot(struct platform_file_io *out)
+{
+	pthread_mutex_lock(&file_io_lock);
+	*out = file_io;
+	pthread_mutex_unlock(&file_io_lock);
+}
+
 BOOL WINAPI ReadFile(HANDLE handle, LPVOID buffer, DWORD count, LPDWORD bytes_read, LPOVERLAPPED overlapped)
 {
 	struct platform_file *file = file_from_handle(handle);
 	BOOL result;
 	DWORD done = 0;
+	double start_ms;
 
 	if (!file)
 		return FALSE;
+	start_ms = file_io_now_ms();
 	result = read_at(file, buffer, count, &done, overlapped != NULL, overlapped ? overlapped_offset(overlapped) : 0);
+	file_io_note(file, 0, done, start_ms);
 	if (bytes_read)
 		*bytes_read = done;
 	if (overlapped)
@@ -714,10 +774,13 @@ BOOL WINAPI WriteFile(HANDLE handle, LPCVOID buffer, DWORD count, LPDWORD bytes_
 	struct platform_file *file = file_from_handle(handle);
 	BOOL result;
 	DWORD done = 0;
+	double start_ms;
 
 	if (!file)
 		return FALSE;
+	start_ms = file_io_now_ms();
 	result = write_at(file, buffer, count, &done, overlapped != NULL, overlapped ? overlapped_offset(overlapped) : 0);
+	file_io_note(file, 1, done, start_ms);
 	if (bytes_written)
 		*bytes_written = done;
 	if (overlapped)
@@ -754,7 +817,12 @@ BOOL WINAPI ReadFileEx(HANDLE handle, LPVOID buffer, DWORD count, LPOVERLAPPED o
 			SetLastError(ERROR_INVALID_PARAMETER);
 		return FALSE;
 	}
-	result = read_at(file, buffer, count, &done, TRUE, overlapped_offset(overlapped));
+	{
+		const double start_ms = file_io_now_ms();
+
+		result = read_at(file, buffer, count, &done, TRUE, overlapped_offset(overlapped));
+		file_io_note(file, 0, done, start_ms);
+	}
 	overlapped->Internal = result ? ERROR_SUCCESS : GetLastError();
 	if (result && done == 0 && count > 0)
 		overlapped->Internal = ERROR_HANDLE_EOF;
@@ -777,7 +845,12 @@ BOOL WINAPI WriteFileEx(HANDLE handle, LPCVOID buffer, DWORD count, LPOVERLAPPED
 			SetLastError(ERROR_INVALID_PARAMETER);
 		return FALSE;
 	}
-	result = write_at(file, buffer, count, &done, TRUE, overlapped_offset(overlapped));
+	{
+		const double start_ms = file_io_now_ms();
+
+		result = write_at(file, buffer, count, &done, TRUE, overlapped_offset(overlapped));
+		file_io_note(file, 1, done, start_ms);
+	}
 	overlapped->Internal = result ? ERROR_SUCCESS : GetLastError();
 	overlapped->InternalHigh = done;
 	platform_queue_apc(file_completion_apc, (void *)completion_routine, overlapped, NULL);

@@ -34,6 +34,14 @@ the SDK headers are read, exactly as game code sees them. */
 /* prints "halo-linux: <message>" to stderr */
 void platform_log(const char *format, ...) __attribute__((format(printf, 1, 2)));
 
+/* the game's file reads and writes since the start (xbox_files.c): their time and sizes, and the longest; the frame pacing notes take the difference between two looks */
+struct platform_file_io
+{
+	double read_ms, write_ms, longest_ms;
+	unsigned long reads, writes, bytes_read, bytes_written;
+};
+void platform_file_io_snapshot(struct platform_file_io *out);
+
 /* opens the url in the system's browser (a Discord link's page: player_link.c);
 in the web build, the page offers it to be opened (a page may open a tab only
 when it is clicked) */
