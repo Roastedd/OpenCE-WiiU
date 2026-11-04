@@ -11,8 +11,8 @@
 The art is the port's own and made here from shapes and text, so that the file can be made again: a hexagon with "CE" in it (Combat Evolved),
 on a dark gradient; the title is set in Overpass (port/assets/fonts, SIL Open Font License 1.1). It uses no picture of the game, of its
 characters or of its logo, which belong to Microsoft; the splash screens say that the port is unofficial and needs the player's own copy.
-Needs Pillow only (no NumPy); the pictures are the same on every machine that has the font file (the checkout's), because every shape is drawn
-by Pillow's own rasteriser at four times the size and scaled down with LANCZOS.
+Needs Pillow only (no NumPy); every shape is drawn by Pillow's own rasteriser at four times the size and scaled down with LANCZOS, so another Pillow
+version may differ by a level or two at an edge (--check allows a mean difference of half a level).
 """
 
 import argparse
@@ -20,7 +20,7 @@ import math
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageStat
 
 ROOT = Path(__file__).resolve().parent.parent
 META = ROOT / "port/wiiu/meta"
@@ -155,6 +155,15 @@ def splash(width, height):
     return image.resize((width, height), Image.LANCZOS)
 
 
+def same_picture(a, b, tolerance=0.5):
+    """whether two pictures are the same to the eye: the same size, and the mean difference of each channel under tolerance (levels of 255). A
+    Pillow or FreeType of another version rasterises an edge a little differently; the pictures in the repository are what this machine's draws"""
+    if a.size != b.size:
+        return False
+    difference = ImageChops.difference(a.convert("RGB"), b.convert("RGB"))
+    return max(ImageStat.Stat(difference).mean) < tolerance
+
+
 def pictures():
     return {"icon.png": icon(), "splash-tv.png": splash(1280, 720), "splash-drc.png": splash(854, 480)}
 
@@ -168,7 +177,7 @@ def main() -> int:
     for name, image in pictures().items():
         path = args.output / name
         if args.check:
-            if not path.is_file() or Image.open(path).convert("RGB").tobytes() != image.convert("RGB").tobytes():
+            if not path.is_file() or not same_picture(Image.open(path), image):
                 stale.append(name)
             continue
         args.output.mkdir(parents=True, exist_ok=True)

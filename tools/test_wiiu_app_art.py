@@ -24,7 +24,7 @@ class AppArtTest(unittest.TestCase):
             self.assertEqual(image.size, sizes[name], name)
             on_disk = Image.open(wiiu_app_art.META / name)
             self.assertEqual(on_disk.size, sizes[name], name)
-            self.assertEqual(on_disk.convert("RGB").tobytes(), image.convert("RGB").tobytes(), f"{name}: run tools/wiiu_app_art.py")
+            self.assertTrue(wiiu_app_art.same_picture(on_disk, image), f"{name}: run tools/wiiu_app_art.py")
 
     def test_the_font_the_titles_are_set_in_is_in_the_checkout(self):
         import wiiu_app_art
