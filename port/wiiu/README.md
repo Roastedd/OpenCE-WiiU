@@ -899,6 +899,8 @@ so that a harness that must not delete a card file can write -1 to put one back.
 | `tick_owners.txt` | 0 | the tick owners' queues, mode 1 or 2 |
 | `game_core.txt` | 1 | the core of the game thread: 0, 1 or 2 |
 | `gx2_thread.txt` | 7 | the GX2 thread's mode (0: the game thread makes the calls) |
+| `gpu_offload.txt` | 0 | bits: 1 the interpolation's blends without square roots, 2 the GX2 census lines, 4 host-only comparison; 0 or a negative number: none |
+| `governor.txt` | the governor as `display.dynamic_quality` sets it | text, not a number: a first word `on`/`off`/`1`/`0`, or settings (`step 2`, `target 25`, `max_step 3`); **a file whose first word is -1 is the same as no file** |
 
 ## Start-up
 

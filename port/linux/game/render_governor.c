@@ -17,7 +17,7 @@ decal or a particle that is not drawn is still made and ages as it would. Where 
   (graphics_quality.c, which asks for the step each frame);
 - decals far away or thinned (rasterizer_xbox_decals.c) and particles small or thinned (render_particles.c).
 
-halo/governor.txt (HALO_GOVERNOR on the host): a first word on/off/1/0 turns it on or off (display.dynamic_quality otherwise); then, one to a line or
+halo/governor.txt (HALO_GOVERNOR on the host; a file whose first word is -1 is the same as no file): a first word on/off/1/0 turns it on or off (display.dynamic_quality otherwise); then, one to a line or
 separated by semicolons, "name value": target (ms), step (hold this step, for a test: the governor then does not move), max_step, window (ms), down_dwell,
 up_dwell (ms), down_windows, up_windows, up_margin (the share of the target the frame must be under, with the step's saving added), min_render (ms of drawing a frame
 under which the governor does not step down: the frame is the ticks', 4), tick_bound (ms a frame waited for the tick thread, 3, and tick_bound_share, 0.35 of the
@@ -203,6 +203,13 @@ static void settings_parse(char *text)
 	char *item = text;
 	int first = 1;
 
+	/* (a file whose first word is -1 is the same as no file: a harness that must not delete a card file writes -1 to put it back) */
+	{
+		char word[40];
+
+		if (sscanf(text, "%39s", word) == 1 && !strcmp(word, "-1"))
+			return;
+	}
 	for (; item && *item; )
 	{
 		char *end = item + strcspn(item, "\n;\r");
