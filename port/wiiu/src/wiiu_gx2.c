@@ -4939,6 +4939,26 @@ int wiiu_gx2_thread_priority(void)
 	return gt.state == 2 ? OSGetThreadPriority(&gt.thread) : OSGetThreadPriority(OSGetDefaultThread(1));
 }
 
+/* the stream slots in use (halo/stream_slots.txt: 2 to 8; absent, -1 or out of range: 6, d3d8_gx2.c's STREAM_SLOTS). The game thread waits for a free slot when the GX2 thread is that many streams behind
+(the console, 2026-11-03: 2.9 ms a frame inside the draws with the tick thread on the GX2 thread's core). */
+int host_gx2_stream_slots(void);
+
+int host_gx2_stream_slots(void)
+{
+	FILE *file = fopen(WIIU_DATA_DIRECTORY "/stream_slots.txt", "r");
+	int slots = 6;
+
+	if (file)
+	{
+		if (fscanf(file, "%d", &slots) != 1 || slots < 2 || slots > 8)
+			slots = 6;
+		fclose(file);
+	}
+	if (slots != 6)
+		wiiu_log("GX2: %d stream slots (halo/stream_slots.txt)", slots);
+	return slots;
+}
+
 int host_gx2_async(void);
 
 int host_gx2_async(void)

@@ -436,6 +436,11 @@ unsigned long replay_gx2_most_queued(void)
 
 /* ---------- what the layer asks of wiiu_gx2.c */
 
+int host_gx2_stream_slots(void)
+{
+	return 6;
+}
+
 int host_gx2_async(void)
 {
 	return gx.async;

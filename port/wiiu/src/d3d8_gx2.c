@@ -577,8 +577,11 @@ int host_gx2_visibility_enabled(void);
 Six: a stream is handed over every 40 draws, about twenty a frame, and with three the game thread could be only two ahead of the GX2 thread - it waited
 for a slot whenever that thread waited for the display's flip or had a frame's worth of work queued (6% of the game thread standing) */
 #define STREAM_SLOTS 6
+/* (the most halo/stream_slots.txt can ask for: buffers in static memory, the slots beyond STREAM_SLOTS cost an address range and nothing more while unused) */
+#define STREAM_SLOTS_MAX 8
+int host_gx2_stream_slots(void);
 /* (on cache lines: the lines made in a slot, stream_lines_make, are whole lines of it) */
-static uint32_t stream_buffers[STREAM_SLOTS][STREAM_SIZE / 4] __attribute__((aligned(64)));
+static uint32_t stream_buffers[STREAM_SLOTS_MAX][STREAM_SIZE / 4] __attribute__((aligned(64)));
 static uint32_t *stream = stream_buffers[0];
 static unsigned long stream_used;
 /* The stream's cache lines below this are made (dcbz) or written: those past it are made before anything is written in them. A write to a line that is not in the cache first
@@ -648,7 +651,7 @@ static int async_on(void)
 	{
 		dk_async = host_gx2_async();
 		if (dk_async)
-			stream_queue_init(&dk_stream_queue, STREAM_SLOTS);
+			stream_queue_init(&dk_stream_queue, host_gx2_stream_slots());
 	}
 	return dk_async;
 }
