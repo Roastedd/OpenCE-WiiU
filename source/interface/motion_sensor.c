@@ -297,7 +297,7 @@ static void motion_sensor_update(
 	long current_time;
 	short active_sensor_index;
 
-	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 	game_engine_running();
 	current_time = game_time_get();
 	motion_sensor_globals->update = TRUE;
@@ -514,7 +514,7 @@ static void update_motion_sensor(
 	long unit_index;
 	struct motion_sensor_datum *sensor;
 
-	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 	player = get_motion_sensor_data(local_player_index);
 	/* (port: the FRIENDS radar's viewer: this player) */
 	game_engine_motion_sensor_viewer(local_player_index);
@@ -647,7 +647,7 @@ static void render_motion_sensor(
 	real_point2d corner;
 	short history_index;
 
-	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 	perspective = director_get_perspective(local_player_index);
 	if (perspective == _director_perspective_neutral ||
 		perspective == _director_perspective_scripted)

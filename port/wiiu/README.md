@@ -46,7 +46,32 @@ target), not copies of them, and `test_wiiu_build.py` checks that. What it does:
   defines, newlib's wide-character functions, which assume a 32-bit `wchar_t`), makes the RPX with `elf2rpl`, and reports the
   sizes against wut's memory map (`tools/wiiu_size_report.py`).
 
-No link-time optimisation and no profile: devkitPPC's linker does not read LLVM bitcode.
+No link-time optimisation across the whole program and no profile: devkitPPC's linker does not read LLVM bitcode. `--wiiu-lto` (`LTO=1` in
+`build_game.sh`) optimises the game's own sources together as one module before they are linked, which the console's builds since 2026-10-31 use.
+
+### The release build (`RELEASE=1`)
+
+`RELEASE=1 tools/wiiu/build_game.sh` (in the tools repository; the same as `python3 configure.py --linux-target=wiiu --release --wiiu-lto`, then
+`ninja linux_wiiu`) builds the flavour that players are given. What it is, and what it is not (the figures are in
+`reports/research/2026-11-04/release-polish.md` of the tools repository):
+
+- **`HALO_RELEASE`**, as the desktop builds' `--release`: a failed assertion is noted in `data/debug.txt` and the game goes on, as the retail game's
+  (whose assertions were compiled out) did, where a default build stops at it ("halted"). The assertions' expressions are still evaluated (some do
+  work the game relies on), so this is not a speed switch. **Exception: the saved games' sources** (`saved_game_files.c`, `game_state.c`,
+  `game_state_xbox.c`, `player_profile.c`, `playlist_profile.c`) define `HALO_ASSERTS_STOP` (`cseries.h`): a failed fatal assertion there still stops the
+  game, after its note, because it guards what is read from or written to a player's saves. `error()`'s own halts (a datum lookup that fails,
+  a map that does not load) are not assertions and stay as they are.
+- **The HUD's stack sentinel is left out** (`hud_draw.h`): each of the 25 guarded HUD functions of the Xbox's development build fills a 512-byte local
+  with 0x62 and checks it and its own return address when it ends. Nothing can change either, so the checks only cost the HUD's draw calls their
+  instructions; in a release build they fold away. The picture is the same.
+- `-DDEBUG` **stays**: it is the Xbox development build's own define (every port's compile line has it), not the flavour. The network's join
+  token is made `#ifndef DEBUG` from the build's compile time and the tags' checksum (`network_server_manager.c`), so a build without it could join no
+  game of any other build; what else it turns on is the checks of zlib's compressor and a dump of the network games' state, which a game does not
+  run. The build says `release` to the hosts it joins (`HALO_BUILD_FLAVOR`).
+- What stays on as it is in a default build, on purpose: the log and its 5-second lines, the black box, the watchdog, the crash note, the exit trail,
+  the profile sampler and the debug server (both need a card file), the shader capture's census (`always` needs a card file). They are
+  what a bug report is made from and cost little (sections 3 and 4 of the report). The card files' defaults are as in the default build.
+
 
 ## The toolchain
 

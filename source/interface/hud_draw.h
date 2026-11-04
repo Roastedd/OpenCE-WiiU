@@ -166,4 +166,18 @@ __inline short check_stack_buffer(
 	return NONE;
 }
 
+#ifdef HALO_RELEASE
+/* port: release builds (configure.py --release) leave out the HUD's stack sentinel: the 512 bytes each guarded function fills with 0x62 and
+checks at its end (check_stack_buffer, 128 compares), and the paired reads of its return address (get_return_eip). They are a development
+build's check of the function's own frame, which a release build only noted in debug.txt and carried on past (cseries.h), and the HUD asks
+for them hundreds to thousands of times a frame. What they check is true by construction here (return_eip is get_return_eip() of the same
+frame, the buffer is never written), so the checks that are left read: return_eip == 0 and no corrupt index, and fold away; every
+frame the HUD draws is the same. The checked form (a build without --release) is as it was. */
+#define hud_stack_sentinel_fill(buffer) ((void)(buffer))
+#define check_stack_buffer(buffer) ((void)(buffer), (short)NONE)
+#define get_return_eip() 0L
+#else
+#define hud_stack_sentinel_fill(buffer) csmemset(buffer, 0x62, sizeof(buffer))
+#endif
+
 #endif /* __HUD_DRAW_H */

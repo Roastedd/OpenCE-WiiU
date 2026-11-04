@@ -431,6 +431,9 @@ static boolean hud_bad_bitmap_reported = FALSE;
 
 /* ---------- public code */
 
+#ifdef HALO_RELEASE
+#undef get_return_eip
+#endif
 /* Inspect the guarded caller's frame, not the return site of this helper.
  * A normal prologue would replace EBP and defeat the paired stack check. */
 __attribute__((noinline)) long get_return_eip(
@@ -439,6 +442,9 @@ __attribute__((noinline)) long get_return_eip(
 	/* the caller's return address, as [ebp+4] is in the naked original */
 	return (long)(__INTPTR_TYPE__)__builtin_return_address(1);
 }
+#ifdef HALO_RELEASE
+#define get_return_eip() 0L
+#endif
 
 real hud_globals_get_scale(
 	boolean in_multiplayer)
@@ -456,7 +462,7 @@ void hud_retrieve_bitmap_and_bounding_rect(
 	long return_eip = get_return_eip();
 	long stack_buffer[STACK_BUFFER_LENGTH];
 
-	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 
 	match_assert("c:\\halo\\SOURCE\\interface\\hud_draw.c", 193, bitmap);
 	match_assert("c:\\halo\\SOURCE\\interface\\hud_draw.c", 194, clip);
@@ -527,7 +533,7 @@ static boolean hud_draw_multitexture_overlay_get_current_weapon_definition(
 	long stack_buffer[STACK_BUFFER_LENGTH];
 	long weapon_index;
 
-	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 
 	weapon_index = unit_inventory_get_weapon(
 		player->unit_index,
@@ -626,7 +632,7 @@ static void hud_draw_multitexture_overlay(
 	short map_index;
 	short function_index;
 
-	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 
 	sin_theta = (real)sin(theta);
 	texture_offset[0].x = overlay->map_offset[0].i;
@@ -1014,7 +1020,7 @@ void hud_calculate_point(
 	real scale;
 	short corner;
 
-	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 
 	if (in_multiplayer && override_scale != 0.0f)
 	{
@@ -1130,7 +1136,7 @@ pixel32 get_flash_color(
 	real_argb_color flash_color;
 	real flash_phase;
 
-	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 
 	flash_phase = (real)fmod(
 		(game_time_get() - reference_value) * (1.0f / TICKS_PER_SECOND),
@@ -1235,7 +1241,7 @@ void hud_draw_weapon_overlays(
 	long stack_buffer[STACK_BUFFER_LENGTH];
 	long item_index;
 
-	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 
 	for (item_index = 0; item_index < overlays->items.count; item_index++)
 	{
@@ -1435,7 +1441,7 @@ void hud_draw_static_element(
 	struct bitmap_data *bitmap;
 	short overlay_index;
 
-	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 
 	bitmap_group = bitmap_group_get(
 		verify_tag_reference(&static_element->interface_bitmap));
@@ -1565,7 +1571,7 @@ static void hud_draw_bitmap_internal(
 	struct rasterizer_dynamic_screen_geometry_parameters parameters;
 	short vertex_index;
 
-	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 
 	sin_theta = (real)sin(theta);
 	cos_theta = (real)cos(theta);
@@ -1652,7 +1658,7 @@ static void hud_draw_bitmap_with_meter(
 	point2d point;
 	real_rectangle2d bounds;
 
-	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 
 	default_clip.x0 = 0.0f;
 	default_clip.x1 = 1.0f;
@@ -1721,7 +1727,7 @@ static real_rectangle2d const *get_sprite_clip_rect(
 	long return_eip = get_return_eip();
 	long stack_buffer[STACK_BUFFER_LENGTH];
 
-	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 
 	if (bitmap_group_index!=NONE && sequence_index!=NONE && frame_index!=NONE)
 	{
@@ -1762,7 +1768,7 @@ static void hud_calculate_bitmap_bounds(
 	real width;
 	real height;
 
-	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 
 	width = (clip->x1-clip->x0)*(is_interface_bitmap ? 1 : bitmap->width);
 	height = (clip->y1-clip->y0)*(is_interface_bitmap ? 1 : bitmap->height);
@@ -1830,7 +1836,7 @@ void hud_draw_bitmap_direct(
 	real_vector2d xy_scale;
 	real_rectangle2d bounds;
 
-	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 
 	default_clip.x0 = 0.0f;
 	default_clip.x1 = 1.0f;
@@ -1888,7 +1894,7 @@ void hud_draw_meter(
 	struct bitmap_group *bitmap_group;
 	struct bitmap_data *bitmap;
 
-	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 
 	bitmap_group = bitmap_group_get(
 		verify_tag_reference(&meter->meter_bitmap));
@@ -2014,7 +2020,7 @@ void hud_draw_numbers(
 	long stack_buffer[STACK_BUFFER_LENGTH];
 	long hud_number_index;
 
-	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 
 	hud_number_index = interface_get_tag_index(_interface_hud_digits);
 	if (hud_number_index != NONE)
