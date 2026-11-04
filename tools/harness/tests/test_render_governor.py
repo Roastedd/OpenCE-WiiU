@@ -34,7 +34,11 @@ void platform_log(char const *format, ...)
 	logs++;
 	printf("LOG %s\n", last_log);
 }
+static int performance_mode;
+static double wait_total;
 int config_boolean(const char *name) { return !strcmp(name, "display.dynamic_quality") && config_on; }
+const char *config_string(const char *name) { return !strcmp(name, "display.graphics_mode") ? (performance_mode ? "performance" : "balanced") : ""; }
+double tick_overlap_wait_ms_total(void) { return wait_total; }
 unsigned long config_changes(void) { return changes; }
 int render_governor_settings_text(char *text, unsigned long size)
 {
@@ -50,8 +54,9 @@ unsigned long render_governor_pass_milliseconds(double milliseconds[13])
 }
 
 /* the milliseconds a frame each step takes off the one before, in a fight (render_governor.c's default_save_ms, less a little: the model is worse) */
-static const double saved_up_to[RENDER_GOVERNOR_STEPS] = { 0, 0.9, 2.1, 3.3, 4.8, 6.9, 8.2, 9.4 };
+static const double saved_up_to[RENDER_GOVERNOR_STEPS] = { 0, 1.0, 3.2, 4.4, 5.2, 7.0, 8.3, 9.5 };
 static double now_ms = 1000.0;
+static double saved_scale = 1.0;
 static unsigned long noise_state = 12345;
 static int last_step;
 static double first_change = -1;
@@ -69,7 +74,7 @@ static void run(double seconds, double base, double jitter)
 
 	while (now_ms < end)
 	{
-		double work = base - saved_up_to[render_governor_step()] + noise() * jitter;
+		double work = base - saved_up_to[render_governor_step()] * saved_scale + noise() * jitter;
 
 		render_governor_frame(work, work * 0.4, work * 0.6, now_ms);
 		now_ms += work > 16.7 ? work : 16.7;
@@ -96,6 +101,7 @@ int main(int argc, char **argv)
 	else if (!strcmp(scenario, "down_then_up"))
 	{
 		config_on = 1;
+		settings_text = "max_step 7";
 		run(25, 32, 0);
 		printf("RESULT after_heavy %d\n", render_governor_step());
 		run(150, 14, 0);
@@ -155,6 +161,97 @@ int main(int argc, char **argv)
 			now_ms += 30;
 		}
 		printf("RESULT step %d\n", render_governor_step());
+	}
+	else if (!strcmp(scenario, "cap"))
+	{
+		/* the default: a scene far too heavy goes down to step 3 and no deeper (no unit, vehicle, weapon or projectile is ever culled up to it) */
+		config_on = 1;
+		run(60, 40, 0);
+		printf("RESULT step %d cull_unit %.0f cull_item %.0f\n", render_governor_step(), render_governor_values()->cull_unit_pixels,
+			render_governor_values()->cull_item_pixels);
+	}
+	else if (!strcmp(scenario, "performance"))
+	{
+		/* the Performance mode, chosen: all 7 steps */
+		config_on = 1;
+		performance_mode = 1;
+		run(60, 40, 0);
+		printf("RESULT step %d\n", render_governor_step());
+	}
+	else if (!strcmp(scenario, "new_map"))
+	{
+		/* a map starts: the cold start's slow frames for 20 s decide nothing */
+		config_on = 1;
+		run(30, 15, 0);
+		render_governor_new_map();
+		now_ms += 1;
+		run(30, 40, 0);
+		printf("RESULT map_at 31000\n");
+	}
+	else if (!strcmp(scenario, "worst"))
+	{
+		/* 30 ms frames, but every half second one of 95 ms: those windows are not evidence */
+		int index;
+
+		config_on = 1;
+		for (index = 0; index < 400; index++)
+		{
+			render_governor_frame(index % 15 == 0 ? 95 : 30, 12, 18, now_ms);
+			now_ms += index % 15 == 0 ? 95 : 30;
+		}
+		printf("RESULT step %d\n", render_governor_step());
+	}
+	else if (!strcmp(scenario, "tick_bound"))
+	{
+		/* the game thread waits 12 ms a frame for the tick thread: the frame is the tick thread's, drawing less shortens nothing */
+		int index;
+
+		config_on = 1;
+		for (index = 0; index < 1500; index++)
+		{
+			wait_total += 12;
+			render_governor_frame(30, 14, 15, now_ms);
+			now_ms += 30;
+		}
+		printf("RESULT step %d\n", render_governor_step());
+	}
+	else if (!strcmp(scenario, "wait_some"))
+	{
+		/* a frame of 33 ms that waits 6 for the tick thread (18%): drawing is most of it, and is shed */
+		int index;
+
+		config_on = 1;
+		for (index = 0; index < 1500; index++)
+		{
+			wait_total += 6;
+			render_governor_frame(33, 10, 21, now_ms);
+			now_ms += 33;
+		}
+		printf("RESULT step %d\n", render_governor_step());
+	}
+	else if (!strcmp(scenario, "probe"))
+	{
+		/* a scene where each step saves twice what the table says: at the cap the frame is 20.0 ms, under 93% of the target, and the estimate says a step
+		back would be 21.2, over the 88% it needs; after 20 s under it tries, finds 22.4, and takes it back (a longer wait for the next) */
+		config_on = 1;
+		saved_scale = 2.0;
+		run(30, 28.8, 0);
+		printf("RESULT at_cap %d\n", render_governor_step());
+		run(150, 28.8, 0);
+	}
+	else if (!strcmp(scenario, "low_target"))
+	{
+		config_on = 1;
+		settings_text = "target 18";
+		run(30, 19.5, 0);
+		printf("RESULT step %d\n", render_governor_step());
+	}
+	else if (!strcmp(scenario, "file_implies_on"))
+	{
+		config_on = 0;
+		settings_text = "target 30";
+		run(5, 20, 0);
+		printf("RESULT active %d\n", render_governor_active());
 	}
 	else if (!strcmp(scenario, "mild"))
 	{
@@ -272,7 +369,9 @@ def test_settles_on_a_step_that_fits(tmp_path):
 def test_a_scene_at_the_edge_does_not_oscillate(tmp_path):
     transitions, results, _ = run_scenario(tmp_path, "edge")
     ups = [t for t in transitions if t[2] < t[1]]
-    assert ups == [] and len(transitions) <= 3 and results["step"] >= 1
+    # (it goes down and stays: the only ups are the tries after a long time under the target, each taken back and the next one twice as late)
+    assert results["step"] >= 1 and len(transitions) <= 12
+    assert all(b[0] - a[0] >= 20000 for a, b in zip(ups, ups[1:]))
 
 
 def test_a_hitch_is_not_shed_for(tmp_path):
@@ -280,12 +379,68 @@ def test_a_hitch_is_not_shed_for(tmp_path):
     assert transitions == [] and results["step"] == 0
 
 
-def test_the_worse_the_faster(tmp_path):
-    _, severe, _ = run_scenario(tmp_path, "severe")
+def test_never_more_than_a_step_in_two_seconds(tmp_path):
+    transitions, _, _ = run_scenario(tmp_path, "severe")
     _, mild, _ = run_scenario(tmp_path, "mild")
-    # (40% over: one window; a little over: the dwell, a second, and two windows)
-    assert severe["first"] < mild["first"]
-    assert severe["first"] <= 700 and mild["first"] >= 1000
+    # (40% over is one window of evidence instead of two, and still a step in two seconds at the fastest)
+    assert transitions and transitions[0][0] >= 2000
+    assert all(b[0] - a[0] >= 2000 for a, b in zip(transitions, transitions[1:]))
+    assert mild["first"] >= 2000
+
+
+def test_the_default_goes_to_step_3_and_no_deeper(tmp_path):
+    transitions, results, _ = run_scenario(tmp_path, "cap")
+    assert results["step"] == 3 and results["cull_unit"] == 0 and results["cull_item"] == 0
+    assert max(t[2] for t in transitions) == 3
+
+
+def test_the_performance_mode_goes_to_all_7(tmp_path):
+    _, results, _ = run_scenario(tmp_path, "performance")
+    assert results["step"] == 7
+
+
+def test_the_first_seconds_of_a_map_decide_nothing(tmp_path):
+    transitions, _, _ = run_scenario(tmp_path, "new_map")
+    # (the map starts at 30 s of the run, +1 ms: nothing for 20 s after it, then the heavy scene is shed)
+    assert transitions and transitions[0][0] >= 30000 + 20000 and transitions[0][1] == 0
+
+
+def test_a_window_with_a_long_frame_is_not_evidence(tmp_path):
+    _, results, _ = run_scenario(tmp_path, "worst")
+    assert results["step"] == 0
+
+
+def test_a_frame_the_tick_thread_holds_is_not_drawings_to_shed(tmp_path):
+    _, results, _ = run_scenario(tmp_path, "tick_bound")
+    assert results["step"] == 0
+
+
+def test_a_frame_that_waits_a_little_for_the_tick_thread_is_still_drawings(tmp_path):
+    _, results, _ = run_scenario(tmp_path, "wait_some")
+    assert results["step"] == 3
+
+
+def test_a_step_back_is_tried_when_the_frame_has_been_under_long(tmp_path):
+    transitions, results, _ = run_scenario(tmp_path, "probe")
+    assert results["at_cap"] == 3
+    ups = [t for t in transitions if t[2] < t[1]]
+    assert ups, transitions
+    # (the first try about 20 s after the cap was reached; taken back; the next one waits twice as long)
+    first = ups[0][0]
+    assert 20000 <= first <= 35000
+    later = [t for t in ups[1:]]
+    assert not later or later[0][0] - first >= 38000
+
+
+def test_a_target_under_20_is_20(tmp_path):
+    transitions, results, logs = run_scenario(tmp_path, "low_target")
+    assert transitions == [] and results["step"] == 0
+    assert any("using 20" in line for line in logs)
+
+
+def test_a_file_that_tunes_it_turns_it_on(tmp_path):
+    _, results, _ = run_scenario(tmp_path, "file_implies_on")
+    assert results["active"] == 1
 
 
 def test_a_frame_of_ticks_is_not_drawings_to_shed(tmp_path):
@@ -336,9 +491,11 @@ def test_negative_controls(tmp_path, fault):
     source = (ROOT / "port/linux/game/render_governor.c").read_text(encoding="latin-1")
     changes = {
         # (up as soon as the frame is under the target, without the step's saving)
-        "no_hysteresis": [("mean + (double)save_ms[governor.step] < target * settings.up_margin", "mean < target")],
+        "no_hysteresis": [("governor.step > 0 && predicted < target * settings.up_margin ?", "governor.step > 0 && mean + 0 * predicted < target ?"),
+                          ("governor.probe_windows >= (int)(settings.probe_ms / settings.window_ms)", "0")],
         # (a load's frame counts, and a window of one frame is a window)
-        "no_hitch_filter": [("if (work_ms > 250.0)", "if (work_ms > 2.5e9)"), ("if (governor.frames >= 8)", "if (governor.frames >= 1)")],
+        "no_hitch_filter": [("if (work_ms > 250.0)", "if (work_ms > 2.5e9)"), ("if (governor.frames >= 8)", "if (governor.frames >= 1)"),
+                            ("governor.window_worst > settings.worst_ms", "0")],
         # (an up taken back soon waits no longer)
         "no_backoff": [("governor.up_backoff *= 2;", "governor.up_backoff *= 1;")],
     }

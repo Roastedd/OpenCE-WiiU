@@ -64,7 +64,7 @@ extern struct rasterizer_debug_options rasterizer_debug_options;
     # (the dynamic quality's, which graphics_quality.c asks for the step and what it leaves out)
     "render_governor.h": r'''
 struct render_governor_values { char const *name; float cull_scenery_pixels, cull_item_pixels, cull_unit_pixels, lod_scale, shadow_min_pixels,
-	decal_radius; int decal_keep; float particle_lod_scale; int particle_keep; int grass, lens_flares, specular, contrails; };
+	decal_radius; int decal_keep; float particle_lod_scale; int particle_keep; int grass, lens_flares, specular, contrails; int decal_max, particle_max; };
 int render_governor_step(void);
 struct render_governor_values const *render_governor_values(void);
 ''',
@@ -81,7 +81,7 @@ FIXTURE = r'''
 
 /* the dynamic quality: the step it holds and what that step leaves out (the neutral values: nothing) */
 static int governor_step;
-static struct render_governor_values shed = { "full", 0, 0, 0, 1, 0, 0, 16, 1, 16, 1, 1, 1, 1 };
+static struct render_governor_values shed = { "full", 0, 0, 0, 1, 0, 0, 16, 1, 16, 1, 1, 1, 1, 0, 0 };
 int render_governor_step(void) { return governor_step; }
 struct render_governor_values const *render_governor_values(void) { return &shed; }
 
