@@ -193,8 +193,8 @@ enum
 	MODE_NO_PREFETCH = 1024, /* the next block's cache lines are not asked for while one is copied */
 	MODE_NO_ROTATION_CACHE = 2048, /* the blends find the rotations of both poses every frame (off: each pose's are found once and kept) */
 	MODE_POISON_LEFT_OUT = 4096, /* test: what the copies leave out is filled with 0xCD, so that a read of it changes the frames */
-	MODE_NO_FLUSH = 16384, /* the tick thread's copies are not written back to memory after a capture (off: they are, so that the game thread's reads find them in memory, not in the tick core's cache) */
-	MODE_NO_VIEW_PREFETCH = 32768, /* the game thread does not ask for the cache lines of the newest capture's copies when a frame begins */
+	MODE_FLUSH = 16384, /* the tick thread writes its copies back to memory after a capture (dcbst), so that the game thread's reads find them in memory, not in the tick core's cache. Off by default: the console's second matrix (2026-11-03) found no difference */
+	MODE_VIEW_PREFETCH = 32768, /* the game thread asks for the cache lines of the newest capture's new copies when a frame begins. Off by default: it cost 1.0 to 1.1 ms a frame for no gain in the frame (rendering 25.25 ms with it, 25.4 without) */
 };
 
 /* an object copied at a capture if it was asked for within this many captures */
@@ -405,8 +405,8 @@ static int tick_snapshot_mode(void)
 		s.skip_orientations = (s.mode & MODE_ON) != 0 && !(s.mode & MODE_KEEP_ORIENTATIONS);
 		s.skip_unchanged = s.overlap_requested && !(s.mode & MODE_COPY_ALL);
 		s.prefetch = (s.mode & MODE_ON) != 0 && !(s.mode & MODE_NO_PREFETCH);
-		s.flush = s.overlap_requested && !(s.mode & MODE_NO_FLUSH);
-		s.view_prefetch = s.overlap_requested && !(s.mode & MODE_NO_VIEW_PREFETCH);
+		s.flush = s.overlap_requested && (s.mode & MODE_FLUSH) != 0;
+		s.view_prefetch = s.overlap_requested && (s.mode & MODE_VIEW_PREFETCH) != 0;
 		s.rotation_cache = s.overlap_requested && !(s.mode & MODE_NO_ROTATION_CACHE);
 		if (s.skip_unchanged)
 		{
