@@ -472,6 +472,7 @@ static void motion_sensor_update(
 		}
 	}
 
+#if !defined(HALO_RELEASE) && !defined(HALO_NO_HUD_SENTINEL)
 	{
 		short corrupt_index;
 		short buffer_index;
@@ -500,6 +501,9 @@ stack_buffer_checked_motion_sensor_update:
 			corrupt_index == NONE,
 			csprintf(temporary, "corrupt stack at %d!", corrupt_index));
 	}
+#else
+	(void)return_eip;
+#endif
 
 	return;
 }
@@ -732,6 +736,7 @@ static void render_motion_sensor(
 	rasterizer_hud_motion_sensor_blip_end(&center_point, sweep_theta);
 
 render_motion_sensor_done:
+#if !defined(HALO_RELEASE) && !defined(HALO_NO_HUD_SENTINEL)
 	{
 		short corrupt_index;
 		short buffer_index;
@@ -760,6 +765,9 @@ stack_buffer_checked_render_motion_sensor:
 			corrupt_index == NONE,
 			csprintf(temporary, "corrupt stack at %d!", corrupt_index));
 	}
+#else
+	(void)return_eip;
+#endif
 
 	return;
 }

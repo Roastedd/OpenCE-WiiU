@@ -35,6 +35,15 @@ class ReleaseFlavourTest(unittest.TestCase):
                 before = text[max(0, match.start() - 40):match.start()]
                 self.assertIn("#if !defined(HALO_RELEASE) && !defined(HALO_NO_HUD_SENTINEL)", text[max(0, match.start() - 90):match.start()], f"{name}: {before!r}")
 
+    def test_motion_sensors_hand_written_checks_go_with_the_fill(self):
+        # (found by the lean build's digest run: with the fill left out, motion_sensor.c's two open-coded checks of the buffer read what was never
+        # written and halted a build whose assertions stop the game: "corrupt stack at 127!")
+        text = (ROOT / "source/interface/motion_sensor.c").read_text(errors="replace")
+        guard = "#if !defined(HALO_RELEASE) && !defined(HALO_NO_HUD_SENTINEL)"
+        for match in re.finditer(r"if \(stack_buffer\[buffer_index\] != 0x62626262\)", text):
+            before = text[:match.start()]
+            self.assertGreater(before.rfind(guard), before.rfind("#endif"), "an open-coded check outside the sentinel's guard")
+
     def test_the_release_sentinel_macros_leave_nothing_to_run(self):
         text = (ROOT / "source/interface/hud_draw.h").read_text()
         start = text.index("#if defined(HALO_RELEASE) || defined(HALO_NO_HUD_SENTINEL)")
