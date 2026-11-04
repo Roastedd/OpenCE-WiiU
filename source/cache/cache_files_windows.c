@@ -1201,6 +1201,11 @@ static void CALLBACK cache_file_read_io_completion_routine(
 	/* port: a read that failed or came up short completes as failed: what
 	waits on it stops waiting, and a caller that checks (the map's tags and
 	bsps) sees it, instead of taking what is in its buffer for the map */
+#ifdef HALO_WIIU
+	/* port: the bytes of the read are in memory before the flag that says so is seen by the other cores (the game thread draws from them at once; texture streaming
+	draws from a tail while the rest is read) */
+	__sync_synchronize();
+#endif
 	*(volatile boolean *)finished_request->overlapped.hEvent =
 		error_code == ERROR_SUCCESS && bytes_transferred == (unsigned long)finished_request->size ?
 			TRUE :
