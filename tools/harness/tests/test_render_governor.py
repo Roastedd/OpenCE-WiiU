@@ -39,6 +39,8 @@ static double wait_total;
 int config_boolean(const char *name) { return !strcmp(name, "display.dynamic_quality") && config_on; }
 const char *config_string(const char *name) { return !strcmp(name, "display.graphics_mode") ? (performance_mode ? "performance" : "balanced") : ""; }
 double tick_overlap_wait_ms_total(void) { return wait_total; }
+static int overlay_step = -9, overlay_max = -9;
+void wiiu_overlay_governor(int step, int max_step) { overlay_step = step; overlay_max = max_step; } /* (wiiu_gx2.c: the detailed overlay's field) */
 unsigned long config_changes(void) { return changes; }
 int render_governor_settings_text(char *text, unsigned long size)
 {
@@ -112,7 +114,7 @@ int main(int argc, char **argv)
 		/* a scene of 24 ms: step 2 takes it to 21.9, which fits; nothing takes it back up (21.9 and 1.2 more is over 88% of 22) */
 		config_on = 1;
 		run(300, 24, 0);
-		printf("RESULT step %d\n", render_governor_step());
+		printf("RESULT step %d overlay_step %d overlay_max %d\n", render_governor_step(), overlay_step, overlay_max);
 	}
 	else if (!strcmp(scenario, "edge"))
 	{
@@ -364,6 +366,12 @@ def test_settles_on_a_step_that_fits(tmp_path):
     transitions, results, _ = run_scenario(tmp_path, "settles")
     assert results["step"] == 2
     assert [t[2] for t in transitions] == [1, 2]
+
+
+def test_the_overlay_is_told_the_step_and_the_deepest_step(tmp_path):
+    _, results, _ = run_scenario(tmp_path, "settles")
+    # (the detailed overlay's GOV field: the governor's step now and the deepest step it may go to, the default cap)
+    assert results["overlay_step"] == results["step"] == 2 and results["overlay_max"] == 3
 
 
 def test_a_scene_at_the_edge_does_not_oscillate(tmp_path):
