@@ -2938,6 +2938,9 @@ void object_compute_node_matrices(
 		{
 			short node_stack_index = node_stack[node_index++];
 			short next_sibling_node_index;
+#ifdef HALO_PPC_HOTPATHS_ON
+			boolean root_matrix_is_valid = FALSE;
+#endif
 			struct model_node *node = TAG_BLOCK_GET_ELEMENT(&model->nodes, node_stack_index, struct model_node);
 			
 			if (node_stack_index==0)
@@ -3023,7 +3026,13 @@ void object_compute_node_matrices(
 					object_nodes[node_stack_index] = node_matrix;
 				}
 
-				if (!valid_real_matrix4x3(&object_nodes[node_stack_index]))
+				if (valid_real_matrix4x3(&object_nodes[node_stack_index]))
+				{
+#ifdef HALO_PPC_HOTPATHS_ON
+					root_matrix_is_valid = TRUE;
+#endif
+				}
+				else
 				{
 					real_matrix4x3 const *validated_root_node_matrix;
 
@@ -3146,7 +3155,12 @@ void object_compute_node_matrices(
 			if (node_stack_index==0)
 			{
 				real_matrix4x3 *final_matrix = &object_nodes[node_stack_index];
+#ifdef HALO_PPC_HOTPATHS_ON
+				/* port: this is the matrix the check above has just passed, unchanged (nothing between the two writes it): it passes again */
+				if (!root_matrix_is_valid && !valid_real_matrix4x3(final_matrix))
+#else
 				if (!valid_real_matrix4x3(final_matrix))
+#endif
 				{
 					char *name2 = tag_get_name(object->definition_index);
 					char *string = name2;
