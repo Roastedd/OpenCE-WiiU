@@ -1057,14 +1057,14 @@ unsigned wiiu_gpu_offload_bits(void)
 }
 
 /* wiiu_study.c: a study switch's number from a file on the card; here from the environment (tick_thread.txt: HALO_TICK_THREAD,
-tick_overlap.txt: HALO_TICK_OVERLAP, startup.txt: HALO_STARTUP), so that a run can have the ticks on a thread of their own, and overlapped */
+tick_overlap.txt: HALO_TICK_OVERLAP, startup.txt: HALO_STARTUP, stream.txt: HALO_STREAM, hotpaths.txt: HALO_HOTPATHS), so that a run can have the ticks on a thread of their own, and overlapped */
 long wiiu_study_number(const char *name, long fallback)
 {
 	const char *variable = !strcmp(name, "tick_thread.txt") ? "HALO_TICK_THREAD" : !strcmp(name, "tick_overlap.txt") ? "HALO_TICK_OVERLAP" :
 		!strcmp(name, "tick_overlap_stall.txt") ? "HALO_TICK_OVERLAP_STALL" : !strcmp(name, "tick_overlap_serialize.txt") ? "HALO_TICK_OVERLAP_SERIALIZE" :
 		!strcmp(name, "tick_overlap_jitter.txt") ? "HALO_TICK_OVERLAP_JITTER" : !strcmp(name, "tick_overlap_force_serial.txt") ? "HALO_TICK_OVERLAP_FORCE_SERIAL" :
 		!strcmp(name, "startup.txt") ? "HALO_STARTUP" :
-		!strcmp(name, "stream.txt") ? "HALO_STREAM" :
+		!strcmp(name, "stream.txt") ? "HALO_STREAM" : !strcmp(name, "hotpaths.txt") ? "HALO_HOTPATHS" :
 		!strcmp(name, "stream_delay.txt") ? "HALO_STREAM_DELAY" : NULL;
 	const char *value;
 
