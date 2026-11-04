@@ -273,7 +273,12 @@ static void pixel_key_make(const struct dk_derive *derive, struct nv2a_pixel_sha
 		texture_scale[stage][0] = found->scale[0];
 		texture_scale[stage][1] = found->scale[1];
 		if (stage == 0)
+		{
 			key->coverage_alpha = found->hires_coverage != FALSE;
+			/* (the meters' discrete thresholds in red, read unfiltered: d3d8_gl.c's bind_textures has it from upstream's "Read discrete health thresholds
+			independently of filtered HUD artwork"; the key's field was in the wire format, but nothing set it) */
+			key->point_threshold = found->hires_point_threshold != FALSE;
+		}
 		key->sampler_type[stage] = found->kind == DK_TEXTURE_CUBE ? _xgpu_sampler_cube : found->kind == DK_TEXTURE_3D ?
 			_xgpu_sampler_3d : _xgpu_sampler_2d;
 		sampler_make(derive->ts[stage], found->mipmapped, found->hires, &textures->stages[stage].sampler);
@@ -282,6 +287,7 @@ static void pixel_key_make(const struct dk_derive *derive, struct nv2a_pixel_sha
 	key->coverage_alpha = key->coverage_alpha && rs[D3DRS_ALPHABLENDENABLE] &&
 		rs[D3DRS_SRCBLEND] == D3DBLEND_CONSTANTCOLOR &&
 		rs[D3DRS_DESTBLEND] == D3DBLEND_SRCALPHA;
+	key->point_threshold = key->point_threshold && key->coverage_alpha;
 	key->alpha_test_function = rs[D3DRS_ALPHATESTENABLE] ? rs[D3DRS_ALPHAFUNC] : 0;
 	key->fog_enable = rs[D3DRS_FOGENABLE] != 0;
 	key->fog_table_mode = (unsigned char)rs[D3DRS_FOGTABLEMODE];
