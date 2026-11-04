@@ -680,6 +680,7 @@ struct widget_instance;
 #include "text/text_group.h"
 #include "text/unicode.h"
 #include "ui_widget.h"
+#include "halo_startup.h" /* port: port/linux/include/halo_startup.h */
 
 #ifdef HALO_WIIU
 /* port: a menu's pause of the game clock is a message to the tick thread, and the menu reads what it has asked for
@@ -4985,16 +4986,24 @@ short remap_sticks_for_local_player(
 static unsigned long __stdcall filesystem_initialization_thread_proc(
 	void *input)
 {
+	STARTUP_TIMER(started);
+
+	STARTUP_NOTE("fs_start");
 	widget_globals.filesystem_check_result = saved_game_perform_file_system_checks();
+	STARTUP_ADD("fs_checks", started, 1, 0);
 	if (!widget_globals.filesystem_check_result)
 	{
 		word number_of_profiles = 1;
 		long profile_index;
 
 		playlist_profiles_enumerate_available_to_local_player_index(NONE, &number_of_profiles, &profile_index);
+		STARTUP_NOTE("fs_playlists");
 		player_profiles_enumerate_available_to_local_player_index(NONE, &number_of_profiles, &profile_index, TRUE);
+		STARTUP_NOTE("fs_profiles");
 		player_ui_get_player1_last_used_profile_index();
 	}
+	STARTUP_ADD("fs_all", started, 1, 0);
+	STARTUP_NOTE("fs_end");
 
 	return 0;
 }
@@ -5007,6 +5016,11 @@ static void perform_filesystem_initialization(
 		5439,
 		widget_globals.initialization_thread==NULL);
 	error(_error_silent, "begining filesystem checks & saved game file enumeration...");
+#ifdef HALO_WIIU
+	/* port: the card's free space is asked on a thread of its own, which the menu does not wait for (saved_game_files.c) */
+	if (STARTUP_OPTION(STARTUP_FREE_SPACE_APART))
+		saved_game_files_ask_free_space();
+#endif
 	ui_widgets_inhibit_processing(TRUE);
 	widget_globals.filesystem_check_result = 0;
 	if (!create_thread(0, filesystem_initialization_thread_proc, NULL, &widget_globals.initialization_thread))
@@ -5018,6 +5032,25 @@ static void perform_filesystem_initialization(
 	}
 
 	return;
+}
+
+/* port: whether the saved games' checks were started before the main menu was loaded (ui_widgets_start_filesystem_checks) */
+static boolean filesystem_checks_started_early;
+
+/* port (HALO_WIIU, halo/startup.txt bit 1): the saved games' checks, which the menus must wait for, started as soon as the game's systems are up,
+beside the main menu's map being loaded, rather than after it. The thread is the same and does the same; it starts about 2.4 s earlier on the
+console, where its file operations were found to hold the menu back (the highlight appears when the widgets are first processed, which waits for
+the thread to end). Only for a first load of the main menu: a run that starts a map from init.txt starts it when the menu is first loaded. */
+void ui_widgets_start_filesystem_checks(
+	void)
+{
+	if (main_screen_shell_first_load != TRUE || filesystem_checks_started_early || widget_globals.initialization_thread ||
+		!STARTUP_OPTION(STARTUP_EARLY_FILESYSTEM_CHECKS))
+	{
+		return;
+	}
+	filesystem_checks_started_early = TRUE;
+	perform_filesystem_initialization();
 }
 
 void main_screen_shell_load(
@@ -5047,7 +5080,8 @@ void main_screen_shell_load(
 			if (!bink_playback_active())
 				load_main_menu = TRUE;
 		}
-		perform_filesystem_initialization();
+		if (!filesystem_checks_started_early)
+			perform_filesystem_initialization();
 		input_abstraction_reset_controller_detection_timer();
 	}
 	if (load_main_menu)
@@ -8594,6 +8628,7 @@ void process_ui_widgets(
 	boolean pause_pressed;
 	boolean modal_widget_active[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
 	long widget_index;
+	STARTUP_TIMER(entered);
 
 	match_assert(
 		"c:\\halo\\SOURCE\\interface\\ui_widget.c",
@@ -8609,7 +8644,11 @@ void process_ui_widgets(
 	if (widget_globals.initialization_thread)
 	{
 		if (!thread_has_exited(widget_globals.initialization_thread))
+		{
+			/* port: (the start-up's timeline: the frames the menu's widgets were not processed for, by what stopped them) */
+			STARTUP_ADD("ui_wait_checks", entered, 1, 0);
 			return;
+		}
 		dispose_thread(widget_globals.initialization_thread);
 		widget_globals.initialization_thread = NULL;
 		ui_widgets_inhibit_processing(FALSE);
@@ -8634,7 +8673,10 @@ void process_ui_widgets(
 		return;
 	}
 	if (progress_bar_is_active())
+	{
+		STARTUP_ADD("ui_wait_progress", entered, 1, 0);
 		return;
+	}
 	if (virtual_keyboard_active())
 	{
 		virtual_keyboard_process();
@@ -8644,6 +8686,7 @@ void process_ui_widgets(
 	}
 	if (attract_mode_should_start())
 	{
+		STARTUP_ADD("ui_wait_attract", entered, 1, 0);
 		attract_mode_start();
 
 		return;
@@ -8693,6 +8736,16 @@ void process_ui_widgets(
 		}
 
 		return;
+	}
+	/* port: the main menu's widgets are processed for the first time: its highlight is there to be drawn (startup_timeline.c) */
+	{
+		static boolean live_marked;
+
+		if (!live_marked && we_are_at_the_main_menu && widget_globals.active_widgets[0])
+		{
+			live_marked = TRUE;
+			STARTUP_MARK("menu_live");
+		}
 	}
 	pause_pressed = ui_check_for_pause_game();
 	any_modal_widget_active = FALSE;

@@ -35,6 +35,7 @@ menu gets FRIENDLY FIRE too.
 */
 
 #include "cseries.h"
+#include "halo_startup.h"
 #include "bitmaps/bitmap_group.h"
 #include "game/game.h"
 #include "tag_files/tag_groups.h"
@@ -440,7 +441,7 @@ static struct
 {
 	/* what is let go when the map unloads */
 	void **blocks;
-	long block_count;
+	long block_count, block_capacity;
 	struct bitmap_data **bitmaps;
 	long bitmap_count;
 	struct menu_frame_placement *placements;
@@ -467,6 +468,11 @@ static struct
 	long *strings_tags;
 	long *text_tags;
 	long *spinner_tags;
+	/* the names of the widgets, bitmaps and string lists by hash (name_table_find): the slot's index plus one, 0 for none */
+	long *widget_names;
+	long *bitmap_names;
+	long *strings_names;
+	long name_slots;
 	boolean failed;
 	/* a game map's build (the pause menu's SETTINGS): what the map has not
 	got is none, not a failure */
@@ -492,8 +498,11 @@ static void *allocate(long size)
 		return NULL;
 	}
 	memset(block, 0, size > 0 ? size : 1);
+	if (menu_tags.block_count == menu_tags.block_capacity)
 	{
-		void **blocks = realloc(menu_tags.blocks, (menu_tags.block_count + 1) * sizeof(*menu_tags.blocks));
+		/* (grown by half again, not by one: a build makes thousands, and each realloc of a table that long moved it) */
+		long capacity = menu_tags.block_capacity + menu_tags.block_capacity / 2 + 64;
+		void **blocks = realloc(menu_tags.blocks, capacity * sizeof(*menu_tags.blocks));
 
 		if (!blocks)
 		{
@@ -502,6 +511,7 @@ static void *allocate(long size)
 			return NULL;
 		}
 		menu_tags.blocks = blocks;
+		menu_tags.block_capacity = capacity;
 	}
 	menu_tags.blocks[menu_tags.block_count++] = block;
 	return block;
@@ -591,9 +601,75 @@ static char const *widget_name(long index) { return build.menus->widgets[index].
 static char const *bitmap_name(long index) { return build.menus->bitmaps[index].name; }
 static char const *strings_name(long index) { return build.menus->string_lists[index].name; }
 
+static unsigned long name_hash(char const *name)
+{
+	unsigned long hash = 2166136261UL;
+
+	while (*name)
+		hash = (hash ^ (unsigned char)*name++) * 16777619UL;
+	return hash;
+}
+
+/* a table of the names of count things (slots: a power of two, more than count twice), each slot the index plus one of a thing with the name that
+hashes to it or to one before it: the FIRST thing of a name is the one in the table, as find() returns it. The names are looked up thousands of times
+in a build (every child, every handler's target), and each was a walk down all the widgets' names, which are long and alike. */
+static long *name_table_make(long count, long slots, char const *(*name_of)(long))
+{
+	long *table = malloc((size_t)slots * sizeof(*table));
+	long index;
+
+	if (!table)
+		return NULL;
+	memset(table, 0, (size_t)slots * sizeof(*table));
+	for (index = 0; index < count; index++)
+	{
+		unsigned long slot = name_hash(name_of(index)) & (unsigned long)(slots - 1);
+
+		while (table[slot])
+		{
+			/* (a name given twice stays the first's) */
+			if (!strcmp(name_of(table[slot] - 1), name_of(index)))
+				break;
+			slot = (slot + 1) & (unsigned long)(slots - 1);
+		}
+		if (!table[slot])
+			table[slot] = index + 1;
+	}
+	return table;
+}
+
+static long name_table_find(long const *table, long slots, char const *name, char const *(*name_of)(long))
+{
+	unsigned long slot = name_hash(name) & (unsigned long)(slots - 1);
+
+	while (table[slot])
+	{
+		if (!strcmp(name_of(table[slot] - 1), name))
+			return table[slot] - 1;
+		slot = (slot + 1) & (unsigned long)(slots - 1);
+	}
+	return NONE;
+}
+
 static long widget_named(char const *name)
 {
+	if (name && build.widget_names)
+		return name_table_find(build.widget_names, build.name_slots, name, widget_name);
 	return find(name, build.menus->widget_count, widget_name);
+}
+
+static long bitmap_named(char const *name)
+{
+	if (name && build.bitmap_names)
+		return name_table_find(build.bitmap_names, build.name_slots, name, bitmap_name);
+	return find(name, build.menus->bitmap_count, bitmap_name);
+}
+
+static long strings_named(char const *name)
+{
+	if (name && build.strings_names)
+		return name_table_find(build.strings_names, build.name_slots, name, strings_name);
+	return find(name, build.menus->string_list_count, strings_name);
 }
 
 static long map_tag(long group_tag, char const *name, char const *file, long line)
@@ -610,6 +686,7 @@ static long map_tag(long group_tag, char const *name, char const *file, long lin
 static long tag_named(long group_tag, char const *name, char const *file, long line)
 {
 	long index = NONE;
+	STARTUP_TIMER(started);
 
 	if (strchr(name, '\\'))
 		return map_tag(group_tag, name, file, line);
@@ -620,16 +697,17 @@ static long tag_named(long group_tag, char const *name, char const *file, long l
 		index = index == NONE ? NONE : build.widget_tags[index];
 		break;
 	case BITMAP_GROUP_TAG:
-		index = find(name, build.menus->bitmap_count, bitmap_name);
+		index = bitmap_named(name);
 		index = index == NONE ? NONE : build.bitmap_tags[index];
 		break;
 	case UNICODE_STRING_LIST_TAG:
-		index = find(name, build.menus->string_list_count, strings_name);
+		index = strings_named(name);
 		index = index == NONE ? NONE : build.strings_tags[index];
 		break;
 	}
 	if (index == NONE)
 		problem(file, line, "there is nothing named", name);
+	STARTUP_ADD("mt_named", started, 1, 0);
 	return index;
 }
 
@@ -645,16 +723,23 @@ static long function_index(char const *name, char const *file, long line)
 {
 	char const *function_name;
 	long index;
+	STARTUP_TIMER(started);
 
 	if (unwired(name))
 		name = "unwired";
 	index = name_index(name, port_function_names, NUMBEROF(port_function_names));
 	if (index != NONE)
+	{
+		STARTUP_ADD("mt_function", started, 1, 0);
 		return PC_MENU_FUNCTION_BASE + index;
+	}
 	for (index = 0; (function_name = ui_widget_event_handler_function_name(index)) != NULL; index++)
 	{
 		if (!strcmp(name, function_name))
+		{
+			STARTUP_ADD("mt_function", started, 1, 0);
 			return index;
+		}
 	}
 	problem(file, line, "there is no event handler function", name);
 	return NONE;
@@ -2482,6 +2567,17 @@ static boolean menus_language_maps(void)
 	return FALSE;
 }
 
+#ifdef HALO_WIIU
+/* port (from the game's main, when its memory is set up): the menus' XML read by a thread of its own, and the main menu's art made ready by it
+(menu_files.c), where the game thread would do both when the menus' map has loaded (halo/startup.txt bits 2 and 4) */
+void menu_tags_preload(
+	void)
+{
+	if (menus_pc_chosen() && STARTUP_OPTION(STARTUP_PRELOAD_MENUS))
+		halo_menus_preload();
+}
+#endif
+
 void menu_tags_loaded(
 	char const *map_name)
 {
@@ -2502,7 +2598,9 @@ void menu_tags_loaded(
 	{
 		return;
 	}
+	STARTUP_MARK("map_tags");
 	menus = halo_menus_load();
+	STARTUP_MARK("menus_xml");
 	if (!menus)
 		return;
 	memset(&build, 0, sizeof(build));
@@ -2520,13 +2618,28 @@ void menu_tags_loaded(
 	build.strings_tags = malloc((menus->string_list_count + 1) * sizeof(long));
 	if (!build.widget_tags || !build.text_tags || !build.spinner_tags || !build.bitmap_tags || !build.strings_tags)
 		goto failed;
-	for (index = 0; index < widget_count; index++)
 	{
-		own_lists += (menus->widgets[index].text != NULL) + (menus->widgets[index].strings != NULL);
-		/* (names are unique) */
-		if (widget_named(menus->widgets[index].name) != index)
-			problem(menus->widgets[index].file, menus->widgets[index].line, "two widgets are named",
-				menus->widgets[index].name);
+		/* the names by hash, for the lookups below (without them, the lookups walk the names; the build is then as long as it was) */
+		long largest = widget_count > menus->bitmap_count ? widget_count : menus->bitmap_count;
+		STARTUP_TIMER(unique);
+
+		if (menus->string_list_count > largest)
+			largest = menus->string_list_count;
+		for (build.name_slots = 64; build.name_slots < 2 * largest + 2; build.name_slots *= 2)
+			;
+		build.widget_names = name_table_make(widget_count, build.name_slots, widget_name);
+		build.bitmap_names = name_table_make(menus->bitmap_count, build.name_slots, bitmap_name);
+		build.strings_names = name_table_make(menus->string_list_count, build.name_slots, strings_name);
+
+		for (index = 0; index < widget_count; index++)
+		{
+			own_lists += (menus->widgets[index].text != NULL) + (menus->widgets[index].strings != NULL);
+			/* (names are unique) */
+			if (widget_named(menus->widgets[index].name) != index)
+				problem(menus->widgets[index].file, menus->widgets[index].line, "two widgets are named",
+					menus->widgets[index].name);
+		}
+		STARTUP_ADD("mt_unique", unique, widget_count, 0);
 	}
 	total = widget_count + own_lists + menus->string_list_count + menus->bitmap_count +
 		(game_map ? PAUSE_PATCH_TAGS : 0);
@@ -2546,14 +2659,20 @@ void menu_tags_loaded(
 		build.bitmap_tags[index] = next_tag();
 	/* the tags: the bitmaps and strings first, which the widgets name; the
 	widgets' names in the table before any is built, which they find there */
-	for (index = 0; index < menus->bitmap_count && !build.failed; index++)
 	{
-		instance_set(instances, BITMAP_GROUP_TAG, build.bitmap_tags[index], menus->bitmaps[index].name, "",
-			bitmap_build(&menus->bitmaps[index], build.bitmap_tags[index]));
+		STARTUP_TIMER(bitmaps);
+
+		for (index = 0; index < menus->bitmap_count && !build.failed; index++)
+		{
+			instance_set(instances, BITMAP_GROUP_TAG, build.bitmap_tags[index], menus->bitmaps[index].name, "",
+				bitmap_build(&menus->bitmaps[index], build.bitmap_tags[index]));
+		}
+		STARTUP_ADD("mt_bitmaps", bitmaps, menus->bitmap_count, 0);
 	}
 	/* (the PC version's strings in the language of the Custom Edition the
 	maps come from, its loc.map's, unless English is chosen) */
 	locale = menus_language_maps() && custom_edition_locale_open();
+	STARTUP_MARK("menus_art");
 	for (index = 0; index < menus->string_list_count && !build.failed; index++)
 	{
 		struct halo_menu_strings const *list = &menus->string_lists[index];
@@ -2599,10 +2718,12 @@ void menu_tags_loaded(
 		instances[index].name = "";
 	}
 	cache_files_set_tag_instances(instances, build.first_index + total);
+	STARTUP_MARK("menus_tags");
 	for (index = 0; index < widget_count && !build.failed; index++)
 		instances[DATUM_INDEX_TO_ABSOLUTE_INDEX(build.widget_tags[index])].base_address = widget_build(index);
 	if (build.failed)
 		goto failed;
+	STARTUP_MARK("menus_widgets");
 	if (game_map)
 	{
 		pause_patch(instances);
@@ -2637,6 +2758,13 @@ failed:
 	menu_tags_release();
 
 done:
+	/* (the game's free takes no NULL) */
+	if (build.widget_names)
+		free(build.widget_names);
+	if (build.bitmap_names)
+		free(build.bitmap_names);
+	if (build.strings_names)
+		free(build.strings_names);
 	free(build.widget_tags);
 	free(build.text_tags);
 	free(build.spinner_tags);

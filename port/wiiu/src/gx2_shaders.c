@@ -17,10 +17,17 @@ shader-misses-*.txt batches for shader_pack.py; .part files are incomplete and m
 #include "xgpu.h"
 #include "shader_key_wire.h"
 #include "wiiu_missing_keys.h"
+#include "halo_startup.h"
 
+void wiiu_thread_off_game_core(void);
+
+#include <fcntl.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #define PACK_FILE "/vol/external01/wiiu/apps/halo/shaders.pack"
 #define PROGRAM_LIMIT 512
@@ -52,36 +59,123 @@ static uint32_t big32(const unsigned char *at)
 	return (uint32_t)at[0] << 24 | (uint32_t)at[1] << 16 | (uint32_t)at[2] << 8 | (uint32_t)at[3];
 }
 
+/* the pack's file read whole (2.7 MB at the time of writing, which the card gives in a fifth of a second): the buffer, or NULL (said in the log). It is read
+by the GX2 thread when the first draw asks for a shader, or before that by a thread of its own (dk_shader_pack_prefetch). */
+static unsigned char *pack_read(uint32_t *size_out)
+{
+	off_t length;
+	size_t done = 0;
+	unsigned char *buffer;
+	int file;
+	STARTUP_TIMER(started);
+
+	/* (open and read, not fopen and fread: the C library's stdio reads a file through its own small buffer unless it is asked for a lot at once, and the
+	card gives most when it is asked for a lot at once) */
+	file = open(PACK_FILE, O_RDONLY);
+	if (file < 0)
+	{
+		platform_log("shaders: no pack at %s: no draw will be made", PACK_FILE);
+		return NULL;
+	}
+	length = lseek(file, 0, SEEK_END);
+	if (length < 16 || lseek(file, 0, SEEK_SET) != 0)
+	{
+		close(file);
+		return NULL;
+	}
+	buffer = malloc((size_t)length);
+	while (buffer && done < (size_t)length)
+	{
+		const ssize_t got = read(file, buffer + done, (size_t)length - done);
+
+		if (got <= 0)
+			break;
+		done += (size_t)got;
+	}
+	close(file);
+	if (!buffer || done != (size_t)length)
+	{
+		free(buffer);
+		platform_log("shaders: the pack could not be read");
+		return NULL;
+	}
+	STARTUP_ADD("shader_pack_read", started, 1, done);
+	*size_out = (uint32_t)done;
+	return buffer;
+}
+
+/* the pack read ahead (halo/startup.txt bit 8): 0 not started, 1 being read, 2 read (or failed: prefetched is NULL) */
+static pthread_mutex_t prefetch_lock;
+static pthread_cond_t prefetch_done;
+static volatile int prefetch_state;
+static unsigned char *prefetched;
+static uint32_t prefetched_size;
+
+static void *prefetch_main(void *unused)
+{
+	uint32_t size = 0;
+	unsigned char *buffer;
+
+	(void)unused;
+	wiiu_thread_off_game_core();
+	buffer = pack_read(&size);
+	pthread_mutex_lock(&prefetch_lock);
+	prefetched = buffer;
+	prefetched_size = size;
+	prefetch_state = 2;
+	pthread_cond_broadcast(&prefetch_done);
+	pthread_mutex_unlock(&prefetch_lock);
+	STARTUP_NOTE("shader_pack_ready");
+	return NULL;
+}
+
+/* (from the game's main, once its memory is set up) the pack read by a thread of its own, where the GX2 thread would read it at the first draw */
+void dk_shader_pack_prefetch(void);
+
+void dk_shader_pack_prefetch(void)
+{
+	pthread_attr_t attributes;
+	pthread_t thread;
+
+	if (prefetch_state || !STARTUP_OPTION(STARTUP_PREFETCH_SHADER_PACK))
+		return;
+	if (pthread_mutex_init(&prefetch_lock, NULL) != 0 || pthread_cond_init(&prefetch_done, NULL) != 0)
+		return;
+	prefetch_state = 1;
+	pthread_attr_init(&attributes);
+	pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
+	pthread_attr_setstacksize(&attributes, 128 * 1024);
+	if (pthread_create(&thread, &attributes, prefetch_main, NULL) != 0)
+		prefetch_state = 0; /* (the GX2 thread reads it itself) */
+	pthread_attr_destroy(&attributes);
+}
+
 static void pack_load(void)
 {
-	FILE *file;
-	long size;
+	STARTUP_TIMER(started);
+	uint32_t size = 0;
 
 	if (pack_tried)
 		return;
 	pack_tried = 1;
-	file = fopen(PACK_FILE, "rb");
-	if (!file)
+	if (prefetch_state)
 	{
-		platform_log("shaders: no pack at %s: no draw will be made", PACK_FILE);
-		return;
+		pthread_mutex_lock(&prefetch_lock);
+		while (prefetch_state != 2)
+			pthread_cond_wait(&prefetch_done, &prefetch_lock);
+		pack = prefetched;
+		size = prefetched_size;
+		prefetched = NULL;
+		pthread_mutex_unlock(&prefetch_lock);
+		STARTUP_ADD("shader_pack_wait", started, 1, size);
 	}
-	if (fseek(file, 0, SEEK_END) != 0 || (size = ftell(file)) < 16 || fseek(file, 0, SEEK_SET) != 0)
+	else
 	{
-		fclose(file);
-		return;
+		pack = pack_read(&size);
 	}
-	pack = malloc((size_t)size);
-	if (!pack || fread(pack, 1, (size_t)size, file) != (size_t)size)
-	{
-		free(pack);
-		pack = NULL;
-		fclose(file);
-		platform_log("shaders: the pack could not be read");
+	if (!pack)
 		return;
-	}
-	fclose(file);
-	pack_size = (uint32_t)size;
+	pack_size = size;
 	if (memcmp(pack, "HSP1", 4) != 0 || 16 + (uint64_t)big32(pack + 4) * 24 > pack_size)
 	{
 		platform_log("shaders: %s is not a shader pack", PACK_FILE);

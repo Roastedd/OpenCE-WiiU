@@ -413,6 +413,14 @@ void wiiu_thread_stack_range(unsigned long *low, unsigned long *size)
 	*size = start < end ? end - start : start - end;
 }
 
+/* the log's clock in milliseconds since the shell started (port/linux/game/startup_timeline.c's marks are in it) */
+unsigned long wiiu_shell_ms(void);
+
+unsigned long wiiu_shell_ms(void)
+{
+	return (unsigned long)shell_ms();
+}
+
 /* the time base's ticks, as the OS counts them (a conversion to microseconds is a 64-bit division, which the blends' two reads an object would pay) */
 unsigned long long wiiu_now_ticks(void)
 {
@@ -1027,6 +1035,9 @@ static int start_monitor(void *(*function)(void *))
 
 /* ---------- the game */
 
+/* port/linux/game/startup_timeline.c: the start-up's marks */
+void startup_timeline_mark(const char *name);
+
 static int game_entry(int argc, const char **argv)
 {
 	(void)argc;
@@ -1034,6 +1045,7 @@ static int game_entry(int argc, const char **argv)
 	wiiu_fpu_setup();
 	setup_thread("game");
 	wiiu_phase("the game's main");
+	startup_timeline_mark("game_thread");
 	wiiu_log("The game starts on core %u", (unsigned)OSGetCoreId());
 	game_result = game_main_function();
 	wiiu_log("The game's main returned %d", game_result);
@@ -1235,6 +1247,7 @@ int wiiu_shell_run(int (*game_main)(void))
 
 	wiiu_tag_thread("main");
 	wiiu_phase("starting");
+	startup_timeline_mark("log_up");
 	wiiu_log("OpenCE for the Wii U starting: main thread on core %u at priority %d", (unsigned)OSGetCoreId(), (int)main_priority);
 	if (memory_line(text, sizeof(text)))
 		wiiu_log("%s", text);
@@ -1249,6 +1262,7 @@ int wiiu_shell_run(int (*game_main)(void))
 	the game starts: then the files on the card are another build's, which is being started in place of this one, and the game is not */
 	wiiu_phase("the updater's start");
 	relaunching = wiiu_update_startup(crash_note);
+	startup_timeline_mark("updater");
 	/* (halo/mic_probe.txt 1: the microphone probe; voice chat's thread is otherwise started by the first network game's voice; not when the
 	updater is starting the other build in this one's place) */
 	if (!relaunching)

@@ -28,6 +28,7 @@ Not run on a console.
 #include "wiiu_overlay.h"
 #include "wiiu_stream_queue.h"
 #include "wiiu_update.h"
+#include "wiiu_gpu_offload.h"
 
 /* d3d8_gx2.c: the queue of streams and its buffers (halo/gx2_thread.txt 7) */
 extern struct stream_queue dk_stream_queue;
@@ -64,6 +65,9 @@ uint32_t *dk_stream_buffer(unsigned slot);
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* port/linux/game/startup_timeline.c: the start-up's events, said in the log once the main menu is live */
+void startup_timeline_note(const char *name);
 
 extern const unsigned char wiiu_gx2_blit_gsh[];
 extern const unsigned long wiiu_gx2_blit_gsh_size;
@@ -163,6 +167,12 @@ static struct
 	unsigned long frame_buckets[4]; /* frames since the last log note that took one refresh of the display, two, three, more */
 	OSTime draw_started, section_now;
 	OSTime section_ticks[7];
+	/* halo/gpu_offload.txt bit 2, the census (wiiu_gpu_offload.h): the GX2 thread's time for the parts of a draw that are not GX2 calls, and how many draws repeat one of the
+	frame's earlier ones. The tables are by hash, cleared by the frame's number. */
+	int census;
+	OSTime census_derive, census_keys, census_expand;
+	unsigned long census_draws, census_derive_runs, census_same_as_last, census_tuple_again, census_mesh_again, census_inline;
+	uint32_t census_last_tuple, census_tuples[1024], census_tuple_stamp[1024], census_meshes[1024], census_mesh_stamp[1024];
 	unsigned long counts_state, counts_fetch, counts_vs, counts_ps, counts_vertex_regs, counts_pixel_regs, counts_texture_sets, counts_draw_calls; /* of the draw's: its copies of data, state, shaders, uniforms, textures and attribute buffers, the draw call */
 	unsigned ring_what; /* what the next ring_copy copies: 0 a stream, 1 immediate mode's vertices, 2 constants, 3 indices */
 	unsigned long ring_kind_bytes[4], ring_kind_calls[4];
@@ -2177,6 +2187,83 @@ static void attrib_set(unsigned index, uint32_t size, uint32_t stride, void *buf
 	gx.attrib[index].stride = stride;
 }
 
+/* ---------- the census (halo/gpu_offload.txt bit 2) */
+
+static uint32_t census_mix(uint32_t hash, const void *data, unsigned bytes)
+{
+	const uint32_t *words = (const uint32_t *)data;
+	unsigned i;
+
+	for (i = 0; i < bytes / 4; i++)
+		hash = (hash ^ words[i]) * 16777619u;
+	return hash;
+}
+
+/* whether the hash was put in the table earlier in this frame (the table's stamps are the frame's number plus one); puts it there if not */
+static int census_seen(uint32_t *keys, uint32_t *stamps, uint32_t hash)
+{
+	const uint32_t stamp = gx.frames + 1;
+	unsigned slot = hash & 1023, probes;
+
+	for (probes = 0; probes < 8; probes++, slot = (slot + 1) & 1023)
+	{
+		if (stamps[slot] != stamp)
+		{
+			stamps[slot] = stamp;
+			keys[slot] = hash;
+			return 0;
+		}
+		if (keys[slot] == hash)
+			return 1;
+	}
+	return 0;
+}
+
+/* a draw about to be made: the same state, shaders and textures as the draw before (nothing to set), as an earlier one of the frame (what a display list or a pipeline
+cached by the Direct3D layer would have found), and the same mesh again with them (what instancing could have made one draw of) */
+static void census_draw(const struct dk_command_draw *command)
+{
+	uint32_t tuple = 2166136261u;
+
+	tuple = census_mix(tuple, &gx.vs_handle, sizeof(gx.vs_handle));
+	tuple = census_mix(tuple, &gx.ps_handle, sizeof(gx.ps_handle));
+	tuple = census_mix(tuple, &gx.state, sizeof(gx.state));
+	tuple = census_mix(tuple, gx.stages, sizeof(gx.stages));
+	gx.census_draws++;
+	if (tuple == gx.census_last_tuple)
+		gx.census_same_as_last++;
+	else if (census_seen(gx.census_tuples, gx.census_tuple_stamp, tuple))
+		gx.census_tuple_again++;
+	gx.census_last_tuple = tuple;
+	if (command->inline_bytes)
+		gx.census_inline++;
+	else if (command->stream_count)
+	{
+		uint32_t mesh = census_mix(tuple, &command->streams[0][0], sizeof(command->streams[0]));
+
+		mesh = (mesh ^ command->index_address) * 16777619u;
+		mesh = (mesh ^ command->count) * 16777619u;
+		if (census_seen(gx.census_meshes, gx.census_mesh_stamp, mesh))
+			gx.census_mesh_again++;
+	}
+}
+
+static void census_log(unsigned frames)
+{
+	const double per_frame = frames ? 1.0 / (double)frames : 0.0;
+#define CENSUS_MS(ticks) ((double)OSTicksToMicroseconds(ticks) / 1000.0 * per_frame)
+
+	wiiu_log("gpu offload: the GX2 thread per frame over %u frames: state derivation and shader keys %.2f ms (the keys %.2f; %.0f runs), the decals' expansion %.2f, all of the draws' "
+		"commands %.2f", frames, CENSUS_MS(gx.census_derive), CENSUS_MS(gx.census_keys), (double)gx.census_derive_runs * per_frame, CENSUS_MS(gx.census_expand),
+		CENSUS_MS(gx.draw_ticks));
+	wiiu_log("gpu offload: of %.0f draws a frame: %.0f the same state, shaders and textures as the draw before, %.0f the same as an earlier draw of the frame, %.0f the same mesh again "
+		"with them (instances), %.0f immediate", (double)gx.census_draws * per_frame, (double)gx.census_same_as_last * per_frame, (double)gx.census_tuple_again * per_frame,
+		(double)gx.census_mesh_again * per_frame, (double)gx.census_inline * per_frame);
+#undef CENSUS_MS
+	gx.census_derive = gx.census_keys = gx.census_expand = 0;
+	gx.census_draws = gx.census_derive_runs = gx.census_same_as_last = gx.census_tuple_again = gx.census_mesh_again = gx.census_inline = 0;
+}
+
 static void draw(const struct dk_command_draw *command)
 {
 	/* (HOME can come between two draws: the game thread is held here, before the next call into GX2, not at the end of the stream) */
@@ -2243,6 +2330,8 @@ static void draw(const struct dk_command_draw *command)
 		gx.skipped_shader++;
 		return;
 	}
+	if (gx.census)
+		census_draw(command);
 	memset(buffers, 0, sizeof(buffers));
 	for (stream = 0; stream < DK_STREAM_COUNT; stream++)
 	{
@@ -2530,6 +2619,7 @@ static int initialize(void)
 		}
 		gx.hiz = on;
 		wiiu_log("GX2: hierarchical Z (halo/hiz.txt): %s", on ? "yes" : "no");
+		gx.census = (wiiu_gpu_offload_bits() & WIIU_GPU_OFFLOAD_CENSUS) != 0;
 		file = fopen(WIIU_DATA_DIRECTORY "/mem1_fail.txt", "r");
 		if (file)
 		{
@@ -4056,6 +4146,13 @@ static void present(const struct dk_command_present *command)
 		wiiu_log("GX2: first frame presented");
 		gx.started = now;
 	}
+	if (gx.frames <= 3)
+	{
+		/* (the GX2 thread's presents: the third is the main menu's first frame, which the TV shows) */
+		static const char *const names[] = { "gx2_present_1", "gx2_present_2", "gx2_present_3" };
+
+		startup_timeline_note(names[gx.frames - 1]);
+	}
 	if (gx.exit_after > 0.0 && (double)(now - gx.started) / (double)OSSecondsToTicks(1) >= gx.exit_after)
 	{
 		wiiu_log("GX2: the run's time is up");
@@ -4118,6 +4215,8 @@ static void present(const struct dk_command_present *command)
 			gx.counts_texture_sets / gx.window_frames, gx.draws_made / gx.window_frames);
 		gx.counts_state = gx.counts_fetch = gx.counts_vs = gx.counts_ps = gx.counts_vertex_regs = gx.counts_pixel_regs = gx.counts_texture_sets = 0;
 		memset(gx.section_ticks, 0, sizeof(gx.section_ticks));
+		if (gx.census && gx.window_frames)
+			census_log(gx.window_frames);
 		big_copies_log();
 		wiiu_log("GX2:   %lu copies of the window's data were out of date (written since), so the range was copied into the ring", gx.dynamic_streams);
 		gx.dynamic_streams = 0;
@@ -4273,6 +4372,8 @@ static void derive_apply(void)
 	struct dk_derive *derive = dk_derive_get();
 	const unsigned changed = dk_derive_run(derive);
 
+	gx.census_derive_runs += gx.census;
+
 	if (changed & DK_DERIVED_STATE)
 	{
 		gx.state = *dk_derive_state(derive);
@@ -4282,10 +4383,14 @@ static void derive_apply(void)
 	{
 		uint32_t dk_shader_for_draw(uint32_t stage, const void *key_data);
 
+		const OSTime keys_start = gx.census ? OSGetSystemTime() : 0;
+
 		gx.vs_handle = dk_shader_for_draw(0 /* DK_SHADER_STAGE_VERTEX */, dk_derive_vertex_key(derive));
 		gx.ps_handle = dk_shader_for_draw(1 /* DK_SHADER_STAGE_PIXEL */, dk_derive_pixel_key(derive));
 		if (!gx.vs_handle || !gx.ps_handle)
 			gx.shader_key_misses++;
+		if (gx.census)
+			gx.census_keys += OSGetSystemTime() - keys_start;
 	}
 	if (changed & DK_DERIVED_TEXTURES)
 		textures_set(dk_derive_textures(derive));
@@ -4414,11 +4519,18 @@ static void run_stream(const unsigned char *at, const unsigned char *end)
 			const OSTime draw_start = OSGetSystemTime();
 
 			if (dk_derive_pending(dk_derive_get()))
+			{
 				derive_apply();
+				if (gx.census)
+					gx.census_derive += OSGetSystemTime() - draw_start;
+			}
 			if (((const struct dk_command_draw *)header)->primitive & DK_DRAW_DECALS)
 			{
+				const OSTime expand_start = gx.census ? OSGetSystemTime() : 0;
 				const struct dk_command_draw *expanded = decals_expand((const struct dk_command_draw *)header);
 
+				if (gx.census)
+					gx.census_expand += OSGetSystemTime() - expand_start;
 				if (expanded)
 					draw(expanded);
 			}

@@ -899,3 +899,49 @@ so that a harness that must not delete a card file can write -1 to put one back.
 | `tick_owners.txt` | 0 | the tick owners' queues, mode 1 or 2 |
 | `game_core.txt` | 1 | the core of the game thread: 0, 1 or 2 |
 | `gx2_thread.txt` | 7 | the GX2 thread's mode (0: the game thread makes the calls) |
+
+## Start-up
+
+The log says where the first seconds go. Once the main menu's widgets have been processed (the first time its highlight can be drawn) and the menu has been
+drawn a few times, `log.txt` has a block of lines, each starting `startup:`, from `port/linux/game/startup_timeline.c`:
+
+- the milliseconds to a live menu, and the segments: each is the mark that ends it and the milliseconds since the mark before (`log_up`, `updater`,
+  `game_thread`, `main`, `memory`, `tag_files`, `game_state`, `rasterizer`, `input`, `sound`, `game_init`, `map_tags` to `menus_widgets` for the menus'
+  map and their build, `ui_map`, `widgets`, `precache`, `present_N`, `menu_live`);
+- events of other threads, in milliseconds since the start (`menus_read_end`, `menu_art_ready`, `shader_pack_ready`, `free_space_end`, `fs_start`,
+  `fs_playlists`, `fs_profiles`, `fs_end`, `gx2_present_N`);
+- work added up under a name, as calls, milliseconds and kilobytes (`png_decode`, `png_mips`, `png_send`, `png_all`, `atlas_all`, `tex_get`, `texture_wait`,
+  `read_big` and `read_small` for the map and card reads, `shader_pack_read`, `shader_pack_wait`, `fs_checks`, `fs_all`, `free_space`, `ui_wait_checks` for the
+  frames the menu's widgets were held back by the saved games' checks, `mt_*` for the menus' build), and, for the first twelve, `startup: waited N ms for the
+  pixels of <bitmap>`.
+
+Four things the start-up does differently from before, each switched off by its bit in `halo/startup.txt` (a number; no file: all on):
+
+| bit | what |
+| --- | --- |
+| 1 | the saved games' checks, which the main menu's widgets wait for, start when the game's systems are up, not after the menu's map is loaded |
+| 2 | the menus' XML is read by a thread of its own from the start of the game's memory |
+| 4 | that thread then decodes the pictures of the main menu (every frame of each: the highlight's too) into the texture cache's chains |
+| 8 | the shader pack is read by a thread of its own, not by the GX2 thread at the first draw |
+| 16 | the card's free space is asked on a thread of its own, which the saved games' checks do not wait for |
+| 32 | after the main menu's pictures, those of the screens its items open, as far as 32 MB of ready images go (the first page of each costs about 45 ms a picture otherwise) |
+
+`halo/startup.txt` `0` is the old start-up (the menus' tags look their names up in hash tables, and the texture work is done a word at a time, in either).
+The drawn frames are the same with any of them (the digest harness: tools/test_wiiu_game_digest.py), but for the first two of the main menu, where the highlight is
+there a frame or two sooner with bit 1.
+
+## Taking drawing work off the game thread (`halo/gpu_offload.txt`)
+
+`halo/gpu_offload.txt` is a number (no file, `0` or a negative number: none on, the frames drawn exactly as `wiiu-big-endian` draws them). The study behind it
+(`reports/research/2026-11-03/gpu-offload.md`) found that almost none of the game thread's drawing time can move to the GPU in this renderer: its vertex programs are the
+Xbox's, their constants are the 192 uniform registers of one shader mode, and a GX2 call costs the GX2 thread about 0.1 microsecond. The bits are what it did find:
+
+| bit | what | cost, gain (console, expected; the log lines say what happened) |
+| --- | --- | --- |
+| 1 | the interpolation's blends without square roots: the test that a basis is a rotation compares squared lengths, the quaternion of a basis and the normalising of a blend use 1 / sqrt from `frsqrte` and three Newton steps (`port/linux/game/render_interpolation_fast.h`) | the blends were 2.3 ms of a fight's frame, nine correctly rounded square roots (about 140 cycles each) and seven divisions for each node, 40 percent of its 3,200 cycles; expected 0.7 to 1.0 ms less. The poses differ by a few units in a float's last place |
+| 2 | the census: the GX2 thread times its state derivation, the shader keys' lookup and the decals' expansion, and counts the draws that repeat the draw before, an earlier draw of the frame (state, shaders and textures), and the same mesh with them | about 0.1 ms a frame on the GX2 thread; changes nothing drawn |
+| 4 | with bit 1: every blend is made both ways and the largest difference said every 600 frames | doubles the blends' cost: for the host's runs |
+
+The log says the bits at the first draw (`gpu offload (halo/gpu_offload.txt found): ...`), the census every five seconds (`gpu offload: the GX2 thread per frame ...`,
+`gpu offload: of N draws a frame ...`) and the check (`gpu offload check: ...`). The blends' time is the objects pass's and the `blends` figure of the overlap's log lines.
+`tools/test_wiiu_gpu_offload.py` checks the arithmetic against the original's over 400,000 random bases, natively and big-endian under qemu.

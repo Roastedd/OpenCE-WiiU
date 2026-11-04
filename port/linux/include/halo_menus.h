@@ -149,6 +149,11 @@ struct halo_menus
 /* the menus, read from the files (once; the same each call after); NULL if
 there are none, or a file has an error (logged) */
 struct halo_menus const *halo_menus_load(void);
+#ifdef HALO_WIIU
+/* the Wii U (port/linux/game/menu_tags.c, from the game's main): a thread reads the files now, and then makes the main menu's art ready, so that
+halo_menus_load, when the menus' map has loaded, finds them read (or waits for the thread, which has the files' lock) */
+void halo_menus_preload(void);
+#endif
 /* text as UTF-16, its terminator included, "\n" written as the game's line
 breaks ("\r\n"): the number of characters written (at most capacity) */
 long halo_menus_utf16(char const *utf8, unsigned short *out, long capacity);

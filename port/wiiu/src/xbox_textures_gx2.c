@@ -26,17 +26,20 @@ a time, and only the atlas's rows that changed are sent again.
 */
 
 #include "xgpu.h"
+#include "halo_startup.h"
 #include "port_config.h"
 #include "dk_commands.h"
 #include "dk_textures.h"
 #include "hud_hires.h"
 #include "menu_files.h"
 #include "text_hires.h"
+#include "wiiu_png_chain.h"
 #include "../../linux/game/cache_file_formats.h"
 
 /* (the high-res HUD's and the menus' PNGs come from hud_hires.c and menu_files.c, built without OpenGL here: hud_hires_png_pixels, menu_art_name, menu_art_png,
 menu_art_serial; the text's atlas from text_hires.c, text_hires_atlas_rows) */
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -462,6 +465,7 @@ static void upload(uint32_t id, uint32_t kind, const struct xgpu_texture_descrip
 	{
 		unsigned long per_face = 0;
 		unsigned char *at;
+		STARTUP_TIMER(decoding);
 
 		for (level = 0; level < description->levels; level++)
 			per_face += decoded_bytes(description, level);
@@ -479,6 +483,7 @@ static void upload(uint32_t id, uint32_t kind, const struct xgpu_texture_descrip
 				at += decoded_bytes(description, level);
 			}
 		}
+		STARTUP_ADD("tex_decode", decoding, 1, total);
 		command = dk_stream_command(DK_COMMAND_TEXTURE, sizeof(*command));
 		command->format = DK_TEXTURE_BGRA;
 		command->source = (uint32_t)(uintptr_t)decoded;
@@ -664,66 +669,234 @@ static BOOL level_send(uint32_t id, unsigned long level, unsigned long width, un
 	return TRUE;
 }
 
+/* a PNG's texels and all its mip levels, ready to be sent: the level 0 (blue first) and the rest, one level after another */
+struct png_chain
+{
+	unsigned long width, height, levels;
+	unsigned char *base, *rest;
+	unsigned long bytes;
+};
+
+static unsigned long png_level_count(unsigned long width, unsigned long height)
+{
+	unsigned long largest, levels = 1;
+
+	for (largest = width > height ? width : height; largest > 1; largest >>= 1)
+		levels++;
+	return levels;
+}
+
+static unsigned long png_level_size(unsigned long dimension, unsigned long level)
+{
+	return (dimension >> level) ? dimension >> level : 1;
+}
+
+static void png_chain_free(struct png_chain *chain)
+{
+	free(chain->base);
+	free(chain->rest);
+	memset(chain, 0, sizeof(*chain));
+}
+
+/* the PNG's texels decoded, with their levels made (the mean of the 2 by 2 texels above each: wiiu_png_chain.h); 1 if made. How the image comes to be
+sent is png_image's; this is the work of the game thread's first frame that can be done earlier, on another thread (dk_texture_prewarm_png) */
+static int png_chain_build(const void *png, unsigned long size, struct png_chain *chain)
+{
+	unsigned long level, rest_bytes = 0;
+	STARTUP_TIMER(decoding);
+
+	memset(chain, 0, sizeof(*chain));
+	chain->base = hud_hires_png_pixels(png, size, &chain->width, &chain->height);
+	STARTUP_ADD("png_decode", decoding, 1, chain->base ? chain->width * chain->height * 4 : 0);
+	if (!chain->base)
+		return 0;
+	chain->levels = png_level_count(chain->width, chain->height);
+	chain->bytes = chain->width * chain->height * 4;
+	/* (red first to blue first) */
+	wiiu_png_swap_red_blue((uint32_t *)chain->base, chain->width * chain->height);
+	for (level = 1; level < chain->levels; level++)
+		rest_bytes += png_level_size(chain->width, level) * png_level_size(chain->height, level) * 4;
+	if (rest_bytes)
+	{
+		STARTUP_TIMER(averaging);
+		const unsigned char *above = chain->base;
+		unsigned char *at;
+
+		chain->rest = malloc(rest_bytes);
+		if (!chain->rest)
+		{
+			png_chain_free(chain);
+			return 0;
+		}
+		at = chain->rest;
+		for (level = 1; level < chain->levels; level++)
+		{
+			const unsigned long above_width = png_level_size(chain->width, level - 1), above_height = png_level_size(chain->height, level - 1);
+			const unsigned long next_width = png_level_size(chain->width, level), next_height = png_level_size(chain->height, level);
+
+			wiiu_png_next_level((const uint32_t *)above, above_width, above_height, (uint32_t *)at, next_width, next_height);
+			above = at;
+			at += next_width * next_height * 4;
+		}
+		STARTUP_ADD("png_mips", averaging, chain->levels - 1, rest_bytes);
+		chain->bytes += rest_bytes;
+	}
+	return 1;
+}
+
+/* the images made ahead of the game thread's asking (menu art that the main menu will draw, decoded while the game loads its map): by the PNG's address
+and size. A slot is working (the helper thread has it), ready, or free. The game thread that wants one that is being made waits for it; one that is not
+there it makes itself, as before. */
+#define PREPARED_LIMIT 48
+#define PREPARED_BYTES_LIMIT (32ul << 20)
+enum { PREPARED_FREE, PREPARED_WORKING, PREPARED_READY };
+
+static struct
+{
+	const void *png;
+	unsigned long size;
+	int state;
+	struct png_chain chain;
+} prepared[PREPARED_LIMIT];
+static unsigned long prepared_bytes;
+static pthread_mutex_t prepared_lock;
+static pthread_cond_t prepared_changed;
+static volatile int prepared_ready_to_use;
+
+static void prepared_init(void)
+{
+	if (prepared_ready_to_use == 2)
+		return;
+	if (__sync_bool_compare_and_swap(&prepared_ready_to_use, 0, 1))
+	{
+		pthread_mutex_init(&prepared_lock, NULL);
+		pthread_cond_init(&prepared_changed, NULL);
+		__sync_synchronize();
+		prepared_ready_to_use = 2;
+	}
+	else
+	{
+		while (prepared_ready_to_use != 2)
+			;
+	}
+}
+
+/* (any thread) the image of a PNG made, to be had by png_image when it asks; the PNG's bytes stay where they are */
+void dk_texture_prewarm_png(const void *png, unsigned long size);
+
+void dk_texture_prewarm_png(const void *png, unsigned long size)
+{
+	int slot, free_slot = -1;
+	struct png_chain chain;
+	int made;
+
+	if (!png || !size)
+		return;
+	prepared_init();
+	pthread_mutex_lock(&prepared_lock);
+	for (slot = 0; slot < PREPARED_LIMIT; slot++)
+	{
+		if (prepared[slot].state != PREPARED_FREE && prepared[slot].png == png && prepared[slot].size == size)
+		{
+			pthread_mutex_unlock(&prepared_lock);
+			return;
+		}
+		if (prepared[slot].state == PREPARED_FREE && free_slot < 0)
+			free_slot = slot;
+	}
+	if (free_slot < 0 || prepared_bytes >= PREPARED_BYTES_LIMIT)
+	{
+		pthread_mutex_unlock(&prepared_lock);
+		return;
+	}
+	prepared[free_slot].png = png;
+	prepared[free_slot].size = size;
+	prepared[free_slot].state = PREPARED_WORKING;
+	pthread_mutex_unlock(&prepared_lock);
+	made = png_chain_build(png, size, &chain);
+	pthread_mutex_lock(&prepared_lock);
+	if (made)
+	{
+		prepared[free_slot].chain = chain;
+		prepared[free_slot].state = PREPARED_READY;
+		prepared_bytes += chain.bytes;
+	}
+	else
+	{
+		prepared[free_slot].state = PREPARED_FREE;
+		prepared[free_slot].png = NULL;
+	}
+	pthread_cond_broadcast(&prepared_changed);
+	pthread_mutex_unlock(&prepared_lock);
+}
+
+/* the image made ahead, handed over (and its slot freed); 0 if there is none (or the making failed) */
+static int prepared_take(const void *png, unsigned long size, struct png_chain *chain)
+{
+	int slot, found = 0;
+
+	if (prepared_ready_to_use != 2)
+		return 0;
+	pthread_mutex_lock(&prepared_lock);
+	for (;;)
+	{
+		for (slot = 0; slot < PREPARED_LIMIT; slot++)
+		{
+			if (prepared[slot].state != PREPARED_FREE && prepared[slot].png == png && prepared[slot].size == size)
+				break;
+		}
+		if (slot == PREPARED_LIMIT)
+			break;
+		if (prepared[slot].state == PREPARED_WORKING)
+		{
+			pthread_cond_wait(&prepared_changed, &prepared_lock);
+			continue;
+		}
+		*chain = prepared[slot].chain;
+		prepared_bytes -= chain->bytes;
+		memset(&prepared[slot], 0, sizeof(prepared[slot]));
+		found = 1;
+		break;
+	}
+	pthread_mutex_unlock(&prepared_lock);
+	return found;
+}
+
 /* an image of a PNG (8-bit RGBA) with all its mip levels, as
 hud_hires_png_texture makes in GL: its number, or 0 */
 static uint32_t png_image(const void *png, unsigned long size, unsigned long *levels)
 {
-	unsigned long width, height, level, largest, index;
-	unsigned char *pixels = hud_hires_png_pixels(png, size, &width, &height);
+	struct png_chain chain;
+	unsigned long level;
 	uint32_t id;
+	STARTUP_TIMER(whole);
 
-	if (!pixels)
+	if (!prepared_take(png, size, &chain) && !png_chain_build(png, size, &chain))
 		return 0;
 	id = id_take();
 	if (!id)
 	{
-		free(pixels);
+		png_chain_free(&chain);
 		return 0;
 	}
-	*levels = 1;
-	for (largest = width > height ? width : height; largest > 1; largest >>= 1)
-		(*levels)++;
-	/* (red first to blue first) */
-	for (index = 0; index < width * height; index++)
+	*levels = chain.levels;
+	image_make(id, chain.width, chain.height, chain.levels);
 	{
-		unsigned char red = pixels[index * 4];
+		const unsigned char *at = chain.rest;
 
-		pixels[index * 4] = pixels[index * 4 + 2];
-		pixels[index * 4 + 2] = red;
-	}
-	image_make(id, width, height, *levels);
-	for (level = 0; level < *levels; level++)
-	{
-		unsigned long next_width = width > 1 ? width / 2 : 1, next_height = height > 1 ? height / 2 : 1, x, y, c;
-		unsigned char *next;
-
-		level_send(id, level, width, height, pixels);
-		if (level + 1 == *levels)
-			break;
-		/* the next level: each texel the mean of the (up to) four above it */
-		next = malloc(next_width * next_height * 4);
-		if (!next)
-			break;
-		for (y = 0; y < next_height; y++)
+		for (level = 0; level < chain.levels; level++)
 		{
-			unsigned long y0 = y * 2, y1 = y * 2 + 1 < height ? y * 2 + 1 : y * 2;
+			const unsigned long width = png_level_size(chain.width, level), height = png_level_size(chain.height, level);
+			STARTUP_TIMER(sending);
 
-			for (x = 0; x < next_width; x++)
-			{
-				unsigned long x0 = x * 2, x1 = x * 2 + 1 < width ? x * 2 + 1 : x * 2;
-
-				for (c = 0; c < 4; c++)
-					next[(y * next_width + x) * 4 + c] = (unsigned char)((pixels[(y0 * width + x0) * 4 + c] +
-						pixels[(y0 * width + x1) * 4 + c] + pixels[(y1 * width + x0) * 4 + c] +
-						pixels[(y1 * width + x1) * 4 + c] + 2) / 4);
-			}
+			level_send(id, level, width, height, level ? at : chain.base);
+			STARTUP_ADD("png_send", sending, 1, width * height * 4);
+			if (level)
+				at += width * height * 4;
 		}
-		free(pixels);
-		pixels = next;
-		width = next_width;
-		height = next_height;
 	}
-	free(pixels);
+	png_chain_free(&chain);
+	STARTUP_ADD("png_all", whole, 1, 0);
 	return id;
 }
 
@@ -735,12 +908,14 @@ static uint32_t atlas_image(unsigned long data)
 	static BOOL failed;
 	long size, top, bottom;
 	const unsigned char *coverage;
+	STARTUP_TIMER(started);
 
 	if (failed)
 		return 0;
 	coverage = text_hires_atlas_rows(data, &size, id == 0, &top, &bottom);
 	if (!coverage)
 		return 0;
+	STARTUP_ADD("atlas_rows", started, 1, 0);
 	if (!id)
 	{
 		id = id_take();
@@ -754,7 +929,7 @@ static uint32_t atlas_image(unsigned long data)
 	while (top < bottom)
 	{
 		/* (white, the glyph's coverage its alpha, as the maps' fonts are) */
-		long rows = ROWS_PIECE_BYTES / (size * 4), index;
+		long rows = ROWS_PIECE_BYTES / (size * 4);
 		unsigned char *buffer;
 
 		if (rows > bottom - top)
@@ -762,14 +937,11 @@ static uint32_t atlas_image(unsigned long data)
 		buffer = malloc((size_t)rows * size * 4);
 		if (!buffer)
 			break;
-		for (index = 0; index < rows * size; index++)
-		{
-			buffer[index * 4 + 0] = buffer[index * 4 + 1] = buffer[index * 4 + 2] = 255;
-			buffer[index * 4 + 3] = coverage[top * size + index];
-		}
+		wiiu_png_coverage_to_white((uint32_t *)buffer, coverage + top * size, (unsigned long)(rows * size));
 		rows_send(id, 0, (unsigned long)size, (unsigned long)top, (unsigned long)rows, buffer);
 		top += rows;
 	}
+	STARTUP_ADD("atlas_all", started, 1, 0);
 	return id;
 }
 
@@ -910,7 +1082,20 @@ unsigned long dk_texture_serial(void)
 	return texture_drop_serial;
 }
 
+static uint32_t dk_texture_get_inner(const DWORD *resource, const D3DCOLOR *palette, int *kind,
+	struct xgpu_texture_description *description, int *lasting);
+
 uint32_t dk_texture_get(const DWORD *resource, const D3DCOLOR *palette, int *kind,
+	struct xgpu_texture_description *description, int *lasting)
+{
+	STARTUP_TIMER(started);
+	uint32_t id = dk_texture_get_inner(resource, palette, kind, description, lasting);
+
+	STARTUP_ADD("tex_get", started, 1, 0);
+	return id;
+}
+
+static uint32_t dk_texture_get_inner(const DWORD *resource, const D3DCOLOR *palette, int *kind,
 	struct xgpu_texture_description *description, int *lasting)
 {
 	DWORD data = resource[1], format_word = resource[3], size_word = resource[4];

@@ -20,6 +20,7 @@ matched case-insensitively, like the Xbox's FATX volumes.
 #include "posix.h"
 #include "port_config.h"
 #include "server_mode.h"
+#include "halo_startup.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -585,7 +586,24 @@ static ssize_t read_some(struct platform_file *file, void *buffer, size_t count,
 		read(file->descriptor, buffer, count);
 }
 
+static BOOL read_at_inner(struct platform_file *file, LPVOID buffer, DWORD count, LPDWORD bytes_read,
+	BOOL positioned, unsigned long long offset);
+
+/* (the Wii U's start-up timeline, startup_timeline.c, adds up the reads: those of 256 KB and more, and the rest) */
 static BOOL read_at(struct platform_file *file, LPVOID buffer, DWORD count, LPDWORD bytes_read,
+	BOOL positioned, unsigned long long offset)
+{
+	STARTUP_TIMER(started);
+	BOOL result = read_at_inner(file, buffer, count, bytes_read, positioned, offset);
+
+	if (count >= 262144)
+		STARTUP_ADD("read_big", started, 1, bytes_read ? *bytes_read : 0);
+	else
+		STARTUP_ADD("read_small", started, 1, bytes_read ? *bytes_read : 0);
+	return result;
+}
+
+static BOOL read_at_inner(struct platform_file *file, LPVOID buffer, DWORD count, LPDWORD bytes_read,
 	BOOL positioned, unsigned long long offset)
 {
 	DWORD total = 0;

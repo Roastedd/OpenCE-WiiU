@@ -202,6 +202,42 @@ int halo_interpolation_enabled(void)
 	return 1;
 }
 
+/* startup_timeline.c's (the Wii U's start-up timeline): the replay says nothing of its start-up, so the timers are over before they begin */
+volatile int startup_timeline_finished = 1;
+
+void startup_timeline_mark(const char *name)
+{
+	(void)name;
+}
+
+void startup_timeline_note(const char *name)
+{
+	(void)name;
+}
+
+long long startup_timeline_now(void)
+{
+	return 0;
+}
+
+void startup_timeline_add(const char *name, long long started, unsigned long items, unsigned long bytes)
+{
+	(void)name;
+	(void)started;
+	(void)items;
+	(void)bytes;
+}
+
+void startup_timeline_frame(void)
+{
+}
+
+int startup_option(unsigned long bit)
+{
+	(void)bit;
+	return 0;
+}
+
 /* hud_hires_tags.c's: no menu has the screen, so dynamic resolution's controller would run (it is off: host_gx2_drs_lines answers no step) */
 /* port/linux/game/render_governor.c's (the layer asks for the dynamic quality's model level of detail and tells it each frame's work): not on here */
 float render_governor_lod_scale(void)
