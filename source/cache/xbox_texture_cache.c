@@ -1058,6 +1058,12 @@ static boolean texture_cache_stream_start(
 	stream->first_ms = 0;
 	stream->active = TRUE;
 	texture_stream_totals.cut++;
+	if (texture_stream_totals.cut <= 6)
+	{
+		platform_log("stream: %s (%dx%d, %ld KB) is read in two: the head %lu KB, the tail %lu KB from level %d (%dx%d)", tag_get_name(bitmap->tag_index), (int)bitmap->width,
+			(int)bitmap->height, (long)(bitmap->pixels_size / 1024), plan.tail_offset / 1024, plan.tail_size / 1024, plan.level, (int)(bitmap->width >> plan.level),
+			(int)(bitmap->height >> plan.level));
+	}
 	/* the tail first (it goes before the reads that are waiting), then the rest; they write no byte twice */
 	cache_file_read_first(
 		bitmap->tag_index,
