@@ -117,8 +117,17 @@ ending in a brace, like the checked form, which some uses rely on (no
 semicolon). */
 #define RELEASE_ASSERT_MESSAGE(string) \
 	(__builtin_constant_p(string) ? (char const *)(string) : "<message not formatted in release builds>")
+#ifdef HALO_ASSERTS_STOP
+/* port: the sources that read and write what a player keeps (the saved games' folder: saved game files, the game state, the profiles) define
+HALO_ASSERTS_STOP before their first include, and a failed fatal assertion there stops the game in a release build too, after the note in
+debug.txt, as a debug build does: the retail game carried on past a failed check, but a check on a save's data that fails is better
+a halt than a file written from data that is not what it should be. Everywhere else a failed assertion carries on. */
+#define match_assert(file, line, expr) if (!(expr)) { release_assert_failed(#expr, MATCH_FILE(file), MATCH_LINE(line), TRUE); display_assert_skipped = FALSE; system_exit(-1); }
+#define match_vassert(file, line, expr, string) if (!(expr)) { release_assert_failed(RELEASE_ASSERT_MESSAGE(string), MATCH_FILE(file), MATCH_LINE(line), TRUE); display_assert_skipped = FALSE; system_exit(-1); }
+#else
 #define match_assert(file, line, expr) if (!(expr)) { release_assert_failed(#expr, MATCH_FILE(file), MATCH_LINE(line), TRUE); }
 #define match_vassert(file, line, expr, string) if (!(expr)) { release_assert_failed(RELEASE_ASSERT_MESSAGE(string), MATCH_FILE(file), MATCH_LINE(line), TRUE); }
+#endif
 #define match_warn(file, line, expr) if (!(expr)) { release_assert_failed(#expr, MATCH_FILE(file), MATCH_LINE(line), FALSE); }
 #define match_vwarn(file, line, expr, string) if (!(expr)) { release_assert_failed(RELEASE_ASSERT_MESSAGE(string), MATCH_FILE(file), MATCH_LINE(line), FALSE); }
 #else
