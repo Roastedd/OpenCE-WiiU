@@ -2237,7 +2237,7 @@ static void census_draw(const struct dk_command_draw *command)
 	gx.census_last_tuple = tuple;
 	if (command->inline_bytes)
 		gx.census_inline++;
-	else
+	else if (command->stream_count)
 	{
 		uint32_t mesh = census_mix(tuple, &command->streams[0][0], sizeof(command->streams[0]));
 
