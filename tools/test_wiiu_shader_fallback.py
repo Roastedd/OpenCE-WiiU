@@ -116,7 +116,7 @@ class GeneratorCheckTests(unittest.TestCase):
                      '-D_GNU_SOURCE -DHALO_LINUX_PLATFORM_LAYER -DHALO_GLES -w').split()
             command = ['clang-i686', *flags, '-include', str(ROOT / 'port/linux/include/halo_linux_prefix.h'),
                        '-include', str(directory / 'platform_msvc_semantics.h'), '-I' + str(directory), '-I' + str(ROOT / 'port/linux/src'),
-                       '-I' + str(ROOT / 'source'), '-I' + str(ROOT / 'source/cseries'),
+                       '-I' + str(ROOT / 'port/linux/include'), '-I' + str(ROOT / 'source'), '-I' + str(ROOT / 'source/cseries'),
                        '-idirafter', str(ROOT / 'port/include/xdk'),
                        *(str(directory / name) for name in ['pack_gen.c', 'nv2a_vsh.c', 'nv2a_psh.c', 'xgpu_text.c']),
                        '-no-pie', '-Wl,--gc-sections', '-Wl,--unresolved-symbols=ignore-all', '-o', str(directory / 'pack_gen')]
