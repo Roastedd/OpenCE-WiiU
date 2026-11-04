@@ -6,7 +6,7 @@ game thread's drawing or off the GX2 thread; none of them is a GPU feature of it
 (reports/research/2026-11-03/gpu-offload.md) found none that pays here.
 
   bit 1 (1)  blends: the interpolation's blends (render_interpolation.c) with the square roots left out (render_interpolation_fast.h): 2.3 ms of a fight's drawing
-             in the game thread's time becomes about 0.5. The poses differ by a few units in a float's last place.
+             in the game thread's time becomes about 1.4. The poses differ by a few units in a float's last place.
   bit 2 (2)  census: the GX2 thread times what it does for each draw (the state derivation, the shader keys, the decals' expansion, the rest of the draw's set-up and
              the GX2 calls) and counts how many draws repeat an earlier draw of the frame (the same state, shaders and textures; the same mesh): a log line every
              five seconds ("gpu offload: ..."). It changes nothing that is drawn; its timers cost about 0.1 ms a frame.

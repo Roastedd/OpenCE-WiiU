@@ -916,7 +916,7 @@ Xbox's, their constants are the 192 uniform registers of one shader mode, and a 
 
 | bit | what | cost, gain (console, expected; the log lines say what happened) |
 | --- | --- | --- |
-| 1 | the interpolation's blends without square roots: the test that a basis is a rotation compares squared lengths, the quaternion of a basis and the normalising of a blend use 1 / sqrt from `frsqrte` and three Newton steps (`port/linux/game/render_interpolation_fast.h`) | the blends were 2.3 ms of a fight's frame, nine correctly rounded square roots of about 250 cycles for each node; expected 0.4 to 0.6 ms. The poses differ by a few units in a float's last place |
+| 1 | the interpolation's blends without square roots: the test that a basis is a rotation compares squared lengths, the quaternion of a basis and the normalising of a blend use 1 / sqrt from `frsqrte` and three Newton steps (`port/linux/game/render_interpolation_fast.h`) | the blends were 2.3 ms of a fight's frame, nine correctly rounded square roots (about 140 cycles each) and seven divisions for each node, 40 percent of its 3,200 cycles; expected 0.7 to 1.0 ms less. The poses differ by a few units in a float's last place |
 | 2 | the census: the GX2 thread times its state derivation, the shader keys' lookup and the decals' expansion, and counts the draws that repeat the draw before, an earlier draw of the frame (state, shaders and textures), and the same mesh with them | about 0.1 ms a frame on the GX2 thread; changes nothing drawn |
 | 4 | with bit 1: every blend is made both ways and the largest difference said every 600 frames | doubles the blends' cost: for the host's runs |
 

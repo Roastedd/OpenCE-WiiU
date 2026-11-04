@@ -4,10 +4,11 @@ RENDER_INTERPOLATION_FAST.H
 The arithmetic of render_interpolation.c's blends with the square roots taken out (halo/gpu_offload.txt bit 1 on the Wii U; port/wiiu/src/wiiu_gpu_offload.h).
 
 The Espresso has no square root instruction. The port's sqrtf (wiiu_sqrtf.c) is correctly rounded, as the ticks and the network need, by four Newton steps in double
-precision and a check: about 250 cycles. A node of a blended pose took nine of them (a rotation found for each of the two poses: three lengths for the test that
-the basis is a rotation and one for the quaternion, and one to normalise the blend): about 2,300 cycles of the 3,200 a node takes, and the blends are 2.3 ms of a
-fight's 21 ms of drawing (runs/wiiu/session-20261031/codex-ab/b30-M-*, "blends"). The drawing can do without a correctly rounded root: a pose is shown, not
-simulated, and the ticks never read these results.
+precision and a check: 113 instructions with a chain of about a dozen dependent multiplies, 130 to 150 cycles. A node of a blended pose took nine of them (a rotation
+found for each of the two poses: three lengths for the test that the basis is a rotation and one for the quaternion, and one to normalise the blend) and seven
+divisions: about 1,400 of the 3,200 cycles a node takes (2.6 microseconds, ticks-stage5-snapshot-cost.md), and the blends are 2.3 ms of a fight's 21 ms of drawing
+(runs/wiiu/session-20261031/codex-ab/b30-M-*, "blends"). The drawing can do without a correctly rounded root: a pose is shown, not simulated, and the ticks never read
+these results.
 
   * the test that a basis is a rotation compares the squared lengths with the squares of the limits (0.99 and 1.01), no root;
   * the quaternion of a basis and the normalised blend use 1 / sqrt, from the estimate the processor gives (frsqrte) and three Newton steps in single precision,
