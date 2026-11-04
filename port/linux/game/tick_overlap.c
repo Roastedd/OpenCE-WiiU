@@ -151,6 +151,10 @@ static struct
 	unsigned long late_frames, late_window_ticks;
 	unsigned long long late_ahead_sum, late_wait_sum;
 	unsigned long late_backoff_seconds, late_trips, late_clean_windows;
+	unsigned long long late_job_sum; /* the jobs' time in the window */
+	boolean slow; /* the game's clock is held to one tick a frame: the game runs slow instead of the game thread waiting (the first answer to a late tick thread) */
+	unsigned long long slow_until;
+	unsigned long slow_trips;
 	boolean cores_said;
 } o = { -1, -1, -1 };
 
@@ -377,11 +381,15 @@ void tick_overlap_run_and_wait(
 /* ---------- the tick thread being late
 
 In a heavy scene the tick thread can take longer for a tick than the game thread would (the console's first scripted fights: 48 ms a tick on core 0 against 12.6 on core 1), and then the
-overlap is a loss: the game thread waits for it at every sync point and the game runs slower than 30 ticks a second. The overlapped frames are judged in windows of
-LATE_WINDOW_SECONDS: the tick thread is late if the picture was on average more than 1.5 ticks behind the clock (the pair is held at its end), or the game thread waited more than 8 ms a
-frame for it, or the game ran under 27 ticks a second. Then the frames are the serial loop's for a while (the tick thread moved to the game thread's core, which the game thread
-leaves to it while it waits: the plain loop's cache), and the overlap is tried again: after 10 s, and if it is late again after 20, 40, 60 s. The log says each step. */
-#define LATE_WINDOW_SECONDS 2
+overlap is a loss: the game thread waits for it at every sync point and the game runs slower than 30 ticks a second. The overlapped frames are judged in windows of LATE_WINDOW_SECONDS (5 s).
+A window is LATE only if the game ran under 25 ticks a second AND the tick thread is the reason: it was busy over 95% of the window, or the picture was on average more than 1.5 ticks behind the clock.
+(Not a single late tick, not a wait of the game thread over some milliseconds, and not a slow clock alone: the console's second matrix, 2026-11-03, fell back 2 to 3 times in a run where the tick thread
+made 27.8 ticks a second at 50% busy, on windows where the game itself had stopped for a moment - 15 ticks a second with the picture 1.06 behind and the tick thread idle.)
+The first answer to a late window is to stay overlapped and hold the game's clock to one tick a frame for SLOW_SECONDS: the game runs slow when the tick thread cannot keep up, and the game thread does
+not wait for two ticks at a time (the spiral). Only if the next window is late too and the game is under 20 ticks a second is the answer the serial loop for a while (the tick thread moved to the game
+thread's core, whose cache is big): 10 s, then if it is late again 20, 40, 60 s, and the overlap is tried again after each. The log says each step. */
+#define LATE_WINDOW_SECONDS 5
+#define SLOW_SECONDS 20
 #define LATE_FRAMES_AT_LEAST 20
 
 boolean tick_overlap_late(
@@ -401,21 +409,26 @@ static void tick_overlap_late_judge(
 	const double ahead = (double)o.late_ahead_sum / 1000.0 / frames;
 	const double wait = (double)o.late_wait_sum / (per_second / 1000.0) / frames;
 	const double rate = (double)o.late_window_ticks / seconds;
-	/* (a window of fewer frames than that is a slow game, not a quiet one: the console drew 5 to 11 frames a second when the tick thread was far behind, 10 to 22 in the 2 s of a window, and
-	a window that needed 20 never judged the slowest. Past 4 s, 6 frames are enough; a window with fewer is kept going for up to 10 s) */
+	const double busy = (double)o.late_job_sum / (double)(now - o.late_window_start);
+	/* (a window of fewer frames than that is a slow game, not a quiet one: the console drew 5 to 11 frames a second when the tick thread was far behind. Past 5 s, 6 frames are enough; a window with
+	fewer is kept going for up to 12 s) */
 	unsigned long fewest = tick_overlap_late_fewest_frames();
+	/* (a test with the file holding a number above 1: the host's qemu has a tick thread that is neither busy nor behind, so the slow clock alone is a late window) */
+	const boolean test = tick_overlap_late_setting > 1;
 	boolean late;
 
-	if (seconds >= 4.0 && fewest > 6)
+	if (seconds >= 5.0 && fewest > 6)
 		fewest = 6;
-	if (o.late_frames < fewest && seconds < 10.0)
+	if (o.late_frames < fewest && seconds < 12.0)
 		return; /* (the window goes on) */
-	late = o.late_frames >= fewest && (ahead > 1.5 || wait > 8.0 || rate < 27.0);
+	late = o.late_frames >= fewest && rate < 25.0 && (busy > 0.95 || ahead > 1.5 || test);
 
-	if (late)
+	if (late && o.slow && (rate < 20.0 || test))
 	{
+		/* (the clock held and the game still under 20 ticks a second: the serial loop) */
 		o.late_backoff_seconds = o.late_backoff_seconds ? (o.late_backoff_seconds * 2 > 60 ? 60 : o.late_backoff_seconds * 2) : 10;
 		o.late = TRUE;
+		o.slow = FALSE;
 		o.late_trips++;
 		o.late_clean_windows = 0;
 		o.late_until = now + (unsigned long long)o.late_backoff_seconds * (unsigned long long)per_second;
@@ -425,8 +438,20 @@ static void tick_overlap_late_judge(
 			wiiu_tick_thread_move(1);
 			o.late_moved = TRUE;
 		}
-		tick_snapshot_say("tick overlap: serial frames for %lu s (the tick thread was late over %.1f s: the picture %.2f ticks behind the clock on average, the game thread waited %.1f ms a frame, "
-			"%.1f ticks a second); the tick thread runs on core %u meanwhile", o.late_backoff_seconds, seconds, ahead, wait, rate, wiiu_tick_thread_core_set());
+		tick_snapshot_say("tick overlap: serial frames for %lu s (the tick thread was late over %.1f s with the clock held: the tick thread busy %.0f%%, the picture %.2f ticks behind the clock on average, "
+			"the game thread waited %.1f ms a frame, %.1f ticks a second); the tick thread runs on core %u meanwhile", o.late_backoff_seconds, seconds, busy * 100.0, ahead, wait, rate,
+			wiiu_tick_thread_core_set());
+	}
+	else if (late)
+	{
+		/* (stay overlapped, the game's clock held to one tick a frame) */
+		if (!o.slow)
+			o.slow_trips++;
+		o.slow = TRUE;
+		o.late_clean_windows = 0;
+		o.slow_until = now + (unsigned long long)SLOW_SECONDS * (unsigned long long)per_second;
+		tick_snapshot_say("tick overlap: the game's clock held to one tick a frame for %d s (the tick thread was late over %.1f s: busy %.0f%%, the picture %.2f ticks behind the clock on average, "
+			"the game thread waited %.1f ms a frame, %.1f ticks a second); the overlap goes on", SLOW_SECONDS, seconds, busy * 100.0, ahead, wait, rate);
 	}
 	else if (o.late_frames >= fewest && ++o.late_clean_windows >= 2 && o.late_backoff_seconds)
 	{
@@ -476,6 +501,11 @@ static void tick_overlap_late_check(
 			platform_log("tick overlap: trying the overlap again (the tick thread back on core %u)", wiiu_tick_thread_core_set());
 		}
 		return;
+	}
+	if (o.slow && now >= o.slow_until)
+	{
+		o.slow = FALSE;
+		platform_log("tick overlap: the game's clock is real time again");
 	}
 	if (o.late_window_start && now - o.late_window_start >= (unsigned long long)LATE_WINDOW_SECONDS * (unsigned long long)wiiu_ticks_per_second())
 		tick_overlap_late_judge(now);
@@ -620,6 +650,7 @@ static void tick_overlap_collect(void)
 		o.jobs++;
 		o.ticks += (unsigned long)o.job.ticks_run;
 		o.late_window_ticks += (unsigned long)o.job.ticks_run;
+		o.late_job_sum += took;
 		o.ticks_total += (unsigned long)o.job.ticks_run;
 		/* the clock the game thread decided and the clock the tick thread ended with agree, or the picture's tick was chosen on a wrong count */
 		if (o.job.ticks_run != o.job.ticks_elapsed || game_time_overlap_time() != o.job.time_before + o.job.ticks_run)
@@ -720,6 +751,9 @@ boolean tick_overlap_post_frame(
 		o.late_window_start = 0; /* (a window is of overlapped frames in a row) */
 		return FALSE;
 	}
+	/* (the clock held: one tick a frame at most, the rest of the time is the game running slow) */
+	if (o.slow && ticks > 1)
+		ticks = 1;
 	published = tick_snapshot_published_tick();
 	tick_input_capture();
 	memset(job, 0, sizeof(*job));
@@ -752,6 +786,7 @@ boolean tick_overlap_post_frame(
 			o.late_window_ticks = 0;
 			o.late_ahead_sum = 0;
 			o.late_wait_sum = 0;
+			o.late_job_sum = 0;
 		}
 		o.late_frames++;
 		o.late_ahead_sum += (unsigned long long)((time_now + ticks - tick) * 1000);
