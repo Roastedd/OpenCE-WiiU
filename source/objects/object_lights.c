@@ -1113,6 +1113,17 @@ void lights_preprocess_scene(
 	/* port: a frame drawn beside the tick thread (tick_overlap.h) changes none of the light data, which the ticks change meanwhile: the lights that
 	fade are let go of and moved by the tick thread (lights_fade_update), and the shield glow, which makes lights from the drawing, is left out */
 	overlap = tick_overlap_frame_active();
+	/* (the check of the console's halt of 2026-11-03: a frame that changes the lights - the serial loop's - must be reading the game state's own, not a copy of the ring's; said once) */
+	if (!overlap && LIGHT_DATA() != light_data)
+	{
+		static boolean said = FALSE;
+
+		if (!said)
+		{
+			said = TRUE;
+			platform_log("lights: a serial frame is reading a copy of the lights, and would let go of the faded ones and move the others in the copy (tick_snapshot_light_array)");
+		}
+	}
 	if (!overlap)
 		lights_port_recover();
 	if (!overlap)
