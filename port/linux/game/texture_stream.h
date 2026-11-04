@@ -19,7 +19,7 @@ No game data here, so that the rules can be tested apart from the game (port/wii
 #define TEXTURE_STREAM_SECTOR 512UL /* the cache file's sector: reads start and end on one */
 #endif
 #define TEXTURE_STREAM_TAIL_SIDE 32 /* the first level at or under this many texels on its longer side starts the tail */
-#define TEXTURE_STREAM_MINIMUM_HEAD 16384UL /* a texture with less before its tail is read whole (it is quick) */
+#define TEXTURE_STREAM_MINIMUM_HEAD 49152UL /* a texture with less before its tail is read whole: it takes a few ms, about what the extra read of the tail costs */
 #define TEXTURE_STREAM_MAXIMUM_TAIL 32768UL /* ... and one whose tail is bigger than this is too (the sizes of levels are not what was assumed) */
 #define TEXTURE_STREAM_MAXIMUM_LEVELS 16
 
