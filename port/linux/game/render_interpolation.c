@@ -55,7 +55,8 @@ tick, such as a nav marker, is moved as far as the object is drawn from there
 unsigned wiiu_gpu_offload_bits(void);
 #define WIIU_GPU_OFFLOAD_BLEND_BIT 1u
 /* whether this frame's blends are made with render_interpolation_fast.h's arithmetic (set at the frame's begin) */
-static boolean interpolation_fast_blends;
+static boolean interpolation_fast_blends, interpolation_check_blends;
+#define WIIU_GPU_OFFLOAD_CHECK_BIT 4u
 #endif
 
 /* port/linux/src/port_config.c */
@@ -314,10 +315,11 @@ static void basis_from_quaternion(struct interpolation_quaternion const *q, real
 	matrix->up.k = 1.0f - 2.0f * (ii + jj);
 }
 
-static void rotation_from_matrix(real_matrix4x3 const *matrix, struct interpolation_rotation *rotation)
+/* the rotation of a basis: with render_interpolation_fast.h's arithmetic if fast (HALO_WIIU, halo/gpu_offload.txt bit 1), else the original's */
+static void rotation_from_matrix_with(real_matrix4x3 const *matrix, struct interpolation_rotation *rotation, boolean fast)
 {
 #ifdef HALO_WIIU
-	if (interpolation_fast_blends)
+	if (fast)
 	{
 		rotation->is_rotation = interpolation_basis_is_rotation_fast(&matrix->forward.i, &matrix->left.i, &matrix->up.i) != 0;
 		if (rotation->is_rotation)
@@ -325,6 +327,8 @@ static void rotation_from_matrix(real_matrix4x3 const *matrix, struct interpolat
 				matrix->up.i, matrix->up.j, matrix->up.k, &rotation->quaternion.i, &rotation->quaternion.j, &rotation->quaternion.k, &rotation->quaternion.w);
 		return;
 	}
+#else
+	(void)fast;
 #endif
 	rotation->is_rotation = basis_is_rotation(matrix);
 	if (rotation->is_rotation)
@@ -332,13 +336,14 @@ static void rotation_from_matrix(real_matrix4x3 const *matrix, struct interpolat
 }
 
 /* a matrix a fraction t of the way from a to b, their rotations found */
-static void matrix_blend_rotations(
+static void matrix_blend_rotations_with(
 	real_matrix4x3 const *a,
 	real_matrix4x3 const *b,
 	struct interpolation_rotation const *rotation_a,
 	struct interpolation_rotation const *rotation_b,
 	real t,
-	real_matrix4x3 *result)
+	real_matrix4x3 *result,
+	boolean fast)
 {
 	result->scale = lerp(a->scale, b->scale, t);
 	point_lerp(&a->position, &b->position, t, &result->position);
@@ -360,7 +365,7 @@ static void matrix_blend_rotations(
 		q.k = lerp(qa.k, qb.k, t);
 		q.w = lerp(qa.w, qb.w, t);
 #ifdef HALO_WIIU
-		if (interpolation_fast_blends)
+		if (fast)
 		{
 			const real squared = q.i * q.i + q.j * q.j + q.k * q.k + q.w * q.w;
 
@@ -403,6 +408,89 @@ unblended:
 	result->up.j = lerp(a->up.j, b->up.j, t);
 	result->up.k = lerp(a->up.k, b->up.k, t);
 }
+
+#ifdef HALO_WIIU
+/* halo/gpu_offload.txt bit 4: every blend made both ways, and the largest difference said (for the host's runs: it doubles the cost) */
+static struct
+{
+	unsigned long rotations, decisions_differ, blends;
+	double worst_quaternion, worst_matrix;
+} interpolation_check;
+
+static void rotation_from_matrix(real_matrix4x3 const *matrix, struct interpolation_rotation *rotation)
+{
+	rotation_from_matrix_with(matrix, rotation, interpolation_fast_blends);
+	if (interpolation_fast_blends && interpolation_check_blends)
+	{
+		struct interpolation_rotation reference;
+		double difference;
+
+		rotation_from_matrix_with(matrix, &reference, FALSE);
+		interpolation_check.rotations++;
+		if (reference.is_rotation != rotation->is_rotation)
+			interpolation_check.decisions_differ++;
+		else if (reference.is_rotation)
+		{
+			difference = fabs((double)reference.quaternion.i - rotation->quaternion.i);
+			difference = fmax(difference, fabs((double)reference.quaternion.j - rotation->quaternion.j));
+			difference = fmax(difference, fabs((double)reference.quaternion.k - rotation->quaternion.k));
+			difference = fmax(difference, fabs((double)reference.quaternion.w - rotation->quaternion.w));
+			if (difference > interpolation_check.worst_quaternion)
+				interpolation_check.worst_quaternion = difference;
+		}
+	}
+}
+
+static void matrix_blend_rotations(
+	real_matrix4x3 const *a,
+	real_matrix4x3 const *b,
+	struct interpolation_rotation const *rotation_a,
+	struct interpolation_rotation const *rotation_b,
+	real t,
+	real_matrix4x3 *result)
+{
+	matrix_blend_rotations_with(a, b, rotation_a, rotation_b, t, result, interpolation_fast_blends);
+	if (interpolation_fast_blends && interpolation_check_blends)
+	{
+		real_matrix4x3 reference;
+		const real *x = (const real *)result, *y = (const real *)&reference;
+		unsigned index;
+
+		matrix_blend_rotations_with(a, b, rotation_a, rotation_b, t, &reference, FALSE);
+		interpolation_check.blends++;
+		for (index = 0; index < sizeof(reference) / sizeof(real); index++)
+			if (fabs((double)x[index] - y[index]) > interpolation_check.worst_matrix)
+				interpolation_check.worst_matrix = fabs((double)x[index] - y[index]);
+	}
+}
+
+/* said with the frames' end, every 600th */
+static void interpolation_check_say(void)
+{
+	void platform_log(char const *format, ...);
+
+	if (interpolation_check_blends && interpolation_fast_blends)
+		platform_log("gpu offload check: %lu rotations found both ways (%lu judged differently), worst quaternion difference %g; %lu blends, worst matrix difference %g",
+			interpolation_check.rotations, interpolation_check.decisions_differ, interpolation_check.worst_quaternion, interpolation_check.blends,
+			interpolation_check.worst_matrix);
+}
+#else
+static void rotation_from_matrix(real_matrix4x3 const *matrix, struct interpolation_rotation *rotation)
+{
+	rotation_from_matrix_with(matrix, rotation, FALSE);
+}
+
+static void matrix_blend_rotations(
+	real_matrix4x3 const *a,
+	real_matrix4x3 const *b,
+	struct interpolation_rotation const *rotation_a,
+	struct interpolation_rotation const *rotation_b,
+	real t,
+	real_matrix4x3 *result)
+{
+	matrix_blend_rotations_with(a, b, rotation_a, rotation_b, t, result, FALSE);
+}
+#endif
 
 /* the vector's parts' sum, large enough to be a correction (so written that
 one not a number is none) */
@@ -702,6 +790,7 @@ void render_interpolation_frame_begin(void)
 	interpolation_rendering_set(halo_interpolation_enabled());
 #ifdef HALO_WIIU
 	interpolation_fast_blends = (wiiu_gpu_offload_bits() & WIIU_GPU_OFFLOAD_BLEND_BIT) != 0;
+	interpolation_check_blends = (wiiu_gpu_offload_bits() & WIIU_GPU_OFFLOAD_CHECK_BIT) != 0;
 #endif
 	interpolation_frame++;
 	interpolation_fraction = game_time_get_tick_fraction();
@@ -710,6 +799,10 @@ void render_interpolation_frame_begin(void)
 void render_interpolation_frame_end(void)
 {
 	interpolation_rendering_set(FALSE);
+#ifdef HALO_WIIU
+	if (interpolation_check_blends && interpolation_fast_blends && !(interpolation_frame % 600))
+		interpolation_check_say();
+#endif
 }
 
 real render_interpolation_fraction(void)

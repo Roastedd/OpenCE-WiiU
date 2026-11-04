@@ -928,7 +928,7 @@ unsigned wiiu_gpu_offload_bits(void)
 	const char *value = getenv("HALO_GPU_OFFLOAD");
 	const long bits = value && *value ? strtol(value, NULL, 0) : 0;
 
-	return bits > 0 ? (unsigned)bits & 3u : 0;
+	return bits > 0 ? (unsigned)bits & 7u : 0;
 }
 
 /* wiiu_study.c: a study switch's number from a file on the card; here from the environment (tick_thread.txt: HALO_TICK_THREAD,

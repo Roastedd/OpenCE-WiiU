@@ -907,3 +907,19 @@ Four things the start-up does differently from before, each switched off by its 
 `halo/startup.txt` `0` is the old start-up (the menus' tags look their names up in hash tables, and the texture work is done a word at a time, in either).
 The drawn frames are the same with any of them (the digest harness: tools/test_wiiu_game_digest.py), but for the first two of the main menu, where the highlight is
 there a frame or two sooner with bit 1.
+
+## Taking drawing work off the game thread (`halo/gpu_offload.txt`)
+
+`halo/gpu_offload.txt` is a number (no file, `0` or a negative number: none on, the frames drawn exactly as `wiiu-big-endian` draws them). The study behind it
+(`reports/research/2026-11-03/gpu-offload.md`) found that almost none of the game thread's drawing time can move to the GPU in this renderer: its vertex programs are the
+Xbox's, their constants are the 192 uniform registers of one shader mode, and a GX2 call costs the GX2 thread about 0.1 microsecond. The bits are what it did find:
+
+| bit | what | cost, gain (console, expected; the log lines say what happened) |
+| --- | --- | --- |
+| 1 | the interpolation's blends without square roots: the test that a basis is a rotation compares squared lengths, the quaternion of a basis and the normalising of a blend use 1 / sqrt from `frsqrte` and three Newton steps (`port/linux/game/render_interpolation_fast.h`) | the blends were 2.3 ms of a fight's frame, nine correctly rounded square roots of about 250 cycles for each node; expected 0.4 to 0.6 ms. The poses differ by a few units in a float's last place |
+| 2 | the census: the GX2 thread times its state derivation, the shader keys' lookup and the decals' expansion, and counts the draws that repeat the draw before, an earlier draw of the frame (state, shaders and textures), and the same mesh with them | about 0.1 ms a frame on the GX2 thread; changes nothing drawn |
+| 4 | with bit 1: every blend is made both ways and the largest difference said every 600 frames | doubles the blends' cost: for the host's runs |
+
+The log says the bits at the first draw (`gpu offload (halo/gpu_offload.txt found): ...`), the census every five seconds (`gpu offload: the GX2 thread per frame ...`,
+`gpu offload: of N draws a frame ...`) and the check (`gpu offload check: ...`). The blends' time is the objects pass's and the `blends` figure of the overlap's log lines.
+`tools/test_wiiu_gpu_offload.py` checks the arithmetic against the original's over 400,000 random bases, natively and big-endian under qemu.
