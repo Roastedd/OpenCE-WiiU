@@ -919,6 +919,12 @@ so that a harness that must not delete a card file can write -1 to put one back.
 | `gx2_thread.txt` | 7 | the GX2 thread's mode (0: the game thread makes the calls) |
 | `gpu_offload.txt` | 0 | bits: 1 the interpolation's blends without square roots, 2 the GX2 census lines, 4 host-only comparison; 0 or a negative number: none |
 | `governor.txt` | the governor as `display.dynamic_quality` sets it | text, not a number: a first word `on`/`off`/`1`/`0`, or settings (`step 2`, `target 25`, `max_step 3`); **a file whose first word is -1 is the same as no file** |
+| `hotpaths.txt` | 0 | 1: while an object or an actor updates, the tick asks (dcbt) for the cache lines of the next ones (`halo_ppc_hotpaths.h`); an A/B switch, off unless 1. The memory probe of 2026-11-04 found sequential loads with dcbt slower than without, so time it both ways |
+| `memcpy_touch.txt` | 1 | 0: the port's memcpy (`wiiu_memcpy.c`) leaves out its dcbt 96 bytes ahead of the source (the dcbz of the destination stays); 1, absent or -1: as it always was |
+| `stream.txt` | 0 | 1: texture streaming (the section below); `stream_delay.txt` (milliseconds, a test aid for hosts) |
+| `overlay.txt` | 0 | 0 off, 1 the compact strip, 2 the detailed panel (L + R + - on the GamePad goes round the three); -1 is off |
+| `pacing.txt` | 0 | text: `0` off, `1 [D]` tear when the frame is late, `2 [D]` never wait for the vsync (D: at most 1 or 2 swaps wait for their flip); -1 is off |
+| `broadway.txt` | 0 | 1: the Broadway kernels that pass the self-test, 2: the self-test only, 3: 1 and GQR5. The console's self-test of 2026-11-04 failed `matrix4x3_multiply` (wide and denormal cases): it stays off |
 
 ## Start-up
 
