@@ -685,6 +685,14 @@ short __wrap_cache_file_read(long tag_index, long offset, long size, void *buffe
 
 void *__real__texture_cache_bitmap_get_hardware_format(void *bitmap, unsigned char block, unsigned char load);
 
+/* texture streaming (halo/stream.txt, HALO_STREAM here): the renderer's ask draws a bitmap from its tail while the rest is read, which is the time of the read; here the whole of
+it is waited for, as without streaming, so that what is drawn does not follow the time. The bitmap's read is still cut in two and its tail read first (that is in the cache, not
+in the ask), so the digests of a run with HALO_STREAM=1 and of one without are the proof that the two reads put the bytes the one read put */
+void *__wrap_texture_cache_bitmap_get_hardware_format_streaming(void *bitmap)
+{
+	return __real__texture_cache_bitmap_get_hardware_format(bitmap, 1, 1);
+}
+
 void *__wrap__texture_cache_bitmap_get_hardware_format(void *bitmap, unsigned char block, unsigned char load)
 {
 	return __real__texture_cache_bitmap_get_hardware_format(bitmap, load ? 1 : block, load);
@@ -925,7 +933,8 @@ tick_overlap.txt: HALO_TICK_OVERLAP, startup.txt: HALO_STARTUP), so that a run c
 long wiiu_study_number(const char *name, long fallback)
 {
 	const char *variable = !strcmp(name, "tick_thread.txt") ? "HALO_TICK_THREAD" : !strcmp(name, "tick_overlap.txt") ? "HALO_TICK_OVERLAP" :
-		!strcmp(name, "tick_overlap_stall.txt") ? "HALO_TICK_OVERLAP_STALL" : !strcmp(name, "startup.txt") ? "HALO_STARTUP" : NULL;
+		!strcmp(name, "tick_overlap_stall.txt") ? "HALO_TICK_OVERLAP_STALL" : !strcmp(name, "startup.txt") ? "HALO_STARTUP" :
+		!strcmp(name, "stream.txt") ? "HALO_STREAM" : NULL;
 	const char *value = variable ? getenv(variable) : NULL;
 
 	return value && *value ? strtol(value, NULL, 10) : fallback;

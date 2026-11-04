@@ -375,6 +375,8 @@ struct texture_stream_state
 };
 
 static struct texture_stream_state texture_streams[XBOX_TEXTURE_CACHE_PAGE_COUNT];
+/* (a block's index is a datum index: its salt in the high 16 bits and its place, which is the cache's page index, in the low) */
+#define TEXTURE_STREAM_STATE(block_index) (&texture_streams[(block_index) & 0xFFFF])
 static long texture_stream_setting = -1;
 
 /* what streaming did, for the log */
@@ -413,7 +415,7 @@ boolean texture_cache_stream_enabled(
 static boolean texture_stream_block_busy(
 	long block_index)
 {
-	struct texture_stream_state *stream = &texture_streams[block_index];
+	struct texture_stream_state *stream = TEXTURE_STREAM_STATE(block_index);
 
 	return stream->active && (!stream->tail_loaded || IDirect3DBaseTexture8_IsBusy(&stream->header));
 }
@@ -684,7 +686,7 @@ static void texture_cache_delete_block_proc(
 #endif
 		IDirect3DBaseTexture8_IsBusy(&cache_entry->hardware_format));
 #ifdef HALO_WIIU
-	texture_streams[block_index].active = FALSE;
+	TEXTURE_STREAM_STATE(block_index)->active = FALSE;
 #endif
 
 	match_assert(
@@ -1005,7 +1007,7 @@ static boolean texture_cache_stream_start(
 	struct xbox_texture_cache_texture *texture,
 	boolean block)
 {
-	struct texture_stream_state *stream = &texture_streams[cache_block_index];
+	struct texture_stream_state *stream = TEXTURE_STREAM_STATE(cache_block_index);
 	struct texture_stream_plan plan;
 	long sizes[TEXTURE_STREAM_MAXIMUM_LEVELS];
 	short max_level, level;
@@ -1105,7 +1107,7 @@ void *texture_cache_bitmap_get_hardware_format_streaming(
 	}
 	if (TEST_FLAG(bitmap->flags, _bitmap_cached_bit) && block_index != NONE)
 	{
-		struct texture_stream_state *stream = &texture_streams[block_index];
+		struct texture_stream_state *stream = TEXTURE_STREAM_STATE(block_index);
 
 		if (hardware_format)
 		{
