@@ -226,6 +226,26 @@ void sound_cache_open(
 	return;
 }
 
+/* port: the sound cache's pool for the performance overlay (see texture_cache_usage) */
+boolean sound_cache_usage(
+	unsigned long *resident_kib,
+	unsigned long *hot_kib,
+	unsigned long *capacity_kib)
+{
+	long resident, hot, pages;
+
+	if (!xbox_sound_cache_globals.cache)
+	{
+		return FALSE;
+	}
+	lruv_cache_usage(xbox_sound_cache_globals.cache, 2, &resident, &hot, &pages);
+	*resident_kib = (unsigned long)resident << (xbox_sound_cache_globals.cache->page_size_bits - 10);
+	*hot_kib = (unsigned long)hot << (xbox_sound_cache_globals.cache->page_size_bits - 10);
+	*capacity_kib = (unsigned long)pages << (xbox_sound_cache_globals.cache->page_size_bits - 10);
+
+	return TRUE;
+}
+
 void sound_cache_idle(
 	void)
 {

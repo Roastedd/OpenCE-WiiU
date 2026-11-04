@@ -36,6 +36,11 @@ void texture_cache_open(
 	void);
 void texture_cache_idle(
 	void);
+/* port: the pool for the performance overlay (port/wiiu/src/wiiu_perf.h): the KiB the cache holds, of them the KiB used in the last two frames, and its size */
+boolean texture_cache_usage(
+	unsigned long *resident_kib,
+	unsigned long *hot_kib,
+	unsigned long *capacity_kib);
 void texture_cache_return_memory(
 	void);
 void texture_cache_flush(

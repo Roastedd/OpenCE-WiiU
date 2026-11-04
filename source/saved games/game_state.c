@@ -705,6 +705,22 @@ void game_state_tick_hash(
 	}
 }
 
+/* port: the game state's pool for the performance overlay (port/wiiu/src/wiiu_perf.h): the KiB its allocations have taken (the CPU part and the GPU part:
+what the game sized its pools to, not what its objects fill of them) and its size. FALSE before it is made. */
+boolean game_state_usage(
+	unsigned long *used_kib,
+	unsigned long *capacity_kib)
+{
+	if (!game_state_globals.base_address)
+	{
+		return FALSE;
+	}
+	*used_kib = ((unsigned long)game_state_globals.cpu_allocation_size + (unsigned long)game_state_globals.gpu_allocation_size + 1023ul) >> 10;
+	*capacity_kib = (unsigned long)GAME_STATE_SIZE >> 10;
+
+	return TRUE;
+}
+
 void *game_state_gpu_malloc(
 	const char *name,
 	const char *type,

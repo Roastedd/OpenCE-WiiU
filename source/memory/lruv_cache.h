@@ -121,6 +121,15 @@ void lruv_cache_get_page_usage(
 	struct lruv_cache *cache,
 	byte *page_usage);
 
+/* port: the pages the cache's blocks hold, and of them the pages of the blocks used within the last `recent_ticks` ticks (the tick is lruv_idle's: a
+frame's), and the cache's pages; read only (the performance overlay's pools) */
+void lruv_cache_usage(
+	struct lruv_cache *cache,
+	long recent_ticks,
+	long *resident_pages,
+	long *hot_pages,
+	long *page_count);
+
 void lruv_resize(
 	struct lruv_cache *cache,
 	long new_page_count);

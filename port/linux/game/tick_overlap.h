@@ -130,6 +130,9 @@ void tick_overlap_note_publish(unsigned long long elapsed);
 /* a producer waits for room in a queue */
 void tick_overlap_note_push_wait(void);
 void tick_overlap_log(unsigned long long now);
+/* the overlap's monotonic counts for the detailed performance overlay (port/wiiu/src/wiiu_perf.h), written into the overlap_ fields of totals */
+struct perf_totals;
+void tick_overlap_perf_read(struct perf_totals *totals);
 
 /* ---------- the other units' (tick_snapshot.c, game_time.c, render_interpolation.c) */
 

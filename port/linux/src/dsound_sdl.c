@@ -223,6 +223,16 @@ static struct sdl_stream *streams;
 static unsigned long decoder_voices_waited;
 /* Caller-side decoding when a queue or allocation is unavailable. */
 static unsigned long decoder_profile_fallbacks;
+/* the decoder's time in packets (the detailed overlay's AUDIO, port/wiiu/src/wiiu_perf.h): a monotonic count of the time base's ticks, written by the decoder
+thread only, in 32 bits so that another thread reads it whole */
+static volatile uint32_t wiiu_decoder_perf_ticks_value;
+
+uint32_t wiiu_decoder_perf_ticks(void);
+
+uint32_t wiiu_decoder_perf_ticks(void)
+{
+	return wiiu_decoder_perf_ticks_value;
+}
 #endif
 
 #ifdef DSOUND_MIXER_YIELDS
@@ -2618,7 +2628,13 @@ static void *decoder_thread(void *parameter)
 		pthread_mutex_unlock(&decoder.lock);
 		if (decoder.profile_enabled)
 			started_ticks = OSGetSystemTime();
-		samples = packet_decode(job.adpcm, job.source, job.size, job.channels, &frames);
+		{
+			/* (the detailed overlay's AUDIO: the decoder's time, a monotonic count of ticks; two reads of the time base a packet) */
+			const uint32_t perf_started = (uint32_t)OSGetSystemTime();
+
+			samples = packet_decode(job.adpcm, job.source, job.size, job.channels, &frames);
+			wiiu_decoder_perf_ticks_value += (uint32_t)OSGetSystemTime() - perf_started;
+		}
 		if (decoder.profile_enabled)
 			decoded_ticks = OSGetSystemTime();
 		packet_deallocate(job.source);

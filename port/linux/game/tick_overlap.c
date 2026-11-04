@@ -11,6 +11,7 @@ The overlap of the game's ticks with its drawing (tick_overlap.h).
 
 #include "cseries/errors.h"
 #include "tick_input.h"
+#include "../../wiiu/src/wiiu_perf.h" /* port: the detailed overlay's totals (perf_totals) */
 
 #include <errno.h>
 #include <pthread.h>
@@ -135,6 +136,9 @@ static struct
 	unsigned long captures, publishes;
 	unsigned long long first_ticks;
 	unsigned long reports;
+	/* monotonic counts for the detailed overlay (wiiu_perf.h), never reset by the log: 32 bits, written by the game thread only (the tick thread's job time is
+	added at the sync point that collects the job), read whole by another */
+	volatile uint32_t perf_frames, perf_overlapped, perf_serial, perf_wait, perf_job, perf_jobs;
 } o = { -1, -1, -1 };
 
 /* ---------- the switch */
@@ -309,6 +313,7 @@ static void tick_overlap_wait(void)
 		const unsigned long long took = tick_overlap_now() - started;
 
 		o.wait_ticks += took;
+		o.perf_wait += (uint32_t)took;
 		if (took > o.wait_max_ticks)
 			o.wait_max_ticks = took;
 		if (took > 4 * (unsigned long long)wiiu_ticks_per_second() / 1000)
@@ -336,9 +341,11 @@ void tick_overlap_run_and_wait(
 	const unsigned long long wait_before = o.wait_ticks;
 	const unsigned long long max_before = o.wait_max_ticks;
 	const unsigned long long long_before = o.waits_long;
+	const uint32_t perf_before = o.perf_wait;
 
 	tick_overlap_post(work, argument);
 	tick_overlap_wait();
+	o.perf_wait = perf_before;
 	o.serial_wait_ticks += o.wait_ticks - wait_before;
 	o.serial_waits++;
 	o.wait_ticks = wait_before;
@@ -480,6 +487,8 @@ static void tick_overlap_collect(void)
 		STORE(o.job_in_flight, FALSE);
 		o.job_collected = TRUE;
 		o.jobs++;
+		o.perf_jobs++;
+		o.perf_job += (uint32_t)took;
 		o.ticks += (unsigned long)o.job.ticks_run;
 		o.ticks_total += (unsigned long)o.job.ticks_run;
 		/* the clock the game thread decided and the clock the tick thread ended with agree, or the picture's tick was chosen on a wrong count */
@@ -572,9 +581,11 @@ boolean tick_overlap_post_frame(
 	if (!tick_overlap_enabled())
 		return FALSE;
 	o.frames++;
+	o.perf_frames++;
 	if (!main_overlap_eligible() || !game_time_overlap_step(dt, &time_now, &ticks, &leftover_after, &speed) || speed != 1.0f)
 	{
 		o.serial_frames++;
+		o.perf_serial++;
 		return FALSE;
 	}
 	published = tick_snapshot_published_tick();
@@ -604,6 +615,7 @@ boolean tick_overlap_post_frame(
 		tick_overlap_set_view(tick, fraction, ticks);
 		STORE(o.job_in_flight, TRUE);
 		o.overlap_frames++;
+		o.perf_overlapped++;
 		o.ahead_sum += (unsigned long long)((time_now + ticks - tick) * 1000);
 		tick_overlap_post(tick_overlap_job_work, job);
 		return TRUE;
@@ -613,6 +625,7 @@ boolean tick_overlap_post_frame(
 	tick_snapshot_unpin();
 	STORE(o.job_in_flight, TRUE);
 	o.primed_frames++;
+	o.perf_overlapped++;
 	tick_overlap_post(tick_overlap_job_work, job);
 	tick_overlap_wait();
 	tick_overlap_collect();
@@ -711,6 +724,19 @@ void tick_overlap_note_publish(
 {
 	__atomic_add_fetch(&o.publish_ticks, (unsigned long)elapsed, __ATOMIC_RELAXED);
 	__atomic_add_fetch(&o.publishes, 1, __ATOMIC_RELAXED);
+}
+
+/* the detailed overlay's read (port/wiiu/src/wiiu_gx2.c): the overlap's monotonic counts, in the fields of perf_totals */
+void tick_overlap_perf_read(
+	struct perf_totals *totals)
+{
+	totals->overlap_enabled = o.enabled > 0;
+	totals->overlap_frames = o.perf_frames;
+	totals->overlap_overlapped = o.perf_overlapped;
+	totals->overlap_serial = o.perf_serial;
+	totals->overlap_wait = o.perf_wait;
+	totals->overlap_job = o.perf_job;
+	totals->overlap_jobs = o.perf_jobs;
 }
 
 /* the numbers, in the style of port/wiiu/src/wiiu_render_passes.c (a log line holds 199 characters) */

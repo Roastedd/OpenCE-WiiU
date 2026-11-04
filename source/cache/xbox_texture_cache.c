@@ -374,6 +374,27 @@ void texture_cache_open(
 	return;
 }
 
+/* port: the texture cache's pool for the performance overlay (port/wiiu/src/wiiu_perf.h): the KiB its blocks hold, of those the KiB used in this
+frame or the last, and its size. The game thread's, which owns the cache. FALSE before the cache is made. */
+boolean texture_cache_usage(
+	unsigned long *resident_kib,
+	unsigned long *hot_kib,
+	unsigned long *capacity_kib)
+{
+	long resident, hot, pages;
+
+	if (!xbox_texture_cache_globals.cache)
+	{
+		return FALSE;
+	}
+	lruv_cache_usage(xbox_texture_cache_globals.cache, 2, &resident, &hot, &pages);
+	*resident_kib = (unsigned long)resident << (xbox_texture_cache_globals.cache->page_size_bits - 10);
+	*hot_kib = (unsigned long)hot << (xbox_texture_cache_globals.cache->page_size_bits - 10);
+	*capacity_kib = (unsigned long)pages << (xbox_texture_cache_globals.cache->page_size_bits - 10);
+
+	return TRUE;
+}
+
 void texture_cache_idle(
 	void)
 {

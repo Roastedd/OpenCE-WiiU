@@ -62,6 +62,10 @@ boolean game_state_reverted(
 void game_state_tick_hash(
 	long tick);
 
+/* port: the game state's pool for the performance overlay: the KiB allocated of it, and its size */
+boolean game_state_usage(
+	unsigned long *used_kib,
+	unsigned long *capacity_kib);
 void *game_state_malloc(
 	const char *name,
 	const char *type,
