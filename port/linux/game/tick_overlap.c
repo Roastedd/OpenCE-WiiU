@@ -1020,6 +1020,8 @@ void tick_overlap_decide(
 	tick_snapshot_decide();
 	if (tick_overlap_enabled())
 		sound_manager_freeze_listeners();
+	else if (was_enabled)
+		platform_log("tick overlap: off for this map (the ticks run on the game thread; the tick thread waits)");
 }
 
 /* what the map summary (port/wiiu/src/wiiu_map_summary.c) reads: the frames the game thread has drawn, the overlapped and the serial ones among them,
