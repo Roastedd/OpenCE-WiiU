@@ -793,6 +793,36 @@ BOOL WINAPI WriteFile(HANDLE handle, LPCVOID buffer, DWORD count, LPDWORD bytes_
 	return result;
 }
 
+/* WriteFile for count bytes made in pieces of at most piece bytes from the file pointer (a checkpoint's 20 MiB, async_save.h: one request that size holds the card while
+other reads wait behind it), noted as the one write it is in the totals and the slow log. Only the pointer is used, not an overlapped offset. */
+BOOL platform_write_file_in_pieces(HANDLE handle, LPCVOID buffer, DWORD count, DWORD piece, LPDWORD bytes_written)
+{
+	struct platform_file *file = file_from_handle(handle);
+	BOOL result = TRUE;
+	DWORD done = 0;
+	double start_ms;
+
+	if (!file)
+		return FALSE;
+	if (piece == 0)
+		piece = count ? count : 1;
+	start_ms = file_io_now_ms();
+	while (done < count)
+	{
+		DWORD wrote = 0;
+		const DWORD size = count - done < piece ? count - done : piece;
+
+		result = write_at(file, (const char *)buffer + done, size, &wrote, FALSE, 0);
+		done += wrote;
+		if (!result)
+			break;
+	}
+	file_io_note(file, 1, done, start_ms);
+	if (bytes_written)
+		*bytes_written = done;
+	return result;
+}
+
 /* ReadFileEx/WriteFileEx complete immediately; as on Win32, the completion
 routine runs during the issuing thread's next alertable wait. */
 

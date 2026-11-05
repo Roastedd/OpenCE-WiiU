@@ -486,6 +486,19 @@ void wiiu_thread_off_game_core(void)
 	OSSleepTicks(OSMillisecondsToTicks(1));
 }
 
+/* The checkpoint's writer (port/linux/game/async_save.c): on core 0, named, and below the game thread's priority like the other workers (setup_thread): it waits for the card
+most of its time, and what it has to do on a core is a piece of the file at a time. */
+void wiiu_thread_background(const char *name);
+void wiiu_thread_background(const char *name)
+{
+	OSThread *self = OSGetCurrentThread();
+
+	wiiu_thread_off_game_core();
+	OSSetThreadName(self, name);
+	OSSetThreadPriority(self, main_priority < 27 ? main_priority + 4 : 31);
+	wiiu_tag_thread(name);
+}
+
 /* The tick thread (port/linux/game/tick_overlap.c): an OSThread made on core 0, not a pthread. wut makes a pthread with OSCreateThread at priority 16 with
 every core allowed (OS_THREAD_ATTRIB_AFFINITY_ANY) and resumes it at once; OSSetThreadAffinity from inside it did not keep it on core 0 (2026-11-02:
 it said core 2, and core 1 after a sleep of 1 ms). Made with the affinity, as the game thread, the audio and the debug server are, it is on core 0 from
@@ -1331,6 +1344,13 @@ int wiiu_shell_run(int (*game_main)(void))
 		whose game never started has not used it) */
 		if (foreground && started_game)
 			GX2DrawDone();
+	}
+	/* a checkpoint's write still on its way to the card (the file is the game's own scratch, read again only by this run's revert: nothing is lost if it does not end) is waited for
+	a moment, so that the card is not taken away from under it; the close does not wait longer */
+	{
+		int game_state_port_save_wait(unsigned long timeout_ms);
+
+		exit_note(game_state_port_save_wait(1500) ? "no checkpoint write is running" : "a checkpoint write still running after 1500 ms");
 	}
 	wiiu_phase("shutting down");
 	box_stopping = 1;

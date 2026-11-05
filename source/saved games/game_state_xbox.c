@@ -102,6 +102,13 @@ symbols in this file:
 #include "saved games/game_state.h"
 #include "sound/sound_manager.h"
 #include <xtl.h>
+#ifdef HALO_WIIU
+#include "async_save.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#endif
 
 /* ---------- constants */
 
@@ -148,6 +155,27 @@ static void *game_state_image_get(
 	unsigned long size);
 static void game_state_image_release(
 	void *image);
+#ifdef HALO_WIIU
+void platform_log(char const *format, ...);
+BOOL platform_write_file_in_pieces(HANDLE handle, LPCVOID buffer, DWORD count, DWORD piece, LPDWORD bytes_written);
+static boolean game_state_async_begin(
+	void);
+static boolean game_state_async_settle(
+	unsigned long timeout_ms,
+	const char *why);
+static void game_state_verify_sync_write(
+	void);
+
+/* the checkpoint's write on a thread of its own (below): the one handed over, if any */
+static struct
+{
+	boolean pending; /* a write was handed over and has not been waited for */
+	boolean lost;
+	volatile int result; /* -1 running, 1 written, 0 failed (the writer thread's) */
+	unsigned long number;
+	double write_ms; /* the writer thread's */
+} game_state_async;
+#endif
 
 /* ---------- globals */
 
@@ -209,6 +237,8 @@ void *game_state_allocate_buffer(
 	/* port: the image a saved game is read into before it is taken, made now
 	while the heap is whole (game_state_image_get) */
 	game_state_image_get(cpu_size+gpu_size);
+	/* port: and the thread a checkpoint's write runs on (async_save.h), made now for the same reason */
+	async_save_prepare();
 #endif
 
 	return result;
@@ -221,6 +251,10 @@ void game_state_free_buffer(
 		"c:\\halo\\SOURCE\\saved games\\game_state_xbox.c",
 		75,
 		xbox_game_state_globals.buffer_allocated);
+#ifdef HALO_WIIU
+	/* port: a checkpoint's write is over before the game state goes (the thread works from a copy, but the file is closed next) */
+	game_state_async_settle(10000, "the game state is freed");
+#endif
 	XPhysicalFree(xbox_game_state_globals.buffer);
 	xbox_game_state_globals.buffer_allocated = FALSE;
 
@@ -269,6 +303,9 @@ void game_state_close_file(
 		"c:\\halo\\SOURCE\\saved games\\game_state_xbox.c",
 		106,
 		xbox_game_state_globals.file_open);
+#ifdef HALO_WIIU
+	game_state_async_settle(10000, "the saved game file is closed");
+#endif
 	CloseHandle(xbox_game_state_globals.handle);
 	xbox_game_state_globals.file_open = FALSE;
 
@@ -290,6 +327,13 @@ boolean game_state_write_to_file(
 		121,
 		xbox_game_state_globals.file_open);
 
+#ifdef HALO_WIIU
+	/* port: the copy is taken here and the write is the writer thread's (game_state_async_begin); where that cannot be, it is made here, as it always was */
+	if (game_state_async_begin())
+	{
+		return TRUE;
+	}
+#endif
 	if (SetFilePointer(xbox_game_state_globals.handle, 0, NULL, FILE_BEGIN) !=
 			INVALID_SET_FILE_POINTER &&
 		WriteFile(xbox_game_state_globals.handle, xbox_game_state_globals.buffer,
@@ -298,6 +342,10 @@ boolean game_state_write_to_file(
 	{
 		xbox_game_state_globals.file_valid_for_read = TRUE;
 		result = TRUE;
+#ifdef HALO_WIIU
+		game_state_async.lost = FALSE;
+		game_state_verify_sync_write();
+#endif
 	}
 	else
 	{
@@ -334,6 +382,10 @@ boolean game_state_read_from_file(
 		146,
 		xbox_game_state_globals.file_valid_for_read || recover_saved_games_hack);
 
+#ifdef HALO_WIIU
+	/* port: a checkpoint still being written to this file is over first (and the read is of what it wrote) */
+	game_state_async_settle(0, "a revert");
+#endif
 	/* port: read beside the game state, and taken once checked */
 	image = game_state_image_get(xbox_game_state_globals.buffer_size);
 	if (image &&
@@ -740,6 +792,8 @@ static void *game_state_image_get(
 	unsigned long size)
 {
 #ifdef HALO_WIIU
+	/* (the image is what a checkpoint's copy is held in until the writer thread has written it: whoever wants it waits for that first) */
+	game_state_async_settle(0, "the image is wanted");
 	if (game_state_image_size < size)
 	{
 		/* (the game's free halts on a null pointer: debug_memory.c) */
@@ -770,4 +824,239 @@ static void game_state_image_release(
 #endif
 
 	return;
+}
+
+/* ---------- port: the checkpoint's write on a thread of its own */
+
+/* A checkpoint wrote the whole game state to z:\savegame.bin on the game thread: one write of 20 MiB (HALO_PORT_GAME_STATE_SIZE) and nothing else (no hash, no compression), which
+took 1.3 to 1.6 s on the console, with the game's time halted and nothing drawn (the owner's a30 and b30 sessions of 2026-11-03/04: reports/research/2026-11-04/async-save.md).
+Here the game thread copies the game state into the image (the buffer a revert reads a saved game into, made at the start and held: a revert, a load and the next checkpoint
+wait for the write first, so the image is never both) and hands the write to the writer thread (async_save.h); the file's bytes are the ones the synchronous write
+made. The file is the session's own scratch: nothing reads it after the process ends (file_valid_for_read is false at the start, and a revert reads it only after a
+checkpoint of this run), so a write cut short leaves nothing a later run would take; the player's saved game (the profile's savegame.bin, Save and Quit) is not
+written here, and is written as it was, after a revert, which waits for this write.
+Where the copy cannot be had, or the thread, the write is made here as before; a write that failed on the thread is made once more from the copy on the game thread
+when it is waited for, and if that fails too the checkpoint is lost (game_state_port_save_lost: the revert then starts the map over, as a failed write did). */
+
+static double game_state_async_now_ms(
+	void)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+
+	return (double)now.tv_sec*1000.0 + (double)now.tv_nsec/1000000.0;
+}
+
+static unsigned long game_state_async_crc(
+	const void *buffer,
+	unsigned long size)
+{
+	unsigned long checksum;
+
+	crc_new(&checksum);
+	crc_checksum_buffer(&checksum, (void *)buffer, size);
+
+	return checksum;
+}
+
+/* the file read back and compared with what was written (halo/async_save_verify.txt), 1 if it is the same */
+static boolean game_state_verify_file(
+	const void *expected,
+	unsigned long size)
+{
+	const unsigned long piece_size = 1024*1024;
+	byte *piece = malloc(piece_size);
+	unsigned long offset = 0;
+	boolean same = piece!=NULL;
+
+	if (same && SetFilePointer(xbox_game_state_globals.handle, 0, NULL, FILE_BEGIN)==INVALID_SET_FILE_POINTER)
+	{
+		same = FALSE;
+	}
+	while (same && offset<size)
+	{
+		unsigned long count = size-offset<piece_size ? size-offset : piece_size;
+		unsigned long bytes_read = 0;
+
+		if (!ReadFile(xbox_game_state_globals.handle, piece, count, &bytes_read, NULL) ||
+			bytes_read!=count ||
+			memcmp(piece, (const byte *)expected+offset, count)!=0)
+		{
+			same = FALSE;
+		}
+		offset += count;
+	}
+	free(piece);
+
+	return same;
+}
+
+static void game_state_verify_sync_write(
+	void)
+{
+	if (async_save_verify())
+	{
+		game_state_async.number++;
+		platform_log("checkpoint %lu: crc %08lx of %lu bytes (written on the game thread), file %s", game_state_async.number,
+			game_state_async_crc(xbox_game_state_globals.buffer, xbox_game_state_globals.buffer_size), (unsigned long)xbox_game_state_globals.buffer_size,
+			game_state_verify_file(xbox_game_state_globals.buffer, xbox_game_state_globals.buffer_size) ? "read back the same" : "READ BACK DIFFERENT");
+	}
+
+	return;
+}
+
+/* the writer thread's job: the copy (the image) to the file, from its start, in pieces */
+static void game_state_async_write(
+	void *argument)
+{
+	const double start = game_state_async_now_ms();
+	const unsigned long size = xbox_game_state_globals.buffer_size;
+	void *snapshot = game_state_image;
+	unsigned long bytes_written = 0;
+	unsigned long error = 0;
+	char note[48];
+	boolean ok = FALSE;
+
+	(void)argument;
+	note[0] = 0;
+	if (SetFilePointer(xbox_game_state_globals.handle, 0, NULL, FILE_BEGIN)!=INVALID_SET_FILE_POINTER &&
+		platform_write_file_in_pieces(xbox_game_state_globals.handle, snapshot, size, async_save_piece_bytes(), &bytes_written) &&
+		bytes_written==size)
+	{
+		ok = TRUE;
+	}
+	else
+	{
+		error = GetLastError();
+		snprintf(note, sizeof(note), " - error %lu", error);
+	}
+	if (ok && async_save_verify() && !game_state_verify_file(snapshot, size))
+	{
+		platform_log("checkpoint %lu: the file read back is NOT the copy", game_state_async.number);
+		ok = FALSE;
+	}
+	game_state_async.write_ms = game_state_async_now_ms()-start;
+	platform_log("checkpoint %lu: %lu KB %s on the writer thread in %.0f ms (pieces of %lu KB)%s", game_state_async.number, size/1024,
+		ok ? "written" : "NOT written", game_state_async.write_ms, async_save_piece_bytes()/1024, note);
+	game_state_async.result = ok ? 1 : 0;
+
+	return;
+}
+
+/* copies the game state and hands the write over: FALSE if that cannot be done, and nothing is changed (the caller writes as it always did) */
+static boolean game_state_async_begin(
+	void)
+{
+	void *image;
+	double start;
+	double copy_ms;
+
+	if (!async_save_enabled())
+	{
+		return FALSE;
+	}
+	game_state_async_settle(0, "the next checkpoint");
+	image = game_state_image_get(xbox_game_state_globals.buffer_size);
+	if (!image)
+	{
+		platform_log("checkpoint: no image to copy the game state to: written on the game thread");
+		return FALSE;
+	}
+
+	start = game_state_async_now_ms();
+	memcpy(image, xbox_game_state_globals.buffer, xbox_game_state_globals.buffer_size);
+	copy_ms = game_state_async_now_ms()-start;
+	game_state_async.number++;
+	if (async_save_verify())
+	{
+		platform_log("checkpoint %lu: crc %08lx of %lu bytes, copy %s", game_state_async.number,
+			game_state_async_crc(image, xbox_game_state_globals.buffer_size), (unsigned long)xbox_game_state_globals.buffer_size,
+			memcmp(image, xbox_game_state_globals.buffer, xbox_game_state_globals.buffer_size)==0 ? "the same as the game state" : "DIFFERENT FROM THE GAME STATE");
+	}
+	game_state_async.result = -1;
+	if (!async_save_start(game_state_async_write, NULL))
+	{
+		game_state_async.number--;
+		platform_log("checkpoint: the writer thread cannot take the write: written on the game thread");
+		return FALSE;
+	}
+	game_state_async.pending = TRUE;
+	game_state_async.lost = FALSE;
+	xbox_game_state_globals.file_valid_for_read = TRUE;
+	platform_log("checkpoint %lu: the game state copied in %.1f ms (%lu KB); the write is on the writer thread", game_state_async.number, copy_ms,
+		(unsigned long)xbox_game_state_globals.buffer_size/1024);
+
+	return TRUE;
+}
+
+/* waits for the write handed over to end (0: as long as it takes); FALSE if it has not ended in timeout_ms. A write that failed is made once more here from the copy */
+static boolean game_state_async_settle(
+	unsigned long timeout_ms,
+	const char *why)
+{
+	double start;
+	double waited_ms;
+
+	if (!game_state_async.pending)
+	{
+		return TRUE;
+	}
+	start = game_state_async_now_ms();
+	if (!async_save_wait(timeout_ms))
+	{
+		platform_log("checkpoint %lu: its write is still running after %lu ms (%s)", game_state_async.number, timeout_ms, why);
+		return FALSE;
+	}
+	waited_ms = game_state_async_now_ms()-start;
+	game_state_async.pending = FALSE;
+	if (waited_ms>=1.0)
+	{
+		platform_log("checkpoint %lu: waited %.0f ms for its write (%s)", game_state_async.number, waited_ms, why);
+	}
+	if (game_state_async.result!=1)
+	{
+		unsigned long bytes_written = 0;
+		void *snapshot = game_state_image_get(xbox_game_state_globals.buffer_size);
+
+		platform_log("checkpoint %lu: its write failed on the writer thread: written again on the game thread", game_state_async.number);
+		if (snapshot &&
+			SetFilePointer(xbox_game_state_globals.handle, 0, NULL, FILE_BEGIN)!=INVALID_SET_FILE_POINTER &&
+			WriteFile(xbox_game_state_globals.handle, snapshot, xbox_game_state_globals.buffer_size, &bytes_written, NULL) &&
+			bytes_written==xbox_game_state_globals.buffer_size)
+		{
+			platform_log("checkpoint %lu: written", game_state_async.number);
+		}
+		else
+		{
+			game_state_async.lost = TRUE;
+			xbox_game_state_globals.file_valid_for_read = FALSE;
+			platform_log("checkpoint %lu: LOST: the file could not be written (error %lu)", game_state_async.number, (unsigned long)GetLastError());
+		}
+	}
+
+	return TRUE;
+}
+
+/* game_state.c's: a revert, a load and the end of the game wait for the write first */
+void game_state_port_wait_for_save(
+	const char *why)
+{
+	game_state_async_settle(0, why);
+
+	return;
+}
+
+/* whether the last checkpoint is not on the card (its write failed twice) */
+boolean game_state_port_save_lost(
+	void)
+{
+	return game_state_async.lost;
+}
+
+/* the shell's, at the app's close: 1 if no write is running after at most timeout_ms (nothing else is done) */
+int game_state_port_save_wait(
+	unsigned long timeout_ms)
+{
+	return async_save_wait(timeout_ms);
 }

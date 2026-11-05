@@ -367,6 +367,15 @@ void game_state_port_restamp_revert_time(
 void game_state_revert(
 	void)
 {
+#ifdef HALO_WIIU
+	/* port: the checkpoint's write may still be on its way to the file this reads (game_state_xbox.c): it is waited for, and if it was lost
+	there is no saved state to go back to */
+	game_state_port_wait_for_save("a revert");
+	if (game_state_port_save_lost())
+	{
+		game_state_globals.saved_game_valid = FALSE;
+	}
+#endif
 	if (!game_state_globals.saved_game_valid && !recover_saved_games_hack)
 	{
 		main_reset_map();
