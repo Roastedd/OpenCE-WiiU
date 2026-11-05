@@ -91,6 +91,11 @@ void tick_overlap_frame_end(void);
 /* a map starts or ends, a game state is loaded: the tick thread is idle (the main loop's flags are handled at the sync point); forget the ring and the
 shadows */
 void tick_overlap_map_reset(void);
+/* the map's decision (smooth_defaults.c): the overlap, the snapshot behind it and the owners' queues made again for the map, from nothing; the tick thread idle */
+void tick_overlap_decide(void);
+void tick_snapshot_decide(void);
+/* the numbers the map summary reads, since the start of the run: frames, overlapped frames, serial frames, falls back to the serial loop, times the clock was held */
+void tick_overlap_summary_counts(unsigned long counts[5]);
 
 /* ---------- what the queues ask (tick_owners.c) */
 

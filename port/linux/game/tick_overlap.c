@@ -11,6 +11,7 @@ The overlap of the game's ticks with its drawing (tick_overlap.h).
 
 #include "cseries/errors.h"
 #include "tick_input.h"
+#include "smooth_defaults.h" /* port: what the cards and the map decide (smooth_defaults.c) */
 #include "tick_perf.h"
 #include "../../wiiu/src/wiiu_perf.h" /* port: the detailed overlay's totals (perf_totals) */
 
@@ -169,8 +170,9 @@ boolean tick_overlap_requested(
 {
 	if (o.requested < 0)
 	{
-		const long overlap = wiiu_study_number("tick_overlap.txt", 0);
-		const long thread = wiiu_study_number("tick_thread.txt", 0);
+		/* (what the cards and the map decide for this map: smooth_defaults.c; before a first map starts, the cards as they have always been read) */
+		const long overlap = smooth_defaults_value(SMOOTH_TICK_OVERLAP);
+		const long thread = smooth_defaults_value(SMOOTH_TICK_THREAD);
 
 		o.requested = overlap > 0 && thread > 0;
 		if (overlap > 0 && thread <= 0)
@@ -584,7 +586,8 @@ boolean tick_overlap_enabled(
 				tick_overlap_listeners_frozen = 1;
 				o.enabled = 1;
 				o.first_ticks = tick_overlap_now();
-				platform_log("tick overlap: on (halo/tick_overlap.txt): the ticks run beside the drawing, the frame drawn from the ring one tick behind the clock");
+				platform_log("tick overlap: on for this map (%s): the ticks run beside the drawing, the frame drawn from the ring one tick behind the clock",
+					smooth_defaults_decided() ? "smooth defaults or halo/tick_overlap.txt" : "halo/tick_overlap.txt");
 				platform_log("tick overlap: the game thread is on core %u, the tick thread on core %u (halo/tick_core.txt, halo/game_core.txt)", wiiu_core_here(), wiiu_tick_thread_core_set());
 				platform_log("tick overlap: the fall back to serial frames when the tick thread is late is %s (halo/tick_overlap_late.txt: %s; a file holding 0 turns it off)",
 					tick_overlap_late_enabled() ? "on" : "OFF", tick_overlap_late_enabled() ? "absent or 1" : "0");
@@ -972,6 +975,60 @@ void tick_overlap_map_reset(
 	game_time_set_view(FALSE, 0, 0, 1.0f);
 	render_interpolation_overlap_set(FALSE, 0);
 	tick_snapshot_unpin();
+}
+
+/* The map's decision (smooth_defaults.c), at a map start with the tick thread idle: the overlap, the snapshot behind it and the owners' queues are made again
+for the map from what the cards and the map say. Nothing of the last map's is kept: the job and its numbers are taken, the views and the pin let go, the
+late state (the clock held, the serial window, the tick thread moved to the game thread's core) forgotten, the listeners unfrozen and the owners' gate
+taken off if the map is not one for the overlap. The thread stays (it is made once, on the first map that wants it) and waits for work. */
+void tick_overlap_decide(
+	void)
+{
+	const boolean was_enabled = o.enabled > 0;
+
+	if (was_enabled)
+		tick_overlap_map_reset();
+	o.late = FALSE;
+	o.slow = FALSE;
+	o.late_until = o.slow_until = 0;
+	o.late_window_start = 0;
+	o.late_window_ticks = 0;
+	o.late_frames = 0;
+	o.late_ahead_sum = o.late_wait_sum = o.late_job_sum = 0;
+	o.late_backoff_seconds = 0;
+	o.late_clean_windows = 0;
+	if (o.late_moved)
+	{
+		wiiu_tick_thread_move(0);
+		o.late_moved = FALSE;
+	}
+	if (was_enabled)
+	{
+		tick_owners_set_threaded(FALSE);
+		tick_overlap_listeners_frozen = 0;
+		o.frame_active = FALSE;
+		o.pair_active = FALSE;
+	}
+	o.requested = -1;
+	o.enabled = -1;
+	o.log_started_ticks = 0;
+	/* (in this order: the owners' mode is the overlap's request, the snapshot's flags are too, and the overlap needs the snapshot) */
+	tick_owners_decide();
+	tick_snapshot_decide();
+	if (tick_overlap_enabled())
+		sound_manager_freeze_listeners();
+}
+
+/* what the map summary (port/wiiu/src/wiiu_map_summary.c) reads: the frames the game thread has drawn, the overlapped and the serial ones among them,
+and the times the tick thread was late (the serial window: a fall back) and the clock was held (the answer before it), all of them since the start of the run */
+void tick_overlap_summary_counts(
+	unsigned long counts[5])
+{
+	counts[0] = o.ov_frames;
+	counts[1] = o.ov_overlapped;
+	counts[2] = o.ov_serial;
+	counts[3] = o.late_trips;
+	counts[4] = o.slow_trips;
 }
 
 void tick_overlap_note_blend(

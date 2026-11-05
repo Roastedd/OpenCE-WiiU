@@ -389,6 +389,7 @@ symbols in this file:
 #include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
 #include "tick_input.h" /* port: port/linux/game/tick_input.c */
 #include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
+#include "smooth_defaults.h" /* port: port/linux/game/smooth_defaults.c */
 #endif
 #include "map_share.h" /* port: port/linux/game/map_share.c */
 #include "profile_sections.h" /* port: port/linux/include/profile_sections.h */
@@ -3476,13 +3477,13 @@ static void main_game_time_update_work(
 static void main_game_time_update(
 	real time_delta_sec)
 {
-	if (main_tick_thread.state < 0)
-	{
-		main_tick_thread.state = 0;
-		if (main_study_setting("HALO_TICK_THREAD", 0) > 0)
-			main_tick_thread.state = tick_overlap_start_thread() ? 1 : 0;
-	}
-	if (!main_tick_thread.state)
+	/* (the ticks on a thread of their own, the serial loop's stage 1: halo/tick_thread.txt for a map the smooth defaults are for, smooth_defaults.h; decided at each map start, so a
+	network game, a split screen game and the main menu run their ticks on the game thread whatever the file holds. The thread is made on the first map that wants it) */
+	const boolean wanted = smooth_defaults_value(SMOOTH_TICK_THREAD) > 0;
+
+	if (wanted && main_tick_thread.state < 0)
+		main_tick_thread.state = tick_overlap_start_thread() ? 1 : 0;
+	if (!wanted || main_tick_thread.state <= 0)
 	{
 		game_time_update(time_delta_sec);
 		return;
@@ -3718,6 +3719,62 @@ static void main_game_render(
 }
 
 #ifdef HALO_WIIU
+/* port: whether the map that has just been loaded is one the smooth defaults are for (smooth_defaults.h): NULL if it is, else why not. Asked at each map start
+(game_initialize_for_new_map), before the map's players exist: the players of a split screen game are counted by the menu's player_spawn_count, not yet by
+local_player_count, which still holds the last map's. The tick thread is idle. The frames of a map that is one are still the serial loop's whenever main_overlap_eligible
+says so (a pause, a cinematic, a save). */
+static char const *main_smooth_defaults_reason_for(
+	boolean map_started)
+{
+	boolean network_game_is_active(void);
+
+	if (main_globals.main_menu_scenario_loaded)
+		return "the main menu's scene";
+	else if (main_globals.connection == _game_connection_film_playback)
+		return "a saved film";
+	else if (main_globals.connection == _game_connection_network_server)
+		return "a hosted network game";
+	else if (main_globals.connection == _game_connection_network_client)
+		return "a joined network game";
+	else if (main_globals.connection != _game_connection_local)
+		return "a network game";
+	else if (network_game_is_active())
+		return "a network session is open (system link or internet)";
+	else if (halo_server_mode())
+		return "a dedicated server";
+	else if (game_in_editor())
+		return "the editor";
+	else if (main_globals.movie)
+		return "a recording";
+	else if (!halo_interpolation_enabled())
+		return "display.interpolation is off: there are no frames between ticks to overlap";
+	else if (player_spawn_count > 1)
+		return "split screen";
+	else if (!map_started && local_player_count() > 1 && game_time_get() >= 3)
+		return "split screen";
+	return NULL;
+}
+
+char const *main_smooth_defaults_reason(
+	void)
+{
+	return main_smooth_defaults_reason_for(TRUE);
+}
+
+/* port: each frame, at the sync point: a map the smooth defaults were switched on for that stops being one (a second local player counted after the map began, a network
+session opened, a film) is decided again, as a map start is: the overlap stops cleanly and the frames are the serial loop's from here */
+static void main_smooth_defaults_recheck(
+	void)
+{
+	void platform_log(char const *format, ...);
+
+	if (smooth_defaults_map_ok() && main_smooth_defaults_reason_for(FALSE))
+	{
+		platform_log("smooth defaults: this map stops being one for them (%s)", main_smooth_defaults_reason_for(FALSE));
+		smooth_defaults_new_map();
+	}
+}
+
 /* port: whether this frame's tick side may be the tick thread's, beside the drawing (tick_overlap.h): a game of this machine alone and one player, in
 the game's own time, with nothing that shows or changes the world in a way the ring of the snapshot cannot follow. Asked by the game thread with the
 tick thread idle. Anything else is the serial loop's frame. */
@@ -3907,6 +3964,7 @@ static boolean main_loop_iteration(
 		/* port: the tick thread's job of the last frame is over before anything else is done with the game state (the map changes, the saves
 		and the rest of this frame's work below): tick_overlap.h */
 		tick_overlap_sync_point();
+		main_smooth_defaults_recheck();
 #endif
 		if (!game_in_editor())
 		{

@@ -17,7 +17,8 @@ decal or a particle that is not drawn is still made and ages as it would. Where 
   (graphics_quality.c, which asks for the step each frame);
 - decals far away or thinned (rasterizer_xbox_decals.c) and particles small or thinned (render_particles.c).
 
-halo/governor.txt (HALO_GOVERNOR on the host; a file whose first word is -1 is the same as no file): a first word on/off/1/0 turns it on or off (display.dynamic_quality otherwise); then, one to a line or
+halo/governor.txt (HALO_GOVERNOR on the host; a file whose first word is -1 or "default" is the same as no file: the default, which is the governor on for a map of one local
+player and no network, smooth_defaults.h): a first word on/off/1/0 turns it on or off (on only for such a map; off for every map; display.dynamic_quality otherwise); then, one to a line or
 separated by semicolons, "name value": target (ms), step (hold this step, for a test: the governor then does not move), max_step, window (ms), down_dwell,
 up_dwell (ms), down_windows, up_windows, up_margin (the share of the target the frame must be under, with the step's saving added), min_render (ms of drawing a frame
 under which the governor does not step down: the frame is the ticks', 4), tick_bound (ms a frame waited for the tick thread, 3, and tick_bound_share, 0.35 of the
@@ -75,7 +76,7 @@ static struct
 {
 	int loaded;
 	unsigned long config_at;
-	int configured_on, card_on, card_off; /* the setting, and the card file's word */
+	int configured_on, card_on, card_off; /* the setting, and the card file's word (neither: the default) */
 	int forced;                         /* the step held (-1: the governor decides) */
 	int max_step, max_step_set, performance_mode;
 	double target_ms, window_ms, down_dwell_ms, up_dwell_ms, up_margin, log_ms, min_render_ms, tick_bound_ms, tick_bound_share, quiet_ms, probe_ms, worst_ms;
@@ -207,7 +208,7 @@ static void settings_parse(char *text)
 	{
 		char word[40];
 
-		if (sscanf(text, "%39s", word) == 1 && !strcmp(word, "-1"))
+		if (sscanf(text, "%39s", word) == 1 && (!strcmp(word, "-1") || !strcmp(word, "default")))
 			return;
 	}
 	for (; item && *item; )
@@ -247,6 +248,7 @@ static void settings_parse(char *text)
 }
 
 static int governor_max_step(void);
+static void governor_publish(void);
 
 static void settings_load(void)
 {
@@ -262,13 +264,22 @@ static void settings_load(void)
 	settings.configured_on = config_boolean("display.dynamic_quality") != 0;
 	settings.performance_mode = config_string("display.graphics_mode") && !strcmp(config_string("display.graphics_mode"), "performance");
 	settings.loaded = 1;
-	if (settings.card_on || settings.configured_on)
-	{
-		platform_log("governor: on (%s), target %.1f ms, steps 0 to %d, window %.0f ms, dwell %.0f down %.0f up", settings.card_on ? "halo/governor.txt" :
-			"display.dynamic_quality", settings.target_ms, governor_max_step(), settings.window_ms, settings.down_dwell_ms, settings.up_dwell_ms);
-		if (settings.forced >= 0)
-			platform_log("governor: held at step %d by halo/governor.txt (a test)", settings.forced);
-	}
+}
+
+/* what the smooth defaults decided for this map (smooth_defaults.c, render_governor_decide): -1 nothing decided yet (an explicit "on" is the governor on, as it has always been), else
+0 or 1 for the map, the card file's word and the map's kind taken into account */
+static int smooth_on = -1;
+/* the log's line for the map has been said */
+static int on_said;
+
+static void governor_say_on(void)
+{
+	on_said = 1;
+	platform_log("governor: on (%s), target %.1f ms, steps 0 to %d, window %.0f ms, dwell %.0f down %.0f up",
+		smooth_on == 1 ? (settings.card_on ? "halo/governor.txt, this map is one for it" : "the smooth defaults") : settings.card_on ? "halo/governor.txt" : "display.dynamic_quality",
+		settings.target_ms, governor_max_step(), settings.window_ms, settings.down_dwell_ms, settings.up_dwell_ms);
+	if (settings.forced >= 0)
+		platform_log("governor: held at step %d by halo/governor.txt (a test)", settings.forced);
 }
 
 static int governor_on(void)
@@ -286,7 +297,40 @@ static int governor_on(void)
 		if (was != settings.configured_on)
 			platform_log("governor: display.dynamic_quality is now %s", settings.configured_on ? "on" : "off");
 	}
-	return settings.card_off ? 0 : (settings.card_on || settings.configured_on);
+	{
+		/* (the card file's off is off, whatever the map; its on and the default are on for a map the smooth defaults are for; display.dynamic_quality is the player's own) */
+		const int on = settings.card_off ? 0 : ((smooth_on < 0 ? settings.card_on : smooth_on) || settings.configured_on);
+
+		if (on && !on_said)
+			governor_say_on();
+		return on;
+	}
+}
+
+/* halo/governor.txt's word for smooth_defaults.c: SMOOTH_CARD_DEFAULT (-1) if the file is absent or has no word for it, 0 off, 1 on */
+long render_governor_card(void)
+{
+	if (!settings.loaded)
+		settings_load();
+	return settings.card_off ? 0 : settings.card_on ? 1 : -1;
+}
+
+/* The map's decision (smooth_defaults.c), at a map start: on is the governor's switch for the map (0 or 1). A step reached in the last map is forgotten with the
+rest (render_governor_new_map, which game.c calls first). */
+void render_governor_decide(
+	int map_ok,
+	int on)
+{
+	const int was = smooth_on == 1;
+
+	(void)map_ok;
+	if (!settings.loaded)
+		settings_load();
+	smooth_on = on != 0;
+	on_said = 0;
+	if (was && !smooth_on)
+		platform_log("governor: off for this map");
+	governor_publish();
 }
 
 int render_governor_active(void)
@@ -301,6 +345,14 @@ int render_governor_step(void)
 
 /* the values the drawing reads, one pointer (the drawing asks for it for every object, decal and particle): the step's, set whenever the step or the switch changes */
 static struct render_governor_values const *published;
+
+/* the frames drawn at each step while the governor was on, since the start of the run (the map summary, wiiu_map_summary.c, takes the differences) */
+static unsigned long step_frames[STEPS];
+
+void render_governor_step_frames(unsigned long frames[RENDER_GOVERNOR_STEPS])
+{
+	memcpy(frames, step_frames, sizeof(step_frames));
+}
 
 /* the detailed overlay's field (wiiu_gx2.c): the step and the deepest step, -1 when the governor is off */
 void wiiu_overlay_governor(int step, int max_step);
@@ -426,6 +478,8 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 		return;
 	}
 	governor_publish();
+	/* (the map summary's: a frame at the step it was drawn at) */
+	step_frames[governor.step >= 0 && governor.step < STEPS ? governor.step : 0]++;
 	if (!governor.up_backoff)
 		governor.up_backoff = 1;
 	if (governor.step > governor_max_step() && settings.forced < 0)
@@ -578,6 +632,22 @@ float render_governor_lod_scale(void)
 
 void render_governor_new_map(void)
 {
+}
+
+void render_governor_step_frames(unsigned long frames[RENDER_GOVERNOR_STEPS])
+{
+	memset(frames, 0, sizeof(unsigned long) * RENDER_GOVERNOR_STEPS);
+}
+
+long render_governor_card(void)
+{
+	return -1;
+}
+
+void render_governor_decide(int map_ok, int on)
+{
+	(void)map_ok;
+	(void)on;
 }
 
 void render_governor_frame(double work_ms, double tick_ms, double render_ms, double now_ms)

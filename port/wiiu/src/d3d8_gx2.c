@@ -26,6 +26,7 @@ and presenting go there; a draw and a visibility test do nothing yet.
 #include "posix.h"
 #include "dk_commands.h"
 #include "wiiu_immediate.h"
+#include "wiiu_map_summary.h"
 #include "wiiu_inflight.h"
 #include "wiiu_indices.h"
 #include "wiiu_pending_reads.h"
@@ -4412,6 +4413,9 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 	}
 	profile.present_ms += present;
 	profile.work_ms += work;
+	/* the map summary (wiiu_map_summary.h): the time between this present and the one before */
+	if (work > 0.0)
+		wiiu_map_summary_frame(work + present);
 	/* a frame whose work took more than two refreshes: where it went (the draws, waiting for the GX2 thread, for a stream slot, for the renderer to be idle, the card's files;
 	the rest is the game's: the checkpoints' writes, a menu's changes). The note is kept under the log's 230 characters. */
 	{

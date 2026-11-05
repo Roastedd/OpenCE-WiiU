@@ -63,6 +63,8 @@ enum { RENDER_GOVERNOR_BUDGET_DECALS, RENDER_GOVERNOR_BUDGET_PARTICLES };
 
 /* a map has started (game_initialize_for_new_map): the picture is the full one and the governor decides nothing for the first seconds (a cold start loads shaders and textures) */
 void render_governor_new_map(void);
+/* the frames drawn at each step while the governor was on, since the start of the run (the map summary) */
+void render_governor_step_frames(unsigned long frames[RENDER_GOVERNOR_STEPS]);
 
 /* the governor is on, and the step it holds (0 when it is off) */
 int render_governor_active(void);

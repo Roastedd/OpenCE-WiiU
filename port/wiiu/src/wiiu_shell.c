@@ -28,6 +28,8 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 #include "wiiu_missing_keys.h"
 #include "wiiu_shell_watch.h"
 #include "wiiu_update.h"
+#include "wiiu_map_summary.h"
+#include "../../linux/game/smooth_defaults.h" /* the cards and the map (smooth_defaults.c): whether the ticks run beside the drawing */
 
 #include <coreinit/core.h>
 #include <sysapp/launch.h>
@@ -447,6 +449,8 @@ void wiiu_request_exit(void)
 	if (asked)
 		return;
 	asked = 1;
+	/* the map that was playing says how it went (wiiu_map_summary.h) */
+	wiiu_map_summary_end();
 	/* the missing shaders' records are written only outside gameplay (wiiu_missing_keys.c), and once the Menu is asked for the app is in
 	the background, where the close does not write them: the quit, which is not gameplay, gives them up to five seconds first (64 records
 	took several on the console's SD card: a scan of the folder, then a file per 8 records, each flushed). As "always", a gameplay flag the
@@ -576,7 +580,8 @@ int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes)
 		/* (no file: core 2 when the ticks run beside the drawing and the game thread is not on it - core 0 has the audio mixer and the system's threads, and its L2 was 3 times as slow in
 		a heavy scene on 2026-11-03; core 2 has the GX2 thread, which sleeps between looks then - else core 0, as before) */
 		const long set = card_number("tick_core.txt", -1);
-		const int overlap = card_number("tick_overlap.txt", 0) > 0;
+		/* (the overlap as the cards and the map have it for the map that wants the thread: smooth_defaults.h) */
+		const int overlap = smooth_defaults_value(SMOOTH_TICK_OVERLAP) > 0;
 
 		tick_core = set >= 0 && set <= 2 ? (unsigned)set : (set < 0 && overlap && OSGetCoreId() != 2) ? 2u : 0u;
 		tick_core_now = tick_core;
@@ -587,7 +592,7 @@ int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes)
 		gx2_sleep_us = card_number("gx2_idle_sleep.txt", 0);
 		tick_quantum_us = card_number("tick_quantum.txt", -1);
 		wiiu_log("The tick thread is made on core %u (halo/tick_core.txt: 0, 1 or 2%s), the game thread is on core %u (halo/game_core.txt), the GX2 thread on core %d%s", tick_core,
-			set < 0 ? "; absent: 2 with the overlap on, else 0" : "", (unsigned)OSGetCoreId(), gx2_core,
+			set < 0 ? "; absent: 2 with the overlap on (the default for one local player), else 0" : "", (unsigned)OSGetCoreId(), gx2_core,
 			tick_core == (unsigned)OSGetCoreId() ? ": the tick thread is on the game thread's core, and the two cannot run beside each other" : "");
 	}
 	if (!OSCreateThread(&tick_thread, tick_thread_main, 0, NULL, tick_thread_stack + stack_bytes, stack_bytes, main_priority, core_attribute(tick_core)))

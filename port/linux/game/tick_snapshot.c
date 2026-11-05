@@ -82,6 +82,7 @@ port/wiiu/src/wiiu_tick_snapshot_timers.c, on the console, the milliseconds a fr
 
 #include "tick_owners.h"
 #include "tick_overlap.h"
+#include "smooth_defaults.h" /* port: what the cards and the map decide (smooth_defaults.c) */
 #include "tick_perf.h"
 #include "tick_ring.h"
 
@@ -375,18 +376,22 @@ volatile unsigned char tick_snapshot_in_scope[HALO_PORT_MAXIMUM_OBJECTS_PER_MAP]
 
 /* ---------- the switch */
 
-static int tick_snapshot_mode(void)
+/* the card's word for the snapshot, raw: halo/tick_snapshot.txt (HALO_TICK_SNAPSHOT on the host), -1 if there is none or it is negative (the default: smooth_defaults.h), 0 off, else the
+bits. Read once. */
+long tick_snapshot_card(void)
 {
-	if (s.mode < 0)
+	static long card = -2;
+
+	if (card == -2)
 	{
 		char const *environment = getenv("HALO_TICK_SNAPSHOT");
-		long value = 0;
+		long value = -1;
 
 		if (environment && *environment)
 		{
 			value = strtol(environment, NULL, 0);
 			if (value < 0)
-				value = 0;
+				value = -1;
 		}
 		else
 		{
@@ -395,10 +400,24 @@ static int tick_snapshot_mode(void)
 			if (file)
 			{
 				if (fscanf(file, "%li", &value) != 1 || value < 0)
-					value = 0; /* (-1: as no file) */
+					value = -1; /* (-1: as no file) */
 				fclose(file);
 			}
 		}
+		card = value;
+	}
+	return card;
+}
+
+static int tick_snapshot_mode(void)
+{
+	if (s.mode < 0)
+	{
+		/* (what the cards and the map decide for this map: smooth_defaults.c; before a first map starts, the card as it has always been read) */
+		long value = smooth_defaults_value(SMOOTH_TICK_SNAPSHOT);
+
+		if (value < 0)
+			value = 0;
 		s.mode = (int)value;
 		/* the overlap copies every object at every capture and has no lazy copy (tick_overlap.h) */
 		s.overlap_requested = (s.mode & MODE_ON) != 0 && tick_overlap_requested();
@@ -414,8 +433,10 @@ static int tick_snapshot_mode(void)
 			memset((void *)tick_snapshot_dirty, 0, sizeof(tick_snapshot_dirty));
 			tick_snapshot_dirty_tracking = 1;
 		}
+		else
+			tick_snapshot_dirty_tracking = 0;
 		if (s.mode)
-			platform_log("tick snapshot: on, mode %d (halo/tick_snapshot.txt)%s", s.mode, s.overlap_requested && !(s.mode & MODE_ALL) ? ", every object copied (the overlap)" : "");
+			platform_log("tick snapshot: on, mode %d (halo/tick_snapshot.txt or the smooth defaults)%s", s.mode, s.overlap_requested && !(s.mode & MODE_ALL) ? ", every object copied (the overlap)" : "");
 	}
 	return s.mode;
 }
@@ -423,6 +444,20 @@ static int tick_snapshot_mode(void)
 int tick_snapshot_enabled(void)
 {
 	return tick_snapshot_mode() & MODE_ON;
+}
+
+/* The map's decision (smooth_defaults.c, tick_overlap_decide), at a map start with the tick thread idle: the ring, the versions and the marks are forgotten and the mode
+is read again, as the cards and the map decide it: the copies of one map never meet the next map's frames, and a map that is not one for the snapshot has the game read
+its own state, with no mark kept by the accessors. */
+void tick_snapshot_decide(void)
+{
+	const int before = s.mode;
+
+	tick_snapshot_reset();
+	s.mode = -1;
+	tick_snapshot_mode();
+	if (before >= 0 && before != s.mode && !s.mode)
+		platform_log("tick snapshot: off for this map");
 }
 
 long tick_snapshot_none(void)
