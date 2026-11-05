@@ -45,6 +45,32 @@ enum smooth_switch
 #define SMOOTH_CARD_DEFAULT (-1L)
 #define SMOOTH_CARD_OFF (0L)
 
+/* What the game says of a map (main.c fills it): the rule that says whether the smooth settings are for it is pure (smooth_defaults_reason) */
+struct smooth_defaults_map
+{
+	int main_menu;          /* the main menu's scene is loaded */
+	int connection;         /* SMOOTH_CONNECTION_*: the game's connection */
+	int network_session;    /* a network game object exists (a lobby or a game, system link or internet) */
+	int dedicated_server;
+	int editor;
+	int recording;          /* a movie is being recorded */
+	int interpolation;      /* display.interpolation is on */
+	int spawn_players;      /* the menu's player_spawn_count: the local players the game starts with (1, or 2 or more for split screen) */
+	int local_players;      /* local_player_count, once the map has run a few ticks (0 until then: at a map start it still holds the last map's) */
+};
+
+enum
+{
+	SMOOTH_CONNECTION_LOCAL,
+	SMOOTH_CONNECTION_SERVER,
+	SMOOTH_CONNECTION_CLIENT,
+	SMOOTH_CONNECTION_FILM,
+	SMOOTH_CONNECTION_OTHER
+};
+
+/* NULL for a map the smooth settings are for (exactly one local player, no network of any kind, no film, no split screen), else why not, in words for the log */
+char const *smooth_defaults_reason(struct smooth_defaults_map const *map);
+
 struct smooth_defaults
 {
 	/* what the cards say (SMOOTH_CARD_*: for the governor 1 is on) */

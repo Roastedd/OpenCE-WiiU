@@ -3724,35 +3724,24 @@ static void main_game_render(
 local_player_count, which still holds the last map's. The tick thread is idle. The frames of a map that is one are still the serial loop's whenever main_overlap_eligible
 says so (a pause, a cinematic, a save). */
 static char const *main_smooth_defaults_reason_for(
-	boolean map_started)
+	boolean at_map_start)
 {
 	boolean network_game_is_active(void);
+	struct smooth_defaults_map map;
 
-	if (main_globals.main_menu_scenario_loaded)
-		return "the main menu's scene";
-	else if (main_globals.connection == _game_connection_film_playback)
-		return "a saved film";
-	else if (main_globals.connection == _game_connection_network_server)
-		return "a hosted network game";
-	else if (main_globals.connection == _game_connection_network_client)
-		return "a joined network game";
-	else if (main_globals.connection != _game_connection_local)
-		return "a network game";
-	else if (network_game_is_active())
-		return "a network session is open (system link or internet)";
-	else if (halo_server_mode())
-		return "a dedicated server";
-	else if (game_in_editor())
-		return "the editor";
-	else if (main_globals.movie)
-		return "a recording";
-	else if (!halo_interpolation_enabled())
-		return "display.interpolation is off: there are no frames between ticks to overlap";
-	else if (player_spawn_count > 1)
-		return "split screen";
-	else if (!map_started && local_player_count() > 1 && game_time_get() >= 3)
-		return "split screen";
-	return NULL;
+	map.main_menu = main_globals.main_menu_scenario_loaded != 0;
+	map.connection = main_globals.connection == _game_connection_local ? SMOOTH_CONNECTION_LOCAL :
+		main_globals.connection == _game_connection_network_server ? SMOOTH_CONNECTION_SERVER :
+		main_globals.connection == _game_connection_network_client ? SMOOTH_CONNECTION_CLIENT :
+		main_globals.connection == _game_connection_film_playback ? SMOOTH_CONNECTION_FILM : SMOOTH_CONNECTION_OTHER;
+	map.network_session = network_game_is_active() != 0;
+	map.dedicated_server = halo_server_mode() != 0;
+	map.editor = game_in_editor() != 0;
+	map.recording = main_globals.movie != 0;
+	map.interpolation = halo_interpolation_enabled() != 0;
+	map.spawn_players = player_spawn_count;
+	map.local_players = !at_map_start && game_time_get() >= 3 ? local_player_count() : 0;
+	return smooth_defaults_reason(&map);
 }
 
 char const *main_smooth_defaults_reason(

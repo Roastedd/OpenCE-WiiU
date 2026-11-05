@@ -80,6 +80,35 @@ void smooth_defaults_resolve(struct smooth_defaults *out, long const card[NUMBER
 	resolve_one(out, SMOOTH_GOVERNOR, reason, 0, 1, 1);
 }
 
+/* ---------- the map */
+
+char const *smooth_defaults_reason(struct smooth_defaults_map const *map)
+{
+	if (map->main_menu)
+		return "the main menu's scene";
+	if (map->connection == SMOOTH_CONNECTION_FILM)
+		return "a saved film";
+	if (map->connection == SMOOTH_CONNECTION_SERVER)
+		return "a hosted network game";
+	if (map->connection == SMOOTH_CONNECTION_CLIENT)
+		return "a joined network game";
+	if (map->connection != SMOOTH_CONNECTION_LOCAL)
+		return "a network game";
+	if (map->network_session)
+		return "a network session is open (system link or internet)";
+	if (map->dedicated_server)
+		return "a dedicated server";
+	if (map->editor)
+		return "the editor";
+	if (map->recording)
+		return "a recording";
+	if (!map->interpolation)
+		return "display.interpolation is off: there are no frames between ticks to overlap";
+	if (map->spawn_players > 1 || map->local_players > 1)
+		return "split screen";
+	return NULL;
+}
+
 /* ---------- the cards */
 
 void smooth_defaults_read_cards(long card[NUMBER_OF_SMOOTH_SWITCHES])
