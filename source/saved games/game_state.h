@@ -43,6 +43,16 @@ boolean game_state_port_saved_game_valid(
 	void);
 void game_state_port_restamp_revert_time(
 	void);
+#ifdef HALO_WIIU
+/* port: the checkpoint's write on a thread of its own (game_state_xbox.c): waits for it to end, whether its file is lost, and (the shell's, at the close) whether
+no write is running after at most the time given */
+void game_state_port_wait_for_save(
+	const char *why);
+boolean game_state_port_save_lost(
+	void);
+int game_state_port_save_wait(
+	unsigned long timeout_ms);
+#endif
 void game_state_save_to_persistent_storage(
 	void);
 boolean game_state_test_persistent_storage(
