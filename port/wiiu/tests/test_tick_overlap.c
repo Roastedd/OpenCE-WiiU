@@ -80,6 +80,16 @@ int tick_snapshot_enabled(void)
 	return 1;
 }
 
+/* the smooth defaults' (smooth_defaults.c): what the map gets of the switches; the test turns the map into one that is not */
+static long smooth_stub_value = 1;
+long smooth_defaults_value(enum smooth_switch which)
+{
+	(void)which;
+	return smooth_stub_value;
+}
+int smooth_defaults_decided(void) { return 1; }
+void tick_snapshot_decide(void) {}
+
 int halo_interpolation_enabled(void)
 {
 	return 1;
@@ -340,8 +350,9 @@ static void test_frames(long frames)
 		applied_at_sync = game_applied_count;
 		if (frame == frames / 2)
 		{
-			/* a map ends and another starts: the tick thread idle, everything forgotten */
-			tick_overlap_map_reset();
+			/* a map ends and another starts, and the smooth defaults are decided again for it: the tick thread idle, everything forgotten */
+			tick_overlap_decide();
+			CHECK(tick_overlap_enabled());
 			tick_ring_reset(&ring, SLOTS);
 			world_time = 0;
 		}
@@ -459,12 +470,67 @@ static void test_frames(long frames)
 	CHECK(tick_requests_applied > frames);
 }
 
+/* the overlap stops cleanly for a map that is not one for it, and starts again for the next */
+static void test_decisions(void)
+{
+	long frame;
+
+	game_thread = pthread_self();
+	tick_overlap_note_render_thread();
+	tick_ring_reset(&ring, SLOTS);
+	setenv("HALO_TICK_OWNERS", "2", 1);
+	smooth_stub_value = 1;
+	tick_overlap_decide();
+	CHECK(tick_overlap_enabled() && tick_owners_threaded() && tick_overlap_listeners_frozen);
+	for (frame = 0; frame < 300; frame++)
+	{
+		tick_overlap_sync_point();
+		eligible = 1;
+		tick_overlap_post_frame(0.033f);
+		if (tick_overlap_frame_active())
+			tick_overlap_draw_done();
+		tick_overlap_frame_end();
+	}
+	/* a hosted game: off, with a job possibly in flight */
+	smooth_stub_value = 0;
+	tick_overlap_decide();
+	CHECK(!tick_overlap_enabled() && !tick_owners_threaded() && !tick_overlap_listeners_frozen);
+	CHECK(!tick_overlap_job_in_flight() && !tick_overlap_frame_active());
+	for (frame = 0; frame < 100; frame++)
+	{
+		tick_overlap_sync_point();
+		CHECK(!tick_overlap_post_frame(0.033f));
+		CHECK(!tick_overlap_frame_active());
+		tick_overlap_frame_end();
+	}
+	/* and a level of one player again */
+	smooth_stub_value = 1;
+	world_time = 0;
+	tick_ring_reset(&ring, SLOTS);
+	tick_overlap_decide();
+	CHECK(tick_overlap_enabled() && tick_owners_threaded() && tick_overlap_listeners_frozen);
+	for (frame = 0; frame < 300; frame++)
+	{
+		tick_overlap_sync_point();
+		eligible = 1;
+		tick_overlap_post_frame(0.033f);
+		if (tick_overlap_frame_active())
+			tick_overlap_draw_done();
+		tick_overlap_frame_end();
+	}
+	tick_overlap_sync_point();
+	tick_overlap_decide();
+	CHECK(!tick_overlap_job_in_flight());
+}
+
 int main(int count, char **arguments)
 {
 	const char *which = count > 1 ? arguments[1] : "frames";
 
 	if (!strcmp(which, "frames"))
 		test_frames(3000);
+	else if (!strcmp(which, "decisions"))
+		test_decisions();
 	else if (!strcmp(which, "small"))
 	{
 		small_queues = 1;

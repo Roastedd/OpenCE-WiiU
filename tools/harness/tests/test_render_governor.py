@@ -90,9 +90,89 @@ static void run(double seconds, double base, double jitter)
 	}
 }
 
+/* smooth_defaults.c's calls (a map start decides) */
+long render_governor_card(void);
+void render_governor_decide(int map_ok, int on);
+
 int main(int argc, char **argv)
 {
 	const char *scenario = argc > 1 ? argv[1] : "";
+
+	if (!strncmp(scenario, "smooth_", 7))
+	{
+		unsigned long frames[RENDER_GOVERNOR_STEPS];
+		int deep;
+
+		if (!strcmp(scenario, "smooth_default"))
+		{
+			/* no card file and no setting: the card's word is "default" (-1), and a map decided to be one for the smooth defaults has the governor on */
+			printf("RESULT card %ld\n", render_governor_card());
+			run(5, 40, 0);
+			printf("RESULT before_decision %d\n", render_governor_active());
+			render_governor_decide(1, 1);
+			run(40, 32, 0);
+			printf("RESULT on %d step %d\n", render_governor_active(), render_governor_step());
+			/* the next map is a hosted game: off, the picture whole at once */
+			render_governor_decide(0, 0);
+			run(2, 32, 0);
+			printf("RESULT hosted_active %d hosted_step %d\n", render_governor_active(), render_governor_step());
+			/* and a level of one player again: on, from the full picture */
+			render_governor_new_map();
+			render_governor_decide(1, 1);
+			run(1, 32, 0);
+			printf("RESULT again_active %d\n", render_governor_active());
+		}
+		else if (!strcmp(scenario, "smooth_card_on"))
+		{
+			/* the card file says on: on for the map that is one, off for the map that is not */
+			settings_text = "on";
+			printf("RESULT card %ld\n", render_governor_card());
+			render_governor_decide(1, 1);
+			run(40, 32, 0);
+			printf("RESULT map_on %d on_step %d\n", render_governor_active(), render_governor_step());
+			render_governor_decide(0, 0);
+			run(2, 32, 0);
+			printf("RESULT map_off %d off_step %d\n", render_governor_active(), render_governor_step());
+		}
+		else if (!strcmp(scenario, "smooth_card_off"))
+		{
+			/* the card file says off: off for every map, and display.dynamic_quality does not turn it on against the file */
+			settings_text = "off";
+			config_on = 1;
+			printf("RESULT card %ld\n", render_governor_card());
+			render_governor_decide(1, 0);
+			run(40, 32, 0);
+			printf("RESULT active %d step %d\n", render_governor_active(), render_governor_step());
+		}
+		else if (!strcmp(scenario, "smooth_default_word"))
+		{
+			/* a file whose first word is "default" or -1 is no file, whatever else it holds */
+			settings_text = "default";
+			printf("RESULT word_default %ld\n", render_governor_card());
+		}
+		else if (!strcmp(scenario, "smooth_minus_one"))
+		{
+			settings_text = "-1";
+			printf("RESULT word_minus_one %ld\n", render_governor_card());
+		}
+		else if (!strcmp(scenario, "smooth_config"))
+		{
+			/* display.dynamic_quality is the player's own setting: on for every map, the smooth defaults' map or not */
+			config_on = 1;
+			render_governor_decide(0, 0);
+			run(40, 32, 0);
+			printf("RESULT active %d step %d\n", render_governor_active(), render_governor_step());
+		}
+		else if (!strcmp(scenario, "smooth_steps"))
+		{
+			render_governor_decide(1, 1);
+			run(40, 32, 0);
+			render_governor_step_frames(frames);
+			for (deep = 0; deep < RENDER_GOVERNOR_STEPS; deep++)
+				printf("RESULT s%d %lu\n", deep, frames[deep]);
+		}
+		return 0;
+	}
 
 	if (!strcmp(scenario, "off"))
 	{
@@ -521,3 +601,41 @@ def test_negative_controls(tmp_path, fault):
         downs = [t for t in transitions if t[2] > t[1] and t[0] > ups[0][0]]
         later = [t for t in ups if t[0] > downs[0][0]]
         assert later[0][0] - downs[0][0] < 16000
+
+
+def test_a_map_the_smooth_defaults_are_for_has_the_governor_on_without_a_card_file(tmp_path):
+    transitions, results, logs = run_scenario(tmp_path, "smooth_default")
+    assert results["card"] == -1 and results["before_decision"] == 0
+    assert results["on"] == 1 and results["step"] == 3
+    assert any("governor: on (the smooth defaults)" in line for line in logs)
+    # (a hosted game: the picture whole at once; the next level of one player starts from the full picture again)
+    assert results["hosted_active"] == 0 and results["hosted_step"] == 0 and results["again_active"] == 1
+    assert any("governor: off for this map" in line for line in logs)
+
+
+def test_a_card_file_that_says_on_is_on_for_the_maps_that_are_one_and_no_other(tmp_path):
+    _, results, logs = run_scenario(tmp_path, "smooth_card_on")
+    assert results["card"] == 1 and results["map_on"] == 1 and results["on_step"] >= 1
+    assert results["map_off"] == 0 and results["off_step"] == 0
+    assert any("halo/governor.txt" in line for line in logs)
+
+
+def test_a_card_file_that_says_off_is_off_for_every_map_and_over_the_setting(tmp_path):
+    _, results, _ = run_scenario(tmp_path, "smooth_card_off")
+    assert results["card"] == 0 and results["active"] == 0 and results["step"] == 0
+
+
+def test_a_first_word_of_default_or_minus_one_is_no_file(tmp_path):
+    assert run_scenario(tmp_path, "smooth_default_word")[1]["word_default"] == -1
+    assert run_scenario(tmp_path, "smooth_minus_one")[1]["word_minus_one"] == -1
+
+
+def test_the_graphics_setting_is_the_players_own_and_holds_in_every_map(tmp_path):
+    _, results, _ = run_scenario(tmp_path, "smooth_config")
+    assert results["active"] == 1 and results["step"] >= 1
+
+
+def test_the_map_summary_gets_the_frames_at_each_step(tmp_path):
+    _, results, _ = run_scenario(tmp_path, "smooth_steps")
+    frames = [results[f"s{step}"] for step in range(8)]
+    assert sum(frames) > 1000 and frames[0] > 0 and frames[3] > frames[0] and frames[4:] == [0] * 4

@@ -157,7 +157,7 @@ def build(name: str = "here", rev: str = None, mutations=(), poison: bool = Fals
     return program
 
 
-def start(program: Path, run: str, ticks: int, trace: str = None, detail: str = None, random: bool = False, mode: str = "host"):
+def start(program: Path, run: str, ticks: int, trace: str = None, detail: str = None, random: bool = False, mode: str = "host", extra: dict = None):
     """a run of the program to the frame of the game at tick ticks, in build/game-digest/runs/RUN, started; (its process, its folder)"""
     folder = DIGEST / "runs" / run
     shutil.rmtree(folder, ignore_errors=True)
@@ -177,6 +177,8 @@ def start(program: Path, run: str, ticks: int, trace: str = None, detail: str = 
     for setting in filter(None, os.environ.get("GAME_DIGEST_ENV", "").split(",")):
         key, _, value = setting.partition("=")
         environment[key] = value
+    # (a run's own settings, over the rest: PLAIN is the build with none of the smooth defaults, whatever the map)
+    environment.update(extra or {})
     command = ["docker", "run", "--rm", "--network", "none", "--ulimit", "core=0", "-v", f"{program}:/program:ro", "-v", f"{folder / 'data'}:/data",
                "-v", f"{folder / 'out'}:/out", "-v", f"{maps_folder()}:/data/maps:ro", "-w", "/data"]
     for key, value in environment.items():
@@ -187,6 +189,11 @@ def start(program: Path, run: str, ticks: int, trace: str = None, detail: str = 
     process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=stderr)
     stderr.close()
     return process, folder / "out"
+
+
+# (the smooth defaults, port/linux/game/smooth_defaults.h, are on for a one-player map with no card file: a run of the loop without them says each card file 0)
+PLAIN = {"HALO_TICK_THREAD": "0", "HALO_TICK_OVERLAP": "0", "HALO_TICK_SNAPSHOT": "0", "HALO_GOVERNOR": "off"}
+EXPLICIT = {"HALO_TICK_THREAD": "1", "HALO_TICK_OVERLAP": "1", "HALO_TICK_SNAPSHOT": "1"}
 
 
 def finish(process, out: Path) -> dict:
@@ -331,28 +338,24 @@ class LevelsTest(unittest.TestCase):
         program = build(os.environ.get("GAME_DIGEST_LEVELS_NAME", "here"))
         default_ticks = int(os.environ.get("GAME_DIGEST_LEVELS_TICKS", "400"))
         only = [name for name in os.environ.get("GAME_DIGEST_LEVELS_ONLY", "").split(",") if name] or list(LEVELS)
-        overlap = {"HALO_TICK_THREAD": "1", "HALO_TICK_OVERLAP": "1", "HALO_TICK_SNAPSHOT": "1"}
+        # the variant: "default" (no card file: the smooth defaults decide, as a player with no card file gets them), or "explicit" (the three tick files at 1, as the owner's card has them)
+        variant = os.environ.get("GAME_DIGEST_LEVELS_VARIANT", "default")
         for level in only:
             # (b30 opens with a cinematic of about 1,070 ticks, serial frames: its first overlapped frames are past it)
             ticks = max(default_ticks, 1150) if level == "b30" else default_ticks
             with self.subTest(level=level):
-                plain = start(program, f"levels-{level}-plain", ticks, mode="solo-" + level)
-                saved = {key: os.environ.get(key) for key in overlap}
-                os.environ.update(overlap)
-                try:
-                    overlapped = start(program, f"levels-{level}-overlap", ticks, mode="solo-" + level)
-                finally:
-                    for key, value in saved.items():
-                        if value is None:
-                            os.environ.pop(key, None)
-                        else:
-                            os.environ[key] = value
+                plain = start(program, f"levels-{level}-plain", ticks, mode="solo-" + level, extra=PLAIN)
+                overlapped = start(program, f"levels-{level}-{variant}", ticks, mode="solo-" + level, extra=EXPLICIT if variant == "explicit" else None)
                 finish(*plain)
                 finish(*overlapped)
                 a, b = tick_lines(plain[1]), tick_lines(overlapped[1])
                 self.assertGreater(len(a), ticks // 2, f"{level}: the plain loop played {len(a)} ticks")
                 count = min(len(a), len(b))
                 self.assertEqual(a[:count], b[:count], f"{level}: the overlapped game's ticks differ from the plain loop's")
+                log = (overlapped[1] / "stderr.txt").read_text(errors="replace")
+                self.assertIn("smooth defaults: ON for this map", log, f"{level}: the map was not decided to be one for the smooth defaults")
+                self.assertIn("tick overlap: on for this map", log, f"{level}: the overlap was not started")
+                self.assertIn("overlapped frames from here", log, f"{level}: no frame was overlapped")
 
 
 def main() -> int:
