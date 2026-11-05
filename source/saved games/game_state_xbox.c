@@ -886,7 +886,7 @@ static unsigned long game_state_async_crc(
 /* halo/async_save_fault.txt (a test's: the host runs and a console run with the owner's card snapshotted): 1 makes the writer thread's write of every second
 checkpoint fail after its first piece (the game thread then writes it again, from the copy), 2 makes that second write fail too (the checkpoint is lost, and a
 revert starts the map over), 3 makes every write take 800 ms more (a slow card: the revert, the next checkpoint, the load of the next map and the end of the game then
-find a write still running), 4 makes it 4 s more, 5 makes it 3 s more and the time every wait for a write is given 0.5 s (a card that does not answer: the end of the game,
+find a write still running), 4 makes it 4 s more, 5 makes it 9 s more and the time every wait for a write is given 0.5 s (a card that does not answer: the end of the game,
 a revert and the next checkpoint then give up on the write, which the log says); 0 or absent: none. */
 static long game_state_async_fault(
 	void)
@@ -899,7 +899,7 @@ static long game_state_async_fault(
 		if (fault>0)
 		{
 			platform_log("checkpoint: FAULTS are made on purpose (halo/async_save_fault.txt %ld): %s", fault,
-				fault==3 ? "every write takes 800 ms more" : fault==4 ? "every write takes 4 s more" : fault>4 ? "every write takes 3 s more, and a wait for it gives up after 0.5 s" : fault==2 ? "every second checkpoint's write fails, and so does its second try" : "every second checkpoint's write fails");
+				fault==3 ? "every write takes 800 ms more" : fault==4 ? "every write takes 4 s more" : fault>4 ? "every write takes 9 s more, and a wait for it gives up after 0.5 s" : fault==2 ? "every second checkpoint's write fails, and so does its second try" : "every second checkpoint's write fails");
 		}
 	}
 
@@ -977,7 +977,7 @@ static void game_state_async_write(
 	note[0] = 0;
 	if (game_state_async_fault()>=3)
 	{
-		Sleep(game_state_async_fault()==3 ? 800 : game_state_async_fault()==4 ? 4000 : 3000);
+		Sleep(game_state_async_fault()==3 ? 800 : game_state_async_fault()==4 ? 4000 : 9000);
 	}
 	if (game_state_async_fault() && game_state_async_fault()<3 && (game_state_async.number&1)==0)
 	{
