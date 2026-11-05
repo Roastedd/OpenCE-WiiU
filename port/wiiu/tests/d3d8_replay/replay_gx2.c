@@ -12,6 +12,8 @@ The decals' expansion is wiiu_gx2.c's own (decals_expand, taken from the source 
 */
 
 #include "replay.h"
+#include "dk_shaders.h"
+#include "shader_key_wire.h"
 
 #include <stdarg.h>
 #include <stddef.h>
@@ -21,6 +23,8 @@ The decals' expansion is wiiu_gx2.c's own (decals_expand, taken from the source 
 #include "replay_decals.inc"
 
 #define COMPOSITE_LIMIT 32
+
+static void keys_note(const struct nv2a_pixel_shader_key *pixel);
 
 static struct
 {
@@ -216,6 +220,7 @@ static void draw(const struct dk_command_draw *command)
 	surface_text(depth, sizeof(depth), &gx.depth);
 	for (stage = 0; stage < 4; stage++)
 		stage_text(stages[stage], sizeof(stages[stage]), &dk_derive_textures(derive)->stages[stage]);
+	keys_note((const struct nv2a_pixel_shader_key *)dk_derive_pixel_key(derive));
 	line("draw %lu.%lu: prim %u count %u offset %d indices %016llx%s; targets %s %s; state %016llx vertex key %016llx pixel key %016llx; textures %s %s %s %s; "
 		"vertex parameters %016llx pixel parameters %016llx constants %016llx format %016llx",
 		gx.frame, gx.draw, (unsigned)primitive, (unsigned)command->count, (int)vertex_offset, (unsigned long long)indices, streams, color, depth,
@@ -226,6 +231,63 @@ static void draw(const struct dk_command_draw *command)
 		(unsigned long long)hash_of(dk_derive_vertex_parameters(derive), sizeof(struct dk_vertex_parameters)),
 		(unsigned long long)hash_of(dk_derive_pixel_parameters(derive), sizeof(struct dk_pixel_parameters)),
 		(unsigned long long)hash_of(gx.constants, sizeof(gx.constants)), (unsigned long long)hash_of(&gx.format, sizeof(gx.format)));
+}
+
+
+/* ---------- the pixel shader keys of the draws (GAME_DIGEST_KEYS=file)
+
+Every draw the layer derives has the pixel key the console's GX2 thread looks up in shaders.pack (dk_shader_for_draw: the same dk_derive_pixel_key). With the
+variable set, each key not yet written is appended to that file as the missing-shader capture writes it on the card ("P" and the 256-byte key as hex), after a
+comment with the frame it first came in, so that a scene's keys can be compared with tools/wiiu/shader_keys.txt. Nothing is written, and the lines of the digest
+do not change, when the variable is not set. */
+
+#define KEYS_SLOTS 65536u
+
+static struct
+{
+	int tried;
+	FILE *file;
+	uint64_t *seen;
+	struct nv2a_pixel_shader_key last;
+	int last_valid;
+} keys;
+
+static void keys_note(const struct nv2a_pixel_shader_key *pixel)
+{
+	unsigned char wire[SHADER_KEY_WIRE_BYTES];
+	uint64_t identity;
+	unsigned slot, index;
+
+	if (!keys.tried)
+	{
+		const char *path = getenv("GAME_DIGEST_KEYS");
+
+		keys.tried = 1;
+		if (path && *path)
+		{
+			keys.file = fopen(path, "w");
+			keys.seen = calloc(KEYS_SLOTS, sizeof(uint64_t));
+			if (!keys.file || !keys.seen)
+				keys.file = NULL;
+		}
+	}
+	if (!keys.file || (keys.last_valid && !memcmp(pixel, &keys.last, sizeof(*pixel))))
+		return;
+	keys.last = *pixel;
+	keys.last_valid = 1;
+	shader_key_write(pixel, wire);
+	identity = shader_key_hash(SHADER_KEY_HASH_INIT, wire, sizeof(wire)) ^ 0x5049585Full;
+	if (!identity)
+		identity = 1;
+	for (slot = (unsigned)(identity % KEYS_SLOTS); keys.seen[slot]; slot = (slot + 1) % KEYS_SLOTS)
+		if (keys.seen[slot] == identity)
+			return;
+	keys.seen[slot] = identity;
+	fprintf(keys.file, "# frame %lu\nP ", gx.frame);
+	for (index = 0; index < sizeof(wire); index++)
+		fprintf(keys.file, "%02x", wire[index]);
+	fputc('\n', keys.file);
+	fflush(keys.file);
 }
 
 static void clear(const struct dk_command_clear *command)
