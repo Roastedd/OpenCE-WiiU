@@ -860,7 +860,7 @@ static unsigned long game_state_async_crc(
 /* halo/async_save_fault.txt (a test's: the host runs and a console run with the owner's card snapshotted): 1 makes the writer thread's write of every second
 checkpoint fail after its first piece (the game thread then writes it again, from the copy), 2 makes that second write fail too (the checkpoint is lost, and a
 revert starts the map over), 3 makes every write take 800 ms more (a slow card: the revert, the next checkpoint, the load of the next map and the end of the game then
-find a write still running); 0 or absent: none. */
+find a write still running), 4 makes it 4 s more (the end of the game then waits for it, 10 s at most); 0 or absent: none. */
 static long game_state_async_fault(
 	void)
 {
@@ -872,7 +872,7 @@ static long game_state_async_fault(
 		if (fault>0)
 		{
 			platform_log("checkpoint: FAULTS are made on purpose (halo/async_save_fault.txt %ld): %s", fault,
-				fault==3 ? "every write takes 800 ms more" : fault==2 ? "every second checkpoint's write fails, and so does its second try" : "every second checkpoint's write fails");
+				fault==3 ? "every write takes 800 ms more" : fault>3 ? "every write takes 4 s more" : fault==2 ? "every second checkpoint's write fails, and so does its second try" : "every second checkpoint's write fails");
 		}
 	}
 
@@ -939,11 +939,11 @@ static void game_state_async_write(
 
 	(void)argument;
 	note[0] = 0;
-	if (game_state_async_fault()==3)
+	if (game_state_async_fault()>=3)
 	{
-		Sleep(800);
+		Sleep(game_state_async_fault()==3 ? 800 : 4000);
 	}
-	if (game_state_async_fault() && game_state_async_fault()!=3 && (game_state_async.number&1)==0)
+	if (game_state_async_fault() && game_state_async_fault()<3 && (game_state_async.number&1)==0)
 	{
 		/* (a test's failure: the first piece written, then an error, as a card that fills up or is pulled would */
 		SetFilePointer(xbox_game_state_globals.handle, 0, NULL, FILE_BEGIN);
