@@ -3760,7 +3760,7 @@ static void main_smooth_defaults_recheck(
 	if (smooth_defaults_map_ok() && main_smooth_defaults_reason_for(FALSE))
 	{
 		platform_log("smooth defaults: this map stops being one for them (%s)", main_smooth_defaults_reason_for(FALSE));
-		smooth_defaults_new_map();
+		smooth_defaults_map_stops();
 	}
 }
 

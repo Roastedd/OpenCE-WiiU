@@ -351,7 +351,7 @@ static void test_frames(long frames)
 		if (frame == frames / 2)
 		{
 			/* a map ends and another starts, and the smooth defaults are decided again for it: the tick thread idle, everything forgotten */
-			tick_overlap_decide();
+			tick_overlap_decide(0);
 			CHECK(tick_overlap_enabled());
 			tick_ring_reset(&ring, SLOTS);
 			world_time = 0;
@@ -480,7 +480,7 @@ static void test_decisions(void)
 	tick_ring_reset(&ring, SLOTS);
 	setenv("HALO_TICK_OWNERS", "2", 1);
 	smooth_stub_value = 1;
-	tick_overlap_decide();
+	tick_overlap_decide(0);
 	CHECK(tick_overlap_enabled() && tick_owners_threaded() && tick_overlap_listeners_frozen);
 	for (frame = 0; frame < 300; frame++)
 	{
@@ -493,8 +493,10 @@ static void test_decisions(void)
 	}
 	/* a hosted game: off, with a job possibly in flight */
 	smooth_stub_value = 0;
-	tick_overlap_decide();
+	tick_overlap_decide(1);
 	CHECK(!tick_overlap_enabled() && !tick_owners_threaded() && !tick_overlap_listeners_frozen);
+	/* (in the middle of a map the owners' queues keep their mode: a sound started as a ticket is not a datum) */
+	CHECK(tick_owners_mode() == 2);
 	CHECK(!tick_overlap_job_in_flight() && !tick_overlap_frame_active());
 	for (frame = 0; frame < 100; frame++)
 	{
@@ -507,7 +509,7 @@ static void test_decisions(void)
 	smooth_stub_value = 1;
 	world_time = 0;
 	tick_ring_reset(&ring, SLOTS);
-	tick_overlap_decide();
+	tick_overlap_decide(0);
 	CHECK(tick_overlap_enabled() && tick_owners_threaded() && tick_overlap_listeners_frozen);
 	for (frame = 0; frame < 300; frame++)
 	{
@@ -519,7 +521,7 @@ static void test_decisions(void)
 		tick_overlap_frame_end();
 	}
 	tick_overlap_sync_point();
-	tick_overlap_decide();
+	tick_overlap_decide(0);
 	CHECK(!tick_overlap_job_in_flight());
 }
 

@@ -982,7 +982,7 @@ for the map from what the cards and the map say. Nothing of the last map's is ke
 late state (the clock held, the serial window, the tick thread moved to the game thread's core) forgotten, the listeners unfrozen and the owners' gate
 taken off if the map is not one for the overlap. The thread stays (it is made once, on the first map that wants it) and waits for work. */
 void tick_overlap_decide(
-	void)
+	int mid_map)
 {
 	const boolean was_enabled = o.enabled > 0;
 
@@ -1013,7 +1013,10 @@ void tick_overlap_decide(
 	o.enabled = -1;
 	o.log_started_ticks = 0;
 	/* (in this order: the owners' mode is the overlap's request, the snapshot's flags are too, and the overlap needs the snapshot) */
-	tick_owners_decide();
+	/* (the owners' mode is not changed in the middle of a map: a sound started as a ticket would be taken for a datum, and the other way round. A map that stops being one for the
+	overlap keeps its queues, unthreaded, as the build before the smooth defaults had them in a network game) */
+	if (!mid_map)
+		tick_owners_decide();
 	tick_snapshot_decide();
 	if (tick_overlap_enabled())
 		sound_manager_freeze_listeners();

@@ -18,7 +18,7 @@ long wiiu_study_number(const char *name, long fallback);
 /* the units' */
 long tick_snapshot_card(void);                          /* tick_snapshot.c: halo/tick_snapshot.txt (HALO_TICK_SNAPSHOT), SMOOTH_CARD_DEFAULT if absent or negative */
 long render_governor_card(void);                        /* render_governor.c: halo/governor.txt's first word: SMOOTH_CARD_DEFAULT, 0 (off), 1 (on or a tuning line) */
-void tick_overlap_decide(void);                         /* tick_overlap.c: the overlap, the snapshot and the owners' queues made again for the map */
+void tick_overlap_decide(int mid_map);                  /* tick_overlap.c: the overlap, the snapshot and (not in the middle of a map) the owners' queues made again for the map */
 void render_governor_decide(int map_ok, int on);        /* render_governor.c */
 char const *main_smooth_defaults_reason(void);          /* main.c: NULL for a map the smooth settings are for, else why not */
 
@@ -151,7 +151,7 @@ static char const *source_text(int source)
 	}
 }
 
-void smooth_defaults_new_map(void)
+static void decide(int mid_map)
 {
 	char const *reason;
 	struct smooth_defaults decided;
@@ -185,8 +185,18 @@ void smooth_defaults_new_map(void)
 		if (reason)
 			platform_log("smooth defaults:   a card file that holds 1 is on only for the maps the smooth settings are for: this one is not");
 	}
-	tick_overlap_decide();
+	tick_overlap_decide(mid_map);
 	render_governor_decide(sd.map_ok, (int)sd.now.value[SMOOTH_GOVERNOR]);
+}
+
+void smooth_defaults_new_map(void)
+{
+	decide(0);
+}
+
+void smooth_defaults_map_stops(void)
+{
+	decide(1);
 }
 
 long smooth_defaults_value(enum smooth_switch which)

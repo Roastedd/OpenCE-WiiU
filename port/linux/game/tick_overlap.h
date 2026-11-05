@@ -92,7 +92,7 @@ void tick_overlap_frame_end(void);
 shadows */
 void tick_overlap_map_reset(void);
 /* the map's decision (smooth_defaults.c): the overlap, the snapshot behind it and the owners' queues made again for the map, from nothing; the tick thread idle */
-void tick_overlap_decide(void);
+void tick_overlap_decide(int mid_map);
 void tick_snapshot_decide(void);
 /* the numbers the map summary reads, since the start of the run: frames, overlapped frames, serial frames, falls back to the serial loop, times the clock was held */
 void tick_overlap_summary_counts(unsigned long counts[5]);

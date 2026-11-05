@@ -101,6 +101,9 @@ void smooth_defaults_read_cards(long card[NUMBER_OF_SMOOTH_SWITCHES]);
 
 /* The decision, at a map start; the reason it gets from the game (main.c's main_smooth_defaults_reason). The tick thread idle. */
 void smooth_defaults_new_map(void);
+/* The same in the middle of a map that stops being one for the smooth defaults (a second local player, a session opened, a film): at the sync point, the tick thread idle; the owners' queues
+keep their mode (a sound started as a ticket would be taken for a datum in the other) */
+void smooth_defaults_map_stops(void);
 
 /* What the current map gets of a switch. Before the first map start (nothing decided) it is 0: the start-up and the pregame run without the smooth defaults. */
 long smooth_defaults_value(enum smooth_switch which);

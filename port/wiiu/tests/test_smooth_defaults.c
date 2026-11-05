@@ -43,7 +43,7 @@ long wiiu_study_number(const char *name, long fallback)
 long tick_snapshot_card(void) { return snapshot_card; }
 long render_governor_card(void) { return governor_card; }
 char const *main_smooth_defaults_reason(void) { return reason_now; }
-void tick_overlap_decide(void) { calls[0]++; }
+void tick_overlap_decide(int mid_map) { calls[0]++; calls[2] += mid_map; }
 void render_governor_decide(int map_ok, int on) { calls[1]++; last_governor_map_ok = map_ok; last_governor_on = on; }
 
 static int logged(char const *text)
@@ -239,6 +239,13 @@ static void test_decisions(void)
 	smooth_defaults_new_map();
 	CHECK(smooth_defaults_value(SMOOTH_TICK_OVERLAP) == 1 && smooth_defaults_value(SMOOTH_GOVERNOR) == 1);
 	CHECK(smooth_defaults_map_count() == 5);
+	/* a map that stops being one in the middle of it: decided again, with the owners' queues left as they are */
+	reset_log();
+	reason_now = "a network session is open (system link or internet)";
+	smooth_defaults_map_stops();
+	CHECK(calls[0] == 1 && calls[2] == 1 && calls[1] == 1 && !smooth_defaults_map_ok());
+	CHECK(logged("OFF for this map: a network session is open"));
+	CHECK(smooth_defaults_value(SMOOTH_TICK_OVERLAP) == 0);
 }
 
 /* the owner's card (1, 1, 1, on) in a process of its own: the cards are read once, at the first map */
