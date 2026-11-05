@@ -327,32 +327,44 @@ class LevelsTest(unittest.TestCase):
     overlapped frame is drawn from a ring that has just been made, and a campaign script can switch the structure bsp in the first tick (a30 and d20 did, and the
     drawing met a bsp let go of: the console halted). GAME_DIGEST_LEVELS_ONLY=a30,d20 runs those only; GAME_DIGEST_LEVELS_NAME is the build's name."""
 
+    # The variants of the frames' cadence: "fixed" (debug.fixed_step: a frame a tick, as every host run), "cadence" (frames of 16.667 ms of game time each, HALO_FIXED_STEP=0:
+    # the console's 60 frames a second, two a tick, one with no tick in it), "stall" (the same, and the game thread held back 50 ms after giving the job in each of the first 5
+    # overlapped frames, so that the tick thread runs ahead of the picture: the console's first frames of a level, which fixed_step never has). GAME_DIGEST_LEVELS_VARIANTS=fixed,cadence,stall
+    VARIANTS = {"fixed": {}, "cadence": {"HALO_TICK_FRAME_MS": "16.667", "GAME_DIGEST_ENV": "HALO_FIXED_STEP=0"},
+                "stall": {"HALO_TICK_FRAME_MS": "16.667", "GAME_DIGEST_ENV": "HALO_FIXED_STEP=0", "HALO_TICK_OVERLAP_FRAME_STALL": "50"}}
+
+    def run_with(self, program, name, ticks, level, environment):
+        saved = {key: os.environ.get(key) for key in environment}
+        os.environ.update(environment)
+        try:
+            return start(program, name, ticks, mode="solo-" + level)
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
     def test_every_level_runs_overlapped_without_a_halt_and_with_the_plain_loops_ticks(self):
         program = build(os.environ.get("GAME_DIGEST_LEVELS_NAME", "here"))
         default_ticks = int(os.environ.get("GAME_DIGEST_LEVELS_TICKS", "400"))
         only = [name for name in os.environ.get("GAME_DIGEST_LEVELS_ONLY", "").split(",") if name] or list(LEVELS)
+        variants = [name for name in os.environ.get("GAME_DIGEST_LEVELS_VARIANTS", "fixed,cadence,stall").split(",") if name]
         overlap = {"HALO_TICK_THREAD": "1", "HALO_TICK_OVERLAP": "1", "HALO_TICK_SNAPSHOT": "1"}
-        for level in only:
-            # (b30 opens with a cinematic of about 1,070 ticks, serial frames: its first overlapped frames are past it)
-            ticks = max(default_ticks, 1150) if level == "b30" else default_ticks
-            with self.subTest(level=level):
-                plain = start(program, f"levels-{level}-plain", ticks, mode="solo-" + level)
-                saved = {key: os.environ.get(key) for key in overlap}
-                os.environ.update(overlap)
-                try:
-                    overlapped = start(program, f"levels-{level}-overlap", ticks, mode="solo-" + level)
-                finally:
-                    for key, value in saved.items():
-                        if value is None:
-                            os.environ.pop(key, None)
-                        else:
-                            os.environ[key] = value
-                finish(*plain)
-                finish(*overlapped)
-                a, b = tick_lines(plain[1]), tick_lines(overlapped[1])
-                self.assertGreater(len(a), ticks // 2, f"{level}: the plain loop played {len(a)} ticks")
-                count = min(len(a), len(b))
-                self.assertEqual(a[:count], b[:count], f"{level}: the overlapped game's ticks differ from the plain loop's")
+        for variant in variants:
+            for level in only:
+                # (b30 opens with a cinematic of about 1,070 ticks, serial frames: its first overlapped frames are past it)
+                ticks = max(default_ticks, 1150) if level == "b30" else default_ticks
+                with self.subTest(level=level, variant=variant):
+                    plain_environment = {key: value for key, value in self.VARIANTS[variant].items() if key != "HALO_TICK_OVERLAP_FRAME_STALL"}
+                    plain = self.run_with(program, f"levels-{level}-{variant}-plain", ticks, level, plain_environment)
+                    overlapped = self.run_with(program, f"levels-{level}-{variant}-overlap", ticks, level, dict(self.VARIANTS[variant], **overlap))
+                    finish(*plain)
+                    finish(*overlapped)
+                    a, b = tick_lines(plain[1]), tick_lines(overlapped[1])
+                    self.assertGreater(len(a), ticks // 2, f"{level}: the plain loop played {len(a)} ticks")
+                    count = min(len(a), len(b))
+                    self.assertEqual(a[:count], b[:count], f"{level} ({variant}): the overlapped game's ticks differ from the plain loop's")
 
 
 def main() -> int:
