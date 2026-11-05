@@ -133,15 +133,17 @@ int main(void)
 		memcpy(governor_now, start_governor, sizeof(governor_now));
 		memcpy(overlap_now, start_overlap, sizeof(overlap_now));
 		wiiu_map_summary_begin("levels\\a10\\a10, smooth defaults on");
+		wiiu_map_summary_frame(4000.0); /* (the map's load: the first frame after a begin is not counted) */
 		for (i = 0; i < 300; i++)
 			wiiu_map_summary_frame(1000.0 / 60.0);
 		governor_now[0] += 300;
 		wiiu_map_summary_end();
-		CHECK(said_count == 3 && strstr(said[0], "a10") && strstr(said[2], "0 100%"));
+		CHECK(said_count == 3 && strstr(said[0], "a10") && strstr(said[0], "300 frames") && strstr(said[0], "hitches over 100 ms: 0") && strstr(said[2], "0 100%"));
 		wiiu_map_summary_end(); /* (a second end says nothing more) */
 		CHECK(said_count == 3);
 		/* a map that begins while another has not ended ends it first */
 		wiiu_map_summary_begin("one");
+		wiiu_map_summary_frame(16.0);
 		wiiu_map_summary_frame(16.0);
 		wiiu_map_summary_begin("two");
 		CHECK(said_count == 5 && strstr(said[3], "(one)"));

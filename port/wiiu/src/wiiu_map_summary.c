@@ -174,13 +174,17 @@ void wiiu_map_summary_begin(char const *label)
 	render_governor_step_frames(governor);
 	tick_overlap_summary_counts(overlap);
 	wiiu_map_summary_reset(&current, label, governor, overlap);
+	current.skip_first = 1;
 	pthread_mutex_unlock(&lock);
 }
 
 void wiiu_map_summary_frame(double frame_ms)
 {
 	pthread_mutex_lock(&lock);
-	wiiu_map_summary_add_frame(&current, frame_ms);
+	if (current.skip_first)
+		current.skip_first = 0;
+	else
+		wiiu_map_summary_add_frame(&current, frame_ms);
 	pthread_mutex_unlock(&lock);
 }
 

@@ -41,6 +41,7 @@ struct wiiu_map_summary
 	unsigned long governor_at_start[WIIU_MAP_SUMMARY_STEPS];
 	unsigned long overlap_at_start[5];
 	int active; /* a map has begun and not ended */
+	int skip_first; /* the first frame after a begin carries the map's load (the time since the last present), not the map's: it is not counted */
 };
 
 void wiiu_map_summary_reset(struct wiiu_map_summary *summary, char const *label, unsigned long const governor[WIIU_MAP_SUMMARY_STEPS], unsigned long const overlap[5]);

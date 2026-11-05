@@ -896,17 +896,57 @@ GPU pixels. The fixed shader's sources and byte identity live in
 `shaders/mip.*`; regenerate the embedded GFD with
 `python3 port/wiiu/tools/embed_mip_shader.py --compiler <existing-glslcompiler>`.
 
+## Smooth by default: the tick overlap and the governor (since `wiiu-rc4`)
+
+A game of **one local player with no network of any kind** is smooth with no card file at all: the game's ticks run on a thread of their own on core 2 beside the
+drawing (the tick overlap, with the tick snapshot behind it), and the dynamic quality governor holds the frame near 22 ms (steps 0 to 3: it sheds only small, far or
+thin things, never a unit, a vehicle, a weapon or a projectile). On the console, in the scripted one-player b30 fight, that was about 25 to 31 frames a second without
+it and 45 to 47 with it (`reports/research/2026-11-01/ticks-stage4.md` sections 11 to 15, `ticks-stage5-snapshot-cost.md`); the owner's 25 minutes of rc2 with it ran at a
+mean of 58.7 (`reports/research/2026-11-04/rc4-defaults.md` has the figures and the checks).
+
+**The map decides, at each map start.** The log says it, once a map: `smooth defaults: ON for this map (one local player, no network)` or
+`smooth defaults: OFF for this map: <the reason>`, and then what each of the four switches came to and where it came from. The smooth settings are for a map with
+exactly one local player, no network session of any kind (hosted, joined, system link, internet: a network game stays the serial loop, with the ticks on the game
+thread), no split screen, no saved film, no dedicated server, no editor, not the main menu's scene, and `display.interpolation` on. Every other map, and the start-up
+before the first map, runs as the build without the smooth defaults does. The decision is taken again at every map start (a level change, the way back to the main menu,
+a game started from it, a loaded save), and the overlap's state is made again from nothing each time: the tick thread idle, the snapshot's ring and its marks, the owners'
+queues' mode, the late state, the listeners. A map that was one and stops being one (a second local player counted after the map began, a network session opened, a film)
+is decided again at the next frame's sync point (`smooth defaults: this map stops being one for them`). A revert to a checkpoint is the same map: the decision stands and
+the ring is forgotten (as before). The serial fallback stays: when the tick thread is late the clock is held to one tick a frame, and below 20 ticks a second the frames
+are the serial loop's for 10 s and more (`tick_overlap_late.txt`). The tick thread is never on core 0 by default (`tick_core.txt`: absent means core 2).
+
+**The four card files** (`tick_thread.txt`, `tick_snapshot.txt`, `tick_overlap.txt`, `governor.txt`) **changed meaning in `wiiu-rc4`**: before, absent and -1 meant off, and now they mean
+the default, which is on for a map of one player. The other files of this section keep -1 as "no file".
+
+| Word in the file | Meaning | In the log |
+| --- | --- | --- |
+| absent, or -1 (`governor.txt`: or a first word of -1 or `default`) | **the default: the smooth setting, for a map the smooth defaults are for; off for any other** | `<switch> on, the default (halo/<file>: absent or -1)` |
+| 0 (`governor.txt`: `off`) | **off, for every map**: an explicit opt-out for a test or a comparison. One 0 among the first three turns the whole tick overlap off (it needs the thread and the snapshot; the other two then default to off, not to half of it); the governor is its own | `<switch> off: its card file holds 0` / `off: another of the three is 0` |
+| above 0 (`governor.txt`: `on`, `1`, or any line of settings) | on, as it has always been (the snapshot's number is its bits), **but never for a map that is not one for them**: a network game, a split screen game and the main menu stay the serial loop whatever the file holds | `<switch> on, its card file`; for a map that is not one: `off: not for this map`, and `a card file that holds 1 is on only for the maps the smooth settings are for` |
+
+The owner's card (`tick_thread.txt` 1, `tick_snapshot.txt` 1, `tick_overlap.txt` 1, `governor.txt` `on`) is therefore the default for him in a one-player map, and
+now also off in a network game and in split screen, where before the overlap's switches were on in the build and the frames were the serial loop's. A harness that writes
+-1 to put a file back now puts the default back, which is on: **write 0 for off.** `gpu_offload.txt` is not part of this: it stays off unless the file says 1 (not
+reproduced on the console). Off by default and unchanged: `gpu_offload`, `hotpaths`, the Broadway kernels, `stream`, `pacing`, dynamic resolution, the overlay (L + R + - on
+the GamePad).
+
+**The map summary.** At the end of each map (a level change, the way back to the main menu, the game's quit) the log says how it played: `map summary (levels\b30\b30,
+smooth defaults on): 18432 frames in 312.4 s, mean 59.0 fps, 1% low 41.2 fps (24.3 ms), longest frame 190 ms, hitches over 100 ms: 3`, then the share of the map's 5 s
+windows at 57 fps and over, 45 to 57 and under 45, the overlap's falls back to the serial loop and times the clock was held, and the share of frames at each governor
+step. The 5 s lines of the log are unchanged.
+
 ## Threading study files on the card
 
 These files of `wiiu/apps/halo/` hold one number each and are read once at start. **A negative number (-1) is the same as no file** (the default),
-so that a harness that must not delete a card file can write -1 to put one back. 0 and the positive numbers keep their meanings.
+so that a harness that must not delete a card file can write -1 to put one back. 0 and the positive numbers keep their meanings. **Except the four of the section above**
+(`tick_thread.txt`, `tick_snapshot.txt`, `tick_overlap.txt`, `governor.txt`), whose default is now the smooth setting for a map of one local player.
 
 | File | Absent or -1 | Meaning |
 | --- | --- | --- |
-| `tick_thread.txt` | 0 | 1: the game's ticks run on a thread of their own |
-| `tick_overlap.txt` | 0 | 1: the ticks run beside the drawing (needs `tick_thread.txt`, `tick_snapshot.txt` 1) |
-| `tick_snapshot.txt` | 0 | bits: 1 on, 128 the check of the objects left out, 256 to 2048 turn one change off, 16384 the tick thread writes its copies back to memory, 32768 the game thread asks for the newest copies' cache lines when a frame begins (the last two are off unless set; the report `reports/research/2026-11-01/ticks-stage5-snapshot-cost.md`) |
-| `tick_core.txt` | 2 with the overlap on, else 0 | the core of the tick thread: 0, 1 or 2 |
+| `tick_thread.txt` | **on** for a map of one local player (0 for any other) | 1: the game's ticks run on a thread of their own; 0: off |
+| `tick_overlap.txt` | **on** for a map of one local player | 1: the ticks run beside the drawing (needs `tick_thread.txt` and `tick_snapshot.txt` not 0); 0: off |
+| `tick_snapshot.txt` | **1** for a map of one local player | bits: 1 on, 128 the check of the objects left out, 256 to 2048 turn one change off, 16384 the tick thread writes its copies back to memory, 32768 the game thread asks for the newest copies' cache lines when a frame begins (the last two are off unless set; the report `reports/research/2026-11-01/ticks-stage5-snapshot-cost.md`); 0: off |
+| `tick_core.txt` | 2 with the overlap on (the default for one player), else 0 | the core of the tick thread: 0, 1 or 2 |
 | `tick_priority.txt` | 0 | the tick thread's priority offset below the game's, 0 to 8 |
 | `gx2_idle_sleep.txt` | 0 | microseconds the GX2 thread sleeps between looks for work when the tick thread shares its core; 0 is the yield |
 | `tick_quantum.txt` | the system's | microseconds: the tick thread's run quantum (`OSSetThreadRunQuantum`), untouched if absent |
@@ -918,7 +958,7 @@ so that a harness that must not delete a card file can write -1 to put one back.
 | `game_core.txt` | 1 | the core of the game thread: 0, 1 or 2 |
 | `gx2_thread.txt` | 7 | the GX2 thread's mode (0: the game thread makes the calls) |
 | `gpu_offload.txt` | 0 | bits: 1 the interpolation's blends without square roots, 2 the GX2 census lines, 4 host-only comparison; 0 or a negative number: none |
-| `governor.txt` | the governor as `display.dynamic_quality` sets it | text, not a number: a first word `on`/`off`/`1`/`0`, or settings (`step 2`, `target 25`, `max_step 3`); **a file whose first word is -1 is the same as no file** |
+| `governor.txt` | **on** (the capped governor: target 22 ms, steps 0 to 3) for a map of one local player; elsewhere as `display.dynamic_quality` sets it | text, not a number: a first word `on`/`off`/`1`/`0`, or settings (`step 2`, `target 25`, `max_step 3`); **a file whose first word is -1 or `default` is the same as no file**; `off` is off for every map, `on` and settings are on only for the maps the smooth defaults are for |
 | `hotpaths.txt` | 0 | 1: while an object or an actor updates, the tick asks (dcbt) for the cache lines of the next ones (`halo_ppc_hotpaths.h`); an A/B switch, off unless 1. The memory probe of 2026-11-04 found sequential loads with dcbt slower than without, so time it both ways |
 | `memcpy_touch.txt` | 0 | 1: the port's memcpy (`wiiu_memcpy.c`) asks for the source's lines 96 bytes ahead with dcbt (as it did until 2026-11-04); 0, absent or -1: it does not (the default: three alternating pairs of fight runs on the console had the tick thread 0.7 to 1.8 ms faster and the objects pass 0.5 to 1.4 ms faster without it; the dcbt of the destination (dcbz) stays) |
 | `stream.txt` | 0 | 1: texture streaming (the section below); `stream_delay.txt` (milliseconds, a test aid for hosts) |
