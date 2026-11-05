@@ -150,6 +150,9 @@ static void test_maps(void)
 	map = one_player();
 	map.connection = SMOOTH_CONNECTION_SERVER;
 	CHECK(smooth_defaults_reason(&map) && strstr(smooth_defaults_reason(&map), "hosted"));
+	map.local_server = 1;
+	CHECK(smooth_defaults_reason(&map) && strstr(smooth_defaults_reason(&map), "split screen"));
+	map.local_server = 0;
 	map.connection = SMOOTH_CONNECTION_CLIENT;
 	CHECK(smooth_defaults_reason(&map) && strstr(smooth_defaults_reason(&map), "joined"));
 	map.connection = SMOOTH_CONNECTION_FILM;

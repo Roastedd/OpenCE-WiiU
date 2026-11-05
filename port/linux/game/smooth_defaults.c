@@ -89,7 +89,7 @@ char const *smooth_defaults_reason(struct smooth_defaults_map const *map)
 	if (map->connection == SMOOTH_CONNECTION_FILM)
 		return "a saved film";
 	if (map->connection == SMOOTH_CONNECTION_SERVER)
-		return "a hosted network game";
+		return map->local_server ? "split screen (a game server of this machine's players)" : "a hosted network game";
 	if (map->connection == SMOOTH_CONNECTION_CLIENT)
 		return "a joined network game";
 	if (map->connection != SMOOTH_CONNECTION_LOCAL)

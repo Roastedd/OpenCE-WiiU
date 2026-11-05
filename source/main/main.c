@@ -3726,7 +3726,10 @@ says so (a pause, a cinematic, a save). */
 static char const *main_smooth_defaults_reason_for(
 	boolean at_map_start)
 {
-	boolean network_game_is_active(void);
+	boolean network_game_should_accept_remote_connections(void);
+	boolean network_game_is_splitscreen_local(void);
+	struct network_game_client *global_network_game_client_get(void);
+	struct network_game_server *global_network_game_server_get(void);
 	struct smooth_defaults_map map;
 
 	map.main_menu = main_globals.main_menu_scenario_loaded != 0;
@@ -3734,7 +3737,9 @@ static char const *main_smooth_defaults_reason_for(
 		main_globals.connection == _game_connection_network_server ? SMOOTH_CONNECTION_SERVER :
 		main_globals.connection == _game_connection_network_client ? SMOOTH_CONNECTION_CLIENT :
 		main_globals.connection == _game_connection_film_playback ? SMOOTH_CONNECTION_FILM : SMOOTH_CONNECTION_OTHER;
-	map.network_session = network_game_is_active() != 0;
+	/* (a client, or a server that takes remote connections: a lobby or a game with peers. A server that does not is the split screen of this machine's players) */
+	map.network_session = global_network_game_client_get() != NULL || (global_network_game_server_get() != NULL && network_game_should_accept_remote_connections());
+	map.local_server = network_game_is_splitscreen_local() != 0;
 	map.dedicated_server = halo_server_mode() != 0;
 	map.editor = game_in_editor() != 0;
 	map.recording = main_globals.movie != 0;

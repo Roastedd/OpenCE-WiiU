@@ -50,7 +50,8 @@ struct smooth_defaults_map
 {
 	int main_menu;          /* the main menu's scene is loaded */
 	int connection;         /* SMOOTH_CONNECTION_*: the game's connection */
-	int network_session;    /* a network game object exists (a lobby or a game, system link or internet) */
+	int network_session;    /* a network session that has peers or can have them: a client, or a server that accepts remote connections (system link, internet) */
+	int local_server;       /* the game is run by a game server that accepts no remote connections: the split screen of this machine's players */
 	int dedicated_server;
 	int editor;
 	int recording;          /* a movie is being recorded */
