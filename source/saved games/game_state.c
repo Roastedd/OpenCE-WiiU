@@ -368,6 +368,9 @@ void game_state_revert(
 	void)
 {
 #ifdef HALO_WIIU
+	void platform_log(char const *format, ...);
+	unsigned long revert_start;
+
 	/* port: the checkpoint's write may still be on its way to the file this reads (game_state_xbox.c): it is waited for, and if it was lost
 	there is no saved state to go back to */
 	game_state_port_wait_for_save("a revert");
@@ -385,6 +388,9 @@ void game_state_revert(
 
 	game_state_note_event("checkpoint revert");
 	game_state_call_before_load_procs();
+#ifdef HALO_WIIU
+	revert_start = system_milliseconds();
+#endif
 	/* port: a file that is not a saved game of this build is not taken, and
 	the map starts over */
 	if (!game_state_read_from_file())
@@ -392,6 +398,11 @@ void game_state_revert(
 		game_state_globals.saved_game_valid = FALSE;
 		main_reset_map();
 	}
+#ifdef HALO_WIIU
+	/* port: how long the revert took (the file read, the state taken), for the frame pacing notes */
+	platform_log("checkpoint: reverted to the saved game%s in %lu ms", game_state_globals.saved_game_valid ? "" : " - NOT TAKEN, the map starts over -",
+		system_milliseconds() - revert_start);
+#endif
 	game_state_call_after_load_procs();
 
 	return;
