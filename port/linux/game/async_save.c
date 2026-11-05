@@ -32,6 +32,14 @@ static struct
 	unsigned long piece;
 } job = { PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, 0, 0, 0, NULL, NULL, -1, -1, 0 };
 
+double async_save_now_ms(void)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (double)now.tv_sec * 1000.0 + (double)now.tv_nsec / 1000000.0;
+}
+
 int async_save_enabled(void)
 {
 	if (job.enabled < 0)

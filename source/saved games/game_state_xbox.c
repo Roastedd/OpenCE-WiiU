@@ -107,7 +107,6 @@ symbols in this file:
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #endif
 
 /* ---------- constants */
@@ -841,11 +840,7 @@ when it is waited for, and if that fails too the checkpoint is lost (game_state_
 static double game_state_async_now_ms(
 	void)
 {
-	struct timespec now;
-
-	clock_gettime(CLOCK_MONOTONIC, &now);
-
-	return (double)now.tv_sec*1000.0 + (double)now.tv_nsec/1000000.0;
+	return async_save_now_ms();
 }
 
 static unsigned long game_state_async_crc(
