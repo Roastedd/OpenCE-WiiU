@@ -260,6 +260,12 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 	(void)now_ms;
 }
 
+/* wiiu_map_summary.c: the time between two presents, for the log's note at the end of a map; the replay's game has no maps */
+void wiiu_map_summary_frame(double frame_ms)
+{
+	(void)frame_ms;
+}
+
 int port_menus_active(void)
 {
 	return 0;
