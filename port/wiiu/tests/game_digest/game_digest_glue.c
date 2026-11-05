@@ -873,17 +873,22 @@ void __wrap_rasterizer_set_model_lighting(const void *lighting)
 	__real_rasterizer_set_model_lighting(lighting);
 }
 
-#ifdef GAME_DIGEST_POISON
+/* the scene (game_digest_scene.c) gives a frame its fixed camera before it is drawn, when GAME_DIGEST_SCENE says so; with --poison the frame's
+rendering has its stack filled first */
+void game_digest_scene_render_frame(void *windows, short window_count);
+
 void __real_render_frame(void *windows, short window_count, const void *screenshot_page_index, const void *screenshot_index, void *bitmap,
 	float time_delta_since_tick);
 
 void __wrap_render_frame(void *windows, short window_count, const void *screenshot_page_index, const void *screenshot_index, void *bitmap,
 	float time_delta_since_tick)
 {
+#ifdef GAME_DIGEST_POISON
 	stack_fill(0xa5);
+#endif
+	game_digest_scene_render_frame(windows, window_count);
 	__real_render_frame(windows, window_count, screenshot_page_index, screenshot_index, bitmap, time_delta_since_tick);
 }
-#endif
 
 /* ---------- the GX2 thread's and the console platform's answers (replay_world.c's, and the console's defaults) */
 
