@@ -1278,6 +1278,9 @@ static void render_object(
 				return;
 			}
 			render_governor_counts[RENDER_GOVERNOR_COUNT_OBJECTS_DRAWN]++;
+			render_governor_counts[RENDER_GOVERNOR_COUNT_VEHICLES_DRAWN] += object->object.type == _object_type_vehicle;
+			render_governor_counts[RENDER_GOVERNOR_COUNT_BIPEDS_DRAWN] += object->object.type == _object_type_biped;
+			render_governor_counts[RENDER_GOVERNOR_COUNT_PROJECTILES_DRAWN] += object->object.type == _object_type_projectile;
 #ifdef HALO_WIIU
 			render_object_perf_drawn++;
 #endif

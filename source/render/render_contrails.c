@@ -37,6 +37,7 @@ symbols in this file:
 #include "objects/objects.h"
 #include "rasterizer/rasterizer.h"
 #include "render.h"
+#include "render_governor.h" /* port: port/linux/game/render_governor.c */
 #include "tag_files/tag_files.h"
 
 /* ---------- constants */
@@ -135,6 +136,8 @@ static void render_contrail(
 	if (_texture_cache_bitmap_get_hardware_format(bitmap, FALSE, TRUE))
 	{
 		segment_count = contrail->contrail_point_counts[instance_index] - 1;
+		render_governor_counts[RENDER_GOVERNOR_COUNT_CONTRAILS_DRAWN]++;
+		render_governor_counts[RENDER_GOVERNOR_COUNT_CONTRAIL_POINTS] += (unsigned long)(segment_count + 1);
 		triangle_count = segment_count + segment_count;
 		vertex_count = triangle_count + 2;
 		triangle_buffer_index = rasterizer_dynamic_triangles_new(triangle_count);

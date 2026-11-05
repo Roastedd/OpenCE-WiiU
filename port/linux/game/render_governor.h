@@ -54,6 +54,14 @@ enum
 	RENDER_GOVERNOR_COUNT_DECALS_SKIPPED,
 	RENDER_GOVERNOR_COUNT_PARTICLES_DRAWN,
 	RENDER_GOVERNOR_COUNT_PARTICLES_SKIPPED,
+	/* and, for the log's line of what a frame is made of (the numbers of the log are counts only, nothing is decided by them): the objects drawn by kind, the lens
+	flares queued, and the contrails drawn with the points in them */
+	RENDER_GOVERNOR_COUNT_VEHICLES_DRAWN,
+	RENDER_GOVERNOR_COUNT_BIPEDS_DRAWN,
+	RENDER_GOVERNOR_COUNT_PROJECTILES_DRAWN,
+	RENDER_GOVERNOR_COUNT_LENS_FLARES,
+	RENDER_GOVERNOR_COUNT_CONTRAILS_DRAWN,
+	RENDER_GOVERNOR_COUNT_CONTRAIL_POINTS,
 	RENDER_GOVERNOR_COUNTS,
 };
 extern unsigned long render_governor_counts[RENDER_GOVERNOR_COUNTS];
