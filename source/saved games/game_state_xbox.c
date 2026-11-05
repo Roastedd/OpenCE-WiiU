@@ -913,14 +913,34 @@ static unsigned long game_state_async_bound(
 	return game_state_async_fault()>=5 ? 500 : milliseconds;
 }
 
+/* the buffer the file is read back in: made on the game thread (the game's memory is not the writer thread's to allocate from: debug_memory.c is not made for two threads),
+only when the check is on, and kept */
+enum
+{
+	GAME_STATE_VERIFY_PIECE_SIZE = 1024*1024
+};
+
+static byte *game_state_verify_piece;
+
+static void game_state_verify_piece_make(
+	void)
+{
+	if (async_save_verify() && !game_state_verify_piece)
+	{
+		game_state_verify_piece = malloc(GAME_STATE_VERIFY_PIECE_SIZE);
+	}
+
+	return;
+}
+
 /* the file read back and compared with what was written (halo/async_save_verify.txt), 1 if it is the same */
 static boolean game_state_verify_file(
 	HANDLE file,
 	const void *expected,
 	unsigned long size)
 {
-	const unsigned long piece_size = 1024*1024;
-	byte *piece = malloc(piece_size);
+	const unsigned long piece_size = GAME_STATE_VERIFY_PIECE_SIZE;
+	byte *piece = game_state_verify_piece;
 	unsigned long offset = 0;
 	boolean same = piece!=NULL;
 
@@ -941,7 +961,6 @@ static boolean game_state_verify_file(
 		}
 		offset += count;
 	}
-	free(piece);
 
 	return same;
 }
@@ -949,6 +968,7 @@ static boolean game_state_verify_file(
 static void game_state_verify_sync_write(
 	void)
 {
+	game_state_verify_piece_make();
 	if (async_save_verify())
 	{
 		game_state_async.number++;
@@ -1047,6 +1067,7 @@ static boolean game_state_async_begin(
 			memcmp(image, xbox_game_state_globals.buffer, xbox_game_state_globals.buffer_size)==0 ? "the same as the game state" : "DIFFERENT FROM THE GAME STATE");
 	}
 	game_state_async_fault(); /* (read here, on the game thread) */
+	game_state_verify_piece_make();
 	game_state_async.job_handle = xbox_game_state_globals.handle;
 	game_state_async.result = -1;
 	if (!async_save_start(game_state_async_write, NULL))
