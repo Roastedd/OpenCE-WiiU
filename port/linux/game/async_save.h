@@ -18,9 +18,6 @@ Switches (halo/<name> on the console, HALO_<NAME> in the environment of the host
 
 #ifdef HALO_WIIU
 
-/* a monotonic clock in milliseconds (the game's own sources cannot take the C library's time.h) */
-double async_save_now_ms(void);
-
 /* the switches, read once */
 int async_save_enabled(void);
 int async_save_verify(void);

@@ -840,7 +840,8 @@ when it is waited for, and if that fails too the checkpoint is lost (game_state_
 static double game_state_async_now_ms(
 	void)
 {
-	return async_save_now_ms();
+	/* (the port's monotonic millisecond count: the game sources have no time.h) */
+	return (double)GetTickCount();
 }
 
 static unsigned long game_state_async_crc(
