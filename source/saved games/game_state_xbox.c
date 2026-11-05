@@ -156,6 +156,7 @@ static void game_state_image_release(
 	void *image);
 #ifdef HALO_WIIU
 void platform_log(char const *format, ...);
+long wiiu_study_number(const char *name, long fallback);
 BOOL platform_write_file_in_pieces(HANDLE handle, LPCVOID buffer, DWORD count, DWORD piece, LPDWORD bytes_written);
 static boolean game_state_async_begin(
 	void);
@@ -856,6 +857,26 @@ static unsigned long game_state_async_crc(
 	return checksum;
 }
 
+/* halo/async_save_fault.txt (a test's: the host runs and a console run with the owner's card snapshotted): 1 makes the writer thread's write of every second
+checkpoint fail after its first piece (the game thread then writes it again, from the copy), 2 makes that second write fail too (the checkpoint is lost, and a
+revert starts the map over); 0 or absent: none. */
+static long game_state_async_fault(
+	void)
+{
+	static long fault = -1;
+
+	if (fault<0)
+	{
+		fault = wiiu_study_number("async_save_fault.txt", 0);
+		if (fault>0)
+		{
+			platform_log("checkpoint: FAULTS are made on purpose (halo/async_save_fault.txt %ld): every second checkpoint's write fails%s", fault, fault>1 ? ", and so does its second try" : "");
+		}
+	}
+
+	return fault;
+}
+
 /* the file read back and compared with what was written (halo/async_save_verify.txt), 1 if it is the same */
 static boolean game_state_verify_file(
 	const void *expected,
@@ -916,7 +937,15 @@ static void game_state_async_write(
 
 	(void)argument;
 	note[0] = 0;
-	if (SetFilePointer(xbox_game_state_globals.handle, 0, NULL, FILE_BEGIN)!=INVALID_SET_FILE_POINTER &&
+	if (game_state_async_fault() && (game_state_async.number&1)==0)
+	{
+		/* (a test's failure: the first piece written, then an error, as a card that fills up or is pulled would */
+		SetFilePointer(xbox_game_state_globals.handle, 0, NULL, FILE_BEGIN);
+		platform_write_file_in_pieces(xbox_game_state_globals.handle, snapshot, async_save_piece_bytes(), async_save_piece_bytes(), &bytes_written);
+		error = 0xFA17;
+		snprintf(note, sizeof(note), " - error %lu", error);
+	}
+	else if (SetFilePointer(xbox_game_state_globals.handle, 0, NULL, FILE_BEGIN)!=INVALID_SET_FILE_POINTER &&
 		platform_write_file_in_pieces(xbox_game_state_globals.handle, snapshot, size, async_save_piece_bytes(), &bytes_written) &&
 		bytes_written==size)
 	{
@@ -970,6 +999,7 @@ static boolean game_state_async_begin(
 			game_state_async_crc(image, xbox_game_state_globals.buffer_size), (unsigned long)xbox_game_state_globals.buffer_size,
 			memcmp(image, xbox_game_state_globals.buffer, xbox_game_state_globals.buffer_size)==0 ? "the same as the game state" : "DIFFERENT FROM THE GAME STATE");
 	}
+	game_state_async_fault(); /* (read here, on the game thread) */
 	game_state_async.result = -1;
 	if (!async_save_start(game_state_async_write, NULL))
 	{
@@ -1017,6 +1047,7 @@ static boolean game_state_async_settle(
 
 		platform_log("checkpoint %lu: its write failed on the writer thread: written again on the game thread", game_state_async.number);
 		if (snapshot &&
+			!(game_state_async_fault()>1 && (game_state_async.number&1)==0) &&
 			SetFilePointer(xbox_game_state_globals.handle, 0, NULL, FILE_BEGIN)!=INVALID_SET_FILE_POINTER &&
 			WriteFile(xbox_game_state_globals.handle, snapshot, xbox_game_state_globals.buffer_size, &bytes_written, NULL) &&
 			bytes_written==xbox_game_state_globals.buffer_size)
