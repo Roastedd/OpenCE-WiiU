@@ -573,7 +573,13 @@ void first_person_weapon_draw(
 			if (unit_index!=NONE &&
 				first_person_weapon->visible &&
 				first_person_weapon->unit_index!=NONE &&
-				first_person_weapon->weapon_index!=NONE)
+				first_person_weapon->weapon_index!=NONE
+#ifdef HALO_WIIU
+				/* port: and both in the capture the frame is drawn from (tick_snapshot_object_present): the tick side publishes the unit and the weapon of the tick it has run, which a pair of
+				the ring one or two ticks behind may not hold yet (a level's first frames: the player is made in a tick after the pair's) */
+				&& tick_snapshot_object_present(unit_index) && tick_snapshot_object_present(first_person_weapon->weapon_index)
+#endif
+				)
 			{
 				struct unit_datum *unit= unit_get(unit_index);
 				struct weapon_datum *weapon= weapon_get(first_person_weapon->weapon_index);

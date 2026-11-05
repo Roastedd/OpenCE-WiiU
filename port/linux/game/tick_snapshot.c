@@ -306,7 +306,7 @@ static struct
 	/* counts, for the log */
 	unsigned long captures, window_captures;
 	unsigned long objects_copied, bytes_copied, header_bytes, block_calls, partition_bytes, light_bytes;
-	unsigned long misses, catch_ups, fallbacks, reads, views, camera_copies, ring_full;
+	unsigned long misses, catch_ups, fallbacks, reads, views, camera_copies, ring_full, pair_absent;
 	/* (the game thread's, never reset: the blends' log says the difference between its windows) */
 	unsigned long reads_total, fallbacks_total, applied_total;
 	/* verify */
@@ -433,6 +433,21 @@ long tick_snapshot_none(void)
 int tick_snapshot_viewing(void)
 {
 	return tick_snapshot_headers != NULL;
+}
+
+int tick_snapshot_pair_viewing(void)
+{
+	return tick_snapshot_headers != NULL && s.pair_view;
+}
+
+int tick_snapshot_object_present(long object_index)
+{
+	struct object_header_datum const *header;
+
+	if (!tick_snapshot_headers || !s.pair_view || !s.view)
+		return 1;
+	header = (struct object_header_datum const *)datum_try_and_get(&s.view->array, object_index);
+	return header != NULL && header->datum != NULL;
 }
 
 /* the slot of a tick, or NULL */
@@ -1682,8 +1697,17 @@ struct object_header_datum *tick_snapshot_object_header_try_and_get(long object_
 	s.reads_total++;
 	if (!header)
 	{
-		struct object_header_datum *live = (struct object_header_datum *)datum_try_and_get(object_header_data, object_index);
+		struct object_header_datum *live;
 
+		/* (a frame drawn from a pinned pair: an object the pair does not hold was made since, and does not exist for this frame; its block, its clusters and its lights are of another
+		tick than the partitions and the lights the frame reads, and the game state's own is being changed beside the drawing) */
+		if (s.pair_view)
+		{
+			if (!s.pair_absent++)
+				platform_log("tick snapshot: an object (%08lx) that the frame's pair of the ring does not hold was asked for by name; it does not exist for this frame (said once)", (unsigned long)object_index);
+			return NULL;
+		}
+		live = (struct object_header_datum *)datum_try_and_get(object_header_data, object_index);
 		if (live)
 		{
 			s.fallbacks++;

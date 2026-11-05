@@ -25,6 +25,11 @@ void tick_snapshot_objects_changed(void);
 void tick_snapshot_view_begin(void);
 void tick_snapshot_view_end(void);
 int tick_snapshot_viewing(void);
+/* a frame is being drawn from a pinned pair of the ring (the overlap's), not from the last tick's capture of the serial loop's frames */
+int tick_snapshot_pair_viewing(void);
+/* whether an object is in the capture the frame is drawn from (always, outside a pinned pair's frame): a handle the tick side published since (the first person weapon's unit, made in a
+tick after the pair's) names an object whose block, whose clusters and whose lights the pair does not hold */
+int tick_snapshot_object_present(long object_index);
 struct cluster_partition;
 /* the snapshot's copy of the object cluster partitions (the others are not copied: the partition itself) */
 struct cluster_partition const *tick_snapshot_cluster_partition(struct cluster_partition const *live);
