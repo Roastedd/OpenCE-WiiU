@@ -114,6 +114,7 @@ static struct
 	struct tick_overlap_job job;
 	volatile unsigned long posted_jobs; /* jobs posted so far (the tags of the game thread's pushes) */
 	volatile int in_overlap_job; /* the tick thread is in an overlap job (its drains stop at the tag) */
+	unsigned long overlapped_run; /* the frames since the last serial one, for the test aid below */
 	volatile unsigned long running_sequence;
 	boolean job_in_flight; /* (the game thread's) */
 	boolean frame_active; /* the frame about to be drawn, or being drawn, is the overlap's: from the post to the frame's end */
@@ -831,6 +832,7 @@ boolean tick_overlap_post_frame(
 		o.serial_frames++;
 		o.ov_serial++;
 		o.late_window_start = 0; /* (a window is of overlapped frames in a row) */
+		o.overlapped_run = 0;
 		return FALSE;
 	}
 	/* (the clock held: one tick a frame at most, the rest of the time is the game running slow) */
@@ -877,6 +879,20 @@ boolean tick_overlap_post_frame(
 		o.ov_overlapped++;
 		o.ahead_sum += (unsigned long long)((time_now + ticks - tick) * 1000);
 		tick_overlap_post(tick_overlap_job_work, job);
+		/* (a test aid: halo/tick_overlap_frame_stall.txt, in milliseconds, holds the game thread back that long after it has given the job, in each of the first 5 frames after a serial one:
+		the tick thread then runs ahead of the picture as it does on the console when the drawing is slower than the ticks. HALO_TICK_OVERLAP_FRAME_STALL on the host.) */
+		{
+			static long frame_stall = -1;
+
+			if (frame_stall < 0)
+				frame_stall = wiiu_study_number("tick_overlap_frame_stall.txt", 0);
+			if (frame_stall > 0 && o.overlapped_run++ < 5)
+			{
+				struct timespec pause = { frame_stall / 1000, (frame_stall % 1000) * 1000000L };
+
+				nanosleep(&pause, NULL);
+			}
+		}
 		/* (a test aid: halo/tick_overlap_serialize.txt holds 1: the job is waited for before the frame is drawn, so that nothing runs beside the drawing and two runs
 		draw the same frames: the pictures' random numbers, which the two threads draw from one seed, come in one order. The picture is the same pair of the ring.) */
 		{
