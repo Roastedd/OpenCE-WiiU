@@ -10,7 +10,7 @@ build draw every frame of the game the same. A change to the rendering that keep
 the first tick it changes (tools/wiiu/digest_compare.py, which also compares the traces' lines, and in any order within a frame or a span).
 
     tools/test_wiiu_game_digest.py build [--name NAME] [--rev REV] [--mutate PATH BEFORE AFTER]... [--poison]
-    tools/test_wiiu_game_digest.py run RUN [--name NAME] [--poison] [--ticks N] [--trace FIRST-LAST|all] [--detail TICK] [--random] [--mode host|local|solo|solo-bloodgulch|solo-deathless|menu|menu-cycle|menu-campaign|menu-solo]
+    tools/test_wiiu_game_digest.py run RUN [--name NAME] [--poison] [--ticks N] [--trace FIRST-LAST|all] [--detail TICK] [--random] [--level NAME [--init LINE]... [--cues "SECOND LINE|..."]] [--mode host|local|solo|solo-bloodgulch|solo-deathless|menu|menu-cycle|menu-campaign|menu-solo]
     tools/test_wiiu_game_digest.py compare RUN_A RUN_B [digest_compare.py's options]
     GAME_DIGEST=1 python3 -m unittest tools.test_wiiu_game_digest      (GAME_DIGEST_TICKS: the ticks each run plays, 300 by default)
 
@@ -20,6 +20,12 @@ init.txt; it opens with a cinematic of about 1,070 ticks), solo-bloodgulch (a mu
 cheat_deathless_player and cheat_infinite_ammo, so that the fight goes on). HALO_TICK_* in the environment, and GAME_DIGEST_ENV="NAME=VALUE,NAME=VALUE" for the others
 (HALO_RENDER_REPEAT=3), go to the game. menu, menu-cycle and menu-campaign are the main menu and the way back to it (a game started from it, the main menu
 again, and so on: network_test.c's solo: and its main_menu cue); their --ticks counts frames.
+
+--level NAME plays a stock level (a10 ... d40, or a multiplayer map's name) as a game of one player, with --init's lines of init.txt before its map_name (cheats) and --cues "<second> <console
+line>|..." run from the first tick (debug.network_test_cues; a console line has no outer parentheses). GAME_DIGEST_SCENE="GROUP:tag name:COUNT|..." makes objects in front of a fixed
+camera (port/wiiu/tests/game_digest/game_digest_scene.c has its settings), GAME_DIGEST_PASSES=1 counts the draws of each render pass, GAME_DIGEST_KEYS=/out/keys.txt writes the pixel keys,
+GAME_DIGEST_READS=/out/reads.txt the map's reads, GAME_DIGEST_DOCKER_ARGS more arguments of docker run (a sampling profiler's folder) and GAME_DIGEST_CONTAINER_PREFIX a name for the
+containers (all through GAME_DIGEST_ENV or the environment). reports/research/2026-11-04/banshee.md used them.
 
 A build named here (the default) is this checkout's; another is a copy of the sources in build/game-digest/trees/NAME, of this checkout's files or of
 a commit's (--rev, git archive), with this checkout's game digest folder over it (a branch before it has none) and --mutate's changes made in it
