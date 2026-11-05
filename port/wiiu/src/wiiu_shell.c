@@ -750,6 +750,8 @@ static uint32_t on_close(void *unused)
 	wiiu_shell_watch_arm_exit(&shell_watch, shell_ms(), WIIU_WATCH_CLOSE_MS);
 	wiiu_phase("closing");
 	wiiu_log("The system asks the app to close (%u s to do it)", (unsigned)(WIIU_WATCH_CLOSE_MS / 1000u));
+	/* the map that was playing says how it went (wiiu_map_summary.h) */
+	wiiu_map_summary_end();
 	return 0;
 }
 
