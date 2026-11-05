@@ -420,6 +420,42 @@ void reference_list_port_report(
 	}
 }
 
+#ifdef HALO_WIIU
+/* port: the walk of a reference list in a frame drawn from a pinned pair of the snapshot's ring (tick_overlap.h): the lists are the capture's, and so are the heads the objects and the
+partitions hold, so a reference that is not in its list is a fault of the capture's (a first person weapon's unit made in a tick after the pair's was drawn from the game state's own object
+and the pair's list: the console's halt of 2026-11-04). It ends the list, once said, and the drawing goes on without the object's clusters (its dynamic lights); the plain loop and the serial
+frames keep the halt. */
+static long cluster_partition_walk(
+	struct data_array *array,
+	long *reference_index)
+{
+	if (*reference_index != NONE && tick_snapshot_pair_viewing())
+	{
+		struct data_reference *reference = (struct data_reference *)datum_try_and_get(array, *reference_index);
+
+		if (!reference)
+		{
+			static boolean said = FALSE;
+			void platform_log(char const *format, ...);
+
+			if (!said)
+			{
+				said = TRUE;
+				platform_log("tick overlap: a reference %08lx is not in the list %s of the capture the frame is drawn from: the list ends there (said once)", (unsigned long)*reference_index,
+					array->name);
+			}
+			*reference_index = NONE;
+			return NONE;
+		}
+		*reference_index = reference->next_reference_index;
+		return reference->datum_index;
+	}
+	return reference_list_get_next_datum_index(array, reference_index);
+}
+#else
+#define cluster_partition_walk reference_list_get_next_datum_index
+#endif
+
 long cluster_partition_get_next_datum(
 	struct cluster_partition const *partition,
 	long *reference_index)
@@ -429,7 +465,7 @@ long cluster_partition_get_next_datum(
 	if (tick_snapshot_viewing())
 		partition = tick_snapshot_cluster_partition(partition);
 #endif
-	return reference_list_get_next_datum_index(partition->data_reference_data, reference_index);
+	return cluster_partition_walk(partition->data_reference_data, reference_index);
 }
 
 long cluster_partition_get_first_cluster(
@@ -444,7 +480,7 @@ long cluster_partition_get_first_cluster(
 #endif
 	*reference_index = first_cluster_reference;
 
-	return reference_list_get_next_datum_index(partition->cluster_reference_data, reference_index);
+	return cluster_partition_walk(partition->cluster_reference_data, reference_index);
 }
 
 long cluster_partition_get_next_cluster(
@@ -455,7 +491,7 @@ long cluster_partition_get_next_cluster(
 	if (tick_snapshot_viewing())
 		partition = tick_snapshot_cluster_partition(partition);
 #endif
-	return reference_list_get_next_datum_index(partition->cluster_reference_data, reference_index);
+	return cluster_partition_walk(partition->cluster_reference_data, reference_index);
 }
 
 void cluster_partition_reconnect(
@@ -560,7 +596,7 @@ long cluster_partition_get_first_datum(
 #endif
 	*reference_index = *cluster_partition_get_first_reference((struct cluster_partition *)partition, cluster_index);
 
-	return reference_list_get_next_datum_index(partition->data_reference_data, reference_index);
+	return cluster_partition_walk(partition->data_reference_data, reference_index);
 }
 
 /* ---------- private code */

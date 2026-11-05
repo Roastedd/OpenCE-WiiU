@@ -952,7 +952,7 @@ so that a harness that must not delete a card file can write -1 to put one back.
 | `tick_quantum.txt` | the system's | microseconds: the tick thread's run quantum (`OSSetThreadRunQuantum`), untouched if absent |
 | `stream_slots.txt` | 6 | 2 to 8: the stream slots the Direct3D layer uses (the game thread waits for a free one) |
 | `tick_overlap_late.txt` | 1 | the answer to a late tick thread (under 25 ticks a second over 5 s, and the thread busy over 95% or the picture 1.5 ticks behind): the clock held to one tick a frame, and the serial loop only if the game is then under 20 ticks a second. 0 off, 1 on, above 1 the fewest frames a window needs, for tests (the clock alone then makes a window late) |
-| `tick_overlap_serialize.txt`, `tick_overlap_stall.txt`, `tick_overlap_jitter.txt` (ms), `tick_overlap_force_serial.txt` (1) | 0 | test aids of the host runs: wait for each job; hold each job back; the tick thread sleeps at random at 9 places of a job; every frame is the serial loop's |
+| `tick_overlap_serialize.txt`, `tick_overlap_stall.txt`, `tick_overlap_jitter.txt` (ms), `tick_overlap_force_serial.txt` (1), `tick_overlap_frame_stall.txt` (ms) | 0 | test aids of the host runs: wait for each job; hold each job back; the tick thread sleeps at random at 9 places of a job; every frame is the serial loop's |
 | `perf_counters.txt` | 0 | 1, 2 or 3: the event set of the cores' performance counters |
 | `tick_owners.txt` | 0 | the tick owners' queues, mode 1 or 2 |
 | `game_core.txt` | 1 | the core of the game thread: 0, 1 or 2 |
