@@ -704,6 +704,28 @@ static real main_fixed_step(
 	return halo_fixed_step() ? 1.0f / TICKS_PER_SECOND : seconds_elapsed;
 }
 
+#ifdef HALO_WIIU
+#include <stdlib.h>
+/* port: a test aid of the host (HALO_TICK_FRAME_MS in the environment, in milliseconds; the console has no environment and never asks): a game of this machine alone is given this much
+time each frame whatever time has passed, with debug.fixed_step off (HALO_FIXED_STEP=0), so that a host run has the console's cadence - 16.7 ms makes two frames a tick, a frame
+with no tick in it among them - at any speed of the emulator. 0: not asked for. */
+static real main_test_frame_seconds(
+	void)
+{
+	static real seconds = -1.0f;
+
+	if (seconds < 0.0f)
+	{
+		char const *value = getenv("HALO_TICK_FRAME_MS");
+
+		seconds = value && *value ? (real)atof(value) / 1000.0f : 0.0f;
+		if (seconds < 0.0f)
+			seconds = 0.0f;
+	}
+	return seconds;
+}
+#endif
+
 /* ---------- prototypes */
 
 static long sort_desired_local_player_controllers(
@@ -2541,6 +2563,12 @@ static void main_update_time_unthrottled(
 	{
 		seconds_elapsed = main_globals.recording_dt;
 	}
+#ifdef HALO_WIIU
+	else if (main_test_frame_seconds() > 0.0f && main_globals.connection == _game_connection_local)
+	{
+		seconds_elapsed = main_test_frame_seconds();
+	}
+#endif
 	else if (halo_fixed_step() && main_globals.connection == _game_connection_local)
 	{
 		/* port: debug.fixed_step, a frame a tick whatever time has passed, as
@@ -2792,6 +2820,12 @@ static void main_update_time(
 	{
 		seconds_elapsed = main_globals.recording_dt;
 	}
+#ifdef HALO_WIIU
+	else if (main_test_frame_seconds() > 0.0f && main_globals.connection == _game_connection_local)
+	{
+		seconds_elapsed = main_test_frame_seconds();
+	}
+#endif
 	else if (halo_fixed_step() && main_globals.connection == _game_connection_local)
 	{
 		/* port: debug.fixed_step, as main_update_time_unthrottled */
