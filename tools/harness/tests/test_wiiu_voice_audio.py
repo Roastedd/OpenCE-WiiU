@@ -25,8 +25,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import CHECK_FAILED, ROOT, mutated, read, runner, timeout_scale  # noqa: E402
 from tools import linux_build  # noqa: E402
 
-CASES = ["round-trip", "stale", "slow-frames", "home", "home-unanswered", "home-while-opening", "close", "retry", "position",
-         "position-auto", "forget", "voice-test", "hears", "no-thread", "probe", "probe-position"]
+CASES = ["round-trip", "stale", "slow-frames", "tail", "home", "home-unanswered", "home-closed", "home-while-opening", "close", "retry",
+         "position", "position-auto", "forget", "voice-test", "hears", "no-thread", "probe", "probe-position", "complexity",
+         "complexity-ignored"]
 
 # a fault in wiiu_voice_audio.c, and the case that must catch it
 NEGATIVE_CONTROLS = {
@@ -44,6 +45,13 @@ NEGATIVE_CONTROLS = {
     "open-unguarded": (("\tif (opened != MIC_ERROR_OK || asked_to_stop())\n", "\tif (opened != MIC_ERROR_OK)\n"), "home-while-opening"),
     # (the close not joining the thread)
     "close-not-joined": (("\tOSJoinThread(&voice_thread, NULL);\n", ""), "close"),
+    # (the packets of the last frames given never taken back: a word loses its end when push to talk is let go)
+    "tail-not-taken": (("int voice_audio_packet_ready(unsigned char *packet, int maximum)\n{\n\tuint32_t dropped = 0, length;\n\n\tif (!running())",
+                        "int voice_audio_packet_ready(unsigned char *packet, int maximum)\n{\n\tuint32_t dropped = 0, length;\n\n\tif (1 || !running())"), "tail"),
+    # (HOME with no microphone open waits for the voice thread all the same)
+    "home-closed-waits": (("\t\tif (closed)\n\t\t{\n\t\t\twiiu_log(\"Voice chat: HOME with no microphone open", "\t\tif (!closed)\n\t\t{\n\t\t\twiiu_log(\"Voice chat: HOME with no microphone open"), "home-closed"),
+    # (the complexity file ignored)
+    "complexity-ignored-file": (("\tFILE *file = fopen(COMPLEXITY_FILE, \"r\");\n\tint complexity = 5, value;", "\tFILE *file = NULL;\n\tint complexity = 5, value;"), "complexity"),
     # (a microphone that would not open tried again every second)
     "retry-soon": (("#define VOICE_RETRY_MS 10000u", "#define VOICE_RETRY_MS 1000u"), "retry"),
     # (a speaker forgotten but still played)

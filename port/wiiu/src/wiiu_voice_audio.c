@@ -80,6 +80,8 @@ call takes one packet, of a frame given before, so at a slow frame rate one can 
 /* how long HOME waits for the voice thread to close the microphone (ms) */
 #define VOICE_SUSPEND_WAIT_MS 100u
 #define VOICE_REPORT_MS 10000u
+/* a gap this long between two turns of the voice thread's loop is logged (ms) */
+#define VOICE_GAP_LOG_MS 250u
 /* (Opus's own stack: 41.7 KB at the most, measured under qemu-ppc; with the frames' buffers, a third of this) */
 #define VOICE_STACK_BYTES (128u * 1024u)
 #define VOICE_PRIORITY 20
@@ -97,6 +99,9 @@ call takes one packet, of a frame given before, so at a slow frame rate one can 
 #define PROBE_RESULT_FILE WIIU_DATA_DIRECTORY "/mic_probe_result.txt"
 #define PROBE_WAV_FILE WIIU_DATA_DIRECTORY "/mic_probe.wav"
 #define CORE_FILE WIIU_DATA_DIRECTORY "/voice_core.txt"
+/* a number 0 to 10 in it is Opus's encoder complexity (5, the desktop's, without it): the console's encoder costs more than the
+instruction counts under qemu said, and this lets one run try a lower one without a build */
+#define COMPLEXITY_FILE WIIU_DATA_DIRECTORY "/voice_complexity.txt"
 
 enum
 {
@@ -152,6 +157,9 @@ static uint32_t microphone_open;
 static uint32_t session_ms;
 /* when the mixer last mixed (no mix lately: the voices sent here would never be heard) */
 static uint32_t mixed_ms;
+/* when the voice thread's loop last came round, and when the shell last asked it to give up the foreground (for the log of a HOME it
+answers late or not at all: the console's logs of 2026-10-31 had "did not answer in 100 ms" at every HOME) */
+static uint32_t last_turn_ms, suspend_asked_ms;
 static uint32_t forget_all_requests;
 static float voice_volume = 1.0f;
 /* debug.voice_test: -1 until the game thread has read it (the settings are not read before the game has started) */
@@ -210,6 +218,10 @@ static struct
 {
 	uint32_t since_ms;
 	uint32_t encoded, decoded, concealed, late, no_slot, ring_full, frames_dropped;
+	/* what the microphone brought: samples, the sum of their squares and the largest (full scale 1) */
+	uint32_t mic_samples;
+	double mic_squares;
+	float mic_peak;
 	uint64_t encode_ticks, encode_max, decode_ticks, decode_max, turn_max;
 } report;
 
@@ -421,7 +433,18 @@ static void microphone_poll(void)
 		{
 			const uint32_t take = count < 512u ? count : 512u;
 
+			uint32_t index;
+
 			wiiu_mic_ring_samples(microphone_ring, MIC_RING_SAMPLES, first, take, samples);
+			for (index = 0; index < take; index++)
+			{
+				const float magnitude = samples[index] < 0.0f ? -samples[index] : samples[index];
+
+				report.mic_squares += (double)samples[index] * samples[index];
+				if (magnitude > report.mic_peak)
+					report.mic_peak = magnitude;
+			}
+			report.mic_samples += take;
 			wiiu_voice_capture_samples(&capture, samples, take);
 			first = (first + take) % MIC_RING_SAMPLES;
 			count -= take;
@@ -454,9 +477,24 @@ static void tone_poll(uint32_t now)
 
 /* ---------- Opus */
 
+/* the encoder's complexity: halo/voice_complexity.txt (0 to 10) or the desktop's 5; read once, when the encoder is made */
+static int encoder_complexity(void)
+{
+	FILE *file = fopen(COMPLEXITY_FILE, "r");
+	int complexity = 5, value;
+
+	if (file)
+	{
+		if (fscanf(file, "%d", &value) == 1 && value >= 0 && value <= 10)
+			complexity = value;
+		fclose(file);
+	}
+	return complexity;
+}
+
 static int encoder_ready(void)
 {
-	int error = 0;
+	int error = 0, complexity;
 
 	if (encoder)
 		return 1;
@@ -469,9 +507,12 @@ static int encoder_ready(void)
 	/* (as voice_audio.c's: a lost frame made up from the next's redundancy; modest complexity) */
 	opus_encoder_ctl(encoder, OPUS_SET_INBAND_FEC(1));
 	opus_encoder_ctl(encoder, OPUS_SET_PACKET_LOSS_PERC(10));
-	opus_encoder_ctl(encoder, OPUS_SET_COMPLEXITY(5));
+	complexity = encoder_complexity();
+	opus_encoder_ctl(encoder, OPUS_SET_COMPLEXITY(complexity));
 	opus_encoder_ctl(encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
 	encoder_bitrate = 0;
+	if (complexity != 5)
+		wiiu_log("Voice chat: Opus complexity %d (halo/voice_complexity.txt)", complexity);
 	return 1;
 }
 
@@ -671,7 +712,7 @@ static void report_poll(uint32_t now, uint64_t turn_ticks)
 	report.frames_dropped = capture.dropped;
 	capture.dropped = 0;
 	/* (only a window that did something: a quiet one is not worth a line) */
-	if (report.encoded || report.decoded || report.frames_dropped)
+	if (report.encoded || report.decoded || report.frames_dropped || report.mic_samples)
 	{
 		int speakers = 0, index;
 
@@ -682,6 +723,12 @@ static void report_poll(uint32_t now, uint64_t turn_ticks)
 			report.encoded ? ticks_ms(report.encode_ticks) / report.encoded : 0.0, ticks_ms(report.encode_max), (unsigned)report.decoded,
 			report.decoded ? ticks_ms(report.decode_ticks) / report.decoded : 0.0, ticks_ms(report.decode_max), (unsigned)report.concealed,
 			speakers, ticks_ms(report.turn_max));
+		/* (what the microphone heard: about 32000 samples a second while it is open; the level rises as one speaks, and a peak of exactly 0 is a
+		ring that is not being seen) */
+		if (report.mic_samples)
+			wiiu_log("Voice: the microphone brought %u samples in %u s (%.0f a second), level %.4f, peak %.4f of full scale",
+				(unsigned)report.mic_samples, (unsigned)((now - report.since_ms) / 1000u),
+				report.mic_samples * 1000.0 / (double)(now - report.since_ms), sqrt(report.mic_squares / report.mic_samples), (double)report.mic_peak);
 		wiiu_log("Voice: dropped %u late, %u for want of a slot, %u to full rings, %u queued packets, %u stale packets, %u frames "
 			"given, %u microphone frames; the microphone's ring found full %u times, its read index elsewhere %u times",
 			(unsigned)report.late, (unsigned)report.no_slot, (unsigned)report.ring_full,
@@ -743,6 +790,16 @@ static int voice_main(int argc, const char **argv)
 		const uint32_t wanted = __atomic_load_n(&request, __ATOMIC_ACQUIRE);
 		int active;
 
+		{
+			/* (a loop that did not come round for a quarter of a second: HOME holding the thread, or a core kept busy; a microphone that
+			takes 137 ms to open is below it) */
+			const uint32_t turn = now_ms();
+			const uint32_t before = __atomic_load_n(&last_turn_ms, __ATOMIC_RELAXED);
+
+			if (before && turn - before >= VOICE_GAP_LOG_MS)
+				wiiu_log("Voice chat: the voice thread's loop did not come round for %u ms (HOME, or a core kept busy)", (unsigned)(turn - before));
+			__atomic_store_n(&last_turn_ms, turn, __ATOMIC_RELAXED);
+		}
 		if ((wanted & 3u) == REQUEST_STOP)
 		{
 			microphone_close("the app closes");
@@ -864,6 +921,21 @@ int voice_audio_encode(const float *frame, int bitrate, unsigned char *packet, i
 	__atomic_add_fetch(&encode_dropped, wiiu_voice_queue_put_newest(&encode_queue, &job, ENCODE_KEEP), __ATOMIC_RELAXED);
 	/* (the packet of a frame given before: this one's is ready by the next call) */
 	length = wiiu_voice_packet_take(&packet_queue, now, VOICE_STALE_MS, maximum > 0 ? (uint32_t)maximum : 0u, packet, &dropped);
+	if (dropped)
+		__atomic_add_fetch(&stale_dropped, dropped, __ATOMIC_RELAXED);
+	return (int)length;
+}
+
+/* network_voice.c's (HALO_WIIU only): the oldest packet the voice thread has encoded that no later frame has taken back, if it is not stale.
+voice_audio_encode gives the packet of the frame before, so the last frames given before the talking stopped (push to talk let go) would
+never be sent: they are taken here, each update, and sent. 0 for none */
+int voice_audio_packet_ready(unsigned char *packet, int maximum)
+{
+	uint32_t dropped = 0, length;
+
+	if (!running())
+		return 0;
+	length = wiiu_voice_packet_take(&packet_queue, now_ms(), VOICE_STALE_MS, maximum > 0 ? (uint32_t)maximum : 0u, packet, &dropped);
 	if (dropped)
 		__atomic_add_fetch(&stale_dropped, dropped, __ATOMIC_RELAXED);
 	return (int)length;
@@ -995,7 +1067,23 @@ void wiiu_voice_suspend(void)
 
 	if (!running())
 		return;
+	__atomic_store_n(&suspend_asked_ms, now_ms(), __ATOMIC_RELAXED);
 	wanted = request_next(REQUEST_SUSPEND);
+	/* (no microphone open, and none being opened: the request is seen under the lock by any opening that follows, so there is nothing
+	for the thread to close and nothing to wait for. The console's logs showed the thread never answering within the 100 ms, each time
+	with the microphone closed: the release callback waited them out for nothing) */
+	if (OSTryLockMutex(&microphone_lock))
+	{
+		const int closed = microphone_handle < 0;
+
+		OSUnlockMutex(&microphone_lock);
+		if (closed)
+		{
+			wiiu_log("Voice chat: HOME with no microphone open: the voice thread is told, and not waited for (its loop last came round %u ms ago)",
+				(unsigned)(now_ms() - __atomic_load_n(&last_turn_ms, __ATOMIC_RELAXED)));
+			return;
+		}
+	}
 	while (__atomic_load_n(&acknowledged, __ATOMIC_ACQUIRE) != wanted && waited < VOICE_SUSPEND_WAIT_MS)
 	{
 		OSSleepTicks(OSMillisecondsToTicks(2));
@@ -1018,13 +1106,14 @@ void wiiu_voice_suspend(void)
 			uninit = MICUninit(handle);
 		}
 		OSUnlockMutex(&microphone_lock);
-		wiiu_log("Voice chat: the voice thread did not answer in %u ms; %s (MICClose %d, MICUninit %d)", (unsigned)waited,
-			handle >= 0 ? "the microphone closed here" : "the microphone was not open", (int)closed, (int)uninit);
+		wiiu_log("Voice chat: the voice thread did not answer in %u ms; %s (MICClose %d, MICUninit %d); its loop last came round %u ms ago",
+			(unsigned)waited, handle >= 0 ? "the microphone closed here" : "the microphone was not open", (int)closed, (int)uninit,
+			(unsigned)(now_ms() - __atomic_load_n(&last_turn_ms, __ATOMIC_RELAXED)));
 	}
 	else
 	{
-		wiiu_log("Voice chat: the voice thread did not answer in %u ms, and is in a microphone call: the microphone is left to the system",
-			(unsigned)waited);
+		wiiu_log("Voice chat: the voice thread did not answer in %u ms, and is in a microphone call: the microphone is left to the system; its loop "
+			"last came round %u ms ago", (unsigned)waited, (unsigned)(now_ms() - __atomic_load_n(&last_turn_ms, __ATOMIC_RELAXED)));
 	}
 }
 

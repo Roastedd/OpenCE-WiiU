@@ -574,6 +574,9 @@ static struct
 	uint32_t mixed;
 } game;
 
+/* whether the game takes the packets no later frame took back (network_voice.c's, HALO_WIIU) */
+static int game_takes_tail = 1;
+
 /* the game thread's frame: the microphone wanted; each frame heard, and talking, encoded, and the packet it gives back
 played as the speakers' (none: not played) */
 static void game_frame(int wanted, int talking, int speaker, int other_speaker)
@@ -608,6 +611,21 @@ static void game_frame(int wanted, int talking, int speaker, int other_speaker)
 		if (other_speaker >= 0)
 			voice_audio_play(other_speaker, game.sequence, packet, length, 1.0f, 0.0f);
 		game.sequence++;
+	}
+	/* (network_voice.c's loop after that one: the packets of frames given before that no later frame took back) */
+	if (wanted && game_takes_tail)
+	{
+		int length;
+
+		while ((length = voice_audio_packet_ready(packet, 136)) > 0)
+		{
+			if (!game.packets)
+				game.first_packet_call = game.calls;
+			game.packets++;
+			if (speaker >= 0)
+				voice_audio_play(speaker, game.sequence, packet, length, 1.0f, 0.0f);
+			game.sequence++;
+		}
 	}
 }
 
@@ -769,9 +787,14 @@ int main(int argc, char **argv)
 		CHECK(voice_audio_microphone(TRUE), "the microphone not said to be open");
 		CHECK(game.frames >= 95 && game.frames <= 101, "%u frames in 2 s", game.frames);
 		CHECK(fabs(mean_level() - TONE_LEVEL) < 0.02 * TONE_LEVEL, "the frames' level %.4f, the tone's %.4f", mean_level(), TONE_LEVEL);
-		/* (a frame's packet comes back at the next call, not its own: the second, or the third when two frames came at once) */
-		CHECK(game.first_packet_call == 2 || game.first_packet_call == 3, "the first packet came back at call %u", game.first_packet_call);
+		/* (a frame's packet comes back at the next call, not its own: the second, or the third when two frames came at once; or, when the
+		voice thread has encoded it before the game's frame is over, at the end of that frame, with the call that gave the frame) */
+		CHECK(game.first_packet_call >= 1 && game.first_packet_call <= 3, "the first packet came back at call %u", game.first_packet_call);
 		CHECK(game.packets + 2 >= game.calls, "%u packets for %u frames", game.packets, game.calls);
+		/* (and the report says what the microphone brought, once its window of 10 s is over: the tone's 0.25 of full scale is its peak) */
+		play_for(9000, TRUE, TRUE, 7, -1);
+		CHECK(logged("Voice: the microphone brought") == 1, "no line of the microphone's samples (%d)", logged("Voice: the microphone brought"));
+		CHECK(logged("level 0.1768, peak 0.2500 of full scale") == 1, "the level and peak are not the tone's");
 		CHECK(game.mixed > 0, "nothing played");
 		CHECK(fabs(sqrt(game.mixed_sum / game.mixed) - TONE_LEVEL) < 0.2 * TONE_LEVEL, "played back at %.4f, the tone at %.4f",
 			sqrt(game.mixed_sum / game.mixed), TONE_LEVEL);
@@ -898,6 +921,68 @@ int main(int argc, char **argv)
 		wiiu_voice_resume();
 		play_for(100, TRUE, FALSE, -1, -1);
 		CHECK(mic.open && mic.opens == 2, "the microphone not open again (opened %d times)", mic.opens);
+		return 0;
+	}
+	if (!strcmp(case_name, "tail"))
+	{
+		/* push to talk let go: the frames given up to then all have their packets sent, the last ones too (a second of talking at 50
+		game frames a second, then 200 ms of silence with the microphone still open) */
+		play_for(1000, TRUE, TRUE, 7, -1);
+		play_for(200, TRUE, FALSE, 7, -1);
+		CHECK(game.calls >= 45, "%u frames given", game.calls);
+		CHECK(game.packets == game.calls, "%u packets sent for %u frames given: the last frames' packets were never taken back", game.packets,
+			game.calls);
+		CHECK(stale_dropped == 0, "%u packets dropped as stale", stale_dropped);
+		/* (and at 15 game frames a second, three frames at a time) */
+		play_at(1000, 66, TRUE, TRUE, 7, -1);
+		play_at(300, 66, TRUE, FALSE, 7, -1);
+		CHECK(game.packets == game.calls, "at 15 frames a second: %u packets for %u frames", game.packets, game.calls);
+		return 0;
+	}
+	if (!strcmp(case_name, "home-closed"))
+	{
+		/* HOME with the microphone closed (no one has asked for it, or it was not wanted a second): the release callback does not wait for
+		the voice thread, which is held asleep here and never answers; and the microphone does not open in the background */
+		uint32_t before;
+
+		voice_audio_microphone(FALSE);
+		advance(100);
+		hold(voice_thread.host, 1);
+		before = (uint32_t)OSTicksToMilliseconds(OSGetSystemTime());
+		wiiu_voice_suspend();
+		CHECK((uint32_t)OSTicksToMilliseconds(OSGetSystemTime()) - before < 20u, "the release callback waited %u ms for nothing",
+			(unsigned)((uint32_t)OSTicksToMilliseconds(OSGetSystemTime()) - before));
+		CHECK(logged("Voice chat: HOME with no microphone open"), "no line of it");
+		CHECK(!logged("did not answer"), "waited all the same");
+		/* (held for 400 ms more, as if the system had stopped it: it says so when it runs again) */
+		advance(400);
+		hold(voice_thread.host, 0);
+		/* (woken, it answers, and says how late: and asked for the microphone in the background it opens none) */
+		voice_audio_microphone(TRUE);
+		advance(300);
+		CHECK(mic.inits == 0, "the microphone set up in the background");
+		CHECK(logged("Voice chat: the voice thread's loop did not come round for"), "no line of the thread's gap");
+		CHECK(__atomic_load_n(&acknowledged, __ATOMIC_ACQUIRE) == __atomic_load_n(&request, __ATOMIC_ACQUIRE), "the voice thread did not answer once woken");
+		wiiu_voice_resume();
+		play_for(200, TRUE, FALSE, -1, -1);
+		CHECK(mic.open && mic.opens == 1, "the microphone not open after HOME (opened %d times)", mic.opens);
+		return 0;
+	}
+	if (!strcmp(case_name, "complexity"))
+	{
+		/* halo/voice_complexity.txt: Opus's complexity, 5 without it; nonsense in it is ignored */
+		card_write("voice_complexity.txt", "2\n");
+		play_for(200, TRUE, TRUE, 7, -1);
+		CHECK(logged("Voice chat: Opus complexity 2 (halo/voice_complexity.txt)"), "no line of the complexity");
+		CHECK(game.packets > 0, "no packets at complexity 2");
+		return 0;
+	}
+	if (!strcmp(case_name, "complexity-ignored"))
+	{
+		card_write("voice_complexity.txt", "99\n");
+		play_for(200, TRUE, TRUE, 7, -1);
+		CHECK(!logged("Opus complexity"), "a complexity of 99 taken");
+		CHECK(game.packets > 0, "no packets");
 		return 0;
 	}
 	if (!strcmp(case_name, "close"))

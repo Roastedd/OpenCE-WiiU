@@ -344,11 +344,17 @@ on 32-bit x86 and big-endian (`tools/harness/tests/test_wiiu_voice.py`: the queu
   for the voice thread. `halo/voice_core.txt` `2` puts the voice thread on core 2 at the GX2 thread's priority, as DirectSound's packet decoder
   is, should the mixer miss chunks with it on core 0.
 - **Latency**: a frame's packet comes back at the next call, 20 ms or a game frame later; a packet more than 150 ms old by then is not
-  sent (the tail of a talk that ended, or of a stall). Each call takes back one packet, so at a slow frame rate one can wait a game frame
+  sent (the tail of a talk that ended, or of a stall). The packets of the last frames given before the talking stopped (push to talk let go)
+  would be waiting for a call that never comes, so `network_voice.c` also asks for them, once an update (`voice_audio_packet_ready`, under
+  `HALO_WIIU`): without it every talk lost its last one to three packets, 20 to 60 ms. Each call takes back one packet, so at a slow frame rate one can wait a game frame
   more: 150 ms keeps every packet down to 15 game frames a second (60 ms lost a fifth of them at 30).
 - **HOME**: the voice thread closes the microphone and drops what waits before the sound is given up (the release callback waits 100 ms at most;
   a thread that does not answer has the microphone closed for it by the callback, if it is between microphone calls), and opens it again when
-  the foreground is back, every 10 s while that fails. The close ends the thread within 300 ms, and `exit-trail.txt` says "the voice thread
+  the foreground is back, every 10 s while that fails. With no microphone open the callback does not wait at all ("HOME with no microphone
+  open"): the console's logs of 2026-10-31 had "did not answer in 100 ms" at every one of 41 HOMEs, each with the microphone closed, so the
+  100 ms was spent for nothing. The thread says "noticed HOME N ms after it was asked" when it does notice late, "its loop did not come round for N ms" when it
+  runs again after a gap of a quarter of a second, and the lines of HOME say how long ago its loop last came round: those settle whether the
+  thread is starved or stopped by the system in the background. The close ends the thread within 300 ms, and `exit-trail.txt` says "the voice thread
   ended".
 - **What the host is told**: a machine says it hears voices only while it can play them (`voice_audio_hears`: the voice thread running, in the
   foreground, with the sound mixing), so a host sends none to a Wii U that cannot play them; a microphone that does not open does not stop it
@@ -358,7 +364,12 @@ on 32-bit x86 and big-endian (`tools/harness/tests/test_wiiu_voice.py`: the queu
   capitalistspz's wiiu_audio_examples). Position: `bufferPos` is where the system writes, in bytes, followed by the app, which never consumes
   (WiiUCamera). Both are written (`src/wiiu_voice_core.c`, tested over simulated rings, in either unit), and `audio.wiiu_microphone_read` chooses:
   `"auto"` (the default) is what the probe found, else consume.
-- **The log**: "Voice chat:" lines when the microphone opens and closes and why, and every 10 s of a session two "Voice:" lines: frames encoded
+- **Opus's cost**: the encoder's complexity is the desktop's 5 unless `halo/voice_complexity.txt` holds 0 to 10 ("Voice chat: Opus complexity N").
+  The one console window measured (2026-10-31, `Voice:` line) had 29 frames encoded at a mean 4.33 ms and at most 10.71 ms, wall time on core 0
+  including whatever preempted the voice thread, against the 1.4 to 2.3 ms estimated from instruction counts.
+- **The log**: "Voice chat:" lines when the microphone opens and closes and why, and every 10 s of a session "Voice:" lines: first what the
+  microphone brought ("the microphone brought N samples in 10 s (32000 a second), level L, peak P of full scale": a rate far from 32000 says the
+  unit or the rate is wrong; a peak of exactly 0 says the ring is not being seen; the level rises as one speaks), then frames encoded
   and packets decoded with their mean and longest times, frames made up, speakers, the slowest turn, and what was dropped. The mixer's
   profile (`halo/audio_profile.txt` 1) times the voices' mix as its "chat" stage.
 - `debug.voice_test` works as on the other builds: a 440 Hz tone in place of the microphone, and a "voice test: speaker N level L gain G pan P
@@ -394,7 +405,7 @@ it was.
    but `consume samples`, the runs after it read by its finding.
 2. **A tone against an x86 build on the LAN.** On the Wii U: `debug.voice_test = true`, `audio.voice_chat = "open_mic"` (the tone is always above
    the open mic's level) and `debug.network_test = "host:bloodgulch"`. The x86 build of the same commit joins from the bridged Colima machine, as
-   `lan_test.sh` has it, with `HALO_VOICE_TEST=1 HALO_VOICE_CHAT=open_mic HALO_NETWORK_TEST=join`. Each side's log has a line each second, `voice
+   `lan_test.sh` has it, with `HALO_VOICE_TEST=1 HALO_VOICE_CHAT=open_mic HALO_NETWORK_TEST=join` (the tools repository's `tools/ppc-be/run.sh` passes the first two on to its container; until 2026-11-02 it did not, and the Mac side would have run without the tone). The same two machines' voice was run on the build machine in both byte orders (big-endian host with an x86 client, and the other way round) with `runs/mic-20261102/voice_cross.sh`: each side logged the other's tone at level 0.195 to 0.214. Each side's log has a line each second, `voice
    test: speaker N level 0.212 ...`, for the other's tone (0.212 is the tone's 0.3 over the square root of 2; `gain 1.00 pan 0.00` in the
    lobby, others when the game's proximity places the speaker), and the Wii U's "Voice:" lines count about 500 frames encoded and 500 packets
    decoded in 10 s. Then the other way round: the x86 build hosts and the Wii U joins (`debug.network_test = "join"`).
