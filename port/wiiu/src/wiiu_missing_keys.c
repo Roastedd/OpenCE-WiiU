@@ -4,6 +4,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
@@ -14,7 +15,11 @@
 #define ACTIVE 2u
 #define QUIESCED 4u
 #define GAMEPLAY 8u
-#define FILE_CAP 128u
+/* Files from earlier runs are only counted (the folder never emptied itself: 128 of them stopped the capture at its first write on
+   2026-11-06, errno 28, and 41 keys were lost). RUN_CAP bounds what one run writes; OLD_CAP is the folder's size at which the capture
+   stays off, so that the scan stays short (SCAN_CAP) and the card does not fill with batches no one collects. */
+#define RUN_CAP 64u
+#define OLD_CAP 1000u
 #define SCAN_CAP 4096u
 #define WRITE_BYTES 4096u
 #define PREFIX "shader-misses-"
@@ -38,7 +43,8 @@ static struct
     uint32_t initialized, gate, io_gate, observing, producer, consumer, write_sequence, read_sequence;
     uint32_t accepted, written, full, unavailable, lost_io, io_errors, close_errors;
     uint32_t rejected_producer, rejected_consumer, phase, batch_records, files, failed;
-    uint32_t scanned, owned_files, sequence, always;
+    uint32_t scanned, owned_files, old_files, sequence, always;
+    const char *why;
     size_t text_size, text_written;
     DIR *scan;
     int descriptor, last_error;
@@ -236,7 +242,7 @@ void wiiu_missing_keys_counts_get(wiiu_missing_keys_counts *out)
     gate = load(&capture.gate); /* acquire any in-flight publication before queue sampling */
 #define COPY(field) out->field = load(&capture.field)
     COPY(accepted); COPY(written); COPY(full); COPY(unavailable); COPY(lost_io); COPY(io_errors); COPY(close_errors);
-    COPY(rejected_producer); COPY(rejected_consumer); COPY(batch_records); COPY(files); COPY(failed);
+    COPY(rejected_producer); COPY(rejected_consumer); COPY(batch_records); COPY(files); COPY(old_files); COPY(failed);
 #undef COPY
     phase = load(&capture.phase);
     out->queue_pending = load(&capture.write_sequence) - load(&capture.read_sequence);
@@ -258,8 +264,8 @@ void wiiu_missing_keys_report(const char *reason)
     if (!load(&capture.initialized) || !capture.config.report)
         return;
     wiiu_missing_keys_counts_get(&counts);
-    snprintf(text, sizeof(text), "Shader capture %s: accepted %u written %u pending %u+%u files %u state %u gates %u/%u play %u drained %u complete %u",
-        reason, counts.accepted, counts.written, counts.queue_pending, counts.batch_records, counts.files,
+    snprintf(text, sizeof(text), "Shader capture %s: accepted %u written %u pending %u+%u files %u (+%u earlier) state %u gates %u/%u play %u drained %u complete %u",
+        reason, counts.accepted, counts.written, counts.queue_pending, counts.batch_records, counts.files, counts.old_files,
         counts.phase, counts.gate, counts.io_gate, counts.gameplay, counts.drained, counts.complete);
     capture.config.report(capture.config.context, text);
     if (counts.full || counts.unavailable || counts.lost_io || counts.io_errors || counts.close_errors ||
@@ -272,8 +278,37 @@ void wiiu_missing_keys_report(const char *reason)
     }
 }
 
+static const char *const phase_names[] = { "idle", "opendir", "readdir", "closedir", "form", "stat", "open", "write",
+    "fsync", "close", "stat", "rename", "commit", "close", "failed" };
+
+static void say(const char *format, ...) __attribute__((format(printf, 1, 2)));
+static void say(const char *format, ...)
+{
+    char text[200];
+    va_list arguments;
+
+    if (!capture.config.report)
+        return;
+    va_start(arguments, format);
+    vsnprintf(text, sizeof(text), format, arguments);
+    va_end(arguments);
+    capture.config.report(capture.config.context, text);
+}
+
 static void fail(int error, int close_unknown)
 {
+    uint32_t phase = load(&capture.phase);
+
+    /* (said while the game runs, not behind the close: after QUIESCED the log is already ending) */
+    if (!(load(&capture.io_gate) & QUIESCED))
+    {
+        if (capture.why)
+            say("Shader capture gives up: %s (errno %d), %u records not written", capture.why, error ? error : EIO,
+                (unsigned)(load(&capture.write_sequence) - load(&capture.read_sequence) + load(&capture.batch_records)));
+        else
+            say("Shader capture gives up: %s failed (errno %d), %u records not written", phase < sizeof(phase_names) / sizeof(*phase_names) ? phase_names[phase] : "?",
+                error ? error : EIO, (unsigned)(load(&capture.write_sequence) - load(&capture.read_sequence) + load(&capture.batch_records)));
+    }
     __atomic_store_n(&capture.last_error, error ? error : EIO, __ATOMIC_RELEASE);
     add(&capture.io_errors, 1);
     store(&capture.failed, 1);
@@ -340,7 +375,14 @@ static int service_turn(void)
     switch (phase)
     {
     case IDLE:
-        if (load(&capture.read_sequence) == load(&capture.write_sequence)) return 0;
+        if (load(&capture.read_sequence) == load(&capture.write_sequence))
+        {
+            /* The folder is counted once, in the menu, before anything is queued, so that the run's log says at its start whether the capture
+               can write and a full folder is known before gameplay (which admits no file work) has queued a single key. */
+            if (capture.sequence || !(load(&capture.gate) & ACCEPTING)) return 0;
+            store(&capture.phase, SCAN_OPEN);
+            return 1;
+        }
         store(&capture.phase, capture.sequence ? FORM : SCAN_OPEN);
         return 1;
     case SCAN_OPEN:
@@ -358,10 +400,25 @@ static int service_turn(void)
     }
     case SCAN_CLOSE:
         error = closedir(capture.scan); capture.scan = NULL;
-        if (error || __atomic_load_n(&capture.last_error,__ATOMIC_ACQUIRE) || capture.owned_files >= FILE_CAP)
-            fail(error ? errno : __atomic_load_n(&capture.last_error,__ATOMIC_ACQUIRE) ?
-                __atomic_load_n(&capture.last_error,__ATOMIC_ACQUIRE) : ENOSPC,0);
-        else { capture.sequence = 1; store(&capture.phase,FORM); }
+        if (error || __atomic_load_n(&capture.last_error,__ATOMIC_ACQUIRE))
+        {
+            capture.why = "the folder could not be listed";
+            fail(error ? errno : __atomic_load_n(&capture.last_error,__ATOMIC_ACQUIRE), 0);
+        }
+        else if (capture.owned_files >= OLD_CAP)
+        {
+            capture.why = "the folder has too many shader-misses files: collect and delete the old ones";
+            say("Shader capture: %u files in halo/ (limit %u)", (unsigned)capture.owned_files, OLD_CAP);
+            fail(ENOSPC, 0);
+        }
+        else
+        {
+            capture.old_files = capture.owned_files;
+            say("Shader capture: %u files in halo/, writing to " PREFIX "%08x%08x-NNNN.txt (at most %u files this run, %u in all)",
+                (unsigned)capture.old_files, (unsigned)capture.config.run_high, (unsigned)capture.config.run_low, RUN_CAP, OLD_CAP);
+            capture.sequence = 1;
+            store(&capture.phase, IDLE);
+        }
         return 1;
     case FORM:
     {
@@ -377,7 +434,8 @@ static int service_turn(void)
         if (!taken) { if (read != write) fail(EINVAL,0); else store(&capture.phase,IDLE); return 1; }
         store(&capture.batch_records,taken);
         store(&capture.read_sequence,read); /* phase FORM was published before slots become reusable */
-        if (capture.owned_files >= FILE_CAP || capture.sequence > FILE_CAP) { fail(ENOSPC,0); return 1; }
+        if (capture.sequence > RUN_CAP) { capture.why = "this run has written its limit of files"; fail(ENOSPC,0); return 1; }
+        if (capture.owned_files >= OLD_CAP) { capture.why = "the folder is full"; fail(ENOSPC,0); return 1; }
         snprintf(capture.final,sizeof(capture.final),"%s/" PREFIX "%08x%08x-%04u.txt",capture.directory,capture.config.run_high,capture.config.run_low,capture.sequence);
         snprintf(capture.part,sizeof(capture.part),"%s.part",capture.final);
         store(&capture.phase,CHECK); return 1;

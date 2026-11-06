@@ -168,7 +168,7 @@ static void test_format_and_wrap(void)
         while (counts().queue_pending || counts().batch_records || counts().phase!=IDLE) { CHECK(!counts().failed); step(); }
     }
     finish(); CHECK(counts().complete && counts().written==162); CHECK(capture.read_sequence>128); CHECK(!counts().full);
-    CHECK(max_write==4096 && reports==0); cleanup();
+    CHECK(max_write==4096 && reports==1); cleanup(); /* (reports: the start line) */
 }
 #ifdef WIIU_MISSING_PRODUCER_FIXTURE
 static void test_actual_producer(void)
@@ -242,8 +242,10 @@ static void test_failures(void)
         finish(); CHECK(counts().failed && !counts().complete && !counts().drained);
         CHECK(counts().io_errors==1 && counts().lost_io==1 && counts().last_error==EIO);
         if (op==OP_CLOSE) CHECK(counts().close_errors==1);
-        CHECK(reports==0); /* Neither COMMIT nor FAILED may enqueue a summary behind main's Closed line. */
-        wiiu_missing_keys_report("explicit-caller"); CHECK(reports==2); cleanup();
+        /* The start line (the folder was counted) and the one line that says why it gave up, both while the game runs; the summary is
+           only ever asked for by main (no COMMIT or FAILED enqueues one behind main's Closed line). */
+        CHECK(reports==(op>=OP_OPEN && op<=OP_RENAME ? 2 : 1));
+        wiiu_missing_keys_report("explicit-caller"); CHECK(reports==(op>=OP_OPEN && op<=OP_RENAME ? 4 : 3)); cleanup();
     }
     reset(); pixel(1); while (counts().phase!=WRITE) step();
     fault=OP_WRITE; fail_call=1; step(); CHECK(counts().phase==FAIL_CLOSE);
@@ -256,10 +258,45 @@ static void test_limits_and_collision(void)
     snprintf(path,sizeof(path),"%s/shader-misses-12345678abcdef01-0001.txt",directory);
     file=fopen(path,"wb"); CHECK(file); fputs("original\n",file); fclose(file);
     finish(); CHECK(counts().failed && counts().last_error==EEXIST); file=fopen(path,"rb"); CHECK(fgetc(file)=='o'); fclose(file); cleanup();
+    /* 128 earlier files (what stopped the capture on 2026-11-06) are only counted: this run still writes */
     reset(); pixel(1);
-    for(i=0;i<128;i++) { snprintf(path,sizeof(path),"%s/shader-misses-existing-%u.part",directory,i); file=fopen(path,"wb"); CHECK(file); fclose(file); }
-    finish(); CHECK(counts().failed && counts().last_error==ENOSPC); cleanup();
+    for(i=0;i<128;i++) { snprintf(path,sizeof(path),"%s/shader-misses-existing-%u.txt",directory,i); file=fopen(path,"wb"); CHECK(file); fclose(file); }
+    finish(); CHECK(!counts().failed && counts().complete && counts().written==1 && counts().old_files==128); cleanup();
+    reset(); pixel(1);
+    for(i=0;i<OLD_CAP;i++) { snprintf(path,sizeof(path),"%s/shader-misses-existing-%u.part",directory,i); file=fopen(path,"wb"); CHECK(file); fclose(file); }
+    finish(); CHECK(counts().failed && counts().last_error==ENOSPC && counts().lost_io==1 && !counts().written && reports==2); cleanup();
+    reset(); pixel(1);
+    for(i=0;i<OLD_CAP-1;i++) { snprintf(path,sizeof(path),"%s/shader-misses-existing-%u.part",directory,i); file=fopen(path,"wb"); CHECK(file); fclose(file); }
+    finish(); CHECK(!counts().failed && counts().written==1); cleanup(); /* one below the limit: the run's own first file is the last */
     reset(); pixel(1); capture.scanned=SCAN_CAP; finish(); CHECK(counts().last_error==EFBIG); cleanup();
+}
+static void test_start_line_and_run_limit(void)
+{
+    unsigned i, turns = 0; char path[512]; FILE *file; int before;
+    /* the folder is counted once with nothing queued, and said at once */
+    reset();
+    for(i=0;i<5;i++) { snprintf(path,sizeof(path),"%s/shader-misses-old-%u.txt",directory,i); file=fopen(path,"wb"); CHECK(file); fclose(file); }
+    snprintf(path,sizeof(path),"%s/other.txt",directory); file=fopen(path,"wb"); CHECK(file); fclose(file);
+    while(!capture.sequence && turns++<1000) step();
+    CHECK(capture.sequence==1 && counts().old_files==5 && reports==1 && counts().phase==IDLE && !counts().failed);
+    before=io_calls; for(i=0;i<50;i++) CHECK(!step()); CHECK(io_calls==before && reports==1); /* then no file work at all while idle */
+    /* gameplay holds the count back as it holds every file step */
+    cleanup();
+    reset(); wiiu_missing_keys_gameplay(1); before=io_calls; for(i=0;i<50;i++) CHECK(!step()); CHECK(io_calls==before && reports==0);
+    wiiu_missing_keys_gameplay(0); while(!capture.sequence && turns++<2000) step(); CHECK(reports==1); cleanup();
+    /* a stopped capture does not start a count */
+    reset(); wiiu_missing_keys_stop(); before=io_calls; for(i=0;i<50;i++) CHECK(!step()); CHECK(io_calls==before && reports==0); cleanup();
+    /* a run writes RUN_CAP files and then says so; the key counted lost, the files kept */
+    reset(); pixel(1); while(counts().written<1) { CHECK(!counts().failed); step(); }
+    capture.sequence=RUN_CAP; pixel(2); /* the 64th file is written */
+    while(counts().written<2 && !counts().failed) step();
+    CHECK(counts().written==2 && counts().files==2 && !counts().failed);
+    pixel(3); finish(); /* the 65th is not */
+    CHECK(counts().failed && counts().last_error==ENOSPC && counts().lost_io==1 && counts().written==2);
+    CHECK(strstr(capture.why,"this run")); cleanup();
+    /* after the line to the log has been closed, a failure adds no line behind it */
+    reset(); pixel(1); while(capture.sequence==0) step(); wiiu_missing_keys_quiesce(); wiiu_missing_keys_resume();
+    capture.io_gate=ACCEPTING|QUIESCED; capture.phase=FORM; reports=0; fail(EIO,0); CHECK(reports==0 && counts().failed); cleanup();
 }
 static void wait_held(void) { pthread_mutex_lock(&hold_lock); while(!held) pthread_cond_wait(&hold_condition,&hold_lock); pthread_mutex_unlock(&hold_lock); }
 static void release_held(void) { pthread_mutex_lock(&hold_lock); released=1; pthread_cond_broadcast(&hold_condition); pthread_mutex_unlock(&hold_lock); }
@@ -386,6 +423,6 @@ int main(void)
     test_activity_states(); test_activity_admitted_turn();
 #endif
     test_always_mode();
-    test_capacity_and_ownership(); test_short_and_home(); test_failures(); test_limits_and_collision(); test_stop_schedules();
+    test_capacity_and_ownership(); test_short_and_home(); test_failures(); test_limits_and_collision(); test_start_line_and_run_limit(); test_stop_schedules();
     puts("missing-key queue: exact V/P, ownership, wrap/full, fair bounded IO, faults, HOME and ACTIVE/IO-held close passed"); return 0;
 }

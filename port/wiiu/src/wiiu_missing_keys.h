@@ -23,7 +23,7 @@ typedef struct wiiu_missing_keys_counts
 {
     uint32_t accepted, written, full, unavailable, lost_io, io_errors, close_errors;
     uint32_t rejected_producer, rejected_consumer, queue_pending, batch_records;
-    uint32_t phase, gate, io_gate, gameplay, files, failed, drained, complete;
+    uint32_t phase, gate, io_gate, gameplay, files, old_files, failed, drained, complete;
     int last_error;
 } wiiu_missing_keys_counts;
 
