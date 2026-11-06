@@ -66,6 +66,21 @@ void wiiu_input_gyro_take(float *turn, float *pitch)
 	*turn = *pitch = 0.0f;
 }
 
+void wiiu_input_set_wimote(const char *layout, const char *look, float box, float speed, int invert_x)
+{
+	(void)layout;
+	(void)look;
+	(void)box;
+	(void)speed;
+	(void)invert_x;
+}
+
+int wiiu_input_remote_look_take(float *turn, float *pitch)
+{
+	*turn = *pitch = 0.0f;
+	return 0;
+}
+
 unsigned long wiiu_input_milliseconds(void)
 {
 	return game_digest_milliseconds();

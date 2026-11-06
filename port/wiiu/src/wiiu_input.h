@@ -2,7 +2,7 @@
 WIIU_INPUT.H
 
 The Wii U's controllers as plain numbers, for xinput_wiiu.c (built with the Xbox's ABI) to turn into XInput: wiiu_input.c (built with the console's) reads
-the GamePad through VPAD and Pro Controllers through KPAD.
+the GamePad through VPAD, and the Pro Controllers, Classic Controllers and Wii Remotes (with a Nunchuk or alone) through KPAD.
 */
 
 #ifndef HALO_WIIU_INPUT_H
@@ -31,6 +31,16 @@ enum
 	WIIU_PAD_TV = 1 << 16,
 };
 
+/* The Xbox's face buttons, by name, for a controller that is laid out in the Xbox's terms (a Wii Remote: wiiu_wimote.h) and not in the Wii U's: they reach the
+game as they are, whatever input.wiiu_face_buttons says of the Wii U's A, B, X and Y. */
+enum
+{
+	WIIU_XBOX_A = 1 << 0,
+	WIIU_XBOX_B = 1 << 1,
+	WIIU_XBOX_X = 1 << 2,
+	WIIU_XBOX_Y = 1 << 3,
+};
+
 struct wiiu_pad
 {
 	unsigned int buttons;
@@ -39,6 +49,11 @@ struct wiiu_pad
 	/* the GamePad's gyro, port 0 only: turn rates in rotations a second, about the pad's own horizontal axis (pitch: top away from the player positive) and its
 	vertical axis (yaw: turning right positive); 0 where there is none */
 	float gyro_pitch, gyro_yaw;
+	/* the Xbox's face buttons held, WIIU_XBOX_*, which xinput_wiiu.c gives the game as they are (the Wii Remote's; the other controllers use the buttons above) */
+	unsigned int xbox_faces;
+	/* a turn rate for the view from a pointer (the Wii Remote's IR pointer outside its free-aim box), -1 to 1, right and up positive, already lifted past the game's
+	dead range for the stick; the game gets the larger of it and the right stick, and not in the menus */
+	float look_x, look_y;
 };
 
 #define WIIU_PAD_PORTS 4
@@ -59,6 +74,16 @@ int wiiu_input_port_present(unsigned int port);
 
 /* How many controllers share the GamePad's player that would be players of their own once a second player joins ("auto" with one player); 0 otherwise. */
 int wiiu_input_controllers_merged(void);
+
+/* The settings for the Wii Remotes (input.wiiu_wiimote_*: wiiu_wimote.h), told whenever they change: layout "default" or "z_fire"; look "auto", "pointer", "motion" or
+"off"; the free-aim box (the share of the pointer's range, 0 to 0.9, that does not turn the view) and the pointer's turn speed (1: the full stick at the edge of the
+screen); invert_x turns the Remote's MotionPlus turn the other way round. */
+void wiiu_input_set_wimote(const char *layout, const char *look, float box, float speed, int invert_x);
+
+/* The first player's Wii Remote as the view's mouse, when its look source is its MotionPlus (input.wiiu_wiimote_look): how far it has turned since the last call, as
+wiiu_input_gyro_take gives the GamePad's, in the space chosen (wiiu_input_set_gyro_space), and cleared. Returns 1 if the first player has such a Remote, and then
+the view is turned by this and not the GamePad's gyro; 0 if not (the outputs are 0). */
+int wiiu_input_remote_look_take(float *turn, float *pitch);
 
 /* The GamePad's gyro as a mouse: how far it has turned since the last call, in rotations (turn: right positive; pitch: the top tilting away positive), worked
 out from each sample in the space chosen (wiiu_input_set_gyro_space), and cleared. */
@@ -88,7 +113,7 @@ unsigned long wiiu_input_milliseconds(void);
 Returns 1 while a finger is on it. */
 int wiiu_input_touch(float *x, float *y);
 
-/* Rumbles the pad of a port, 0 (still) to 1 (full): the GamePad's motor for port 0 and those of the Pro Controllers that drive the port. Does nothing in the
+/* Rumbles the pad of a port, 0 (still) to 1 (full): the GamePad's motor for port 0 and those of the Pro Controllers and Wii Remotes that drive the port (a Remote not while its MotionPlus turns the view). Does nothing in the
 background. */
 void wiiu_input_rumble(unsigned int port, float strength);
 

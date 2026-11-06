@@ -29,7 +29,8 @@ lights show the number of the player it drives (wiiu_input.c): 1 while it shares
 The Xbox pad's four face buttons are matched to the Wii U's in the game by place (the Wii U's B is where the Xbox's A is): the player's thumb finds the
 action where it expects it, and the prompts on the screen show the icon of the letter that is there (hud_hires_tags.c, port_button_icon). In the menus
 they are matched by letter (the Wii U's A selects, its B goes back, as on every Nintendo console), because the menus' own prompts name the Xbox's
-letters. The setting input.wiiu_face_buttons says "position" or "label" for both instead. The Xbox's black and white buttons, which later pads put on the shoulders, are the Wii U's R and L; its triggers are ZR and ZL
+letters. The setting input.wiiu_face_buttons says "position" or "label" for both instead (a Wii Remote's buttons are laid out in the Xbox's own terms, and
+are not matched: wiiu_wimote.c). The Xbox's black and white buttons, which later pads put on the shoulders, are the Wii U's R and L; its triggers are ZR and ZL
 (buttons, so all or nothing). The motors rumble with the game (input.wiiu_rumble).
 
 A cinematic that can be skipped is skipped by holding the Xbox's A (the Wii U's B, by place), + (Start) or a finger on the GamePad's screen for a second: a press
@@ -39,6 +40,11 @@ L + R + - shows or hides the performance overlay.
 
 The GamePad's gyro can aim (input.wiiu_gyro_aim, "off" by default; "always", or "zoom" for only while zoomed in): its turn rates are added to the right stick
 while no menu has the screen.
+
+Wii Remotes. One with a Nunchuk is a controller of its own layout (input.wiiu_wiimote_layout: B fires, A jumps, Nunchuk Z throws grenades, ...; wiiu_wimote.c), one
+alone has the menus' layout. The view turns by the Remote's IR pointer outside a free-aim box (a turn rate that reaches the game as the right stick, but not in the
+menus: WIIU_PAD look_x and look_y) or, for a Remote Plus or one with a MotionPlus adapter that is the first player's, by its MotionPlus (as a mouse, like the
+GamePad's gyro, which it replaces while the first player has such a Remote), as input.wiiu_wiimote_look says.
 */
 
 #include "platform.h"
@@ -152,10 +158,26 @@ static void pad_state(const struct wiiu_pad *pad, XINPUT_GAMEPAD *state)
 				target ^= 1;
 			state->bAnalogButtons[target] = 0xff;
 		}
+	/* (a Wii Remote's face buttons are the Xbox's own, whatever the match of the Wii U's) */
+	if (pad->xbox_faces & WIIU_XBOX_A)
+		state->bAnalogButtons[XINPUT_GAMEPAD_A] = 0xff;
+	if (pad->xbox_faces & WIIU_XBOX_B)
+		state->bAnalogButtons[XINPUT_GAMEPAD_B] = 0xff;
+	if (pad->xbox_faces & WIIU_XBOX_X)
+		state->bAnalogButtons[XINPUT_GAMEPAD_X] = 0xff;
+	if (pad->xbox_faces & WIIU_XBOX_Y)
+		state->bAnalogButtons[XINPUT_GAMEPAD_Y] = 0xff;
 	state->sThumbLX = stick(pad->left_x);
 	state->sThumbLY = stick(pad->left_y);
 	state->sThumbRX = stick(pad->right_x);
 	state->sThumbRY = stick(pad->right_y);
+	/* a pointer's turn rate is a push of the right stick, when it is more than the stick's, and not in the menus (a Remote pointing off the middle must not scroll them) */
+	if ((pad->look_x != 0.0f || pad->look_y != 0.0f) && !port_menus_active() &&
+		pad->look_x * pad->look_x + pad->look_y * pad->look_y > pad->right_x * pad->right_x + pad->right_y * pad->right_y)
+	{
+		state->sThumbRX = stick(pad->look_x);
+		state->sThumbRY = stick(pad->look_y);
+	}
 }
 
 /* debug.virtual_gamepads and debug.virtual_gamepad_script (wiiu_virtual_pads.h): the script's pads for the port, merged with what its controllers do. The script
@@ -227,6 +249,7 @@ int halo_linux_mouse_look(short gamepad_index, float *yaw, float *pitch)
 	static unsigned long read_at = (unsigned long)-1;
 	const float full_turn = 6.2831853f;
 	float turn, tilt, x, y;
+	int remote;
 
 	*yaw = *pitch = 0.0f;
 	if (gamepad_index != 0)
@@ -249,7 +272,15 @@ int halo_linux_mouse_look(short gamepad_index, float *yaw, float *pitch)
 	}
 	/* (taken whether it is used or not: a turn made in a menu must not jump the view when the game comes back) */
 	wiiu_input_gyro_take(&turn, &tilt);
-	if (!mode || port_menus_active() || (mode == 2 && player_control_get_zoom_level(0) < 0))
+	/* the first player's Wii Remote, when its MotionPlus is how it looks (input.wiiu_wiimote_look): its turn is the view's, in place of the GamePad's gyro (the pad lies
+	in a lap while the Remote aims), and aims whatever input.wiiu_gyro_aim says of the GamePad's: the sensitivity, the space, the invert and the pause are the gyro's */
+	remote = wiiu_input_remote_look_take(&x, &y);
+	if (remote)
+	{
+		turn = x;
+		tilt = y;
+	}
+	if ((!mode && !remote) || port_menus_active() || (!remote && mode == 2 && player_control_get_zoom_level(0) < 0))
 		return 0;
 	/* (the stick's: XInputGetState of this poll, which comes first) */
 	if ((pause == 1 && wiiu_input_touch(&x, &y)) || (pause == 2 && stick_aimed_at == aim_polls))
@@ -438,6 +469,10 @@ static void layout_apply(void)
 		read_at = config_changes();
 		wiiu_input_set_layout(!strcmp(layout, "separate") ? WIIU_PAD_LAYOUT_SEPARATE : !strcmp(layout, "merged") ? WIIU_PAD_LAYOUT_MERGED :
 			WIIU_PAD_LAYOUT_AUTO);
+		/* the Wii Remotes' (input.wiiu_wiimote_*: wiiu_wimote.h) */
+		wiiu_input_set_wimote(config_string("input.wiiu_wiimote_layout"), config_string("input.wiiu_wiimote_look"),
+			(float)config_real("input.wiiu_wiimote_pointer_box"), (float)config_real("input.wiiu_wiimote_pointer_speed"),
+			config_boolean("input.wiiu_wiimote_motion_invert_x"));
 	}
 }
 
@@ -527,6 +562,22 @@ static int controller_port(HANDLE device)
 	return -1;
 }
 
+/* the updater's panel is answered by the Wii U's letters: a Wii Remote's Xbox face buttons count as the letters of the same name, as the menus take them */
+static unsigned int panel_buttons(const struct wiiu_pad *pad)
+{
+	unsigned int buttons = pad->buttons;
+
+	if (pad->xbox_faces & WIIU_XBOX_A)
+		buttons |= WIIU_PAD_A;
+	if (pad->xbox_faces & WIIU_XBOX_B)
+		buttons |= WIIU_PAD_B;
+	if (pad->xbox_faces & WIIU_XBOX_X)
+		buttons |= WIIU_PAD_X;
+	if (pad->xbox_faces & WIIU_XBOX_Y)
+		buttons |= WIIU_PAD_Y;
+	return buttons;
+}
+
 DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 {
 	int port = controller_port(device);
@@ -543,7 +594,7 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 	under it sees none */
 	if (port == 0)
 		wiiu_update_menus(port_main_menu_active(), port_menus_active());
-	if (wiiu_update_panel_input((unsigned int)port, have_pad ? pad.buttons : 0u))
+	if (wiiu_update_panel_input((unsigned int)port, have_pad ? panel_buttons(&pad) : 0u))
 	{
 		memset(&pad, 0, sizeof(pad));
 		have_pad = 0;

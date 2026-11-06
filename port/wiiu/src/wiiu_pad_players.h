@@ -1,7 +1,7 @@
 /*
 WIIU_PAD_PLAYERS.H
 
-Which player each Pro Controller and Classic Controller is, as plain C that the desktop tests (tools/harness/tests/test_wiiu_pad_players.py):
+Which player each Pro Controller, Classic Controller and Wii Remote is, as plain C that the desktop tests (tools/harness/tests/test_wiiu_pad_players.py):
 the map from the controllers to the game's players, which keeps a controller's player while it goes and comes back; the layouts
 (input.wiiu_controller_layout), "auto" among them, which decides when the controllers share the GamePad's player and when each is a
 player of its own; and the number each controller's lights show. wiiu_input.c keeps one and tells it what the system says.
@@ -38,7 +38,7 @@ struct wiiu_pad_players
 {
 	struct
 	{
-		/* a controller the game reads (a Pro or Classic Controller) is on the channel */
+		/* a controller the game reads (a Pro or Classic Controller, or a Wii Remote) is on the channel */
 		int present;
 		/* its address, all zero where the system gave none */
 		unsigned char address[WIIU_PAD_ADDRESS_SIZE];
@@ -67,7 +67,7 @@ are taken and it shares the GamePad's, until it connects again. The same control
 address on another channel has left that one. Returns its player. */
 int wiiu_pad_players_connect(struct wiiu_pad_players *players, int channel, const unsigned char address[WIIU_PAD_ADDRESS_SIZE]);
 
-/* The channel's controller has gone (or is one the game does not read, as a Wii Remote whose Classic Controller was taken out); its
+/* The channel's controller has gone (or is one the game does not read, as a Wii Remote with a guitar's extension); its
 player remembers it. */
 void wiiu_pad_players_disconnect(struct wiiu_pad_players *players, int channel);
 

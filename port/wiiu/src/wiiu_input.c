@@ -1,8 +1,10 @@
 /*
 WIIU_INPUT.C
 
-The GamePad (VPAD), the Pro Controllers and the Classic Controllers (KPAD) read as wiiu_input.h's pads, and their motors rumble. Wii Remotes alone (with or
-without a Nunchuk) are not read: they have no second stick.
+The GamePad (VPAD), the Pro Controllers, the Classic Controllers and the Wii Remotes (KPAD) read as wiiu_input.h's pads, and their motors rumble. A Wii Remote
+with a Nunchuk is a controller of the game's own layout (wiiu_wimote.c: input.wiiu_wiimote_layout): the Nunchuk's stick is the left stick, and the view turns by
+the Remote's IR pointer outside a free-aim box in the middle, or by its MotionPlus (a Wii Remote Plus, or a MotionPlus adapter), as input.wiiu_wiimote_look says;
+a Remote alone has the menus' layout (d-pad, A, B, 1, 2). A Remote with a Classic Controller is read as the Classic Controller.
 
 Which port (the game's player) each controller drives is wiiu_pad_players.c's: a map from the controllers, known by their Bluetooth addresses, to players,
 which gives one that goes and comes back its player again whatever channel the system gives it, and the layout input.wiiu_controller_layout asks for. Once a
@@ -12,6 +14,7 @@ connect callback counts the changes a read could miss), the layout is arranged, 
 
 #include "wiiu_input.h"
 #include "wiiu_pad_players.h"
+#include "wiiu_wimote.h"
 
 #include "wiiu_debug.h"
 #include "wiiu_shell.h"
@@ -23,7 +26,19 @@ connect callback counts the changes a read could miss), the layout is arranged, 
 
 #include <coreinit/time.h>
 
+#include <malloc.h>
+#include <stdlib.h>
 #include <string.h>
+
+/* the Remote's button and extension numbers in wiiu_wimote.h are wut's */
+_Static_assert(WIIMOTE_BUTTON_LEFT == WPAD_BUTTON_LEFT && WIIMOTE_BUTTON_RIGHT == WPAD_BUTTON_RIGHT && WIIMOTE_BUTTON_DOWN == WPAD_BUTTON_DOWN &&
+	WIIMOTE_BUTTON_UP == WPAD_BUTTON_UP && WIIMOTE_BUTTON_PLUS == WPAD_BUTTON_PLUS && WIIMOTE_BUTTON_2 == WPAD_BUTTON_2 && WIIMOTE_BUTTON_1 == WPAD_BUTTON_1 &&
+	WIIMOTE_BUTTON_B == WPAD_BUTTON_B && WIIMOTE_BUTTON_A == WPAD_BUTTON_A && WIIMOTE_BUTTON_MINUS == WPAD_BUTTON_MINUS && WIIMOTE_BUTTON_Z == WPAD_BUTTON_Z &&
+	WIIMOTE_BUTTON_C == WPAD_BUTTON_C, "wiiu_wimote.h's buttons are wut's");
+_Static_assert(WIIMOTE_EXT_CORE == WPAD_EXT_CORE && WIIMOTE_EXT_NUNCHUK == WPAD_EXT_NUNCHUK && WIIMOTE_EXT_CLASSIC == WPAD_EXT_CLASSIC &&
+	WIIMOTE_EXT_MPLUS == WPAD_EXT_MPLUS && WIIMOTE_EXT_MPLUS_NUNCHUK == WPAD_EXT_MPLUS_NUNCHUK && WIIMOTE_EXT_MPLUS_CLASSIC == WPAD_EXT_MPLUS_CLASSIC &&
+	WIIMOTE_EXT_PRO_CONTROLLER == WPAD_EXT_PRO_CONTROLLER, "wiiu_wimote.h's extensions are wut's");
+_Static_assert(WIIMOTE_MPLS_ONLY == WPAD_MPLS_MODE_MPLS_ONLY && WIIMOTE_MPLS_NUNCHUK == WPAD_MPLS_MODE_MPLS_NUNCHUK, "wiiu_wimote.h's MotionPlus modes are wut's");
 
 static int started;
 
@@ -46,6 +61,23 @@ static void connect_callback(WPADChan channel, WPADError status)
 		connect_chained[channel](channel, status);
 }
 
+/* The MotionPlus's start-up (KPADSetControlMplsCallback): like the connect callback it runs on the system's thread and only notes what happened; the game's thread
+logs it and takes the failure into account in its next poll. */
+static volatile unsigned int mpls_events[WIIU_PAD_CHANNELS];
+static volatile int mpls_result[WIIU_PAD_CHANNELS];
+static unsigned int mpls_events_seen[WIIU_PAD_CHANNELS];
+
+static void mpls_callback(KPADChan channel, KPADControlMplsStatus status)
+{
+	if ((unsigned int)channel >= WIIU_PAD_CHANNELS)
+		return;
+	/* (started when KPADEnableMpls is called; the others say how it ended) */
+	if (status == KPAD_CONTROL_MPLS_STATUS_STARTED)
+		return;
+	mpls_result[channel] = (int)status;
+	mpls_events[channel]++;
+}
+
 static void start(void)
 {
 	unsigned int channel;
@@ -63,6 +95,7 @@ static void start(void)
 		/* (never itself: it would call itself for ever) */
 		if (previous != connect_callback)
 			connect_chained[channel] = previous;
+		KPADSetControlMplsCallback((KPADChan)channel, mpls_callback);
 	}
 	wiiu_log("Input: KPAD channels 1 to %u read (the system allows %u)", WIIU_PAD_CHANNELS, (unsigned)KPADGetMaxControllers());
 }
@@ -354,16 +387,340 @@ void wiiu_input_set_layout(int layout)
 	pad_layout = layout;
 }
 
+/* ---------- the Wii Remotes (wiiu_wimote.h) */
+
+/* input.wiiu_wiimote_* (wiiu_input_set_wimote), and a count that changes with them, so that each Remote has the pointer and the MotionPlus switched as they say */
+static struct
+{
+	int layout;
+	int look;
+	float box;
+	float speed;
+	int invert_x;
+	unsigned int epoch;
+} wimote_settings = { WIIMOTE_LAYOUT_DEFAULT, WIIMOTE_LOOK_AUTO, 0.3f, 1.0f, 0, 1 };
+
+/* What each channel's Remote was last found to be and was asked. A channel that is not a Remote read here has all zero. */
+static struct
+{
+	int remote; /* the last sample was a Remote the game reads */
+	unsigned int extension; /* KPADStatus.extensionType of the last sample */
+	int layout; /* the layout it has (wimote_layout_for) */
+	int source; /* the look it has (WIIMOTE_SOURCE_*) */
+	int pointer_valid; /* KPADStatus.posValid, as a yes or no */
+	int plus; /* WPADIsMplsIntegrated: 1 a Wii Remote Plus, 0 a Remote, -1 not known */
+	int announced; /* the connection has been told in the log: from now on the changes are */
+	unsigned int announced_extension;
+	int announced_source;
+	OSTime announced_at;
+	unsigned int applied; /* the settings' epoch the pointer was last switched for */
+	OSTime mpls_asked_at;
+	int mpls_attempts; /* of KPADEnableMpls for this extension */
+	int mpls_failed; /* the extension (plus one) KPAD said the MotionPlus cannot be had with: not asked again until it changes */
+	OSTime grace_since; /* the extension was unknown since, a Remote's state is kept for a second meanwhile */
+	OSTime last_sample;
+	struct wimote_motion motion;
+	/* the units of the MotionPlus's rates, in the log now and then: the rates' peak, and how the angles changed over the same time */
+	float peak[3];
+	float angle_ref[3];
+	OSTime angle_ref_at;
+	OSTime pointer_told;
+	int pointer_logged; /* 1 the pointer was told to see the sensor bar, 2 not to */
+	OSTime motion_told;
+	unsigned int motion_told_count;
+} remotes[WIIU_PAD_CHANNELS];
+/* the channels with a Remote the game reads, and those that may rumble (not while their motion turns the view) */
+static unsigned int remote_present, remote_rumble;
+/* the work area KPAD needs for the MotionPlus (KPADSetMplsWorkarea), given once and kept: 0 not yet, 1 given, -1 could not be had */
+static void *mpls_work;
+static int mpls_work_state;
+/* the first player's Remote's turn, not yet taken (wiiu_input_remote_look_take) */
+static struct
+{
+	float turn, pitch;
+} remote_mouse;
+
 static void rumble_stop_all(void);
 
 static void pad_gone(unsigned int channel)
 {
 	pro_present &= ~(1u << channel);
+	remote_present &= ~(1u << channel);
+	remote_rumble &= ~(1u << channel);
+	memset(&remotes[channel], 0, sizeof(remotes[channel]));
 	last_pro[channel].present = 0;
 	last_pro[channel].connected = 0;
 	memset(&last_pro[channel].pad, 0, sizeof(last_pro[channel].pad));
 	/* (whatever connects next is lit again: the system lights it with its channel's number) */
 	lights_forget(channel, OSGetSystemTime());
+}
+
+void wiiu_input_set_wimote(const char *layout, const char *look, float box, float speed, int invert_x)
+{
+	const int new_layout = wimote_parse_layout(layout);
+	const int new_look = wimote_parse_look(look);
+	const int inverted = invert_x ? 1 : 0;
+
+	if (new_layout != wimote_settings.layout || new_look != wimote_settings.look || box != wimote_settings.box || speed != wimote_settings.speed ||
+		inverted != wimote_settings.invert_x)
+	{
+		wimote_settings.layout = new_layout;
+		wimote_settings.look = new_look;
+		wimote_settings.box = box;
+		wimote_settings.speed = speed;
+		wimote_settings.invert_x = inverted;
+		wimote_settings.epoch++;
+		wiiu_log("Input: Wii Remotes: layout %s, look %s, pointer box %.2f, pointer speed %.2f, MotionPlus turn %s", wimote_layout_name(new_layout),
+			wimote_look_name(new_look), (double)box, (double)speed, inverted ? "inverted" : "as it is");
+	}
+}
+
+/* the work area the MotionPlus needs, from the first time it is wanted */
+static int mpls_work_ready(void)
+{
+	if (mpls_work_state == 0)
+	{
+		const uint32_t size = KPADGetMplsWorkSize();
+
+		mpls_work = size ? memalign(32, (size + 31u) & ~31u) : NULL;
+		if (mpls_work)
+		{
+			memset(mpls_work, 0, (size + 31u) & ~31u);
+			KPADSetMplsWorkarea(mpls_work);
+			mpls_work_state = 1;
+			wiiu_log("Input: the MotionPlus's work area, %u bytes, is given to KPAD", (unsigned)size);
+		}
+		else
+		{
+			mpls_work_state = -1;
+			wiiu_log("Input: the MotionPlus's work area (%u bytes) could not be had: no Wii Remote turns the view by its MotionPlus", (unsigned)size);
+		}
+	}
+	return mpls_work_state > 0;
+}
+
+/* the look a channel's Remote has now, from what it was last found to be */
+static int remote_source(unsigned int channel)
+{
+	return wimote_look_source(wimote_settings.look, wimote_has_motion(remotes[channel].extension) && mpls_work_state > 0,
+		wiiu_pad_players_port(&pad_players, (int)channel) == 0, remotes[channel].pointer_valid);
+}
+
+/* what the log says of a channel's Remote: its extension, layout and look */
+static void remote_describe(unsigned int channel, const char *what)
+{
+	wiiu_log("Input: %s channel %u's Wii Remote%s: extension %s, layout %s, look %s (the setting is %s%s)", what, channel + 1,
+		remotes[channel].plus == 1 ? " Plus" : "", wimote_extension_name(remotes[channel].extension), wimote_layout_name(remotes[channel].layout),
+		wimote_source_name(remotes[channel].source), wimote_look_name(wimote_settings.look),
+		wimote_settings.look == WIIMOTE_LOOK_AUTO && remotes[channel].source == WIIMOTE_SOURCE_NONE ? ": the pointer once it sees the sensor bar" : "");
+}
+
+/* A Remote's pointer and MotionPlus switched as the settings say and the extension needs: the IR pointer on for "auto" and "pointer", off otherwise (the camera
+costs the Remote's battery); the MotionPlus asked for ("auto" and "motion") in the mode the extension needs, again if the extension changes (a Nunchuk plugged in or
+out), not again where KPAD said it cannot be had (a Remote without a MotionPlus: the answer is the callback's) and at most three times without an answer. */
+static void remote_control(unsigned int channel, unsigned int extension, OSTime now)
+{
+	const KPADChan chan = (KPADChan)channel;
+	const int wants_pointer = wimote_settings.look == WIIMOTE_LOOK_AUTO || wimote_settings.look == WIIMOTE_LOOK_POINTER;
+	const int wants_motion = wimote_settings.look == WIIMOTE_LOOK_AUTO || wimote_settings.look == WIIMOTE_LOOK_MOTION;
+	const unsigned int mode = wimote_mpls_mode_wanted(extension);
+
+	if (remotes[channel].applied != wimote_settings.epoch)
+	{
+		remotes[channel].applied = wimote_settings.epoch;
+		if (wants_pointer)
+			KPADEnableDPD(chan);
+		else
+			KPADDisableDPD(chan);
+		if (!wants_motion && KPADGetMplsStatus(chan) != WPAD_MPLS_MODE_DISABLE)
+			KPADDisableMpls(chan);
+		remotes[channel].mpls_attempts = 0;
+		remotes[channel].mpls_failed = 0;
+	}
+	if (!wants_motion || !mode || remotes[channel].mpls_failed == (int)extension + 1 || remotes[channel].mpls_attempts >= 3)
+		return;
+	if ((unsigned int)KPADGetMplsStatus(chan) == mode)
+		return;
+	if (remotes[channel].mpls_asked_at && now - remotes[channel].mpls_asked_at < (OSTime)OSSecondsToTicks(2))
+		return;
+	if (!mpls_work_ready())
+		return;
+	remotes[channel].mpls_asked_at = now;
+	remotes[channel].mpls_attempts++;
+	KPADEnableMpls(chan, (KPADMplsMode)mode);
+	wiiu_log("Input: channel %u's Wii Remote is asked for the MotionPlus (%s mode, extension %s, try %d)", channel + 1,
+		mode == WIIMOTE_MPLS_NUNCHUK ? "Nunchuk" : "alone", wimote_extension_name(extension), remotes[channel].mpls_attempts);
+}
+
+/* A channel's Remote, from a sample: the pad it makes, its look, and the pointer and MotionPlus asked for. */
+static void remote_sample(unsigned int channel, const KPADStatus *status, struct wiiu_pad *pad, OSTime now)
+{
+	const unsigned int extension = status->extensionType;
+	const int nunchuk = wimote_has_nunchuk(extension);
+	const int first = wiiu_pad_players_port(&pad_players, (int)channel) == 0;
+	const int valid = status->posValid > 0;
+	const unsigned int bit = 1u << channel;
+	float seconds = remotes[channel].last_sample ? (float)OSTicksToMicroseconds(now - remotes[channel].last_sample) / 1000000.0f : 0.0f;
+	int source;
+
+	if (!remotes[channel].remote)
+	{
+		/* a Remote has come (or its extension was one the game does not read): not known yet whether it has a MotionPlus built in */
+		remotes[channel].plus = WPADIsMplsIntegrated((WPADChan)channel);
+		remotes[channel].applied = 0;
+		wimote_motion_reset(&remotes[channel].motion);
+	}
+	if (remotes[channel].extension != extension)
+	{
+		/* (the extension changed: a Nunchuk plugged in or out, or the MotionPlus came on: asked for afresh, and the up it knew is not the hold it will have) */
+		remotes[channel].mpls_attempts = 0;
+		remotes[channel].mpls_failed = 0;
+	}
+	remotes[channel].remote = 1;
+	remotes[channel].extension = extension;
+	remotes[channel].pointer_valid = valid;
+	remotes[channel].layout = wimote_layout_for(extension, wimote_settings.layout);
+	wimote_map(remotes[channel].layout, wimote_hold(status->hold, nunchuk ? status->nunchuk.hold : 0u), nunchuk ? status->nunchuk.stick.x : 0.0f,
+		nunchuk ? status->nunchuk.stick.y : 0.0f, pad);
+	source = wimote_look_source(wimote_settings.look, wimote_has_motion(extension) && mpls_work_state > 0, first, valid);
+	remotes[channel].source = source;
+	if (source == WIIMOTE_SOURCE_POINTER)
+	{
+		wimote_pointer_look(valid, status->pos.x, status->pos.y, wimote_settings.box, wimote_settings.speed, &pad->look_x, &pad->look_y);
+	}
+	else if (source == WIIMOTE_SOURCE_MOTION)
+	{
+		/* the rates (KPADStatus.mplus.acc: "angular acceleration" in wut's words, the rates in degrees a second as KPAD's MotionPlus status has them) and the Remote's
+		accelerometer for the direction of up */
+		const float rate[3] = { status->mplus.acc.x, status->mplus.acc.y, status->mplus.acc.z };
+		const float acc[3] = { status->acc.x, status->acc.y, status->acc.z };
+		float turn, tilt;
+		unsigned int axis, lower;
+		int owns = first;
+
+		/* (the view turns by one Remote: when several share the first player's port, the lowest channel's) */
+		for (lower = 0; lower < channel; lower++)
+			if (remote_present & (1u << lower) && remotes[lower].source == WIIMOTE_SOURCE_MOTION && wiiu_pad_players_port(&pad_players, (int)lower) == 0)
+				owns = 0;
+		wimote_motion_step(&remotes[channel].motion, gyro_mouse.space, seconds, acc, rate, wimote_settings.invert_x, &turn, &tilt);
+		if (owns)
+		{
+			remote_mouse.turn += turn;
+			remote_mouse.pitch += tilt;
+		}
+		/* held still for a second and a half: the library zeroes the MotionPlus (KPADResetMpls), once for each time it is held still */
+		if (wimote_motion_still(&remotes[channel].motion, seconds, rate))
+		{
+			KPADResetMpls((KPADChan)channel);
+			wiiu_log("Input: channel %u's Wii Remote was held still: the MotionPlus is zeroed (KPADResetMpls)", channel + 1);
+		}
+		/* the units, in the log while it turns (the rates' peak, and how far the angle KPAD adds up changed over the same second: they should agree, rate times
+		a second = the angle's change, if the rates are in the units of the angles) */
+		for (axis = 0; axis < 3; axis++)
+			if (fabsf(rate[axis]) > fabsf(remotes[channel].peak[axis]))
+				remotes[channel].peak[axis] = rate[axis];
+		if (!remotes[channel].angle_ref_at)
+		{
+			remotes[channel].angle_ref_at = now;
+			remotes[channel].angle_ref[0] = status->mplus.angles.x;
+			remotes[channel].angle_ref[1] = status->mplus.angles.y;
+			remotes[channel].angle_ref[2] = status->mplus.angles.z;
+		}
+		else if (now - remotes[channel].angle_ref_at >= OSSecondsToTicks(1))
+		{
+			const float elapsed = (float)OSTicksToMicroseconds(now - remotes[channel].angle_ref_at) / 1000000.0f;
+			const float big = fmaxf(fabsf(remotes[channel].peak[0]), fmaxf(fabsf(remotes[channel].peak[1]), fabsf(remotes[channel].peak[2])));
+
+			if (big > 30.0f && remotes[channel].motion_told_count < 12u && now - remotes[channel].motion_told >= OSSecondsToTicks(5))
+			{
+				remotes[channel].motion_told = now;
+				remotes[channel].motion_told_count++;
+				wiiu_log("Input: channel %u's MotionPlus: rates peaked at %.1f %.1f %.1f (x y z); the angles changed %.1f %.1f %.1f in %.2f s (acc %.2f %.2f %.2f)",
+					channel + 1, (double)remotes[channel].peak[0], (double)remotes[channel].peak[1], (double)remotes[channel].peak[2],
+					(double)(status->mplus.angles.x - remotes[channel].angle_ref[0]), (double)(status->mplus.angles.y - remotes[channel].angle_ref[1]),
+					(double)(status->mplus.angles.z - remotes[channel].angle_ref[2]), (double)elapsed, (double)acc[0], (double)acc[1], (double)acc[2]);
+			}
+			remotes[channel].angle_ref_at = now;
+			remotes[channel].angle_ref[0] = status->mplus.angles.x;
+			remotes[channel].angle_ref[1] = status->mplus.angles.y;
+			remotes[channel].angle_ref[2] = status->mplus.angles.z;
+			remotes[channel].peak[0] = remotes[channel].peak[1] = remotes[channel].peak[2] = 0.0f;
+		}
+	}
+	remotes[channel].last_sample = now;
+	remote_present |= bit;
+	if (wimote_rumble_allowed(source))
+	{
+		remote_rumble |= bit;
+	}
+	else if (remote_rumble & bit)
+	{
+		/* (its motor would shake the view: stopped, by the thread that drives the motors) */
+		remote_rumble &= ~bit;
+		rumble_stop_all();
+	}
+	remote_control(channel, extension, now);
+	/* the changes, once the connection has been told: the extension (a Nunchuk plugged in, the MotionPlus on) and the look (the pointer seeing the sensor bar) */
+	if (remotes[channel].announced && (remotes[channel].announced_extension != extension || remotes[channel].announced_source != source) &&
+		now - remotes[channel].announced_at >= (OSTime)OSSecondsToTicks(2))
+	{
+		remotes[channel].announced_extension = extension;
+		remotes[channel].announced_source = source;
+		remotes[channel].announced_at = now;
+		remote_describe(channel, "now");
+	}
+	/* the pointer finding and losing the sensor bar, in the log now and then */
+	if (wimote_settings.look != WIIMOTE_LOOK_MOTION && wimote_settings.look != WIIMOTE_LOOK_OFF &&
+		(remotes[channel].pointer_told == 0 || now - remotes[channel].pointer_told >= (OSTime)OSSecondsToTicks(3)))
+	{
+		if (remotes[channel].pointer_logged != (valid ? 1 : 2))
+		{
+			remotes[channel].pointer_logged = valid ? 1 : 2;
+			remotes[channel].pointer_told = now;
+			wiiu_log("Input: channel %u's Wii Remote %s the sensor bar (posValid %d, pos %.2f %.2f, %.2f m)", channel + 1, valid ? "sees" : "does not see",
+				(int)status->posValid, (double)status->pos.x, (double)status->pos.y, (double)status->dist);
+		}
+	}
+}
+
+/* the MotionPlus's start-up, as the system's callback noted it (wiiu_input_poll, for each channel) */
+static void mpls_events_poll(unsigned int channel)
+{
+	const unsigned int count = mpls_events[channel];
+
+	if (count == mpls_events_seen[channel])
+		return;
+	mpls_events_seen[channel] = count;
+	if (mpls_result[channel] == KPAD_CONTROL_MPLS_STATUS_FINISHED)
+	{
+		wiiu_log("Input: channel %u's MotionPlus is on (the mode is %d)", channel + 1, (int)KPADGetMplsStatus((KPADChan)channel));
+		return;
+	}
+	/* (it cannot be had with this extension: a Remote that has no MotionPlus says so; asked for again only if the extension changes) */
+	remotes[channel].mpls_failed = (int)remotes[channel].extension + 1;
+	wiiu_log("Input: channel %u's MotionPlus could not be started (status %d, extension %s): this Remote has none, or not with this extension", channel + 1,
+		mpls_result[channel], wimote_extension_name(remotes[channel].extension));
+}
+
+int wiiu_input_remote_look_take(float *turn, float *pitch)
+{
+	unsigned int channel;
+	int owner = 0;
+
+	*turn = remote_mouse.turn;
+	*pitch = remote_mouse.pitch;
+	remote_mouse.turn = remote_mouse.pitch = 0.0f;
+	for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
+	{
+		if (last_pro[channel].present && remotes[channel].remote && remotes[channel].source == WIIMOTE_SOURCE_MOTION &&
+			wiiu_pad_players_port(&pad_players, (int)channel) == 0)
+		{
+			owner = 1;
+		}
+	}
+	if (!owner)
+		*turn = *pitch = 0.0f;
+	return owner;
 }
 
 /* The controller on a KPAD channel now, into last_pro: a sample if there is a new one, else as it was. Returns 1 if it is one the game reads. */
@@ -390,6 +747,9 @@ static int pad_sample(unsigned int channel)
 			now.right_x = status.pro.rightStick.x;
 			now.right_y = status.pro.rightStick.y;
 			pro_present |= 1u << channel;
+			remote_present &= ~(1u << channel);
+			remote_rumble &= ~(1u << channel);
+			remotes[channel].remote = 0;
 			last_pro[channel].present = 1;
 		}
 		else if (status.extensionType == WPAD_EXT_CLASSIC || status.extensionType == WPAD_EXT_MPLUS_CLASSIC)
@@ -405,13 +765,36 @@ static int pad_sample(unsigned int channel)
 			now.right_x = status.classic.rightStick.x;
 			now.right_y = status.classic.rightStick.y;
 			pro_present &= ~(1u << channel);
+			remote_present &= ~(1u << channel);
+			remote_rumble &= ~(1u << channel);
+			remotes[channel].remote = 0;
 			last_pro[channel].present = 1;
+		}
+		else if (wimote_reads(status.extensionType))
+		{
+			/* a Wii Remote, with a Nunchuk or alone (a Remote with a Classic Controller is the Classic Controller above) */
+			pro_present &= ~(1u << channel);
+			remote_sample(channel, &status, &now, OSGetSystemTime());
+			last_pro[channel].present = 1;
+		}
+		else if ((status.extensionType == WPAD_EXT_UNKNOWN || status.extensionType == WPAD_EXT_DEV_NOT_FOUND) && remotes[channel].remote &&
+			(remotes[channel].grace_since == 0 || OSGetSystemTime() - remotes[channel].grace_since < (OSTime)OSSecondsToTicks(1)))
+		{
+			/* (the extension changing under the library, as the MotionPlus comes on: the Remote as it was for a second, not a controller that went and came back) */
+			if (remotes[channel].grace_since == 0)
+				remotes[channel].grace_since = OSGetSystemTime();
+			now = last_pro[channel].pad;
 		}
 		else
 		{
 			pro_present &= ~(1u << channel);
+			remote_present &= ~(1u << channel);
+			remote_rumble &= ~(1u << channel);
+			remotes[channel].remote = 0;
 			last_pro[channel].present = 0;
 		}
+		if (wimote_reads(status.extensionType))
+			remotes[channel].grace_since = 0;
 		last_pro[channel].pad = now;
 	}
 	else if (error != KPAD_ERROR_NO_SAMPLES && error != KPAD_ERROR_BUSY)
@@ -488,6 +871,7 @@ void wiiu_input_poll(int several_players)
 				pad_gone(channel);
 		}
 		present = pad_sample(channel);
+		mpls_events_poll(channel);
 		/* (named from a sample of its own, not from a state the reads kept: a channel the system has not yet said is empty keeps the last
 		controller's, whose address the system may still give) */
 		if (present && last_pro[channel].sampled && (changed || !pad_players.channels[channel].present))
@@ -499,8 +883,18 @@ void wiiu_input_poll(int several_players)
 			WPADGetAddress((WPADChan)channel, &address);
 			player = wiiu_pad_players_connect(&pad_players, (int)channel, address.btDeviceAddress);
 			wiiu_log("Input: a %s on channel %u (%02x:%02x:%02x:%02x:%02x:%02x) is player %d's", (pro_present & (1u << channel)) ? "Pro Controller" :
-				"Classic Controller", channel + 1, address.btDeviceAddress[0], address.btDeviceAddress[1], address.btDeviceAddress[2],
-				address.btDeviceAddress[3], address.btDeviceAddress[4], address.btDeviceAddress[5], player + 1);
+				remotes[channel].remote ? "Wii Remote" : "Classic Controller", channel + 1, address.btDeviceAddress[0], address.btDeviceAddress[1],
+				address.btDeviceAddress[2], address.btDeviceAddress[3], address.btDeviceAddress[4], address.btDeviceAddress[5], player + 1);
+			if (remotes[channel].remote)
+			{
+				/* (the extension, the layout and the look it has now; the changes follow in the log as they come) */
+				remotes[channel].source = remote_source(channel);
+				remotes[channel].announced = 1;
+				remotes[channel].announced_extension = remotes[channel].extension;
+				remotes[channel].announced_source = remotes[channel].source;
+				remotes[channel].announced_at = now;
+				remote_describe(channel, "at connect:");
+			}
 		}
 		else if (!present && pad_players.channels[channel].present)
 		{
@@ -727,7 +1121,9 @@ int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 		if (wiiu_pad_players_port(&pad_players, (int)channel) != (int)port || !pad_sample(channel))
 			continue;
 		pad->buttons |= last_pro[channel].pad.buttons;
+		pad->xbox_faces |= last_pro[channel].pad.xbox_faces;
 		merge_stick(&pad->left_x, &pad->left_y, last_pro[channel].pad.left_x, last_pro[channel].pad.left_y);
+		merge_stick(&pad->look_x, &pad->look_y, last_pro[channel].pad.look_x, last_pro[channel].pad.look_y);
 		merge_stick(&pad->right_x, &pad->right_y, last_pro[channel].pad.right_x, last_pro[channel].pad.right_y);
 		present = 1;
 	}
@@ -772,7 +1168,7 @@ void wiiu_input_rumble(unsigned int port, float strength)
 		motors_stop = 0;
 		for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
 		{
-			if (pro_present & (1u << channel))
+			if ((pro_present | remote_present) & (1u << channel))
 				WPADControlMotor((WPADChan)channel, FALSE);
 		}
 		for (other = 0; other < WIIU_PAD_PORTS; other++)
@@ -804,12 +1200,12 @@ void wiiu_input_rumble(unsigned int port, float strength)
 	{
 		unsigned int channel;
 
-		/* (every Pro Controller that drives the port: in "auto" with one player, all of them with the GamePad. The map is the game thread's poll's,
+		/* (every Pro Controller and Wii Remote that drives the port, a Remote not while its motion turns the view: in "auto" with one player, all of them with the GamePad. The map is the game thread's poll's,
 		read here on the input thread: a controller that moves between the two is rumbled for its old port once more, and its motor stopped at the
 		next call: motors_stop) */
 		for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
 		{
-			if ((pro_present & (1u << channel)) && wiiu_pad_players_port(&pad_players, (int)channel) == (int)port)
+			if (((pro_present | remote_rumble) & (1u << channel)) && wiiu_pad_players_port(&pad_players, (int)channel) == (int)port)
 				WPADControlMotor((WPADChan)channel, step >= 2 ? TRUE : FALSE);
 		}
 	}

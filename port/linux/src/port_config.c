@@ -486,6 +486,33 @@ static const struct config_setting config_settings[] =
 		"2 twice as far." },
 	{ "input.wiiu_gyro_invert_y", _config_boolean, "false", "HALO_WIIU_GYRO_INVERT_Y", _environment_value, _platform_wiiu,
 		"Tilting the top of the GamePad away looks up (as a flight stick), not down." },
+	{ "input.wiiu_wiimote_layout", _config_string, "\"default\"", "HALO_WIIU_WIIMOTE_LAYOUT", _environment_value, _platform_wiiu,
+		"The buttons of a Wii Remote with a Nunchuk (a Remote alone has the menus': the d-pad,\n"
+		"A, B, 1 and 2 as the Xbox's A, B, X and Y, + and -). \"default\": B fires, A jumps,\n"
+		"Nunchuk Z throws a grenade, C crouches, 1 reloads and uses, 2 is the melee, d-pad up\n"
+		"switches weapons, left is the flashlight, right switches grenades, down zooms, + is\n"
+		"Start and - Back; the Nunchuk's stick moves. \"z_fire\": Nunchuk Z fires and B throws\n"
+		"a grenade, the rest as \"default\"." },
+	{ "input.wiiu_wiimote_look", _config_string, "\"auto\"", "HALO_WIIU_WIIMOTE_LOOK", _environment_value, _platform_wiiu,
+		"How a Wii Remote turns the view. \"auto\": by its MotionPlus if it has one (a Wii\n"
+		"Remote Plus, or an adapter) and it is the first player's, else by the pointer while it\n"
+		"sees the sensor bar, else not at all. \"pointer\": the IR pointer, with a free-aim box\n"
+		"in the middle of the screen (input.wiiu_wiimote_pointer_box) outside which the view\n"
+		"turns, faster the further out. \"motion\": the MotionPlus, as the GamePad's gyro aims\n"
+		"(input.wiiu_gyro_space, _sensitivity and _invert_y). \"off\": the Remote does not\n"
+		"turn the view." },
+	{ "input.wiiu_wiimote_pointer_box", _config_real, "0.3", "HALO_WIIU_WIIMOTE_POINTER_BOX", _environment_value, _platform_wiiu,
+		"The free-aim box of the Wii Remote's pointer: its half width, as a share of the\n"
+		"pointer's range from the middle of the sensor bar to the screen's edge, 0 to 0.9.\n"
+		"Inside it the view does not turn; outside it turns at a rate that grows with the\n"
+		"distance past the box's edge." },
+	{ "input.wiiu_wiimote_pointer_speed", _config_real, "1.0", "HALO_WIIU_WIIMOTE_POINTER_SPEED", _environment_value, _platform_wiiu,
+		"How fast the Wii Remote's pointer turns the view past the free-aim box: 1 reaches\n"
+		"the full push of the right stick at the screen's edge, 2 reaches it about two thirds\n"
+		"of the way out (0 to 4)." },
+	{ "input.wiiu_wiimote_motion_invert_x", _config_boolean, "false", "HALO_WIIU_WIIMOTE_MOTION_INVERT_X", _environment_value, _platform_wiiu,
+		"The Wii Remote's MotionPlus turns the view the other way round (the direction of its\n"
+		"turn has not been measured on a console)." },
 	{ "input.wiiu_controller_layout", _config_string, "\"auto\"", "HALO_WIIU_CONTROLLER_LAYOUT", _environment_value, _platform_wiiu,
 		"How the Pro and Classic Controllers take the players' places. \"auto\": while one\n"
 		"person plays, every controller plays as player 1 with the GamePad; once a second\n"
