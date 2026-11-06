@@ -550,9 +550,9 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 	}
 	if (have_pad)
 		pad_state(&pad, &state->Gamepad);
+	virtual_pad_apply((unsigned int)port, &state->Gamepad);
 	if (port == 0)
 		test_input_gamepad(&state->Gamepad);
-	virtual_pad_apply((unsigned int)port, &state->Gamepad);
 	hold_to_skip((unsigned int)port, &state->Gamepad);
 	if (port == 0)
 	{
