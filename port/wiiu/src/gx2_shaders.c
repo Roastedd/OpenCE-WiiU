@@ -306,6 +306,129 @@ static unsigned found_told;
 
 #define FOUND_TOLD_LIMIT 40
 
+/* The pixel keys drawn with another key's shader this run, bounded, with the draws each made (the first 40 are told by name above, in the first minute, and the
+pack's shader-misses capture can be full or lost: the owner's 2026-11-06 session lost the 41 keys of its stand-in draws). A key drawn with its stand-in (a shader
+class the pack has none of) has its 256 bytes written out once, in four log lines `shaders: key P <hash> <n>/4 <hex>` that tools/wiiu/log_keys.py turns back into the
+capture's format; each 5 seconds the keys that drew in the window are said, with their counts (nonexact_report, called by the 5-second note). */
+#define NONEXACT_LIMIT 64
+#define NONEXACT_DUMP_LIMIT 24
+#define NONEXACT_NONE 0xffffffffu
+#define NONEXACT_LINES_PER_NOTE 8
+#define NONEXACT_PART_BYTES 64
+
+static struct
+{
+	uint64_t hash, shader_hash;
+	uint32_t how;
+	unsigned long draws, window;
+} nonexact[NONEXACT_LIMIT];
+static unsigned nonexact_count, nonexact_dumped;
+static unsigned long nonexact_full;
+/* the entry of the last pixel key asked for (the draws after it are its), or none for a key with its own shader */
+static uint32_t nonexact_current = NONEXACT_NONE;
+/* halo/debug_standin.txt: a draw with a stand-in is made magenta (dk_shader_debug_standin) */
+static int debug_standin;
+
+static uint32_t nonexact_note(uint64_t hash, uint64_t shader_hash, uint32_t how, const unsigned char *wire)
+{
+	unsigned index;
+
+	for (index = 0; index < nonexact_count; index++)
+		if (nonexact[index].hash == hash)
+			return index;
+	if (nonexact_count == NONEXACT_LIMIT)
+	{
+		nonexact_full++;
+		return NONEXACT_NONE;
+	}
+	nonexact[nonexact_count].hash = hash;
+	nonexact[nonexact_count].shader_hash = shader_hash;
+	nonexact[nonexact_count].how = how;
+	if (how == DK_SHADER_FOUND_FALLBACK && nonexact_dumped < NONEXACT_DUMP_LIMIT)
+	{
+		static const char digits[] = "0123456789abcdef";
+		const unsigned parts = (SHADER_KEY_WIRE_BYTES + NONEXACT_PART_BYTES - 1) / NONEXACT_PART_BYTES;
+		unsigned part, at;
+
+		nonexact_dumped++;
+		for (part = 0; part < parts; part++)
+		{
+			char text[2 * NONEXACT_PART_BYTES + 1];
+			unsigned used = 0;
+
+			for (at = part * NONEXACT_PART_BYTES; at < (part + 1) * NONEXACT_PART_BYTES && at < SHADER_KEY_WIRE_BYTES; at++)
+			{
+				text[used++] = digits[wire[at] >> 4];
+				text[used++] = digits[wire[at] & 15];
+			}
+			text[used] = 0;
+			platform_log("shaders: key P %08x%08x %u/%u %s", (unsigned)(hash >> 32), (unsigned)hash, part + 1, parts, text);
+		}
+	}
+	return nonexact_count++;
+}
+
+/* a draw was made with the last pixel key asked for (wiiu_gx2.c) */
+void dk_shader_note_draw(void);
+
+void dk_shader_note_draw(void)
+{
+	if (nonexact_current != NONEXACT_NONE)
+	{
+		nonexact[nonexact_current].draws++;
+		nonexact[nonexact_current].window++;
+	}
+}
+
+/* the 5-second note: the keys that drew with a stand-in in the window, and how many keys are known */
+void dk_shader_nonexact_report(void);
+
+void dk_shader_nonexact_report(void)
+{
+	unsigned index, told = 0, standins = 0;
+	unsigned long window = 0;
+
+	for (index = 0; index < nonexact_count; index++)
+	{
+		if (nonexact[index].how == DK_SHADER_FOUND_FALLBACK)
+			standins++;
+		if (!nonexact[index].window)
+			continue;
+		window += nonexact[index].window;
+		if (nonexact[index].how == DK_SHADER_FOUND_FALLBACK && told < NONEXACT_LINES_PER_NOTE)
+		{
+			told++;
+			platform_log("shaders: stand-in key %08x%08x drew %lu times in this window (%lu in all)", (unsigned)(nonexact[index].hash >> 32),
+				(unsigned)nonexact[index].hash, nonexact[index].window, nonexact[index].draws);
+		}
+		nonexact[index].window = 0;
+	}
+	if (told || window)
+		platform_log("shaders: %u keys have been drawn with another key's shader this run, %u of them with a stand-in (%u of those written out)%s", nonexact_count,
+			standins, nonexact_dumped, nonexact_full ? " (the table is full)" : "");
+}
+
+/* halo/debug_standin.txt: 1 makes every draw with a stand-in magenta (the stand-in that has the color of a constant, with the constant magenta: wiiu_gx2.c), so that
+a console picture shows where they are */
+void dk_shader_debug_standin(int on);
+
+void dk_shader_debug_standin(int on)
+{
+	debug_standin = on != 0;
+}
+
+/* the handle of the stand-in that draws a constant color (wiiu_gx2.c sets the constant), 0 if the pack has none */
+static uint32_t tint_handle(void)
+{
+	struct nv2a_pixel_shader_key key;
+	unsigned char wire[SHADER_KEY_WIRE_BYTES];
+
+	/* (the untextured stand-in whose color and alpha are C0's, with no alpha test: index 96 + 1 + 3 * 1) */
+	shader_key_fallback_numbered(SHADER_KEY_FALLBACK_TINT, &key);
+	shader_key_write(&key, wire);
+	return find(DK_SHADER_STAGE_PIXEL, shader_key_hash(SHADER_KEY_HASH_INIT, wire, sizeof(wire)));
+}
+
 /* a pixel key's shader: its own, else its canonical key's (the same shader), else its stand-in's; none for a key left out of the pack. *shader_hash
 is the hash of the key whose shader it is */
 static uint32_t pixel_find(const struct nv2a_pixel_shader_key *key, uint64_t hash, uint32_t *how, uint64_t *shader_hash)
@@ -349,7 +472,7 @@ static struct
 {
 	struct nv2a_pixel_shader_key key;
 	uint64_t hash;
-	uint32_t handle;
+	uint32_t handle, nonexact;
 	unsigned char used, how, noted;
 } pixel_memo[MEMO_SIZE];
 
@@ -390,12 +513,21 @@ uint32_t dk_shader_for_draw(uint32_t stage, const void *key_data)
 			if (!pixel_memo[slot].noted)
 				pixel_memo[slot].noted = (unsigned char)missing_note(stage, pixel_memo[slot].hash, key_data);
 			found[1] = pixel_memo[slot].how;
+			nonexact_current = pixel_memo[slot].nonexact;
 			return pixel_memo[slot].handle;
 		}
 		shader_key_write(key, wire);
 		hash = shader_key_hash(SHADER_KEY_HASH_INIT, wire, sizeof(wire));
 		handle = pixel_find(key, hash, &how, &shader_hash);
 		found[1] = how;
+		nonexact_current = how == DK_SHADER_FOUND_EQUIVALENT || how == DK_SHADER_FOUND_FALLBACK ? nonexact_note(hash, shader_hash, how, wire) : NONEXACT_NONE;
+		if (how == DK_SHADER_FOUND_FALLBACK && debug_standin)
+		{
+			const uint32_t tint = tint_handle();
+
+			if (tint)
+				handle = tint;
+		}
 		if (how != DK_SHADER_FOUND_EXACT && how != DK_SHADER_FOUND_LEFT_OUT)
 			noted = missing_note(stage, hash, key_data);
 		if ((how == DK_SHADER_FOUND_EQUIVALENT || how == DK_SHADER_FOUND_FALLBACK) && found_told < FOUND_TOLD_LIMIT)
@@ -410,6 +542,7 @@ uint32_t dk_shader_for_draw(uint32_t stage, const void *key_data)
 			memcpy(&pixel_memo[slot].key, key, sizeof(*key));
 			pixel_memo[slot].hash = hash;
 			pixel_memo[slot].handle = handle;
+			pixel_memo[slot].nonexact = nonexact_current;
 			pixel_memo[slot].how = (unsigned char)how;
 			pixel_memo[slot].noted = (unsigned char)noted;
 			pixel_memo[slot].used = 1;

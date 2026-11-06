@@ -160,6 +160,8 @@ static struct
 	struct dk_stage_texture stages[4];
 	GX2Sampler samplers[4];
 	GX2Texture white;
+	/* halo/debug_standin.txt: the draws with a stand-in are magenta */
+	int tint_standin;
 	/* what the GPU's registers hold */
 	const struct shader *regs_vs, *regs_ps, *cur_vs, *cur_ps;
 	const struct fetch *cur_fetch;
@@ -341,6 +343,11 @@ static void *gx_alloc(uint32_t size, uint32_t alignment)
 
 /* gx2_shaders.c: where in the pack the shader of a handle is */
 const void *dk_shader_blob(uint32_t handle, uint32_t *size, uint32_t *stage);
+
+/* gx2_shaders.c: the draws of the pixel keys drawn with another's shader counted, said in the 5-second note, and halo/debug_standin.txt */
+void dk_shader_note_draw(void);
+void dk_shader_nonexact_report(void);
+void dk_shader_debug_standin(int on);
 
 enum
 {
@@ -1329,6 +1336,14 @@ static void uniforms_apply(const struct shader *vs, const struct shader *ps)
 		pixel_uniform(ps, PS_TEXTURE_LOD_BIAS, zero, 4);
 		gx.pixel_parameters_dirty = 0;
 		gx.regs_ps = ps;
+	}
+	if (gx.tint_standin && gx.ps_found == DK_SHADER_FOUND_FALLBACK)
+	{
+		/* (halo/debug_standin.txt: gx2_shaders.c gave this draw the stand-in that draws C0; C0 is magenta, and the next draw writes its own constants again) */
+		static const float magenta[1][4] = { { 1.0f, 0.0f, 1.0f, 1.0f } };
+
+		pixel_array(ps, PS_C0, magenta, 1);
+		gx.regs_ps = NULL;
 	}
 }
 
@@ -2570,6 +2585,8 @@ static void draw(const struct dk_command_draw *command)
 		gx.drawn_equivalent++;
 	else if (gx.ps_found == DK_SHADER_FOUND_FALLBACK)
 		gx.drawn_fallback++;
+	if (gx.ps_found == DK_SHADER_FOUND_EQUIVALENT || gx.ps_found == DK_SHADER_FOUND_FALLBACK)
+		dk_shader_note_draw();
 	if (!(gx.draw_total & 31))
 		gpu_poll();
 }
@@ -2878,6 +2895,16 @@ static int initialize(void)
 
 		wiiu_memcpy_touch = wiiu_study_number("memcpy_touch.txt", 0) > 0;
 		wiiu_log("memcpy: the copy asks for the source's lines ahead (dcbt) %s (halo/memcpy_touch.txt: 1 asks for them)", wiiu_memcpy_touch ? "- yes" : "- no");
+	}
+	{
+		/* halo/debug_standin.txt: 1 makes the draws that use a stand-in (a pixel key of a shader class the pack has none of) magenta, so that a picture shows where they are;
+		absent or 0: they draw as the stand-in does */
+		long wiiu_study_number(const char *name, long fallback);
+
+		gx.tint_standin = wiiu_study_number("debug_standin.txt", 0) > 0;
+		dk_shader_debug_standin(gx.tint_standin);
+		if (gx.tint_standin)
+			wiiu_log("GX2: the draws with a stand-in are magenta (halo/debug_standin.txt)");
 	}
 	wiiu_log("memcpy/memset self-test (wiiu_memcpy.c): %d wrong", wiiu_memcpy_selftest());
 	wiiu_bw_start();
@@ -4686,6 +4713,10 @@ static void present(const struct dk_command_present *command)
 			"full; %u clears made as rectangles; %u textures made (%u not 2D, %u short), ring overflows %u", gx.draws_made, gx.drawn_equivalent,
 			gx.drawn_fallback, gx.skipped_target, gx.skipped_state, gx.skipped_missing, gx.skipped_left_out, gx.skipped_shader, gx.skipped_ring,
 			gx.rectangle_clears, gx.textures_made, gx.textures_unsupported, gx.texture_short, gx.ring_overflows);
+		/* (the line above is cut at 199 characters: its texture counts are said here) */
+		wiiu_log("GX2:   textures: %u made, %u not usable, %u short, %u made smaller than the game's", gx.textures_made, gx.textures_unsupported, gx.texture_short,
+			gx.textures_reduced);
+		dk_shader_nonexact_report();
 		if (gx.gpu_window_frames)
 			wiiu_log("GX2:   the GPU's own time for a frame's draws (bottom-of-pipe samples, at most what it took): %.2f ms on average over %u frames, %.2f the longest",
 				(double)OSTicksToMicroseconds(gx.gpu_window_ticks) / 1000.0 / (double)gx.gpu_window_frames, gx.gpu_window_frames,
@@ -4792,7 +4823,7 @@ static void present(const struct dk_command_present *command)
 		gx.draws_made = gx.skipped_target = gx.skipped_state = gx.skipped_missing = gx.skipped_shader = gx.skipped_ring = 0;
 		gx.skipped_left_out = gx.drawn_equivalent = gx.drawn_fallback = 0;
 		gx.rectangle_clears = 0;
-		gx.textures_made = gx.textures_unsupported = 0;
+		gx.textures_made = gx.textures_unsupported = gx.textures_reduced = 0;
 	}
 	ring_next();
 	deferred_flush(0);
