@@ -8,11 +8,10 @@
 - splash-tv.png, 1280x720, shown on the TV while the app starts (--tv-image);
 - splash-drc.png, 854x480, shown on the GamePad meanwhile (--drc-image).
 
-The look is the Wii U's own shell: a clean white and pale-blue picture with soft round shapes, a glossy blue ring (a ring world) with a green armoured helmet with a
-gold visor in front of it, a bold title with a thick rounded outline, and a pill for the subtitle. Everything is drawn here from shapes and gradients, as a simple
-cartoon of a soldier's helmet; none of the game's artwork, logo or models was used, and the helmet and the ring are not copies of any picture of the game (the game and
-its characters belong to Microsoft). The title is set in Overpass (port/assets/fonts, SIL Open Font License 1.1); the outline is drawn by Pillow's stroke, which has
-round joins. The splash screens say that the port is unofficial and needs the player's own copy.
+The look is the Wii U's shell: a bright blue picture with a few soft bubbles, the project's helmet render (port/assets/icon/opence-icon-render.png, the artwork of
+OpenCE's own icon, the same one the earlier Wii U pictures showed) in a round medallion with a white rim and a ring of ticks around it, a bold title with a thick rounded
+outline and a pill for the subtitle. The title is set in Overpass (port/assets/fonts, SIL Open Font License 1.1); the outline is drawn by Pillow's stroke, which has round
+joins. The splash screens say that the port is unofficial and needs the player's own copy (the game and its characters belong to Microsoft).
 Needs Pillow only (no NumPy); every shape is drawn by Pillow's own rasteriser at four times the size and scaled down with LANCZOS, so another Pillow
 version may differ by a level or two at an edge (--check allows a mean difference of half a level).
 """
@@ -34,21 +33,18 @@ TITLE = "OPENCE-U"
 SUBTITLE = "Halo: Combat Evolved for Wii U"
 NOTICE = "Unofficial fan port. Not made, endorsed or supported by Microsoft or the game's makers. It needs your own copy of the game."
 
-PAPER_TOP = (252, 254, 255)
-PAPER_BOTTOM = (206, 232, 248)
-RING_LIGHT = (96, 226, 236)
-RING_DARK = (16, 84, 196)
-INK = (14, 70, 150)
-OUTLINE = (24, 128, 220)
+SKY_TOP = (58, 178, 238)
+SKY_BOTTOM = (16, 84, 190)
+NAVY_TOP = (22, 70, 140)
+NAVY_BOTTOM = (6, 26, 70)
+RIM = (255, 255, 255)
+BAND = (14, 66, 150)
+INK = (8, 40, 100)
+OUTLINE = (12, 58, 138)
 WHITE = (255, 255, 255)
-MUTED = (84, 118, 150)
-PILL = (230, 244, 252)
-ARMOR_LIGHT = (150, 196, 96)
-ARMOR_DARK = (52, 104, 52)
-ARMOR_EDGE = (30, 70, 40)
-VISOR_LIGHT = (255, 226, 120)
-VISOR_DARK = (226, 142, 28)
-VISOR_EDGE = (120, 70, 16)
+SOFT = (214, 236, 252)
+PILL = (255, 255, 255)
+RENDER = ROOT / "port/assets/icon/opence-icon-render.png"
 SCALE = 4
 
 
@@ -109,134 +105,49 @@ def outlined_text(image, anchor, text, font, fill, outline, stroke, shadow=None,
         x += font.getlength(letter) + spacing
 
 
-def ring(image, centre, radius, letters=True):
-    """the badge: a glossy ring (blue and teal, a soft shadow under it, a bright arc along its upper left edge, a small moon on its rim) with "CE" in it"""
+def disc(size, centre, radius):
+    mask = Image.new("L", size, 0)
+    ImageDraw.Draw(mask).ellipse([centre[0] - radius, centre[1] - radius, centre[0] + radius, centre[1] + radius], fill=255)
+    return mask
+
+
+def medallion(image, centre, radius):
+    """the helmet render in a round medallion: a soft shadow, a white rim, a blue band with a ring of light ticks, and inside it the render on a navy gradient"""
     size = image.size
     cx, cy = centre
-    # (the shadow, a little below and to the right)
-    shadow = Image.new("L", size, 0)
-    ImageDraw.Draw(shadow).ellipse([cx - radius, cy - radius + radius * 0.07, cx + radius, cy + radius + radius * 0.07], fill=170)
-    image.paste(Image.new("RGB", size, (96, 150, 196)), (0, 0), blurred(shadow, radius * 0.05))
-    # (the band: outer circle minus the inner one, filled with the gradient)
-    band = Image.new("L", size, 0)
-    d = ImageDraw.Draw(band)
-    d.ellipse([cx - radius, cy - radius, cx + radius, cy + radius], fill=255)
-    d.ellipse([cx - radius * 0.70, cy - radius * 0.70, cx + radius * 0.70, cy + radius * 0.70], fill=0)
-    image.paste(diagonal(size, RING_LIGHT, RING_DARK), (0, 0), band)
-    # (the inside of the ring: a paler disc, so that the letters stand on something)
-    disc = Image.new("L", size, 0)
-    ImageDraw.Draw(disc).ellipse([cx - radius * 0.70, cy - radius * 0.70, cx + radius * 0.70, cy + radius * 0.70], fill=255)
-    image.paste(diagonal(size, (255, 255, 255), (214, 236, 250)), (0, 0), disc)
-    # (the rim lights: a thin white line inside the band's edges, and the bright arc at the upper left)
+    shadow = disc(size, (cx, cy + radius * 0.05), radius)
+    image.paste(Image.new("RGB", size, (6, 40, 110)), (0, 0), blurred(shadow, radius * 0.05).point(lambda v: v * 0.45))
+    image.paste(Image.new("RGB", size, RIM), (0, 0), disc(size, centre, radius))
+    image.paste(Image.new("RGB", size, BAND), (0, 0), disc(size, centre, radius * 0.95))
+    # (the ticks, in the band)
     draw = ImageDraw.Draw(image)
-    line = max(2, round(radius * 0.025))
-    draw.ellipse([cx - radius * 0.985, cy - radius * 0.985, cx + radius * 0.985, cy + radius * 0.985], outline=(214, 248, 250), width=line)
-    gloss = Image.new("L", size, 0)
-    ImageDraw.Draw(gloss).arc([cx - radius * 0.90, cy - radius * 0.90, cx + radius * 0.90, cy + radius * 0.90], 195, 275, fill=255, width=max(3, round(radius * 0.07)))
-    image.paste(Image.new("RGB", size, WHITE), (0, 0), blurred(gloss, radius * 0.012))
-    # (the ring world's segments: short light ticks along the middle of the band)
-    ticks = Image.new("L", size, 0)
-    td = ImageDraw.Draw(ticks)
-    for i in range(36):
-        angle = math.radians(i * 10 + 5)
-        inner, outer = radius * 0.80, radius * 0.90
-        td.line([(cx + inner * math.cos(angle), cy + inner * math.sin(angle)), (cx + outer * math.cos(angle), cy + outer * math.sin(angle))],
-                fill=110, width=max(2, round(radius * 0.022)))
-    image.paste(Image.new("RGB", size, WHITE), (0, 0), ticks)
-    # (the moon on the rim at the upper right, with its own small gloss)
-    mx, my, mr = cx + radius * 0.74, cy - radius * 0.74, radius * 0.13
-    draw.ellipse([mx - mr * 1.5, my - mr * 1.5, mx + mr * 1.5, my + mr * 1.5], fill=WHITE)
-    draw.ellipse([mx - mr, my - mr, mx + mr, my + mr], fill=RING_DARK)
-    draw.ellipse([mx - mr * 0.55, my - mr * 0.6, mx - mr * 0.05, my - mr * 0.1], fill=(170, 226, 250))
-    if letters:
-        helmet(image, (cx, cy + radius * 0.03), radius * 1.30)
-
-
-def rounded(mask, radius):
-    """a mask with its corners rounded (blurred and cut again)"""
-    return blurred(mask, radius).point(lambda v: 255 if v > 127 else 0)
-
-
-def sticker(image, mask, fill, edge, width):
-    """the shape of mask, filled with the picture fill, with an outline of width pixels in the colour edge (the dilated mask under it)"""
-    grown = blurred(mask, width * 0.7).point(lambda v: 255 if v > 20 else 0)
-    image.paste(Image.new("RGB", image.size, edge), (0, 0), grown)
-    image.paste(fill, (0, 0), mask)
-
-
-def draw_helmet(image, centre, size):
-    """a green armoured helmet with a gold mirror visor, in the picture's round cartoon style: drawn from a few shapes, in front view (an original drawing of
-    a soldier's helmet; the game's artwork was not used)"""
-    cx, cy = centre
-    s = size
-    full = image.size
-    edge = max(3, round(s * 0.035))
-    # (the shell: a dome and a jaw, joined and rounded)
-    shell = Image.new("L", full, 0)
-    d = ImageDraw.Draw(shell)
-    d.ellipse([cx - 0.40 * s, cy - 0.50 * s, cx + 0.40 * s, cy + 0.30 * s], fill=255)
-    d.polygon([(cx - 0.40 * s, cy - 0.10 * s), (cx - 0.38 * s, cy + 0.28 * s), (cx - 0.20 * s, cy + 0.47 * s), (cx + 0.20 * s, cy + 0.47 * s),
-               (cx + 0.38 * s, cy + 0.28 * s), (cx + 0.40 * s, cy - 0.10 * s)], fill=255)
-    shell = rounded(shell, s * 0.03)
-    # (a shadow under it)
-    under = blurred(shell.transform(full, Image.AFFINE, (1, 0, 0, 0, 1, -s * 0.04)), s * 0.03).point(lambda v: v * 0.35)
-    image.paste(Image.new("RGB", full, (70, 120, 160)), (0, 0), under)
-    sticker(image, shell, diagonal(full, ARMOR_LIGHT, ARMOR_DARK), ARMOR_EDGE, edge)
-    draw = ImageDraw.Draw(image)
-    # (the ear pieces and the crest line)
-    for side in (-1, 1):
-        x = cx + side * 0.385 * s
-        draw.ellipse([x - 0.065 * s, cy - 0.04 * s, x + 0.065 * s, cy + 0.14 * s], fill=ARMOR_DARK, outline=ARMOR_EDGE, width=max(2, round(s * 0.012)))
-    draw.line([(cx, cy - 0.49 * s), (cx, cy - 0.30 * s)], fill=ARMOR_EDGE, width=max(3, round(s * 0.02)))
-    # (the visor: a rounded shield shape, gold)
-    visor = Image.new("L", full, 0)
-    ImageDraw.Draw(visor).polygon([(cx - 0.30 * s, cy - 0.20 * s), (cx + 0.30 * s, cy - 0.20 * s), (cx + 0.27 * s, cy + 0.10 * s), (cx + 0.10 * s, cy + 0.23 * s),
-                                   (cx - 0.10 * s, cy + 0.23 * s), (cx - 0.27 * s, cy + 0.10 * s)], fill=255)
-    visor = rounded(visor, s * 0.035)
-    sticker(image, visor, diagonal(full, VISOR_LIGHT, VISOR_DARK), VISOR_EDGE, edge)
-    # (the reflections on the visor: a sky band and a bright streak, cut to the visor's shape)
-    glass = Image.new("L", full, 0)
-    gd = ImageDraw.Draw(glass)
-    gd.polygon([(cx - 0.30 * s, cy - 0.20 * s), (cx + 0.30 * s, cy - 0.20 * s), (cx + 0.29 * s, cy - 0.10 * s), (cx - 0.29 * s, cy - 0.05 * s)], fill=150)
-    sky = ImageChops.multiply(glass, visor)
-    image.paste(Image.new("RGB", full, (255, 250, 220)), (0, 0), sky)
-    streak = Image.new("L", full, 0)
-    ImageDraw.Draw(streak).polygon([(cx - 0.20 * s, cy - 0.01 * s), (cx - 0.12 * s, cy - 0.01 * s), (cx - 0.20 * s, cy + 0.09 * s), (cx - 0.24 * s, cy + 0.09 * s)], fill=210)
-    image.paste(Image.new("RGB", full, WHITE), (0, 0), ImageChops.multiply(blurred(streak, s * 0.004), visor))
-    # (the dome's highlight, the chin vents)
-    shine = Image.new("L", full, 0)
-    ImageDraw.Draw(shine).arc([cx - 0.33 * s, cy - 0.43 * s, cx + 0.33 * s, cy + 0.17 * s], 200, 262, fill=200, width=max(3, round(s * 0.035)))
-    image.paste(Image.new("RGB", full, (230, 250, 205)), (0, 0), blurred(shine, s * 0.006))
-    for k in (-1, 0, 1):
-        draw.line([(cx + k * 0.07 * s, cy + 0.30 * s), (cx + k * 0.07 * s, cy + 0.40 * s)], fill=ARMOR_EDGE, width=max(2, round(s * 0.018)))
-
-
-def helmet(image, centre, size):
-    """draw_helmet on a crop of the picture that holds it (the filters work on that, not on the whole picture), put back"""
-    half = round(size * 0.75)
-    box = (round(centre[0]) - half, round(centre[1]) - half, round(centre[0]) + half, round(centre[1]) + half)
-    region = image.crop(box)
-    draw_helmet(region, (half, half), size)
-    image.paste(region, box[:2])
-
-
-def sparkle(image, centre, radius, alpha=230):
-    """a four-pointed star, the Wii U shell's twinkle"""
-    layer = Image.new("L", image.size, 0)
-    cx, cy = centre
-    k = radius * 0.22
-    ImageDraw.Draw(layer).polygon([(cx, cy - radius), (cx + k, cy - k), (cx + radius, cy), (cx + k, cy + k), (cx, cy + radius), (cx - k, cy + k),
-                                   (cx - radius, cy), (cx - k, cy - k)], fill=alpha)
-    image.paste(Image.new("RGB", image.size, WHITE), (0, 0), blurred(layer, radius * 0.02))
+    for i in range(48):
+        angle = math.radians(i * 7.5)
+        inner, outer = radius * 0.865, radius * 0.925
+        draw.line([(cx + inner * math.cos(angle), cy + inner * math.sin(angle)), (cx + outer * math.cos(angle), cy + outer * math.sin(angle))],
+                  fill=(120, 190, 250) if i % 6 else WHITE, width=max(2, round(radius * (0.014 if i % 6 else 0.026))))
+    inner = radius * 0.80
+    face = Image.new("RGB", size, NAVY_TOP)
+    face = gradient(size, NAVY_TOP, NAVY_BOTTOM)
+    image.paste(face, (0, 0), disc(size, centre, inner))
+    # (the render, its helmet in the middle of the medallion, cut to the disc)
+    render = Image.open(RENDER).convert("RGBA")
+    side = round(inner * 2.15)
+    render = render.resize((side, side), Image.LANCZOS)
+    layer = Image.new("RGBA", size, (0, 0, 0, 0))
+    layer.paste(render, (round(cx - side * 0.47), round(cy - side * 0.45)))
+    alpha = ImageChops.multiply(layer.getchannel("A"), disc(size, centre, inner))
+    image.paste(layer.convert("RGB"), (0, 0), alpha)
+    draw.ellipse([cx - inner, cy - inner, cx + inner, cy + inner], outline=(120, 190, 250), width=max(2, round(radius * 0.012)))
 
 
 def background(size):
-    """the white and pale-blue paper of the Wii U's shell, with soft round bubbles"""
+    """the shell's bright blue, with a few soft bubbles"""
     width, height = size
-    image = gradient(size, PAPER_TOP, PAPER_BOTTOM)
+    image = gradient(size, SKY_TOP, SKY_BOTTOM)
     bubbles = Image.new("L", size, 0)
     d = ImageDraw.Draw(bubbles)
-    for x, y, r, a in ((0.10, 0.20, 0.20, 90), (0.88, 0.14, 0.15, 70), (0.78, 0.92, 0.30, 90), (0.30, 0.98, 0.22, 70), (0.97, 0.55, 0.10, 60), (0.52, 0.06, 0.07, 60)):
+    for x, y, r, a in ((0.08, 0.12, 0.22, 46), (0.92, 0.10, 0.16, 40), (0.80, 0.98, 0.34, 46), (0.34, 1.02, 0.24, 36), (1.0, 0.55, 0.10, 34)):
         d.ellipse([width * x - height * r, height * y - height * r, width * x + height * r, height * y + height * r], fill=a)
     image.paste(Image.new("RGB", size, WHITE), (0, 0), blurred(bubbles, height * 0.004))
     return image
@@ -245,11 +156,11 @@ def background(size):
 def icon():
     size = 128 * SCALE
     image = background((size, size))
-    # (a tile with round corners, as the Wii U's channels are: the picture shows through outside it)
-    ring(image, (size / 2, size / 2), size * 0.38)
+    medallion(image, (size / 2, size / 2), size * 0.44)
+    # (a tile with round corners, as the Wii U's channels are)
     mask = Image.new("L", (size, size), 0)
     ImageDraw.Draw(mask).rounded_rectangle([0, 0, size - 1, size - 1], radius=size * 0.20, fill=255)
-    result = Image.new("RGB", (size, size), PAPER_BOTTOM)
+    result = Image.new("RGB", (size, size), SKY_BOTTOM)
     result.paste(image, (0, 0), mask)
     return result.resize((128, 128), Image.LANCZOS)
 
@@ -259,23 +170,21 @@ def pill(image, box, fill):
 
 
 def splash(width, height):
-    """the start-up picture: the ring at the left, the title, the subtitle in its pill and the notice at the right (everything in proportion to the height)"""
+    """the start-up picture: the medallion at the left, the title, the subtitle in its pill and the notice at the right (everything in proportion to the height)"""
     w, h = width * SCALE, height * SCALE
     image = background((w, h))
     unit = h / 720.0
-    ring(image, (w * 0.24, h * 0.47), h * 0.30)
-    for x, y, r in ((0.43, 0.20, 0.030), (0.93, 0.80, 0.026), (0.075, 0.82, 0.022), (0.40, 0.88, 0.016)):
-        sparkle(image, (w * x, h * y), h * r)
-    left = w * 0.46
-    # (the title as large as fits between the ring and the right edge's margin, at most 120 px of a 720-line picture)
+    medallion(image, (w * 0.25, h * 0.48), h * 0.34)
+    left = w * 0.47
+    # (the title as large as fits between the medallion and the right edge's margin, at most 120 px of a 720-line picture)
     size = round(120 * unit)
-    while size > 8 and text_width(ImageFont.truetype(str(BLACK_FONT), size), TITLE, 4 * unit) > w - left - 90 * unit:
+    while size > 8 and text_width(ImageFont.truetype(str(BLACK_FONT), size), TITLE, 4 * unit) > w - left - 80 * unit:
         size -= 1
     title = ImageFont.truetype(str(BLACK_FONT), size)
-    outlined_text(image, (left, h * 0.45), TITLE, title, WHITE, OUTLINE, round(7 * unit), shadow=(0, 8 * unit, 6 * unit, 0.30), spacing=4 * unit)
+    outlined_text(image, (left, h * 0.46), TITLE, title, WHITE, OUTLINE, round(7 * unit), shadow=(0, 8 * unit, 6 * unit, 0.35), spacing=4 * unit)
     sub = ImageFont.truetype(str(MEDIUM_FONT), round(32 * unit))
     sub_width = text_width(sub, SUBTITLE, 1.5 * unit)
-    top = h * 0.45 + 48 * unit
+    top = h * 0.46 + 46 * unit
     pill(image, [left, top, left + sub_width + 56 * unit, top + 60 * unit], PILL)
     draw_text(ImageDraw.Draw(image), (left + 28 * unit, top + 42 * unit), SUBTITLE, sub, INK, spacing=1.5 * unit)
     note = ImageFont.truetype(str(MEDIUM_FONT), round(17 * unit))
@@ -290,7 +199,7 @@ def splash(width, height):
             line = trial
     lines.append(line)
     for i, text in enumerate(lines):
-        draw_text(ImageDraw.Draw(image), (left, h * 0.45 + 150 * unit + i * 25 * unit), text, note, MUTED)
+        draw_text(ImageDraw.Draw(image), (left, h * 0.46 + 148 * unit + i * 25 * unit), text, note, SOFT)
     return image.resize((width, height), Image.LANCZOS)
 
 
