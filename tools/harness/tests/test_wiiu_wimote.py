@@ -62,6 +62,22 @@ FAULTS = {
     "invert_ignored": ("*turn = invert_turn ? -result : result;", "*turn = result;"),
     # (the Remote's own roll turns the view the wrong way round)
     "lean_sign": ("result = -turned[1];", "result = turned[1];"),
+    # (the edge turn turns the view the wrong way round)
+    "edge_sign": ("return sign * rate * seconds;", "return -sign * rate * seconds;"),
+    # (the edge turn begins at the middle, not at the box's edge)
+    "edge_no_box": ("if (!(distance > box))\n\t\treturn 0.0f;\n\t/* (0 at the box's edge to 1 at its range", "/* (0 at the box's edge to 1 at its range"),
+    # (the kept turn is not held at the range, so coming back takes as long as going out did)
+    "edge_unclamped": ("\tif (*kept > box + range)\n\t\t*kept = box + range;\n\telse if (*kept < -(box + range))\n\t\t*kept = -(box + range);\n", ""),
+    # (the kept turn never leaks: a drift in the sensor turns the view for good)
+    "edge_no_leak": ("if (slow)\n\t\t*kept -= *kept * EDGE_LEAK * seconds;", ""),
+    # (the kept turn leaks while the Remote is turned fast too)
+    "edge_leaks_always": ("rate < EDGE_SLOW);\n\t*extra_tilt", "1);\n\t*extra_tilt"),
+    # (the speed does nothing)
+    "edge_speed_ignored": ("rate = speed * WIIMOTE_EDGE_RATE *", "rate = WIIMOTE_EDGE_RATE *"),
+    # (a late sample counts for its whole time in the edge turn)
+    "edge_no_time_limit": ("\tif (seconds > 0.1f)\n\t\tseconds = 0.1f;\n\trate = sqrtf", "\trate = sqrtf"),
+    # (zeroing the Remote does not make where it points the middle)
+    "edge_no_recentre": ("motion->edge_x = motion->edge_y = 0.0f;", ""),
 }
 
 CHECKS = r'''
@@ -442,6 +458,87 @@ static int still_checks(void)
 	return 0;
 }
 
+/* the edge turn: the box in rotations (20 degrees), the range (25 degrees); samples of a tenth of a second */
+#define BOX (20.0f / 360.0f)
+#define RANGE (25.0f / 360.0f)
+
+static int edge_checks(void)
+{
+	struct wimote_motion m;
+	float extra_turn, extra_tilt, last = 0.0f;
+	int step;
+
+	/* inside the box: nothing is added */
+	wimote_motion_reset(&m);
+	for (step = 0; step < 5; step++)
+	{
+		wimote_motion_edge(&m, 0.01f, 0.0f, 0.1f, BOX, RANGE, 1.0f, &extra_turn, &extra_tilt);
+		CHECK(extra_turn == 0.0f && extra_tilt == 0.0f, 800);
+	}
+	/* past the box: it keeps turning the same way, more the further out, and no more than the quickest at the range */
+	wimote_motion_reset(&m);
+	for (step = 0; step < 6; step++)
+		wimote_motion_edge(&m, 0.02f, 0.0f, 0.1f, BOX, RANGE, 1.0f, &extra_turn, &extra_tilt);
+	CHECK(m.edge_x > BOX, 801);
+	CHECK(extra_turn > 0.0f && extra_tilt == 0.0f, 802);
+	last = extra_turn;
+	wimote_motion_edge(&m, 0.02f, 0.0f, 0.1f, BOX, RANGE, 1.0f, &extra_turn, &extra_tilt);
+	CHECK(extra_turn >= last, 803);
+	for (step = 0; step < 40; step++)
+		wimote_motion_edge(&m, 0.02f, 0.0f, 0.1f, BOX, RANGE, 1.0f, &extra_turn, &extra_tilt);
+	/* (clamped at box + range, the quickest: 0.30 rotations a second, 0.03 a sample) */
+	CHECK(NEAR(m.edge_x, BOX + RANGE, 0.0001f), 804);
+	CHECK(NEAR(extra_turn, 0.03f, 0.0005f), 805);
+	/* the other way round it turns the other way, and the tilt has its own axis */
+	wimote_motion_reset(&m);
+	for (step = 0; step < 10; step++)
+		wimote_motion_edge(&m, -0.03f, 0.03f, 0.1f, BOX, RANGE, 1.0f, &extra_turn, &extra_tilt);
+	CHECK(extra_turn < 0.0f && extra_tilt > 0.0f, 806);
+	/* speed 2 is twice as quick at the quickest, speed 0 and a bad box or range are no edge turn */
+	wimote_motion_reset(&m);
+	for (step = 0; step < 40; step++)
+		wimote_motion_edge(&m, 0.02f, 0.0f, 0.1f, BOX, RANGE, 2.0f, &extra_turn, &extra_tilt);
+	CHECK(NEAR(extra_turn, 0.06f, 0.001f), 807);
+	wimote_motion_reset(&m);
+	for (step = 0; step < 40; step++)
+	{
+		wimote_motion_edge(&m, 0.02f, 0.0f, 0.1f, BOX, RANGE, 0.0f, &extra_turn, &extra_tilt);
+		CHECK(extra_turn == 0.0f, 808);
+		wimote_motion_edge(&m, 0.02f, 0.0f, 0.1f, 0.0f, RANGE, 1.0f, &extra_turn, &extra_tilt);
+		CHECK(extra_turn == 0.0f, 809);
+		wimote_motion_edge(&m, 0.02f, 0.0f, 0.1f, BOX, -1.0f, 1.0f, &extra_turn, &extra_tilt);
+		CHECK(extra_turn == 0.0f, 810);
+	}
+	/* a late sample counts for no more than a tenth of a second, and no time is no turn */
+	wimote_motion_reset(&m);
+	m.edge_x = BOX + RANGE;
+	wimote_motion_edge(&m, 0.0f, 0.0f, 5.0f, BOX, RANGE, 1.0f, &extra_turn, &extra_tilt);
+	CHECK(NEAR(extra_turn, 0.03f, 0.0015f), 811);
+	wimote_motion_edge(&m, 0.0f, 0.0f, 0.0f, BOX, RANGE, 1.0f, &extra_turn, &extra_tilt);
+	CHECK(extra_turn == 0.0f, 812);
+	/* the kept turn leaks away while the Remote is held still, so that a drift does not turn the view for ever */
+	wimote_motion_reset(&m);
+	m.edge_x = BOX + RANGE;
+	for (step = 0; step < 150; step++)
+		wimote_motion_edge(&m, 0.0f, 0.0f, 0.1f, BOX, RANGE, 1.0f, &extra_turn, &extra_tilt);
+	CHECK(m.edge_x < BOX && extra_turn == 0.0f, 813);
+	/* but not while it is turned at a rate (about 10 degrees a second and over): the kept turn stays where it is */
+	wimote_motion_reset(&m);
+	m.edge_x = BOX + RANGE * 0.5f;
+	wimote_motion_edge(&m, 0.0f, 0.05f, 0.1f, BOX, RANGE, 1.0f, &extra_turn, &extra_tilt);
+	CHECK(NEAR(m.edge_x, BOX + RANGE * 0.5f, 0.00001f), 814);
+	wimote_motion_reset(&m);
+	m.edge_x = BOX + RANGE * 0.5f;
+	wimote_motion_edge(&m, 0.0f, 0.001f, 0.1f, BOX, RANGE, 1.0f, &extra_turn, &extra_tilt);
+	CHECK(m.edge_x < BOX + RANGE * 0.5f - 0.0001f, 815);
+	/* recentred (the Remote was zeroed): the middle is where it points now */
+	m.edge_x = 0.2f;
+	m.edge_y = -0.1f;
+	wimote_motion_recentre(&m);
+	CHECK(m.edge_x == 0.0f && m.edge_y == 0.0f, 816);
+	return 0;
+}
+
 int main(void)
 {
 	int result;
@@ -453,7 +550,7 @@ int main(void)
 	if ((result = layout_checks(WIIMOTE_LAYOUT_MENU, MENU, sizeof(MENU) / sizeof(MENU[0]), 120)))
 		return result;
 	if ((result = rate_checks()) || (result = pointer_checks()) || (result = look_checks()) || (result = extension_checks()) || (result = stick_checks()) ||
-		(result = motion_checks()) || (result = still_checks()))
+		(result = motion_checks()) || (result = still_checks()) || (result = edge_checks()))
 		return result;
 	return 0;
 }

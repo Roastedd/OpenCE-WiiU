@@ -473,6 +473,8 @@ static void layout_apply(void)
 		wiiu_input_set_wimote(config_string("input.wiiu_wiimote_layout"), config_string("input.wiiu_wiimote_look"),
 			(float)config_real("input.wiiu_wiimote_pointer_box"), (float)config_real("input.wiiu_wiimote_pointer_speed"),
 			config_boolean("input.wiiu_wiimote_motion_invert_x"));
+		wiiu_input_set_wimote_edge(config_boolean("input.wiiu_wiimote_motion_edge"), (float)config_real("input.wiiu_wiimote_motion_edge_box"),
+			(float)config_real("input.wiiu_wiimote_motion_edge_range"), (float)config_real("input.wiiu_wiimote_motion_edge_speed"));
 	}
 }
 

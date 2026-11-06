@@ -244,6 +244,13 @@ A Remote without a Nunchuk has the menus' layout whatever the setting says: the 
   motor is not rumbled while its motion turns the view. **To recentre, hold the Remote still for a second and a half**: it asks the library to zero the
   MotionPlus (`KPADResetMpls`) once for each time it is held still (the log says so); a drifting view is cured by that. The view is turned by the rates, so
   the Remote's own idea of its angle does not matter. `input.wiiu_wiimote_motion_invert_x` turns the turn round, since its direction is a guess.
+- **Edge turn** (`input.wiiu_wiimote_motion_edge`, on by default; `_edge_box` 20 degrees, `_edge_range` 25, `_edge_speed` 1): the MotionPlus turns the view as
+  the Remote turns, as a mouse does, and that runs out of wrist. So the port keeps how far the Remote has turned from where it was zeroed (the middle of the
+  TV, as a pointer would have it) and, past the box, keeps the view turning on, gently at first and up to about 100 degrees a second at the range's far side
+  (`wimote_motion_edge`), as a pointer at the edge of the screen does for the pointer look. Inside the box nothing changes. The kept turn leaks away while the
+  Remote turns slowly (about 7 seconds to a third), so a sensor's drift does not leave the view turning by itself, and it starts again from nothing when the
+  Remote is zeroed by being held still. The gun and the crosshair stay in the middle of the view, as the game draws them: nothing here moves them apart from the
+  view. The numbers are guesses until a Remote has been aimed with them.
 - The log, in the format of the other `Input:` lines, says at connect which extension, layout and look a Remote has ("Input: a Wii Remote on channel 1
   (...) is player 1's", then "Input: at connect: channel 1's Wii Remote: extension a Nunchuk, layout default, look none (the setting is auto: the pointer
   once it sees the sensor bar)"), the same again with "now" when the extension or the look changes (the MotionPlus came on, the pointer found the bar), the

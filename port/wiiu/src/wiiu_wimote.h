@@ -153,6 +153,8 @@ struct wimote_motion
 	/* seconds held still, and whether that has been told */
 	float still;
 	int still_told;
+	/* how far the Remote has turned from where it was zeroed or recentred, in rotations: left positive, and its nose lifting negative (as turn and tilt of wimote_motion_step) */
+	float edge_x, edge_y;
 };
 
 void wimote_motion_reset(struct wimote_motion *motion);
@@ -162,6 +164,18 @@ second is counted): how far the Remote turned, in rotations, as the view's mouse
 yaw, or its roll about its length), and tilt, its nose lifting negative (the sign of wiiu_input_gyro_take's tilt: the GamePad's top away). Rates under about 3 degrees a
 second are scaled down towards nothing (the sensor's noise and a steady hand's tremor). invert_turn turns the turn round. */
 void wimote_motion_step(struct wimote_motion *motion, int space, float seconds, const float acc[3], const float rate[3], int invert_turn, float *turn, float *tilt);
+
+/* The edge turn: a Remote's view turns as the Remote does, as a mouse does, and runs out of wrist; this keeps the Remote's turn from where it was zeroed (the middle of
+the TV, as a pointer would have it) and, once it is past a box (box: its half width, in rotations), keeps the view turning on past the box's edge, at a rate that grows
+with how far past it the Remote is pointed (range: the rotations from the edge to the quickest; speed: 1 is `WIIMOTE_EDGE_RATE` rotations a second at the quickest, 0 to 4).
+turn and tilt are the sample's from wimote_motion_step; extra_turn and extra_tilt are what to add to them, in the same units (the turn of the seconds given, in
+rotations). The kept turn leaks back towards the middle while the Remote is turned slowly (about 7 seconds to forget), so that a drift in the sensor does not leave the view
+turning on its own, and holds at most box + range, so that coming back is quick. A box of 0 or less, or a bad number, is no edge turn. */
+#define WIIMOTE_EDGE_RATE 0.30f
+void wimote_motion_edge(struct wimote_motion *motion, float turn, float tilt, float seconds, float box, float range, float speed, float *extra_turn, float *extra_tilt);
+
+/* The Remote has been zeroed (held still): where it points now is the middle. */
+void wimote_motion_recentre(struct wimote_motion *motion);
 
 /* Whether the Remote has now been held still for long enough to ask the library to zero the MotionPlus (KPADResetMpls): 1 once for each time it is held still
 (about a second and a half), and again only after it has moved. */

@@ -513,6 +513,18 @@ static const struct config_setting config_settings[] =
 	{ "input.wiiu_wiimote_motion_invert_x", _config_boolean, "false", "HALO_WIIU_WIIMOTE_MOTION_INVERT_X", _environment_value, _platform_wiiu,
 		"The Wii Remote's MotionPlus turns the view the other way round (the direction of its\n"
 		"turn has not been measured on a console)." },
+	{ "input.wiiu_wiimote_motion_edge", _config_boolean, "true", "HALO_WIIU_WIIMOTE_MOTION_EDGE", _environment_value, _platform_wiiu,
+		"The Wii Remote's MotionPlus keeps the view turning while the Remote is pointed far to one\n"
+		"side of where it was zeroed (the middle of the TV), as a pointer at the screen's edge\n"
+		"would, so that a turn does not run out of wrist. Inside the box nothing changes: the\n"
+		"view turns as the Remote does." },
+	{ "input.wiiu_wiimote_motion_edge_box", _config_real, "20.0", "HALO_WIIU_WIIMOTE_MOTION_EDGE_BOX", _environment_value, _platform_wiiu,
+		"The half width of the MotionPlus's free-aim box, in degrees from where the Remote\n"
+		"was zeroed (0 to 180)." },
+	{ "input.wiiu_wiimote_motion_edge_range", _config_real, "25.0", "HALO_WIIU_WIIMOTE_MOTION_EDGE_RANGE", _environment_value, _platform_wiiu,
+		"How far past the box, in degrees, the edge turn reaches its quickest (0 to 180)." },
+	{ "input.wiiu_wiimote_motion_edge_speed", _config_real, "1.0", "HALO_WIIU_WIIMOTE_MOTION_EDGE_SPEED", _environment_value, _platform_wiiu,
+		"How fast the edge turn is at its quickest: 1 is about 100 degrees a second (0 to 4)." },
 	{ "input.wiiu_controller_layout", _config_string, "\"auto\"", "HALO_WIIU_CONTROLLER_LAYOUT", _environment_value, _platform_wiiu,
 		"How the Pro and Classic Controllers take the players' places. \"auto\": while one\n"
 		"person plays, every controller plays as player 1 with the GamePad; once a second\n"

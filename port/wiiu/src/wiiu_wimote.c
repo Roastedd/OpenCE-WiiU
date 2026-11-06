@@ -347,6 +347,52 @@ void wimote_motion_step(struct wimote_motion *motion, int space, float seconds, 
 	*tilt *= scale;
 }
 
+/* (the share of the kept turn that leaks away each second while the Remote turns slowly, and what is slowly: rotations a second, about 10 degrees) */
+#define EDGE_LEAK 0.15f
+#define EDGE_SLOW 0.03f
+
+static float edge_axis(float *kept, float step, float seconds, float box, float range, float speed, float slow)
+{
+	float distance, rate, sign;
+
+	*kept += step;
+	if (slow)
+		*kept -= *kept * EDGE_LEAK * seconds;
+	if (*kept > box + range)
+		*kept = box + range;
+	else if (*kept < -(box + range))
+		*kept = -(box + range);
+	sign = *kept < 0.0f ? -1.0f : 1.0f;
+	distance = *kept < 0.0f ? -*kept : *kept;
+	if (!(distance > box))
+		return 0.0f;
+	/* (0 at the box's edge to 1 at its range: gently at first, quickest at the far side, as the pointer's) */
+	distance = (distance - box) / range;
+	if (distance > 1.0f)
+		distance = 1.0f;
+	rate = speed * WIIMOTE_EDGE_RATE * (0.3f * distance + 0.7f * distance * distance);
+	return sign * rate * seconds;
+}
+
+void wimote_motion_edge(struct wimote_motion *motion, float turn, float tilt, float seconds, float box, float range, float speed, float *extra_turn, float *extra_tilt)
+{
+	float rate;
+
+	*extra_turn = *extra_tilt = 0.0f;
+	if (!(seconds > 0.0f) || !(box > 0.0f && box <= 0.5f) || !(range > 0.0f && range <= 0.5f) || !(speed > 0.0f && speed <= POINTER_SPEED_MAXIMUM))
+		return;
+	if (seconds > 0.1f)
+		seconds = 0.1f;
+	rate = sqrtf(turn * turn + tilt * tilt) / seconds;
+	*extra_turn = edge_axis(&motion->edge_x, turn, seconds, box, range, speed, rate < EDGE_SLOW);
+	*extra_tilt = edge_axis(&motion->edge_y, tilt, seconds, box, range, speed, rate < EDGE_SLOW);
+}
+
+void wimote_motion_recentre(struct wimote_motion *motion)
+{
+	motion->edge_x = motion->edge_y = 0.0f;
+}
+
 int wimote_motion_still(struct wimote_motion *motion, float seconds, const float rate[3])
 {
 	if (fabsf(rate[0]) >= STILL_RATE || fabsf(rate[1]) >= STILL_RATE || fabsf(rate[2]) >= STILL_RATE)

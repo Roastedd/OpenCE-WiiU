@@ -75,7 +75,7 @@ buttons sit where the Xbox's do, so jump is under your thumb; the on-screen prom
   To look around, point at the screen (needs a sensor bar: the Wii U's own, or the GamePad as one through the *DRC Sensorbar* Aroma plugin): the view
   does not turn while you point inside the middle of the screen, and turns faster the further out you point (`input.wiiu_wiimote_pointer_box` and
   `_pointer_speed` set the size of the middle and the speed). A **Wii Remote Plus** (or a MotionPlus adapter) needs no bar: it turns the view as you
-  turn it, and holding it still for a second and a half zeroes it. `input.wiiu_wiimote_look` chooses between the two (`"auto"` prefers the MotionPlus).
+  turn it (and keeps turning while you point it well to one side of where it was zeroed, so you do not run out of wrist: `input.wiiu_wiimote_motion_edge`, `_box`, `_range`, `_speed`), and holding it still for a second and a half zeroes it. `input.wiiu_wiimote_look` chooses between the two (`"auto"` prefers the MotionPlus).
   (Written and tested on a computer; not yet checked on a console.)
 - **Skip a cutscene**: hold B (the jump button), + or a finger on the touch screen for one second.
 
