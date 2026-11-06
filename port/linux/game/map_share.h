@@ -120,6 +120,13 @@ boolean map_share_download_begin(
 	char const *level_name,
 	unsigned long version,
 	char const *message);
+/* why the call above did not take the level, in words added to `message` (a buffer of `size`): the setting that
+turned downloads off, or a build that cannot run Custom Edition maps; nothing if there is none */
+void map_share_download_refusal(
+	char const *level_name,
+	unsigned long version,
+	char *message,
+	long size);
 /* the version of the map the network game this machine is in is on, if it
 is on the level `level_name` (or a map of its name: custom_edition_cache.c
 takes the file of that version) */

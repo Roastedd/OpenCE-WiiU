@@ -1148,6 +1148,8 @@ boolean cache_files_map_present(
 		{
 			return TRUE;
 		}
+		/* port: and why the map was not asked of the host, if a setting stopped it */
+		map_share_download_refusal(map_name, version, message, sizeof(message));
 	}
 	else
 	{
