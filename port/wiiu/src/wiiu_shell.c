@@ -207,6 +207,14 @@ static void echo_to_system(const char *line)
 /* The game's debug.txt (errors.c, write_to_debug_file): its lines go through a log of their own, written by its own thread, so that the game thread never waits for
 the card for them; lines from before the log is up are lost (none are written that early) */
 #define ERROR_FILE WIIU_DATA_DIRECTORY "/data/debug.txt"
+#define ERROR_PREVIOUS_FILE WIIU_DATA_DIRECTORY "/data/debug-previous.txt"
+/* A file bigger than this at the start is kept as debug-previous.txt (the one before that let go) and begun again: it held 143,949 lines, 6.2 MB, from 618 runs
+by 2026-11-06 (109,661 of them one message, accept_endpoint() returned NULL), every run appending to it. A smaller one goes on, so that a crash's lines survive a
+restart or two. */
+#define ERROR_FILE_ROLL_BYTES (256 * 1024)
+/* The same line, or one of the last eight, written less than this long ago is counted, not written, and said once with its count (wiiu_shell_log.h collapse_ms):
+the host's blank notices (64 lines a second for ten seconds, twice a vote), the listening socket's refusals (five a second while a game is hosted) */
+#define ERROR_FILE_COLLAPSE_MS 10000u
 static wiiu_shell_log error_log;
 static pthread_once_t error_log_once = PTHREAD_ONCE_INIT;
 static volatile int error_log_started;
@@ -219,6 +227,7 @@ static void error_log_start(void)
 	config.path = ERROR_FILE;
 	config.now_ms = shell_ms;
 	config.thread_setup = setup_thread;
+	config.collapse_ms = ERROR_FILE_COLLAPSE_MS;
 	if (wiiu_shell_log_start(&error_log, &config) == 0)
 		error_log_started = 1;
 }
@@ -1229,6 +1238,16 @@ int wiiu_shell_run(int (*game_main)(void))
 	make_directories();
 	unlink(LOG_PREVIOUS_FILE);
 	rename(LOG_FILE, LOG_PREVIOUS_FILE);
+	{
+		struct stat error_file;
+
+		/* (before the game writes its first line: the writer is made by that line) */
+		if (stat(ERROR_FILE, &error_file) == 0 && error_file.st_size > ERROR_FILE_ROLL_BYTES)
+		{
+			unlink(ERROR_PREVIOUS_FILE);
+			rename(ERROR_FILE, ERROR_PREVIOUS_FILE);
+		}
+	}
 	memset(&missing_config, 0, sizeof(missing_config));
 	run_id = OSGetSystemTime();
 	missing_config.directory = WIIU_DATA_DIRECTORY;

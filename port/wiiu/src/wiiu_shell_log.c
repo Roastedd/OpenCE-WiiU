@@ -82,6 +82,93 @@ static size_t take_batch(wiiu_shell_log *log)
 	return used;
 }
 
+/* a line in the queue (the lock held); the line is dropped, counted, when the queue is full */
+static void queue_locked(wiiu_shell_log *log, const char *line)
+{
+	if (log->count >= WIIU_LOG_SLOTS)
+	{
+		log->dropped++;
+		return;
+	}
+	memcpy(log->slots[(log->first + log->count) % WIIU_LOG_SLOTS], line, WIIU_LOG_LINE_BYTES);
+	log->count++;
+	log->queued++;
+}
+
+static void line_with_time(char *line, uint32_t now, const char *text, const char *suffix)
+{
+	size_t i;
+
+	snprintf(line, WIIU_LOG_LINE_BYTES, "%u.%03u %s%s", (unsigned)(now / 1000u), (unsigned)(now % 1000u), text, suffix);
+	/* one line each: a newline inside would be two */
+	for (i = 0; line[i]; i++)
+		if (line[i] == '\n' || line[i] == '\r')
+			line[i] = ' ';
+}
+
+/* a remembered line's repeats said (the lock held), and forgotten when it is the one to give way */
+static void say_repeats_locked(wiiu_shell_log *log, wiiu_shell_log_recent *entry, uint32_t now)
+{
+	char line[WIIU_LOG_LINE_BYTES], suffix[40];
+	uint32_t seconds = (now - entry->written_ms + 500u) / 1000u;
+
+	if (!entry->repeats)
+		return;
+	snprintf(suffix, sizeof(suffix), " (%u more in %us)", (unsigned)entry->repeats, (unsigned)seconds);
+	line_with_time(line, now, entry->text, suffix);
+	queue_locked(log, line);
+	entry->repeats = 0;
+	entry->written_ms = now;
+}
+
+/* (the lock held) whether the line is one just written: then it is only counted */
+static int collapse_locked(wiiu_shell_log *log, const char *text, uint32_t now)
+{
+	uint32_t i;
+	wiiu_shell_log_recent *entry;
+
+	for (i = 0; i < WIIU_LOG_RECENT; i++)
+	{
+		entry = &log->recent[i];
+		if (!entry->used || strncmp(entry->text, text, WIIU_LOG_KEY_BYTES - 1))
+			continue;
+		if (now - entry->written_ms < log->config.collapse_ms)
+		{
+			entry->repeats++;
+			log->collapsed++;
+			return 1;
+		}
+		say_repeats_locked(log, entry, now);
+		entry->written_ms = now;
+		return 0;
+	}
+	/* a line not remembered: the oldest entry gives way (and says what it had left out) */
+	entry = &log->recent[log->recent_next];
+	log->recent_next = (log->recent_next + 1u) % WIIU_LOG_RECENT;
+	if (entry->used)
+		say_repeats_locked(log, entry, now);
+	snprintf(entry->text, sizeof(entry->text), "%s", text);
+	entry->written_ms = now;
+	entry->repeats = 0;
+	entry->used = 1;
+	return 0;
+}
+
+/* repeats whose time is up said, with nothing new to say them (the worker, each turn) */
+static void flush_repeats(wiiu_shell_log *log, int all)
+{
+	uint32_t now, i;
+
+	if (!log->config.collapse_ms)
+		return;
+	now = log->config.now_ms ? log->config.now_ms() : 0;
+	pthread_mutex_lock(&log->lock);
+	for (i = 0; i < WIIU_LOG_RECENT; i++)
+		if (log->recent[i].used && log->recent[i].repeats && (all || now - log->recent[i].written_ms >= log->config.collapse_ms))
+			say_repeats_locked(log, &log->recent[i], now);
+	pthread_mutex_unlock(&log->lock);
+}
+
 static void *worker(void *context)
 {
 	wiiu_shell_log *log = context;
@@ -92,6 +179,7 @@ static void *worker(void *context)
 	{
 		size_t size;
 
+		flush_repeats(log, 0);
 		pthread_mutex_lock(&log->lock);
 		if (log->stopping)
 		{
@@ -150,36 +238,34 @@ int wiiu_shell_log_start(wiiu_shell_log *log, const wiiu_shell_log_config *confi
 	return 0;
 }
 
+uint32_t wiiu_shell_log_collapsed(wiiu_shell_log *log)
+{
+	uint32_t collapsed;
+
+	pthread_mutex_lock(&log->lock);
+	collapsed = log->collapsed;
+	pthread_mutex_unlock(&log->lock);
+	return collapsed;
+}
+
 void wiiu_shell_log_text(wiiu_shell_log *log, const char *text)
 {
 	char line[WIIU_LOG_LINE_BYTES];
 	uint32_t now;
-	int length;
-	size_t i;
 
 	if (!log->started)
 		return;
 	now = log->config.now_ms ? log->config.now_ms() : 0;
-	length = snprintf(line, sizeof(line), "%u.%03u %s", (unsigned)(now / 1000u), (unsigned)(now % 1000u), text);
-	if (length < 0)
-		return;
-	/* one line each: a newline inside would be two */
-	for (i = 0; line[i]; i++)
-		if (line[i] == '\n' || line[i] == '\r')
-			line[i] = ' ';
+	line_with_time(line, now, text, "");
 	if (log->config.echo)
 		log->config.echo(line);
 	pthread_mutex_lock(&log->lock);
-	if (log->count >= WIIU_LOG_SLOTS)
+	if (log->config.collapse_ms && collapse_locked(log, line + strcspn(line, " ") + 1, now))
 	{
-		log->dropped++;
+		pthread_mutex_unlock(&log->lock);
+		return;
 	}
-	else
-	{
-		memcpy(log->slots[(log->first + log->count) % WIIU_LOG_SLOTS], line, sizeof(line));
-		log->count++;
-		log->queued++;
-	}
+	queue_locked(log, line);
 	pthread_mutex_unlock(&log->lock);
 }
 
@@ -211,6 +297,8 @@ void wiiu_shell_log_counts(wiiu_shell_log *log, uint32_t *pending, uint32_t *que
 int wiiu_shell_log_flush(wiiu_shell_log *log, uint32_t timeout_ms)
 {
 	uint32_t waited = 0;
+
+	flush_repeats(log, 1);
 
 	for (;;)
 	{

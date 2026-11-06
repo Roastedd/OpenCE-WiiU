@@ -268,6 +268,79 @@ static void test_log_card_trouble(void)
 	CHECK(queued == 1 && written == 0 && broken.lost == 1 && broken.write_errors == 1);
 }
 
+/* debug.txt's log: a line the game writes again and again (alternating with another, as the host's notices do) is counted, then said once with its count */
+static volatile uint32_t collapse_clock;
+static uint32_t collapse_now(void)
+{
+	return collapse_clock;
+}
+
+static void test_log_collapse(void)
+{
+	static wiiu_shell_log collapsing;
+	wiiu_shell_log_config config;
+	char path[300];
+	static char text[WIIU_LOG_SLOTS * WIIU_LOG_LINE_BYTES];
+	int i;
+
+	memset(&config, 0, sizeof(config));
+	path_in_folder(path, sizeof(path), "collapse.txt");
+	unlink(path);
+	config.path = path;
+	config.now_ms = collapse_now;
+	config.collapse_ms = 10000;
+	collapse_clock = 1000;
+	CHECK(wiiu_shell_log_start(&collapsing, &config) == 0);
+
+	/* 600 alternating pairs inside one second: both lines are written once */
+	for (i = 0; i < 600; i++)
+	{
+		wiiu_shell_log_text(&collapsing, "chat notice:  ");
+		wiiu_shell_log_text(&collapsing, "the host:  ");
+		collapse_clock += (uint32_t)(i % 2);
+	}
+	wiiu_shell_log_text(&collapsing, "a different line");
+	/* (the worker writes what was queued; no flush: that would say the counts at once) */
+	for (i = 0; i < 300 && !strstr(text, "a different line\n"); i++)
+	{
+		usleep(10000);
+		read_file(path, text, sizeof(text));
+	}
+	CHECK(strstr(text, "chat notice:  \n") && strstr(text, "the host:  \n") && strstr(text, "a different line\n"));
+	CHECK(count_lines(text) == 3);
+	CHECK(wiiu_shell_log_collapsed(&collapsing) == 1198);
+	/* the time passes: the worker says each count by itself, though nothing repeats the lines */
+	collapse_clock += 11000;
+	for (i = 0; i < 300 && !(strstr(text, "chat notice:   (599 more in 11s)\n") && strstr(text, "the host:   (599 more in 11s)\n")); i++)
+	{
+		usleep(10000);
+		read_file(path, text, sizeof(text));
+	}
+	CHECK(strstr(text, "chat notice:   (599 more in 11s)\n") && strstr(text, "the host:   (599 more in 11s)\n"));
+	CHECK(count_lines(text) == 5);
+	/* the window begins again when the count is said: the next of them is counted too */
+	wiiu_shell_log_text(&collapsing, "chat notice:  ");
+	wiiu_shell_log_text(&collapsing, "chat notice:  ");
+	CHECK(wiiu_shell_log_collapsed(&collapsing) == 1200);
+	/* more distinct lines than are remembered: the one that gives way says its count first, and a line of a log without collapse is never held back */
+	collapse_clock += 20000;
+	wiiu_shell_log_text(&collapsing, "x");
+	wiiu_shell_log_text(&collapsing, "x");
+	wiiu_shell_log_text(&collapsing, "x");
+	for (i = 0; i < WIIU_LOG_RECENT; i++)
+		wiiu_shell_log_write(&collapsing, "other %d", i);
+	CHECK(wiiu_shell_log_flush(&collapsing, 5000) == 1);
+	read_file(path, text, sizeof(text));
+	CHECK(strstr(text, "x (2 more in 0s)\n"));
+	/* the end: what is left out is said by the flush */
+	wiiu_shell_log_text(&collapsing, "other 7");
+	wiiu_shell_log_text(&collapsing, "other 7");
+	CHECK(wiiu_shell_log_flush(&collapsing, 5000) == 1);
+	read_file(path, text, sizeof(text));
+	CHECK(strstr(text, "other 7 (2 more in 0s)\n"));
+	CHECK(wiiu_shell_log_stop(&collapsing, 2000));
+}
+
 /* A permanently nonempty normal queue still services capture once per batch, with no lock held. */
 static struct
 {
@@ -492,6 +565,7 @@ int main(void)
 	test_watch_describes();
 	test_log();
 	test_log_card_trouble();
+	test_log_collapse();
 	test_log_service_fairness();
 	test_log_stop();
 	test_blackbox();

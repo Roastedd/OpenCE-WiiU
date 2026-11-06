@@ -1264,7 +1264,10 @@ static void chat_add_notice(
 	line->color = _chat_color_notice;
 	line->channel = _chat_channel_everyone;
 	line->hearers = chat_local_players();
-	error(_error_log, "chat notice: %s", line->text);
+	/* (debug.txt has the text, unless there is none: a host clears the chat with a screenful of blank notices, 32 a second for ten seconds, and each is in
+	debug.txt twice, here and as the host's text) */
+	if (line->text[strspn(line->text, " ")])
+		error(_error_log, "chat notice: %s", line->text);
 }
 
 /* ---------- the host */

@@ -24,6 +24,9 @@ The queue and its worker are plain C with pthreads (the same on the console and 
 /* lines the worker takes at a time (and holds in a buffer of its own while it writes) */
 #define WIIU_LOG_BATCH 64
 #define WIIU_LOG_PERIOD_MS 100
+/* lines a log with collapse_ms remembers, to count their repeats (the first WIIU_LOG_KEY_BYTES - 1 characters of each decide) */
+#define WIIU_LOG_RECENT 8
+#define WIIU_LOG_KEY_BYTES (WIIU_LOG_LINE_BYTES - 56)
 
 typedef struct wiiu_shell_log_config
 {
@@ -34,7 +37,19 @@ typedef struct wiiu_shell_log_config
 	int (*service)(void *context);
 	void *service_context;
 	void (*echo)(const char *line);  /* each line also goes here, from the writer's thread (the system's debug log); may be NULL */
+	/* With a value, a line identical to one of the last WIIU_LOG_RECENT written less than this many milliseconds ago is counted, not
+	queued; once the time has passed, the line says how many were left out ("text (N more in the last S s)"). For logs a game fills with
+	one message again and again (debug.txt); 0 (the default) queues every line. */
+	uint32_t collapse_ms;
 } wiiu_shell_log_config;
+
+typedef struct wiiu_shell_log_recent
+{
+	char text[WIIU_LOG_KEY_BYTES];
+	uint32_t written_ms; /* when the line was last queued */
+	uint32_t repeats;    /* left out since then */
+	uint32_t used;
+} wiiu_shell_log_recent;
 
 typedef struct wiiu_shell_log
 {
@@ -54,6 +69,9 @@ typedef struct wiiu_shell_log
 	uint32_t stopping; /* asked to stop (wiiu_shell_log_stop) */
 	uint32_t stopped;  /* the worker has ended: nothing of the log's touches the card */
 	char batch[WIIU_LOG_BATCH * WIIU_LOG_LINE_BYTES];
+	wiiu_shell_log_recent recent[WIIU_LOG_RECENT];
+	uint32_t recent_next;
+	uint32_t collapsed; /* lines left out because they repeated one just written */
 	wiiu_shell_log_config config;
 	char path[192];
 } wiiu_shell_log;
@@ -64,6 +82,9 @@ int wiiu_shell_log_start(wiiu_shell_log *log, const wiiu_shell_log_config *confi
 /* Queues a line, "SECONDS.MILLIS text" (a longer one is cut). Safe from any thread; never waits for the card. */
 void wiiu_shell_log_write(wiiu_shell_log *log, const char *format, ...) __attribute__((format(printf, 2, 3)));
 void wiiu_shell_log_text(wiiu_shell_log *log, const char *text);
+
+/* lines left out as repeats (collapse_ms) */
+uint32_t wiiu_shell_log_collapsed(wiiu_shell_log *log);
 
 /* lines waiting, accepted, written, dropped */
 void wiiu_shell_log_counts(wiiu_shell_log *log, uint32_t *pending, uint32_t *queued, uint32_t *written, uint32_t *dropped);

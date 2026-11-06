@@ -5436,7 +5436,9 @@ void network_distributed_handle_message(
 		/* (shown whatever game.console_log says, which keeps the console's
 		own lines off the screen by default: the chat's notices) */
 		network_chat_host_notice(text);
-		error(_error_log, "the host: %s", text);
+		/* (and in debug.txt, but not a blank one: a host clears the chat with a screenful of them) */
+		if (text[strspn(text, " ")])
+			error(_error_log, "the host: %s", text);
 		break;
 	}
 	case _distributed_message_client_ready:
