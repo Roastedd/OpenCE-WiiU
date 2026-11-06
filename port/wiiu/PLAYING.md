@@ -162,7 +162,16 @@ found that no Custom Edition map was available on the development machines, so t
 - Maps that need **OpenSauce** (their header asks for its memory upgrades, data files and the like) are refused; maps that only carry
   OpenSauce's header play as stock Custom Edition plays them.
 - In a network game on a Custom Edition map you do not have, the map (and the resource maps you lack) is downloaded from the host into
-  `custom_maps` (`network.map_download` in `config.toml`; and `network.map_share` to send yours to others).
+  `custom_maps` (`network.map_download` in `config.toml`; and `network.map_share` to send yours to others). The server browser says
+  DOWNLOAD (or NEEDS <map>) on the line below the rows for the game you have chosen. The download's progress is shown at the top of the
+  screen: the map and file, percent and size, speed and time left. A first download of a map that needs `bitmaps.map`, `sounds.map` and
+  `loc.map` is the map and those, which can be 100 to 250 MB in all (the later maps need only themselves): the card must have the
+  download's size and 32 MB more free, or the game leaves the lobby and says how much room is needed. The Wii U fetches from the host (and,
+  on a LAN, a couple of other machines); it sends nothing on to other players unless `network.map_seed` is turned on (off by default here).
+  `network.map_download_limit` (MB, 0 for none) refuses a bigger download. A download that stops (HOME, the lobby left) keeps its
+  `*.part` file in `custom_maps` and goes on from there next time; delete the `.part` files to get the room back. `map_hashes.txt` in
+  `custom_maps` is the game's own list of the maps' versions (so that it need not read each map through at every start): delete it if a
+  map is ever replaced by a different file of the same size.
 - A new map can use graphics shaders that `shaders.pack` does not have yet: the game draws a missing one with the closest shader the pack has, or a
   plain stand-in, so a custom map can look wrong (a model, the sky or the HUD with the wrong shine or colour) until the pack is made again with the map's shaders.
 - `game.custom_edition` in `config.toml` (on by default) turns them off; the game then has 23 MB more memory for everything else.
