@@ -55,6 +55,20 @@ int async_save_verify(void)
 	return job.verify;
 }
 
+int async_save_revert_image(void)
+{
+	static int revert_image = -1;
+
+	if (revert_image < 0)
+	{
+		/* (-1 and no file: on) */
+		revert_image = wiiu_study_number("async_save_revert_image.txt", -1) != 0;
+		platform_log("checkpoint: a revert takes the game state from the copy of the last checkpoint held in memory, and does not read the card %s (halo/async_save_revert_image.txt: 0 reads it)",
+			revert_image ? "- yes" : "- no");
+	}
+	return revert_image;
+}
+
 unsigned long async_save_piece_bytes(void)
 {
 	if (!job.piece)

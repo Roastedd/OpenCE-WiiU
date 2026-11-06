@@ -158,6 +158,14 @@ static void *game_state_image_get(
 static void game_state_image_release(
 	void *image);
 #ifdef HALO_WIIU
+/* the image a saved game is read into, and a checkpoint's copy is held in (below, game_state_image_get), the size it was made for, and whether it holds the last checkpoint's bytes */
+static void *game_state_image;
+static unsigned long game_state_image_size;
+static boolean game_state_image_is_checkpoint;
+static void *game_state_image_get_keeping(
+	unsigned long size);
+static double game_state_async_now_ms(
+	void);
 void platform_log(char const *format, ...);
 long wiiu_study_number(const char *name, long fallback);
 BOOL platform_write_file_in_pieces(HANDLE handle, LPCVOID buffer, DWORD count, DWORD piece, LPDWORD bytes_written);
@@ -278,6 +286,10 @@ void game_state_create_or_open_file(
 		87,
 		!xbox_game_state_globals.file_open);
 
+#ifdef HALO_WIIU
+	/* (a new game's file: whatever the image holds is the last game's) */
+	game_state_image_is_checkpoint = FALSE;
+#endif
 	xbox_game_state_globals.handle = CreateFileA("z:\\savegame.bin",
 		GENERIC_READ|GENERIC_WRITE, 0, NULL, OPEN_ALWAYS,
 		FILE_FLAG_NO_BUFFERING|FILE_FLAG_SEQUENTIAL_SCAN, NULL);
@@ -352,6 +364,10 @@ boolean game_state_write_to_file(
 		return FALSE;
 	}
 #endif
+#ifdef HALO_WIIU
+	/* (written here from the game state itself: the image holds an older checkpoint's bytes, or none) */
+	game_state_image_is_checkpoint = FALSE;
+#endif
 	if (SetFilePointer(xbox_game_state_globals.handle, 0, NULL, FILE_BEGIN) !=
 			INVALID_SET_FILE_POINTER &&
 		WriteFile(xbox_game_state_globals.handle, xbox_game_state_globals.buffer,
@@ -410,6 +426,23 @@ boolean game_state_read_from_file(
 			FALSE,
 			csprintf(temporary, "couldn't read saved game file (#%d, step %d): its write has not ended", GetLastError(), 0));
 		return FALSE;
+	}
+#endif
+#ifdef HALO_WIIU
+	/* port: the last checkpoint's bytes are in the image already (the copy that was written to the file): the game state is taken from them, checked as a read file is,
+	and the 20 MiB are not read back from the card. A copy that is not accepted falls through to the file. */
+	if (async_save_revert_image() && game_state_image_is_checkpoint && game_state_image && xbox_game_state_globals.file_valid_for_read && !game_state_async.lost)
+	{
+		const double taken_start = game_state_async_now_ms();
+
+		if (game_state_image_accept(game_state_image, xbox_game_state_globals.buffer_size))
+		{
+			platform_log("checkpoint: the saved game is taken from the copy held in memory in %.0f ms (the card is not read; halo/async_save_revert_image.txt: 0 reads it)",
+				game_state_async_now_ms()-taken_start);
+
+			return TRUE;
+		}
+		platform_log("checkpoint: the copy held in memory is not accepted: the file is read");
 	}
 #endif
 	/* port: read beside the game state, and taken once checked */
@@ -809,15 +842,14 @@ void game_state_create_persistent_storage(
 start: made again at each revert, the 20 MiB block could not always be had late
 in a session, and Save and Quit halted at "couldn't read saved game file (#8)".
 The other builds make it each time, as before. */
-#ifdef HALO_WIIU
-static void *game_state_image;
-static unsigned long game_state_image_size;
-#endif
 
-static void *game_state_image_get(
+/* port: whether the image holds the bytes of the last checkpoint: the copy game_state_async_begin took (the file has the same bytes once the writer thread has written it). A revert
+takes the game state from it and does not read the 20 MiB back from the card (1.4 to 1.8 s on the console, 4 times in the owner's 30 minutes of a50, 2026-11-06). Whoever gets the image
+for any other use (game_state_image_get) puts something else in it, and it is not the checkpoint any more. */
+#ifdef HALO_WIIU
+static void *game_state_image_get_keeping(
 	unsigned long size)
 {
-#ifdef HALO_WIIU
 	/* (the image is what a checkpoint's copy is held in until the writer thread has written it: whoever wants it waits for that first) */
 	if (!game_state_async_settle(15000, "the image is wanted"))
 	{
@@ -832,9 +864,23 @@ static void *game_state_image_get(
 		}
 		game_state_image = malloc(size);
 		game_state_image_size = game_state_image ? size : 0;
+		game_state_image_is_checkpoint = FALSE;
 	}
 
 	return game_state_image;
+}
+#endif
+
+static void *game_state_image_get(
+	unsigned long size)
+{
+#ifdef HALO_WIIU
+	void *image = game_state_image_get_keeping(size);
+
+	/* (what the caller puts in it is its own) */
+	game_state_image_is_checkpoint = FALSE;
+
+	return image;
 #else
 	return malloc(size);
 #endif
@@ -1062,6 +1108,7 @@ static boolean game_state_async_begin(
 	start = game_state_async_now_ms();
 	memcpy(image, xbox_game_state_globals.buffer, xbox_game_state_globals.buffer_size);
 	copy_ms = game_state_async_now_ms()-start;
+	game_state_image_is_checkpoint = TRUE;
 	game_state_async.number++;
 	if (async_save_verify())
 	{
@@ -1076,6 +1123,7 @@ static boolean game_state_async_begin(
 	if (!async_save_start(game_state_async_write, NULL))
 	{
 		game_state_async.number--;
+		game_state_image_is_checkpoint = FALSE;
 		platform_log("checkpoint: the writer thread cannot take the write: written on the game thread");
 		return FALSE;
 	}
@@ -1134,7 +1182,7 @@ static boolean game_state_async_settle(
 	if (game_state_async.result!=1)
 	{
 		unsigned long bytes_written = 0;
-		void *snapshot = game_state_image_get(xbox_game_state_globals.buffer_size);
+		void *snapshot = game_state_image_get_keeping(xbox_game_state_globals.buffer_size);
 
 		platform_log("checkpoint %lu: its write failed on the writer thread: written again on the game thread", game_state_async.number);
 		if (snapshot &&
@@ -1148,6 +1196,7 @@ static boolean game_state_async_settle(
 		else
 		{
 			game_state_async.lost = TRUE;
+			game_state_image_is_checkpoint = FALSE;
 			xbox_game_state_globals.file_valid_for_read = FALSE;
 			platform_log("checkpoint %lu: LOST: the file could not be written (error %lu)", game_state_async.number, (unsigned long)GetLastError());
 		}

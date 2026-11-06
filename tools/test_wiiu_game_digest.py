@@ -467,24 +467,25 @@ class LevelsTest(unittest.TestCase):
                     self.assertIn("overlapped frames from here", log, f"{level} ({variant}): no frame was overlapped")
 
 
-@unittest.skipUnless(os.environ.get("GAME_DIGEST_SAVE"), "a checkpoint that waits for a quiet moment: GAME_DIGEST_SAVE=1 (and Docker's opence-ppc-be image, data-be's maps; three runs of about 1,400 ticks)")
+@unittest.skipUnless(os.environ.get("GAME_DIGEST_SAVE"), "a checkpoint that waits for a quiet moment, and a revert to it: GAME_DIGEST_SAVE=1 (and Docker's opence-ppc-be image, data-be's maps; four runs of about 1,400 ticks)")
 class SaveWaitAndRevertTest(unittest.TestCase):
     """The frames while a checkpoint waits for its quiet moment (game_save_no_timeout asks every 10 ticks whether the players are safe, and a fight holds it off for as long as
-    it lasts: 82 s once in the owner's a50, 2026-11-06) were the serial loop's. They are now the overlap's (reports/research/2026-11-06/stutter-a50.md). Blood Gulch as a game
-    of one player, the frames of 16.667 ms (two a tick), and game_safe_to_save made false for ticks 100 to 449 (a mutation: the map has no one to fight); the cues (which start
-    again from the top at each revert, from the tick it goes back to): a checkpoint at 4 s, which must wait in the first round and need not in the second, and a revert to it at
-    22 s, twice. Three runs: as built; with the old wait (halo/tick_overlap_save_serial.txt, HALO_TICK_OVERLAP_SAVE_SERIAL=1); and the plain loop. Pass: no halt; the game's
-    ticks are the plain loop's up to the first revert in all of them (the checkpoint is a copy: it changes nothing); the as-built run has no serial frame for a save and the
-    old-wait run has."""
+    it lasts: 82 s once in the owner's a50, 2026-11-06) were the serial loop's, and a revert read the 20 MiB back from the card (1.4 to 1.8 s). They are now the overlap's, and
+    the revert takes the state from the copy the checkpoint left in memory (reports/research/2026-11-06/stutter-a50.md). Blood Gulch as a game of one player, the frames of
+    16.667 ms (two a tick), and game_safe_to_save made false for ticks 100 to 449 (a mutation: the map has no one to fight); the cues (which start again from the top at
+    each revert, from the tick it goes back to): a checkpoint at 4 s, which must wait in the first round and need not in the second, and a revert to it at 22 s, twice. Four runs: as built; with the old wait (halo/tick_overlap_save_serial.txt, HALO_TICK_OVERLAP_SAVE_SERIAL=1); with the
+    revert read from the card (HALO_ASYNC_SAVE_REVERT_IMAGE=0); and the plain loop. Pass: no halt; the game's ticks are the plain loop's up to the first revert in all of them
+    (the checkpoint is a copy: it changes nothing) and the as-built run's and the card-read run's are the same to the end (the bytes a revert takes are the same); the as-built run
+    has no serial frame for a save and the old-wait run has; the as-built run takes its two reverts from the copy and the other from the card."""
 
     CAMERA = {"HALO_TICK_FRAME_MS": "16.667", "HALO_FIXED_STEP": "0"}
     UNSAFE = ("source/game/game.c", "boolean safe = TRUE;", "boolean safe = !(game_time_get() >= 100 && game_time_get() < 450);")
     CUES = "4 game_save_no_timeout|22 game_revert"
 
-    def test_a_waiting_checkpoint_keeps_the_frames_overlapped(self):
+    def test_a_waiting_checkpoint_keeps_the_frames_overlapped_and_a_revert_needs_no_card(self):
         ticks = int(os.environ.get("GAME_DIGEST_SAVE_TICKS", "1400"))
         program = build("svwait", mutations=[self.UNSAFE])
-        variants = {"as-built": {}, "old-wait": {"HALO_TICK_OVERLAP_SAVE_SERIAL": "1"}, "plain": PLAIN}
+        variants = {"as-built": {}, "old-wait": {"HALO_TICK_OVERLAP_SAVE_SERIAL": "1"}, "card-revert": {"HALO_ASYNC_SAVE_REVERT_IMAGE": "0"}, "plain": PLAIN}
         runs = {name: start(program, f"savewait-{name}", ticks, mode="solo-bloodgulch", cues=self.CUES, extra=dict(self.CAMERA, **extra)) for name, extra in variants.items()}
         logs, lines = {}, {}
         for name, (process, out) in runs.items():
@@ -498,13 +499,18 @@ class SaveWaitAndRevertTest(unittest.TestCase):
         first_revert = [index for index, line in enumerate(logs["plain"].splitlines()) if "checkpoint: reverted to the saved game" in line][0]
         before = len([line for line in logs["plain"].splitlines()[:first_revert] if "network test: tick" in line])
         self.assertGreater(before, 300, "ticks were played before the first revert")
-        for name in ("as-built", "old-wait"):
+        for name in ("as-built", "old-wait", "card-revert"):
             count = min(before, len(lines[name]), len(lines["plain"]))
             self.assertEqual(lines["plain"][:count], lines[name][:count], f"{name}: the game's ticks before the first revert differ from the plain loop's")
+        count = min(len(lines["as-built"]), len(lines["card-revert"]))
+        self.assertGreater(count, ticks // 2)
+        self.assertEqual(lines["as-built"][:count], lines["card-revert"][:count], "the game's ticks differ when a revert takes the state from the copy and from the card")
         self.assertIn("keeps the frames overlapped", logs["as-built"])
         self.assertNotIn("serial frames from here (a save)", logs["as-built"], "a checkpoint that waits made the frames serial")
         self.assertIn("makes the frames serial", logs["old-wait"])
         self.assertIn("serial frames from here (a save)", logs["old-wait"], "the test never made a checkpoint wait")
+        self.assertEqual(len([line for line in logs["as-built"].splitlines() if "the saved game is taken from the copy held in memory" in line]), 2)
+        self.assertNotIn("the saved game is taken from the copy held in memory", logs["card-revert"])
 
 
 @unittest.skipUnless(os.environ.get("GAME_DIGEST_STALL"), "the script stall report: GAME_DIGEST_STALL=1 (and Docker's opence-ppc-be image, data-be's maps; a run of about 3,600 ticks)")
