@@ -1192,6 +1192,98 @@ void hs_runtime_port_shift_sleep_times(
 	}
 }
 
+/* port: scripts that have waited in one sleep_until for a long time, in the log. A mission script that waits for a condition that never comes (a count of
+actors that never reaches zero, a volume with an actor left in it) leaves the player with a level that does nothing, and the console had no way to say which
+condition. Every HS_STALL_REPORT_PERIOD ticks each script thread that polls (sleep_until >= 0) is looked at: the innermost sleep_until call on its stack is the
+wait; one that has not changed for HS_STALL_REPORT_TICKS is written once (the script, the call's node in the scenario's syntax data, the condition's function).
+It reads the threads and writes the log only: no game state, and no random numbers (the game plays the same with it). */
+enum
+{
+	HS_STALL_REPORT_PERIOD = 150,
+	HS_STALL_REPORT_TICKS = 2*60*30,
+	HS_STALL_MAXIMUM_THREADS = 256,
+};
+
+static struct
+{
+	short identifier;
+	long expression_index;
+	long since;
+	boolean reported;
+} hs_stall_waits[HS_STALL_MAXIMUM_THREADS];
+
+/* the node of the sleep_until call that a thread waits in, or NONE */
+static long hs_runtime_thread_wait_node(
+	long thread_index)
+{
+	struct hs_thread_datum *thread = hs_thread_get(thread_index);
+	struct hs_stack_frame *frame;
+	long depth = 0;
+
+	if (thread->type!=_hs_thread_type_script || thread->sleep_until<0 || !valid_thread(thread))
+		return NONE;
+	for (frame = thread->stack; frame && depth<64; frame = frame->previous, depth++)
+	{
+		struct hs_syntax_node *node;
+
+		if ((byte *)frame<thread->stack_data || (byte *)frame>=thread->stack_data+HS_THREAD_STACK_SIZE || frame->expression_index==NONE)
+			break;
+		node = hs_syntax_get(frame->expression_index);
+		if (!TEST_FLAG(node->flags, _hs_syntax_node_script_bit) && !TEST_FLAG(node->flags, _hs_syntax_node_primitive_bit) &&
+			node->function_index==_hs_function_sleep_until)
+			return frame->expression_index;
+	}
+
+	return NONE;
+}
+
+static void hs_runtime_report_stalls(
+	long time)
+{
+	long thread_index;
+
+	for (thread_index = data_next_index(hs_thread_data, NONE);
+		thread_index!=NONE;
+		thread_index = data_next_index(hs_thread_data, thread_index))
+	{
+		long absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(thread_index);
+		long wait = absolute_index<HS_STALL_MAXIMUM_THREADS ? hs_runtime_thread_wait_node(thread_index) : NONE;
+
+		if (absolute_index<HS_STALL_MAXIMUM_THREADS)
+		{
+			short identifier = hs_thread_get(thread_index)->identifier;
+
+			if (wait==NONE)
+			{
+				hs_stall_waits[absolute_index].expression_index = NONE;
+			}
+			else if (hs_stall_waits[absolute_index].identifier!=identifier || hs_stall_waits[absolute_index].expression_index!=wait)
+			{
+				hs_stall_waits[absolute_index].identifier = identifier;
+				hs_stall_waits[absolute_index].expression_index = wait;
+				hs_stall_waits[absolute_index].since = time;
+				hs_stall_waits[absolute_index].reported = FALSE;
+			}
+			else if (!hs_stall_waits[absolute_index].reported && time-hs_stall_waits[absolute_index].since>=HS_STALL_REPORT_TICKS)
+			{
+				void platform_log(char const *format, ...);
+				struct hs_syntax_node *call = hs_syntax_get(wait);
+				long condition = hs_syntax_get(call->data)->next_node_index;
+				char const *condition_name = "(a value)";
+
+				hs_stall_waits[absolute_index].reported = TRUE;
+				if (condition!=NONE && !TEST_FLAG(hs_syntax_get(condition)->flags, _hs_syntax_node_primitive_bit) &&
+					(word)hs_syntax_get(condition)->function_index<hs_function_table_count)
+					condition_name = hs_function_get((word)hs_syntax_get(condition)->function_index)->name;
+				platform_log("hs: the script %s has waited %ld s in the sleep_until at syntax node %ld (its condition is a call of %s)",
+					hs_thread_format(thread_index), (time-hs_stall_waits[absolute_index].since)/30, wait&0xFFFF, condition_name);
+			}
+		}
+	}
+
+	return;
+}
+
 void hs_runtime_update(
 	void)
 {
@@ -1200,6 +1292,9 @@ void hs_runtime_update(
 		long time = game_time_get();
 		boolean console_command_running = FALSE;
 		long thread_index;
+
+		if (time%HS_STALL_REPORT_PERIOD==0)
+			hs_runtime_report_stalls(time);
 
 		for (thread_index = data_next_index(hs_thread_data, NONE);
 			hs_runtime_globals.initialized && thread_index!=NONE;
