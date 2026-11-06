@@ -20,7 +20,7 @@ decal or a particle that is not drawn is still made and ages as it would. Where 
 halo/governor.txt (HALO_GOVERNOR on the host; a file whose first word is -1 or "default" is the same as no file: the default, which is the governor on for a map of one local
 player and no network, smooth_defaults.h): a first word on/off/1/0 turns it on or off (on only for such a map; off for every map; display.dynamic_quality otherwise); then, one to a line or
 separated by semicolons, "name value": target (ms), step (hold this step, for a test: the governor then does not move), max_step, window (ms), down_dwell,
-up_dwell (ms), down_windows, up_windows, up_margin (the share of the target the frame must be under, with the step's saving added), min_render (ms of drawing a frame
+up_dwell (ms), blend (ms a step change glides over, 1500; 0 is all at once), down_windows, up_windows, up_margin (the share of the target the frame must be under, with the step's saving added), min_render (ms of drawing a frame
 under which the governor does not step down: the frame is the ticks', 4), tick_bound (ms a frame waited for the tick thread, 3, and tick_bound_share, 0.35 of the
 frame: over both, the frame is the tick thread's and the governor does not step down), quiet (ms after a map starts that decide nothing, 20000), probe (ms under
 the target before a step up is tried whatever the estimate, 20000), worst (a window with a frame over this many ms decides nothing, 80), log (ms between lines; 0 for none) and sN.name for N the step (0 to 7) and name one of cull_scenery, cull_item, cull_unit, lod, shadow, decal_radius, decal_keep, particle_lod,
@@ -57,9 +57,9 @@ static struct render_governor_values const default_values[STEPS] =
 	Steps 4 to 7 cull units and items by size and are for the Performance graphics mode, or max_step in the card file. */
 	/* name           scenery item unit  lod   shadow  decal: radius keep  particle: lod keep  grass flares specular contrails  decal_max particle_max */
 	/* 0 */ { "full",          0.f,  0.f,  0.f, 1.00f,   0.f,   0.f, 16, 1.00f, 16, 1, 1, 1, 1,   0,   0 },
-	/* 1 */ { "far props",    12.f,  0.f,  0.f, 1.00f,  45.f, 120.f, 14, 1.25f, 14, 1, 1, 1, 1, 200, 300 },
-	/* 2 */ { "small things", 22.f,  0.f,  0.f, 0.85f,  60.f,  90.f, 12, 1.50f, 12, 1, 1, 1, 1, 130, 200 },
-	/* 3 */ { "grass, flares", 32.f, 0.f,  0.f, 0.70f,  80.f,  60.f,  9, 2.00f,  8, 0, 0, 1, 1, 100, 140 },
+	/* 1 */ { "far props",    10.f,  0.f,  0.f, 1.00f,  45.f, 120.f, 14, 1.25f, 14, 1, 1, 1, 1, 200, 300 },
+	/* 2 */ { "small things", 16.f,  0.f,  0.f, 0.85f,  60.f,  90.f, 12, 1.50f, 12, 1, 1, 1, 1, 130, 200 },
+	/* 3 */ { "grass, flares", 22.f, 0.f,  0.f, 0.70f,  80.f,  60.f,  9, 2.00f,  8, 0, 0, 1, 1, 100, 140 },
 	/* 4 */ { "shine, units", 36.f, 28.f,  8.f, 0.55f, 110.f,  40.f,  6, 3.00f,  6, 0, 0, 0, 1,  70, 100 },
 	/* 5 */ { "no shadows",   44.f, 40.f, 14.f, 0.45f,  1e9f,  25.f,  4, 4.00f,  4, 0, 0, 0, 0,  50,  70 },
 	/* 6 */ { "minimum",      60.f, 56.f, 22.f, 0.35f,  1e9f,  15.f,  2, 6.00f,  2, 0, 0, 0, 0,  30,  40 },
@@ -79,6 +79,7 @@ static struct
 	int configured_on, card_on, card_off; /* the setting, and the card file's word (neither: the default) */
 	int forced;                         /* the step held (-1: the governor decides) */
 	int max_step, max_step_set, performance_mode;
+	double blend_ms;
 	double target_ms, window_ms, down_dwell_ms, up_dwell_ms, up_margin, log_ms, min_render_ms, tick_bound_ms, tick_bound_share, quiet_ms, probe_ms, worst_ms;
 	int down_windows, up_windows;
 } settings;
@@ -110,6 +111,7 @@ static void settings_defaults(void)
 	settings.max_step = DEFAULT_MAX_STEP;
 	settings.max_step_set = 0;
 	settings.target_ms = 22.0;
+	settings.blend_ms = 1500.0;
 	settings.window_ms = 500.0;
 	settings.down_dwell_ms = 2000.0;
 	settings.up_dwell_ms = 8000.0;
@@ -155,6 +157,8 @@ static int settings_value(char const *name, double number)
 		settings.worst_ms = number;
 	else if (!strcmp(name, "window") && number >= 100.0)
 		settings.window_ms = number;
+	else if (!strcmp(name, "blend") && number >= 0.0)
+		settings.blend_ms = number;
 	else if (!strcmp(name, "down_dwell") && number >= 0.0)
 		settings.down_dwell_ms = number;
 	else if (!strcmp(name, "up_dwell") && number >= 0.0)
@@ -343,8 +347,14 @@ int render_governor_step(void)
 	return governor_on() ? governor.step : 0;
 }
 
-/* the values the drawing reads, one pointer (the drawing asks for it for every object, decal and particle): the step's, set whenever the step or the switch changes */
+/* the values the drawing reads, one pointer (the drawing asks for it for every object, decal and particle). It points at the blended values: the step's, which the
+distances and sizes glide to over the card file's blend (1.5 s) when the step changes, so that a step down takes away the smallest and farthest first and the rest
+as the seconds go by, not a whole class of objects in one frame (a step that comes in a frame is a pop; blend 0 is that) */
+static struct render_governor_values blended;
+static struct render_governor_values const *target_values;
 static struct render_governor_values const *published;
+static int blended_valid;
+static double blend_last_ms;
 
 /* the frames drawn at each step while the governor was on, since the start of the run (the map summary, wiiu_map_summary.c, takes the differences) */
 static unsigned long step_frames[STEPS];
@@ -361,8 +371,96 @@ static void governor_publish(void)
 {
 	const int on = governor_on();
 
-	published = &values[on ? governor.step : 0];
+	target_values = &values[on ? governor.step : 0];
+	if (!blended_valid || settings.blend_ms <= 0.0 || !on)
+	{
+		blended = *target_values;
+		blended_valid = 1;
+	}
+	published = &blended;
 	wiiu_overlay_governor(on ? governor.step : -1, on ? governor_max_step() : -1);
+}
+
+/* a decal radius of 0 is no limit: for gliding, a long way */
+#define BLEND_NO_RADIUS 400.f
+
+static float blend_float(float current, float target, double k, float snap)
+{
+	float difference = target - current;
+
+	if (difference < snap && difference > -snap)
+		return target;
+	return current + (float)(difference * k);
+}
+
+/* once a frame: moves the blended values toward the step's */
+static void blend_step(double now_ms)
+{
+	double dt = now_ms - blend_last_ms;
+	double k;
+	float radius_now, radius_target;
+
+	blend_last_ms = now_ms;
+	if (!blended_valid || !target_values || settings.blend_ms <= 0.0)
+		return;
+	if (dt <= 0.0 || dt > 250.0)
+		dt = 16.7;
+	/* (95% of the way in the blend time) */
+	k = 1.0 - exp(-dt * 3.0 / settings.blend_ms);
+	blended.name = target_values->name;
+	blended.cull_scenery_pixels = blend_float(blended.cull_scenery_pixels, target_values->cull_scenery_pixels, k, 0.5f);
+	blended.cull_item_pixels = blend_float(blended.cull_item_pixels, target_values->cull_item_pixels, k, 0.5f);
+	blended.cull_unit_pixels = blend_float(blended.cull_unit_pixels, target_values->cull_unit_pixels, k, 0.5f);
+	blended.lod_scale = blend_float(blended.lod_scale, target_values->lod_scale, k, 0.005f);
+	/* (no shadows at all is a jump from anything: 1e9) */
+	if (target_values->shadow_min_pixels >= 1e8f || blended.shadow_min_pixels >= 1e8f)
+		blended.shadow_min_pixels = target_values->shadow_min_pixels;
+	else
+		blended.shadow_min_pixels = blend_float(blended.shadow_min_pixels, target_values->shadow_min_pixels, k, 0.5f);
+	radius_now = blended.decal_radius > 0.f ? blended.decal_radius : BLEND_NO_RADIUS;
+	radius_target = target_values->decal_radius > 0.f ? target_values->decal_radius : BLEND_NO_RADIUS;
+	radius_now = blend_float(radius_now, radius_target, k, 1.f);
+	blended.decal_radius = radius_now >= BLEND_NO_RADIUS ? 0.f : radius_now;
+	blended.decal_keep = target_values->decal_keep;
+	blended.particle_lod_scale = blend_float(blended.particle_lod_scale, target_values->particle_lod_scale, k, 0.01f);
+	blended.particle_keep = target_values->particle_keep;
+	blended.grass = target_values->grass;
+	blended.lens_flares = target_values->lens_flares;
+	blended.specular = target_values->specular;
+	blended.contrails = target_values->contrails;
+	blended.decal_max = target_values->decal_max;
+	blended.particle_max = target_values->particle_max;
+}
+
+/* whether an object of a kind is left out for being small: under the kind's cull size, and once it is, until it is a quarter bigger than that, so that an object at the
+edge (its size shifts a little with the camera and its level of detail) does not come and go from one frame to the next. The bit is the object's absolute index. */
+#ifndef HALO_PORT_MAXIMUM_OBJECTS_PER_MAP
+#define HALO_PORT_MAXIMUM_OBJECTS_PER_MAP 8192
+#endif
+static unsigned char cull_bits[HALO_PORT_MAXIMUM_OBJECTS_PER_MAP / 8];
+
+int render_governor_cull_small(long absolute_index, float pixels, float cull_pixels)
+{
+	unsigned char *byte;
+	unsigned char mask;
+	int was, culled;
+
+	if (absolute_index < 0 || absolute_index >= HALO_PORT_MAXIMUM_OBJECTS_PER_MAP)
+		return cull_pixels > 0.f && pixels < cull_pixels;
+	byte = &cull_bits[absolute_index >> 3];
+	mask = (unsigned char)(1 << (absolute_index & 7));
+	if (cull_pixels <= 0.f)
+	{
+		*byte &= (unsigned char)~mask;
+		return 0;
+	}
+	was = (*byte & mask) != 0;
+	culled = pixels < (was ? cull_pixels * 1.25f : cull_pixels);
+	if (culled)
+		*byte |= mask;
+	else
+		*byte &= (unsigned char)~mask;
+	return culled;
 }
 
 struct render_governor_values const *render_governor_values(void)
@@ -396,6 +494,7 @@ void render_governor_new_map(void)
 	governor.new_map_pending = 1;
 	if (settings.forced < 0)
 		governor.step = 0;
+	blended_valid = 0;
 	governor_publish();
 }
 
@@ -482,6 +581,7 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 		return;
 	}
 	governor_publish();
+	blend_step(now_ms);
 	/* (the map summary's: a frame at the step it was drawn at) */
 	step_frames[governor.step >= 0 && governor.step < STEPS ? governor.step : 0]++;
 	if (!governor.up_backoff)
@@ -632,6 +732,12 @@ struct render_governor_values const *render_governor_values(void)
 float render_governor_lod_scale(void)
 {
 	return 1.f;
+}
+
+int render_governor_cull_small(long absolute_index, float pixels, float cull_pixels)
+{
+	(void)absolute_index;
+	return cull_pixels > 0.f && pixels < cull_pixels;
 }
 
 void render_governor_new_map(void)

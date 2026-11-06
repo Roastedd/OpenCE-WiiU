@@ -202,7 +202,7 @@ Small text files in `wiiu/apps/halo/` that change what the game does. Each holds
 | File | Default | What it does |
 | --- | --- | --- |
 | `overlay.txt` | 0 | 0 no performance overlay, 1 the compact strip, 2 the detailed panel (L + R + − goes round them any time) |
-| `governor.txt` | as Graphics mode says | text: `on` or `off` for auto detail; `target 25` the frame time it aims for in ms (at least 20), `max_step 2` the deepest step (0 to 3), `step 2` hold one step (a test) |
+| `governor.txt` | as Graphics mode says | text: `on` or `off` for auto detail; `target 25` the frame time it aims for in ms (at least 20), `max_step 2` the deepest step (0 to 3), `step 2` hold one step (a test), `blend 1500` the milliseconds a step change takes to reach its sizes (small and far props go first, the rest follow; 0: all at once) |
 | `tick_thread.txt` | 0 | 1: the game's ticks run on a thread of their own |
 | `tick_snapshot.txt` | 0 | 1: the drawing reads a copy of the objects (needed by the overlap) |
 | `tick_overlap.txt` | 0 | 1: the ticks run beside the drawing (needs the two above); campaign and one-player games only |

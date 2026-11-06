@@ -1272,7 +1272,8 @@ static void render_object(
 				TEST_FLAG(_object_mask_item, object->object.type) ? shed->cull_item_pixels :
 				TEST_FLAG(_object_mask_projectile, object->object.type) ? 0.f : shed->cull_scenery_pixels;
 
-			if (cull_pixels > 0.f && object_get_level_of_detail_pixels(data->object_index) < cull_pixels)
+			if (render_governor_cull_small(DATUM_INDEX_TO_ABSOLUTE_INDEX(data->object_index),
+				object_get_level_of_detail_pixels(data->object_index), cull_pixels))
 			{
 				render_governor_counts[RENDER_GOVERNOR_COUNT_OBJECTS_CULLED]++;
 				return;

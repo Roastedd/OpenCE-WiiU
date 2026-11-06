@@ -341,6 +341,32 @@ int main(int argc, char **argv)
 		run(5, 23.5, 0);
 		printf("RESULT first %.0f\n", first_change);
 	}
+	else if (!strcmp(scenario, "glide"))
+	{
+		/* a step down holds, and the sizes under which objects are left out glide to the step's (22 at step 3) over the blend, not in one frame */
+		config_on = 0;
+		settings_text = argc > 2 ? argv[2] : "step 3";
+		{
+			float early, mid;
+
+			run(0.2, 10, 0);
+			early = render_governor_values()->cull_scenery_pixels;
+			run(0.6, 10, 0);
+			mid = render_governor_values()->cull_scenery_pixels;
+			run(5, 10, 0);
+			printf("RESULT early %.2f mid %.2f late %.2f radius %.1f lod %.3f\n", early, mid, render_governor_values()->cull_scenery_pixels,
+				render_governor_values()->decal_radius, render_governor_values()->lod_scale);
+		}
+	}
+	else if (!strcmp(scenario, "cull_small"))
+	{
+		/* an object under the size is out, and stays out until it is a quarter bigger; 0 is never out */
+		int a = render_governor_cull_small(5, 10.f, 12.f), b = render_governor_cull_small(5, 13.f, 12.f), c = render_governor_cull_small(5, 16.f, 12.f);
+		int d = render_governor_cull_small(5, 13.f, 12.f), e = render_governor_cull_small(6, 13.f, 12.f), f = render_governor_cull_small(5, 1.f, 0.f);
+		int g = render_governor_cull_small(-1, 1.f, 12.f);
+
+		printf("RESULT a %d b %d c %d d %d e %d f %d g %d\n", a, b, c, d, e, f, g);
+	}
 	else if (!strcmp(scenario, "forced"))
 	{
 		config_on = 0;
@@ -406,13 +432,13 @@ int main(int argc, char **argv)
 '''
 
 
-def run_scenario(tmp_path, scenario, source=None):
+def run_scenario(tmp_path, scenario, source=None, extra=()):
     (tmp_path / "checks.c").write_text(FIXTURE)
     (tmp_path / "render_governor.c").write_text(source or (ROOT / "port/linux/game/render_governor.c").read_text(encoding="latin-1"))
     executable = tmp_path / "render_governor"
     subprocess.run(["cc", "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-DHALO_WIIU", "-I", str(ROOT / "port/linux/game"),
                     str(tmp_path / "render_governor.c"), str(tmp_path / "checks.c"), "-lm", "-o", str(executable)], check=True)
-    out = subprocess.run([str(executable), scenario], check=True, capture_output=True, text=True).stdout
+    out = subprocess.run([str(executable), scenario, *extra], check=True, capture_output=True, text=True).stdout
     transitions = [tuple(map(float, line.split()[1:])) for line in out.splitlines() if line.startswith("T ")]
     results = {}
     for line in out.splitlines():
@@ -639,3 +665,35 @@ def test_the_map_summary_gets_the_frames_at_each_step(tmp_path):
     _, results, _ = run_scenario(tmp_path, "smooth_steps")
     frames = [results[f"s{step}"] for step in range(8)]
     assert sum(frames) > 1000 and frames[0] > 0 and frames[3] > frames[0] and frames[4:] == [0] * 4
+
+
+def test_a_step_down_glides_to_the_steps_sizes_over_the_blend(tmp_path):
+    _, results, _ = run_scenario(tmp_path, "glide")
+    assert 0 < results["early"] < results["mid"] < 22 and results["late"] == 22
+    assert results["radius"] == 60
+
+
+def test_a_blend_of_0_is_the_step_at_once(tmp_path):
+    _, results, _ = run_scenario(tmp_path, "glide", extra=["step 3; blend 0"])
+    assert results["early"] == 22 and results["mid"] == 22 and results["late"] == 22
+
+
+def test_an_object_under_the_size_stays_out_until_a_quarter_bigger(tmp_path):
+    _, results, _ = run_scenario(tmp_path, "cull_small")
+    assert (results["a"], results["b"], results["c"], results["d"], results["e"], results["f"], results["g"]) == (1, 1, 0, 0, 0, 0, 1)
+
+
+@pytest.mark.parametrize("fault", ["no_blend", "no_cull_hysteresis"])
+def test_the_pop_in_negative_controls(tmp_path, fault):
+    source = (ROOT / "port/linux/game/render_governor.c").read_text(encoding="latin-1")
+    changes = {
+        "no_blend": ("k = 1.0 - exp(-dt * 3.0 / settings.blend_ms);", "k = 1.0;"),
+        "no_cull_hysteresis": ("culled = pixels < (was ? cull_pixels * 1.25f : cull_pixels);", "culled = pixels < (was ? cull_pixels : cull_pixels);"),
+    }
+    before, after = changes[fault]
+    assert source.count(before) == 1
+    _, results, _ = run_scenario(tmp_path, "glide" if fault == "no_blend" else "cull_small", source.replace(before, after, 1))
+    if fault == "no_blend":
+        assert results["early"] == 22
+    else:
+        assert results["b"] == 0

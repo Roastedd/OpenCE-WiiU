@@ -74,6 +74,10 @@ void render_governor_new_map(void);
 /* the frames drawn at each step while the governor was on, since the start of the run (the map summary) */
 void render_governor_step_frames(unsigned long frames[RENDER_GOVERNOR_STEPS]);
 
+/* whether an object (by absolute index) of the given pixel size is left out for being under a kind's cull size: it stays out until it is a quarter bigger than that, so
+that an object at the edge does not come and go. 0 when cull_pixels is 0. */
+int render_governor_cull_small(long absolute_index, float pixels, float cull_pixels);
+
 /* the governor is on, and the step it holds (0 when it is off) */
 int render_governor_active(void);
 int render_governor_step(void);
