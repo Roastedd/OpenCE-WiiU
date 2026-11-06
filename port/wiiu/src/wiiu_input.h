@@ -79,6 +79,8 @@ int wiiu_input_controllers_merged(void);
 "off"; the free-aim box (the share of the pointer's range, 0 to 0.9, that does not turn the view) and the pointer's turn speed (1: the full stick at the edge of the
 screen); invert_x turns the Remote's MotionPlus turn the other way round. */
 void wiiu_input_set_wimote(const char *layout, const char *look, float box, float speed, int invert_x);
+/* The MotionPlus's edge turn (input.wiiu_wiimote_motion_edge*: wiiu_wimote.h, wimote_motion_edge): on or off, the box and the range in degrees, the speed. */
+void wiiu_input_set_wimote_edge(int on, float box_degrees, float range_degrees, float speed);
 
 /* The first player's Wii Remote as the view's mouse, when its look source is its MotionPlus (input.wiiu_wiimote_look): how far it has turned since the last call, as
 wiiu_input_gyro_take gives the GamePad's, in the space chosen (wiiu_input_set_gyro_space), and cleared. Returns 1 if the first player has such a Remote, and then

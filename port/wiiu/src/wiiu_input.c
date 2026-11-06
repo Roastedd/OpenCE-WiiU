@@ -398,7 +398,12 @@ static struct
 	float speed;
 	int invert_x;
 	unsigned int epoch;
-} wimote_settings = { WIIMOTE_LAYOUT_DEFAULT, WIIMOTE_LOOK_AUTO, 0.3f, 1.0f, 0, 1 };
+	/* the MotionPlus's edge turn (wimote_motion_edge): on, the box and the range in rotations, the speed */
+	int edge;
+	float edge_box;
+	float edge_range;
+	float edge_speed;
+} wimote_settings = { WIIMOTE_LAYOUT_DEFAULT, WIIMOTE_LOOK_AUTO, 0.3f, 1.0f, 0, 1, 1, 20.0f / 360.0f, 25.0f / 360.0f, 1.0f };
 
 /* What each channel's Remote was last found to be and was asked. A channel that is not a Remote read here has all zero. */
 static struct
@@ -453,6 +458,15 @@ static void pad_gone(unsigned int channel)
 	memset(&last_pro[channel].pad, 0, sizeof(last_pro[channel].pad));
 	/* (whatever connects next is lit again: the system lights it with its channel's number) */
 	lights_forget(channel, OSGetSystemTime());
+}
+
+void wiiu_input_set_wimote_edge(int on, float box_degrees, float range_degrees, float speed)
+{
+	/* (no epoch: nothing is asked of the Remotes again for these) */
+	wimote_settings.edge = on ? 1 : 0;
+	wimote_settings.edge_box = box_degrees / 360.0f;
+	wimote_settings.edge_range = range_degrees / 360.0f;
+	wimote_settings.edge_speed = speed;
 }
 
 void wiiu_input_set_wimote(const char *layout, const char *look, float box, float speed, int invert_x)
@@ -603,6 +617,15 @@ static void remote_sample(unsigned int channel, const KPADStatus *status, struct
 			if (remote_present & (1u << lower) && remotes[lower].source == WIIMOTE_SOURCE_MOTION && wiiu_pad_players_port(&pad_players, (int)lower) == 0)
 				owns = 0;
 		wimote_motion_step(&remotes[channel].motion, gyro_mouse.space, seconds, acc, rate, wimote_settings.invert_x, &turn, &tilt);
+		if (wimote_settings.edge)
+		{
+			float edge_turn, edge_tilt;
+
+			/* (past the box, the view turns on: a Remote pointed far to one side keeps turning, as a pointer at the screen's edge would) */
+			wimote_motion_edge(&remotes[channel].motion, turn, tilt, seconds, wimote_settings.edge_box, wimote_settings.edge_range, wimote_settings.edge_speed, &edge_turn, &edge_tilt);
+			turn += edge_turn;
+			tilt += edge_tilt;
+		}
 		if (owns)
 		{
 			remote_mouse.turn += turn;
@@ -612,6 +635,7 @@ static void remote_sample(unsigned int channel, const KPADStatus *status, struct
 		if (wimote_motion_still(&remotes[channel].motion, seconds, rate))
 		{
 			KPADResetMpls((KPADChan)channel);
+			wimote_motion_recentre(&remotes[channel].motion);
 			wiiu_log("Input: channel %u's Wii Remote was held still: the MotionPlus is zeroed (KPADResetMpls)", channel + 1);
 		}
 		/* the units, in the log while it turns (the rates' peak, and how far the angle KPAD adds up changed over the same second: they should agree, rate times
