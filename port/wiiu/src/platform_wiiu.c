@@ -120,8 +120,11 @@ int platform_binding_capture_poll(int *input)
 void platform_scoreboard_scroll(int open, long *notches, long *pages)
 {
 	(void)open;
-	*notches = 0;
-	*pages = 0;
+	/* (closing the scoreboard passes NULL for both: game_engine_scoreboard_closed) */
+	if (notches)
+		*notches = 0;
+	if (pages)
+		*pages = 0;
 }
 
 /* the game's data is put on the card by the user: nothing offers it */
