@@ -127,6 +127,8 @@ extern boolean player_autoaim_flag;
 extern boolean player_magnetism_flag;
 /* game_time.c's */
 boolean game_time_reset_speed(void);
+/* port_config.c's */
+int config_boolean(const char *name);
 
 /* port: what the machine draws of the world put back as it draws it for
 everyone: nothing seen through walls (wireframe, a drawing mode, the
@@ -139,9 +141,16 @@ static boolean cheats_network_client_rasterizer_enforce(
 	boolean *environment_part;
 
 	if (rasterizer_debug_options.wireframe_enabled || rasterizer_debug_options.drawing_mode != 0 ||
-		!rasterizer_debug_options.draw_water || !rasterizer_debug_options.draw_detail_objects ||
-		!rasterizer_debug_options.draw_lens_flares || !rasterizer_debug_options.fog_atmospheric_enabled ||
+		!rasterizer_debug_options.draw_water || !rasterizer_debug_options.fog_atmospheric_enabled ||
 		!rasterizer_debug_options.fog_planar_enabled)
+	{
+		changed = TRUE;
+	}
+	/* (port: grass and lens flares are also what the player's own display settings, and the dynamic quality's
+	steps, leave out: config.toml's display.grass and display.lens_flares false are that, not a cheat, so they are
+	put back without a word; they are a change only where the settings have them on) */
+	if ((!rasterizer_debug_options.draw_detail_objects && config_boolean("display.grass")) ||
+		(!rasterizer_debug_options.draw_lens_flares && config_boolean("display.lens_flares")))
 	{
 		changed = TRUE;
 	}
