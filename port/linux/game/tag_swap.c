@@ -1197,6 +1197,26 @@ static void element_swap(
 	boolean whole,
 	short depth);
 
+/* The validator cuts a block's elements and a data's bytes to the game's maximum before it follows them (tag_validate.c, validate_block_extent and
+validate_data_extent), except a Custom Edition block whose maximum is the editing kit's; the elements and bytes past the cut are never looked at. A
+Custom Edition map's block or data is walked as far as the validator walks it, so that one the desktop builds cut and play (a count of a protected map's
+that is garbage, whose elements would run out of the tags) is not refused here. A negative count or size is not cut: the validator refuses it. The Xbox
+maps are walked as map_convert.py walks them, whole. */
+static unsigned long maximum_cut(
+	struct tag_swap const *swap,
+	struct tag_schema_field const *field,
+	unsigned long value,
+	boolean tool_maximum_exempt)
+{
+	if (swap->custom_edition && field->maximum > 0 && value <= 0x7FFFFFFFUL && value > (unsigned long)field->maximum &&
+		!(tool_maximum_exempt && TEST_FLAG(field->flags, _tag_schema_tool_maximum_bit)))
+	{
+		return (unsigned long)field->maximum;
+	}
+
+	return value;
+}
+
 static void block_follow(
 	struct tag_swap *swap,
 	struct tag_schema_definition const *definition,
@@ -1205,7 +1225,7 @@ static void block_follow(
 	short depth)
 {
 	struct tag_schema_definition const *child = field->definition;
-	unsigned long count = value_u32(swap, at);
+	unsigned long count = maximum_cut(swap, field, value_u32(swap, at), TRUE);
 	unsigned long address = value_u32(swap, at + 4);
 	unsigned long stride = (unsigned long)MAX(child->size, 1);
 	unsigned long start;
@@ -1242,7 +1262,7 @@ static void data_follow(
 	unsigned long element_offset,
 	unsigned long at)
 {
-	unsigned long size = value_u32(swap, at);
+	unsigned long size = maximum_cut(swap, field, value_u32(swap, at), FALSE);
 	unsigned long address = value_u32(swap, at + 12);
 	unsigned long start;
 	short kind = NONE;

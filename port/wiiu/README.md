@@ -673,7 +673,7 @@ sharing sends its bytes, so the file stays as Halo PC wrote it, little-endian, a
   does (the Xbox's 22 MB texture cache and 4 MB sound cache: Custom Edition maps can draw more texture than that, and the rest is drawn as the
   default texture) plus its models' and BSP's compressed geometry, up to about 15 MB for the largest maps; geometry that does not fit is drawn
   from the heap (slower, and logged). Ogg Vorbis sounds are decoded at load into a buffer of the heap.
-- **Shaders.** What a draw's shader key is not in `shaders.pack` draws is skipped (`halo/shaders_missing.txt`), so a map's new keys must be
+- **Shaders.** What a draw's shader key is not in `shaders.pack` draws is skipped (`halo/shader-misses-*.txt`), so a map's new keys must be
   captured on the console and the pack remade.
 
 Checked on the Mac (no Custom Edition map is on it, so the repository's test maps stood in: StageKit's, `tools/stagekit`, written little-endian
@@ -681,6 +681,20 @@ as Custom Edition caches are, and the synthetic caches of `tools/test_cache_file
 make the same bytes of every map's tags, BSPs and model data, and the C swap and `map_convert.py` the same bytes of all 24 Xbox maps
 (`map_validate --swap`, `--swap-xbox`, under qemu-ppc and qemu-i386); `map_validate` needs no correction of the StageKit maps, big-endian or
 x86, and fuzzes them the same; the big-endian Linux build plays them tick for tick as the x86 build does. Not run on a console.
+
+### Before the console: the shader keys, on the Mac
+
+A Custom Edition map's draws need pixel shader keys the pack may lack (below). The digest harness (`tools/test_wiiu_game_digest.py`) plays a map through the
+Wii U's Direct3D layer on the Mac and writes the keys the console's GX2 thread would look up, in the lines the missing-shader capture writes:
+
+    GAME_DIGEST_CUSTOM_MAPS=<folder of the maps with bitmaps.map, sounds.map, loc.map> GAME_DIGEST_CONFIG=<a copy of the card's config.toml> \
+      python3 tools/test_wiiu_game_digest.py run NAME --custom-map bloodgulch --ticks 1500 --keys
+    python3 tools/wiiu/key_diff.py build/game-digest/runs/NAME/out/keys.txt <tools/wiiu/shader_keys.txt> -o missing.txt
+
+`missing.txt` goes to `tools/wiiu/shader_pack.sh`. The run sees what the bot sees from where the map starts, so it finds the keys of what is in view (on Xbox Blood
+Gulch it found 6 the pack lacks; on b30's first 1,800 ticks 24), not every key the map will ask for: of the 117 keys the console missed at b30's start on
+2026-11-02 it had 4, but of their 35 shaders (canonical keys, as the branch `wiiu-shader-fallback` counts them) 23. The console's capture stays the way to the rest. Nothing is drawn by it, nothing is
+written to a console; a map's own scripts and sounds run as in any run of the digest harness.
 
 ### The Custom Edition test plan
 
@@ -696,7 +710,7 @@ With the owner at the console and the card on the safe settings, one driver at a
    (79 BSP materials, 21 shaders renumbered, 10 chicago extended, 676 bitmaps, 32 HUD placements), the Ogg Vorbis sounds converted to ADPCM,
    `model parts converted`, `the structure BSP ... has its vertices compressed`; no `cannot be turned` or `refused`. On screen: the level, its
    models and its HUD drawn (the HUD meters' fill, the multipurpose maps' shine on the vehicles); sounds and the announcer play.
-4. **Shader keys**: `halo/shaders_missing.txt` after a few minutes of play (and of each later map): the keys go into the pack
+4. **Shader keys**: `halo/shader-misses-*.txt` after a few minutes of play (and of each later map): the keys go into the pack
    (`tools/wiiu/shader_pack.sh`), and the next run's log shows no draw skipped for a missing key.
 5. **Times and memory**: from `loading` to the first frame, and the swap's share of it (the log's timestamps around `turned to
    big-endian`); the MEM2 heap's free bytes in the game; `YOU GOT STABBED` (the texture cache full) or `SOUND CACHE BLOWN` in `debug.txt`;
@@ -716,7 +730,7 @@ Overpass at the display's resolution; `tools/wiiu/shell_tests.sh` rasterizes gly
 `include/wiiu_net_compat.h`; a router's port forwarding for internet play, and `posix_upnp.c`'s port and address byte order fixed for big-endian), the GamePad's
 gyro aim (`input.wiiu_gyro_aim`), tap-to-skip, Classic Controllers, and voice chat (above: its queues, rings, resampler and microphone readings
 tested on three machines, the rest built). The high-res HUD and menu pictures (`hud_hires.c`, `menu_files.c`) are not ported: they
-draw meters through shader variants that are not in the shader pack, which is made from what a console run asked for (`halo/shaders_missing.txt`).
+draw meters through shader variants that are not in the shader pack, which is made from what a console run asked for (`halo/shader-misses-*.txt`).
 
 ## What it takes to run
 

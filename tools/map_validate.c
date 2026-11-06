@@ -33,7 +33,7 @@ Vorbis sounds and converts its scripts and geometry, from tags the validator
 passed: not here.) Resource maps given as maps are passed over; OpenSauce
 maps are refused, as the game refuses them.
 
-usage: map_validate [--strict] [--quiet] [--maps folder] [--fuzz iterations [--seed n] [--log file]] map.map...
+usage: map_validate [--strict] [--quiet] [--explain] [--maps folder] [--fuzz iterations [--seed n] [--log file]] map.map...
 
 The byte swap the big-endian builds turn a Custom Edition map with
 (port/linux/game/tag_swap.c) is checked against tools/wiiu/map_convert.py's,
@@ -151,6 +151,8 @@ unsigned char tag_validate_custom_edition_tags(void *tag_header, long loaded_siz
 	struct tag_validate_file_range const *file_ranges, short file_range_count, char const *map_name);
 
 static int quiet;
+/* --explain: the fuzzed Custom Edition maps' refusals, one by one */
+static int explain;
 /* (fuzzing: each bsp is checked twice, and whether a second check of one
 found more to correct) */
 static int recheck;
@@ -931,6 +933,19 @@ static int custom_edition_validate(char const *path, unsigned char *tag_cache, l
 		if (custom_edition_check(&map, &resources, tag_cache, name, corrections, &loaded_bytes))
 		{
 			refusals++;
+			/* (--explain: why each refused run was, and what it changed, so that two hosts' refusals can be compared one by one) */
+			if (explain)
+			{
+				int was_quiet = quiet;
+
+				printf("%s: fuzz seed %lu refused; changed:", name, fuzz_seed);
+				for (change = 0; change < changes; change++)
+					printf(" %lx:%lx", offsets[change], little_long(map.bytes + offsets[change]));
+				printf("\n");
+				quiet = 0;
+				custom_edition_check(&map, &resources, tag_cache, name, corrections, &loaded_bytes);
+				quiet = was_quiet;
+			}
 		}
 		else
 		{
@@ -1289,6 +1304,11 @@ int main(int argc, char **argv)
 		if (!strcmp(argv[argument], "--strict"))
 		{
 			strict = 1;
+			continue;
+		}
+		if (!strcmp(argv[argument], "--explain"))
+		{
+			explain = 1;
 			continue;
 		}
 		if (!strcmp(argv[argument], "--quiet"))
