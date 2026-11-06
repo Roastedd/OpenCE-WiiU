@@ -25,6 +25,11 @@ The server browser's master servers (master_list.h).
 #include "update.h"
 #endif
 
+#ifdef HALO_WIIU
+/* (port/wiiu/src/wiiu_shell.c: core 0, below the game thread's priority, named) */
+void wiiu_thread_background(const char *name);
+#endif
+
 enum
 {
 	/* seconds between rounds while browsing; a list older than this is
@@ -35,6 +40,8 @@ enum
 	MAXIMUM_ENTRIES = 512,
 	MAXIMUM_ANSWER = 1024 * 1024,
 	MAXIMUM_LISTING = 400,
+	/* the Wii U's list thread makes the TLS handshakes (Mbed TLS, wiiu_https.c) and checks the signature: more stack than its default has */
+	WIIU_LIST_STACK_BYTES = 256 * 1024,
 };
 
 static struct
@@ -495,6 +502,9 @@ static int fetch(const char *url, struct fetched *fetched)
 	fetched->size = response.body_size;
 	header_value(response.headers, "Signature", fetched->signature, sizeof(fetched->signature));
 	header_value(response.headers, "Signature-Key", fetched->key, sizeof(fetched->key));
+#ifdef HALO_WIIU
+	platform_log("server browser: https GET %s: %lu bytes", url, response.body_size);
+#endif
 	return 1;
 }
 #endif
@@ -622,6 +632,9 @@ static void *list_thread_main(void *argument)
 	unsigned char keys[MASTER_LIST_MAXIMUM_MASTERS][MASTER_LIST_KEY_SIZE];
 	int count;
 
+#ifdef HALO_WIIU
+	wiiu_thread_background("master list");
+#endif
 	read_masters();
 	pthread_mutex_lock(&list.lock);
 	while (list_current(generation))
@@ -696,12 +709,25 @@ void master_list_browse(int on)
 	if (on && !list.browsing)
 	{
 		pthread_t thread;
+		int created;
 
 		list.answered = 0;
 		list.asked = 0;
 		list.browsing = 1;
 		list.generation++;
-		if (pthread_create(&thread, NULL, list_thread_main, (void *)(uintptr_t)list.generation) == 0)
+#ifdef HALO_WIIU
+		{
+			pthread_attr_t attributes;
+
+			pthread_attr_init(&attributes);
+			pthread_attr_setstacksize(&attributes, WIIU_LIST_STACK_BYTES);
+			created = pthread_create(&thread, &attributes, list_thread_main, (void *)(uintptr_t)list.generation);
+			pthread_attr_destroy(&attributes);
+		}
+#else
+		created = pthread_create(&thread, NULL, list_thread_main, (void *)(uintptr_t)list.generation);
+#endif
+		if (created == 0)
 			pthread_detach(thread);
 		else
 			list.browsing = 0;

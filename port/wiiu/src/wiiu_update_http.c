@@ -22,6 +22,7 @@ a would-be-blocking call may say EBUSY.
 #include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,6 +47,10 @@ a would-be-blocking call may say EBUSY.
 /* (no byte for this long: the transfer is given up, and a download tries again) */
 #define IDLE_MS 20000u
 #define WAIT_STEP_MS 100
+/* (another request holds the TLS stack: waited for this long, then given up) */
+#define LOCK_MS 30000u
+/* (the longest extra header lines a request takes) */
+#define EXTRA_HEADERS_MOST 1024u
 #define LINE_MOST 8192u
 #define HEADERS_MOST 32768u
 #define URL_MOST 2048u
@@ -68,7 +73,17 @@ typedef struct connection
 	unsigned char buffer[16384];
 	size_t start, end;
 	int ended;
+	/* the answer's header lines kept, if the caller asked (wiiu_http_request), and the time by which the whole request must be over (0: no limit) */
+	char *capture;
+	size_t capture_size, captured;
+	uint64_t overall;
 } connection;
+
+/* Mbed TLS is built without its threading module: its random generator (PSA's) and its contexts have no lock, and the updater's worker, the server
+browser's thread and the peer-to-peer DTLS may all want the TLS stack. One connection at a time is made and used here (all of it, from the lookup to
+the close), and the cryptography is started under a lock of its own. */
+static pthread_mutex_t request_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t crypto_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* ---------- the clock, sleeping */
 
@@ -128,15 +143,18 @@ wiiu_http *wiiu_http_create(const unsigned char *const *roots, const size_t *siz
 	unsigned i, parsed = 0;
 	int result;
 
+	pthread_mutex_lock(&crypto_lock);
 	if (!crypto_started)
 	{
 		if (psa_crypto_init() != PSA_SUCCESS)
 		{
+			pthread_mutex_unlock(&crypto_lock);
 			snprintf(error, error_size, "the cryptography could not start");
 			return NULL;
 		}
 		crypto_started = 1;
 	}
+	pthread_mutex_unlock(&crypto_lock);
 	http = calloc(1, sizeof(*http));
 	if (!http)
 	{
@@ -209,6 +227,11 @@ static int wait_socket(connection *c, int for_writing, uint64_t deadline, const 
 		c->result->stopped = 1;
 		fail(c->result, "stopped");
 		return -1;
+	}
+	if (c->overall && now_ms() >= c->overall)
+	{
+		fail(c->result, "the request took too long (%s, while %s)", c->result->host, what);
+		return -2;
 	}
 	if (now_ms() >= deadline)
 	{
@@ -682,6 +705,19 @@ static int read_headers(connection *c, response *answer)
 		}
 		if (!line[0])
 			return 0;
+		if (c->capture)
+		{
+			/* ("Name: value" and a newline; a line that does not fit is left out, as the desktop's does) */
+			const size_t length = strlen(line);
+
+			if (c->captured + length + 2 < c->capture_size)
+			{
+				memcpy(c->capture + c->captured, line, length);
+				c->captured += length;
+				c->capture[c->captured++] = '\n';
+				c->capture[c->captured] = 0;
+			}
+		}
 		if (header_is(line, "Content-Length", &value))
 		{
 			uint64_t length;
@@ -763,6 +799,11 @@ static int give(connection *c, const unsigned char *data, size_t size, uint64_t 
 	{
 		c->result->stopped = 1;
 		fail(c->result, "stopped");
+		return -1;
+	}
+	if (c->overall && now_ms() >= c->overall)
+	{
+		fail(c->result, "the request took too long (%s, while its body arrived)", c->result->host);
 		return -1;
 	}
 	if (c->result->received + size > most)
@@ -891,16 +932,68 @@ static int is_redirect(int status)
 	return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
 }
 
-/* One request on its own connection: the status, the Location in location; -1 on a failure */
+/* extra request header lines: printable text in lines each ended by CR LF, no longer than EXTRA_HEADERS_MOST */
+static int extra_headers_are_valid(const char *headers)
+{
+	size_t i, line_start = 0;
+
+	if (!headers || !headers[0])
+		return 1;
+	if (strlen(headers) > EXTRA_HEADERS_MOST)
+		return 0;
+	for (i = 0; headers[i]; i++)
+	{
+		const unsigned char d = (unsigned char)headers[i];
+
+		if (d == '\r')
+		{
+			/* (a line of at least one character, ended by CR LF) */
+			if (headers[i + 1] != '\n' || i == line_start)
+				return 0;
+			i++;
+			line_start = i + 1;
+		}
+		else if ((d < 0x20 && d != '\t') || d >= 0x7F)
+			return 0;
+	}
+	return line_start == i;
+}
+
+/* Take the TLS stack's lock, waiting (and asking the stop hook, and the request's own time) for another connection to end: 0, or -1 with the reason in
+result */
+static int lock_stack(connection *c)
+{
+	const uint64_t deadline = now_ms() + LOCK_MS;
+
+	while (pthread_mutex_trylock(&request_lock) != 0)
+	{
+		if (c->hooks && c->hooks->stop && c->hooks->stop(c->hooks->context))
+		{
+			c->result->stopped = 1;
+			fail(c->result, "stopped");
+			return -1;
+		}
+		if ((c->overall && now_ms() >= c->overall) || now_ms() >= deadline)
+		{
+			fail(c->result, "another HTTPS request (the updater's, or an earlier list) did not finish in time");
+			return -1;
+		}
+		sleep_ms(20);
+	}
+	return 0;
+}
+
+/* One request on its own connection: the status, the Location in location; -1 on a failure. With options (wiiu_http_request): a request of the
+caller's, whose answer is the status, the headers and the body whatever the status, a redirect not followed */
 static int one_get(wiiu_http *http, const char *host, unsigned port, const char *path, uint64_t from, uint64_t most,
-	const wiiu_http_hooks *hooks, wiiu_http_result *result, char *location, size_t location_size)
+	const wiiu_http_hooks *hooks, const wiiu_http_request_options *options, wiiu_http_result *result, char *location, size_t location_size)
 {
 	connection *c = calloc(1, sizeof(connection));
-	char request[URL_MOST + 512];
+	char request[URL_MOST + 512 + EXTRA_HEADERS_MOST];
 	char host_header[160];
 	char range[64] = "";
 	response answer;
-	int status = -1;
+	int status = -1, locked = 0;
 
 	if (!c)
 	{
@@ -912,6 +1005,22 @@ static int one_get(wiiu_http *http, const char *host, unsigned port, const char 
 	c->result = result;
 	location[0] = 0;
 	snprintf(result->host, sizeof(result->host), "%s", host);
+	if (options)
+	{
+		c->capture = options->response_headers;
+		c->capture_size = options->response_headers ? options->response_headers_size : 0;
+		if (c->capture && c->capture_size)
+			c->capture[0] = 0;
+		else
+			c->capture = NULL;
+		if (options->total_ms)
+			c->overall = now_ms() + options->total_ms;
+		if (!extra_headers_are_valid(options->headers))
+		{
+			fail(result, "the request's header lines are not valid");
+			goto done;
+		}
+	}
 	if (port == 443)
 		snprintf(host_header, sizeof(host_header), "%s", host);
 	else
@@ -919,13 +1028,37 @@ static int one_get(wiiu_http *http, const char *host, unsigned port, const char 
 	if (from)
 		snprintf(range, sizeof(range), "Range: bytes=%llu-\r\n", (unsigned long long)from);
 	snprintf(request, sizeof(request),
-		"GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: " USER_AGENT "\r\nAccept: */*\r\n%sConnection: close\r\n\r\n", path, host_header, range);
+		"GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: " USER_AGENT "\r\nAccept: */*\r\n%s%sConnection: close\r\n\r\n", path, host_header, range,
+		options && options->headers ? options->headers : "");
+	if (lock_stack(c) != 0)
+		goto done;
+	locked = 1;
 	if (open_socket(c, host, port) != 0 || tls_open(http, c, host) != 0 ||
 		tls_write(c, (const unsigned char *)request, strlen(request)) != 0 || read_headers(c, &answer) != 0)
 	{
 		goto done;
 	}
 	status = answer.status;
+	if (options)
+	{
+		/* (any answer with a final status is the caller's: it has a body unless the status says it has none) */
+		if (status < 200)
+		{
+			fail(result, "%s answered with an interim status (%d)", host, status);
+			status = -1;
+			goto done;
+		}
+		result->status = status;
+		if (hooks && hooks->start && !hooks->start(hooks->context, status, 0, answer.have_length && !answer.chunked ? answer.length : 0))
+		{
+			fail(result, "the answer of %s was refused (%d)", host, status);
+			status = -1;
+			goto done;
+		}
+		if (status != 204 && status != 304 && read_body(c, &answer, most) != 0)
+			status = -1;
+		goto done;
+	}
 	if (is_redirect(status))
 	{
 		snprintf(location, location_size, "%s", answer.location);
@@ -962,6 +1095,8 @@ static int one_get(wiiu_http *http, const char *host, unsigned port, const char 
 
 done:
 	connection_close(c);
+	if (locked)
+		pthread_mutex_unlock(&request_lock);
 	free(c);
 	return status;
 }
@@ -989,7 +1124,7 @@ int wiiu_http_get(wiiu_http *http, const char *url, uint64_t from, uint64_t most
 			fail(result, "not an https:// address: %.80s", current);
 			return -1;
 		}
-		status = one_get(http, host, port, path, from, most, hooks, result, location, sizeof(location));
+		status = one_get(http, host, port, path, from, most, hooks, NULL, result, location, sizeof(location));
 		if (status < 0)
 			return -1;
 		if (!is_redirect(status))
@@ -1027,6 +1162,26 @@ int wiiu_http_get(wiiu_http *http, const char *url, uint64_t from, uint64_t most
 	}
 	fail(result, "more than %d redirects", MOST_REDIRECTS);
 	return -1;
+}
+
+int wiiu_http_request(wiiu_http *http, const char *url, uint64_t most, const wiiu_http_hooks *hooks, const wiiu_http_request_options *options,
+	wiiu_http_result *result)
+{
+	char host[128], path[URL_MOST], location[URL_MOST];
+	unsigned port;
+	int status;
+
+	memset(result, 0, sizeof(*result));
+	if (parse_url(url, host, sizeof(host), &port, path, sizeof(path)) != 0)
+	{
+		fail(result, "not an https:// address: %.80s", url);
+		return -1;
+	}
+	status = one_get(http, host, port, path, 0, most, hooks, options, result, location, sizeof(location));
+	if (status < 0)
+		return -1;
+	result->status = status;
+	return 0;
 }
 
 /* ---------- a small file into memory */

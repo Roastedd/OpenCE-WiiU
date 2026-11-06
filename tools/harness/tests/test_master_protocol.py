@@ -8,6 +8,7 @@ internal/vectors): read from a checkout beside this repository's when there is o
 here, a copy of it taken on 2026-10-24 (copy it again when the master's vectors change: test_vectors_copy says so)."""
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -298,6 +299,16 @@ def test_vectors_copy():
 def test_case(case):
     status, output = run(build("master_protocol", generated()), case)
     assert status == 0, output
+
+
+@pytest.mark.skipif(not os.environ.get("OPENCE_MASTER_CAPTURE"), reason="OPENCE_MASTER_CAPTURE=<folder> from tools/test_wiiu_https.py")
+def test_a_list_fetched_from_the_official_master():
+    """The official master's own list, fetched with the Wii U's HTTPS client (tools/test_wiiu_https.py, OPENCE_MASTER_TEST=1), is accepted by
+    master_list_verify with the key built in, and its entries are taken."""
+    status, output = run(build("master_protocol", generated()), "captured-list")
+    assert status == 0, output
+    assert "signature accepted" in output, output
+    print(output)
 
 
 @pytest.mark.parametrize("control", NEGATIVE_CONTROLS)
