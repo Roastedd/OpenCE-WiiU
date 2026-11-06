@@ -23,6 +23,7 @@ Not run on a console.
 #include "port_config.h"
 #include "wiiu_indices.h"
 #include "wiiu_mip.h"
+#include "wiiu_texture_layout.h"
 #include "wiiu_font.h"
 #include "wiiu_gx2_mip.h"
 #include "wiiu_overlay.h"
@@ -198,7 +199,7 @@ static struct
 	unsigned skipped_left_out; /* of those, the draws whose key was left out of the pack on purpose (tools/wiiu/shader_exclude.txt) */
 	unsigned drawn_equivalent, drawn_fallback; /* of draws_made, those whose pixel key the pack lacks, drawn with its canonical key's shader or its stand-in */
 	uint32_t vs_found, ps_found; /* how the pack answered the keys of vs_handle and ps_handle (DK_SHADER_FOUND_*) */
-	unsigned textures_made, textures_unsupported, texture_short, layouts_logged;
+	unsigned textures_made, textures_unsupported, texture_short, layouts_logged, textures_reduced;
 	int mip_gpu_enabled;
 	unsigned mip_gpu_calls, mip_cpu_calls, mip_gpu_fallbacks, mip_reuses, mip_failed;
 	unsigned long long mip_gpu_pixels, mip_cpu_pixels, mip_failed_pixels;
@@ -1339,7 +1340,9 @@ struct image
 {
 	int used;
 	int supported;
-	uint32_t kind, format, width, height, depth, levels, requested_levels;
+	/* width, height and depth are the texture the game made, requested_levels its levels; the surface holds `levels` of them from level `skip` on (0 unless the
+	heap had no block for the whole texture: wiiu_texture_layout.h), so that a level of the surface is level + skip of the game's */
+	uint32_t kind, format, width, height, depth, levels, requested_levels, skip;
 	/* a cube's six faces and a 3D texture's slices are slices of one surface */
 	uint32_t slices;
 	unsigned block_bytes;
@@ -1414,8 +1417,8 @@ static void level_layout(const struct image *image, GX2SurfaceFormat format, GX2
 
 	memset(&surface, 0, sizeof(surface));
 	surface.dim = GX2_SURFACE_DIM_TEXTURE_2D;
-	surface.width = level_size(image->width, level);
-	surface.height = level_size(image->height, level);
+	surface.width = level_size(image->width, level + image->skip);
+	surface.height = level_size(image->height, level + image->skip);
 	surface.depth = 1;
 	surface.mipLevels = 1;
 	surface.format = format;
@@ -1486,23 +1489,41 @@ static int image_surface(struct image *image, uint32_t kind, uint32_t format, ui
 	image->levels = levels;
 	image->slices = kind == DK_TEXTURE_CUBE ? 6 : kind == DK_TEXTURE_3D ? image->depth : 1;
 	mode = image->compressed ? GX2_TILE_MODE_TILED_1D_THIN1 : GX2_TILE_MODE_LINEAR_ALIGNED;
-	surface->dim = kind == DK_TEXTURE_CUBE ? GX2_SURFACE_DIM_TEXTURE_CUBE : kind == DK_TEXTURE_3D ? GX2_SURFACE_DIM_TEXTURE_3D : GX2_SURFACE_DIM_TEXTURE_2D;
-	surface->width = width;
-	surface->height = height;
-	surface->depth = kind == DK_TEXTURE_CUBE ? 6 : kind == DK_TEXTURE_3D ? image->depth : 1;
-	surface->mipLevels = levels;
-	surface->format = gx_format;
-	surface->aa = GX2_AA_MODE1X;
-	surface->use = GX2_SURFACE_USE_TEXTURE;
-	surface->tileMode = mode;
-	GX2CalcSurfaceSizeAndAlignment(surface);
-	total = surface->imageSize + (levels > 1 ? surface->mipmapSize : 0);
-	image->base = gx_alloc_raw(total, surface->alignment ? surface->alignment : 256);
-	if (!image->base)
+	/* the texture whole, and if the heap has no block for it, a 2D texture without its top levels (wiiu_texture_layout.h) */
+	for (image->skip = 0;; image->skip++)
 	{
-		wiiu_log("GX2: no memory for a %ux%u texture (%u bytes)", (unsigned)width, (unsigned)height, (unsigned)total);
-		return 0;
+		const unsigned skip = image->skip;
+
+		memset(&image->texture, 0, sizeof(image->texture));
+		surface->dim = kind == DK_TEXTURE_CUBE ? GX2_SURFACE_DIM_TEXTURE_CUBE : kind == DK_TEXTURE_3D ? GX2_SURFACE_DIM_TEXTURE_3D : GX2_SURFACE_DIM_TEXTURE_2D;
+		surface->width = level_size(width, skip);
+		surface->height = level_size(height, skip);
+		surface->depth = kind == DK_TEXTURE_CUBE ? 6 : kind == DK_TEXTURE_3D ? image->depth : 1;
+		surface->mipLevels = levels - skip;
+		surface->format = gx_format;
+		surface->aa = GX2_AA_MODE1X;
+		surface->use = GX2_SURFACE_USE_TEXTURE;
+		surface->tileMode = mode;
+		GX2CalcSurfaceSizeAndAlignment(surface);
+		total = surface->imageSize + (levels - skip > 1 ? surface->mipmapSize : 0);
+		image->base = gx_alloc_raw(total, surface->alignment ? surface->alignment : 256);
+		if (image->base)
+			break;
+		wiiu_log("GX2: no memory for a %ux%u texture (%u bytes)%s", (unsigned)surface->width, (unsigned)surface->height, (unsigned)total,
+			wiiu_texture_can_skip(kind, width, height, levels, skip + 1) ? ": made again without its top level" : "");
+		if (!wiiu_texture_can_skip(kind, width, height, levels, skip + 1))
+		{
+			image->skip = 0;
+			return 0;
+		}
 	}
+	if (image->skip)
+	{
+		wiiu_log("GX2: a %ux%u texture of %u levels is made as %ux%u of %u levels (%u bytes): the heap had no block for the whole of it", (unsigned)width,
+			(unsigned)height, (unsigned)levels, (unsigned)surface->width, (unsigned)surface->height, (unsigned)(levels - image->skip), (unsigned)total);
+		gx.textures_reduced++;
+	}
+	levels -= image->skip;
 	memset(image->base, 0, total);
 	for (level = 0; level < levels; level++)
 	{
@@ -1511,18 +1532,20 @@ static int image_surface(struct image *image, uint32_t kind, uint32_t format, ui
 		the console's numbers for a 64 x 64 BC1 texture are 2048 512 1024) */
 		image->level_offset[level] = level == 0 ? 0 : surface->mipLevelOffset[0] + (level == 1 ? 0 : surface->mipLevelOffset[level - 1]);
 	}
+	/* (a level holds its own slices: a 3D texture's depth halves a level at a time) */
 	for (level = 0; level < levels; level++)
-		if ((uint64_t)image->level_offset[level] + (uint64_t)image->level_slice_bytes[level] * image->slices > total)
+		if (!wiiu_texture_level_fits(image->level_offset[level], image->level_slice_bytes[level], wiiu_texture_slices_at(kind, image->depth, level), total))
 		{
 			if (gx.layouts_logged < 12)
-				wiiu_log("GX2: texture %ux%u kind %u: level %u (%u + %u x %u) does not fit its %u bytes; the texture is its first level only", (unsigned)width,
+				wiiu_log("GX2: texture %ux%u kind %u: level %u (%u + %u x %u) does not fit its %u bytes; the texture is its first %u levels only", (unsigned)width,
 					(unsigned)height, (unsigned)kind, level, (unsigned)image->level_offset[level], (unsigned)image->level_slice_bytes[level],
-					(unsigned)image->slices, (unsigned)total);
+					(unsigned)wiiu_texture_slices_at(kind, image->depth, level), (unsigned)total, level);
 			gx.layouts_logged++;
-			if (level == 0 || kind != DK_TEXTURE_2D)
+			if (level == 0)
 			{
 				MEMFreeToDefaultHeap(image->base);
 				image->base = NULL;
+				image->skip = 0;
 				return 0;
 			}
 			levels = level;
@@ -1561,7 +1584,7 @@ static int image_surface(struct image *image, uint32_t kind, uint32_t format, ui
 /* one slice of one level, from rows of texels or blocks (no padding) */
 static void image_write_slice(const struct image *image, unsigned level, unsigned slice, const uint8_t *source)
 {
-	const uint32_t width = level_size(image->width, level), height = level_size(image->height, level);
+	const uint32_t width = level_size(image->width, level + image->skip), height = level_size(image->height, level + image->skip);
 	uint8_t *destination = image_level(image, level, slice);
 
 	if (image->compressed)
@@ -1575,7 +1598,7 @@ static void image_write_slice(const struct image *image, unsigned level, unsigne
 	}
 }
 
-/* the bytes of one slice of a level in the source */
+/* the bytes of one slice of a level in the source (the game's level: counted from the texture it made, not from the surface's first) */
 static uint32_t level_source_bytes(const struct image *image, unsigned level)
 {
 	const uint32_t width = level_size(image->width, level), height = level_size(image->height, level);
@@ -1593,7 +1616,8 @@ static void image_write(struct image *image, const uint8_t *source, uint32_t sou
 	{
 		uint32_t at = face * face_bytes;
 
-		for (level = 0; level < image->levels; level++)
+		/* (the source's levels are the game's: those left off the surface's top are stepped over) */
+		for (level = 0; level < image->skip + image->levels; level++)
 		{
 			const uint32_t slices = image->kind == DK_TEXTURE_3D ? level_size(image->depth, level) : 1;
 			const uint32_t bytes = level_source_bytes(image, level);
@@ -1603,8 +1627,9 @@ static void image_write(struct image *image, const uint8_t *source, uint32_t sou
 				gx.texture_short++;
 				goto done;
 			}
-			for (slice = 0; slice < slices; slice++)
-				image_write_slice(image, level, image->kind == DK_TEXTURE_CUBE ? face : slice, source + at + (size_t)slice * bytes);
+			if (level >= image->skip)
+				for (slice = 0; slice < slices; slice++)
+					image_write_slice(image, level - image->skip, image->kind == DK_TEXTURE_CUBE ? face : slice, source + at + (size_t)slice * bytes);
 			at += bytes * slices;
 		}
 	}
@@ -1661,14 +1686,16 @@ static void texture_rows(const struct dk_command_texture_rows *command)
 	if (!images || !command->id || command->id >= DK_TEXTURE_LIMIT)
 		return;
 	image = &images[command->id];
-	if (!image->used || !image->supported || image->format != DK_TEXTURE_BGRA || image->kind != DK_TEXTURE_2D || command->level >= image->levels)
+	/* (the command's level is the game's; the surface's first is the game's level `skip`, and the levels left off have nowhere to go) */
+	if (!image->used || !image->supported || image->format != DK_TEXTURE_BGRA || image->kind != DK_TEXTURE_2D || command->level < image->skip ||
+		command->level - image->skip >= image->levels)
 		return;
 	width = level_size(image->width, command->level);
 	height = level_size(image->height, command->level);
 	if (command->top + command->rows > height || command->source_bytes < command->rows * width * 4)
 		return;
 	for (row = 0; row < command->rows; row++)
-		memcpy(image_level(image, command->level, 0) + (size_t)(command->top + row) * image->level_pitch[command->level] * 4,
+		memcpy(image_level(image, command->level - image->skip, 0) + (size_t)(command->top + row) * image->level_pitch[command->level - image->skip] * 4,
 			(const uint8_t *)(uintptr_t)command->source + (size_t)row * width * 4, (size_t)width * 4);
 	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, image->base, image->texture.surface.imageSize + (image->levels > 1 ? image->texture.surface.mipmapSize : 0));
 }
