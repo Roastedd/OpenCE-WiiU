@@ -2028,10 +2028,18 @@ static long config_setting_index(const char *name)
 section: said in the log, with the section of a setting of that name */
 static void config_report_unknown_key(int line, const char *name)
 {
+	/* settings of newer OpenCE builds that share a config.toml with this one (a card file written by a PC build): this build has no such feature, and a
+	line in every log of every start would say nothing the player could mend (2026-11-06: audio.loose_sounds, the sound tag files of the tools' users) */
+	static const char *const of_other_builds[] = { "audio.loose_sounds" };
 	const char *key = strrchr(name, '.');
 	const char *found = NULL;
 	size_t index, count = 0;
 
+	for (index = 0; index < sizeof(of_other_builds) / sizeof(*of_other_builds); index++)
+	{
+		if (!strcmp(name, of_other_builds[index]))
+			return;
+	}
 	key = key ? key + 1 : name;
 	for (index = 0; index < NUMBER_OF_CONFIG_SETTINGS; index++)
 	{
