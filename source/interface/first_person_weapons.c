@@ -555,6 +555,40 @@ long first_person_weapon_get_local_index(
 	return (local_player_index==MAXIMUM_NUMBER_OF_LOCAL_PLAYERS) ? NONE : local_player_index;
 }
 
+#ifdef HALO_WIIU
+void platform_log(char const *format, ...);
+
+/* port: the ticks run on a thread of their own while a frame is drawn, and first_person_weapons_update (the tick thread) changes the first person weapon's fields: a switch sets weapon_index
+to NONE, rebuilds the remapping tables and sets it to the new weapon, in that order. These are read once for the frame (a volatile read, so that the compiler does not read the field again
+at each use: it had to, with the calls between, and the console halted on a weapon_get(NONE) between the two reads of one frame, 2026-11-06, a50 at 1806 s). */
+static long first_person_weapon_read_field(
+	long const *field)
+{
+	return *(long const volatile *)field;
+}
+
+/* whether the weapon the frame has chosen is still the one the first person weapon holds: not if a switch is in the middle (NONE, with the tables being rebuilt) or has been made. The frame
+then does not draw the weapon (the next frame does); the first few times are in the log. */
+static boolean first_person_weapon_still_held(
+	struct first_person_weapon const *first_person_weapon,
+	long weapon_index)
+{
+	long now= first_person_weapon_read_field(&first_person_weapon->weapon_index);
+	static long changed= 0;
+
+	if (now==weapon_index)
+	{
+		return TRUE;
+	}
+	if (changed++<4)
+	{
+		platform_log("first person weapon: the weapon (%08lx) the frame chose was %s by the ticks (%08lx) before it was drawn; not drawn this frame (%ld so far)",
+			(unsigned long)weapon_index, now==NONE ? "let go of" : "replaced", (unsigned long)now, changed);
+	}
+	return FALSE;
+}
+#endif
+
 void first_person_weapon_draw(
 	void)
 {
@@ -569,20 +603,26 @@ void first_person_weapon_draw(
 		{
 			long unit_index= player_get(
 				local_player_get_player_index(render.local_player_index))->unit_index;
+#ifdef HALO_WIIU
+			/* port: the weapon is read once (first_person_weapon_read_field): everything below is drawn from this one handle, which is checked to be in the capture the frame is drawn from
+			(tick_snapshot_object_present: the tick side publishes the unit and the weapon of the tick it has run, which a pair of the ring one or two ticks behind may not hold yet, a level's
+			first frames: the player is made in a tick after the pair's) and, before the tables are read, to be the weapon still held */
+			long const weapon_index= first_person_weapon_read_field(&first_person_weapon->weapon_index);
+#else
+			long const weapon_index= first_person_weapon->weapon_index;
+#endif
 
 			if (unit_index!=NONE &&
 				first_person_weapon->visible &&
 				first_person_weapon->unit_index!=NONE &&
-				first_person_weapon->weapon_index!=NONE
+				weapon_index!=NONE
 #ifdef HALO_WIIU
-				/* port: and both in the capture the frame is drawn from (tick_snapshot_object_present): the tick side publishes the unit and the weapon of the tick it has run, which a pair of
-				the ring one or two ticks behind may not hold yet (a level's first frames: the player is made in a tick after the pair's) */
-				&& tick_snapshot_object_present(unit_index) && tick_snapshot_object_present(first_person_weapon->weapon_index)
+				&& tick_snapshot_object_present(unit_index) && tick_snapshot_object_present(weapon_index)
 #endif
 				)
 			{
 				struct unit_datum *unit= unit_get(unit_index);
-				struct weapon_datum *weapon= weapon_get(first_person_weapon->weapon_index);
+				struct weapon_datum *weapon= weapon_get(weapon_index);
 				struct weapon_definition *weapon_definition= weapon_definition_get(weapon->definition_index);
 
 				if (weapon_definition->weapon.interface_definition.first_person_animations.index!=NONE)
@@ -606,12 +646,19 @@ void first_person_weapon_draw(
 					charge clicks with the picture instead of once a tick; kept
 					in the rasterizer's memory for the frame, as the groups drawn
 					later read them (render_objects.c) */
-					object_function_values_for_render(first_person_weapon->weapon_index, values);
+					object_function_values_for_render(weapon_index, values);
 					if ((kept = rasterizer_memory_alloc(values, sizeof(values))) != NULL)
 						weapon_functions = kept;
 					object_function_values_for_render(unit_index, values);
 					if ((kept = rasterizer_memory_alloc(values, sizeof(values))) != NULL)
 						unit_functions = kept;
+#ifdef HALO_WIIU
+					/* port: a switch of the tick thread in the middle (weapon_index NONE and the remapping tables being rebuilt, or another weapon): the weapon is not drawn this frame */
+					if (!first_person_weapon_still_held(first_person_weapon, weapon_index))
+					{
+						return;
+					}
+#endif
 					model_effect.modifier_shader= NULL;
 					if (TEST_FLAG(unit->unit.flags, _unit_active_camouflaged_bit) ||
 						unit->unit.active_camouflage>0.0f)
@@ -647,7 +694,7 @@ void first_person_weapon_draw(
 							&render.camera.position,
 							0.0f,
 							&model_effect,
-							first_person_weapon->weapon_index,
+							weapon_index,
 							0,
 							FLAG(_render_model_first_person_bit));
 					}
@@ -696,7 +743,7 @@ void first_person_weapon_draw(
 							&render.camera.position,
 							0.0f,
 							&model_effect,
-							first_person_weapon->weapon_index,
+							weapon_index,
 							0,
 							FLAG(_render_model_first_person_bit));
 					}
@@ -1241,6 +1288,7 @@ static void first_person_weapon_build_node_matrices(
 	short local_player_index)
 {
 	struct first_person_weapon *first_person_weapon= first_person_weapon_get(local_player_index);
+	long weapon_index;
 
 	struct first_person_render_fields *render_fields= first_person_render_get(local_player_index, first_person_weapon);
 
@@ -1267,20 +1315,27 @@ static void first_person_weapon_build_node_matrices(
 	render_fields->render_forward= render.camera.forward;
 	first_person_set_rendered(local_player_index, first_person_weapon);
 
-	if (first_person_weapon->weapon_index!=NONE &&
-		!weapon_try_and_get(first_person_weapon->weapon_index))
+#ifdef HALO_WIIU
+	/* port: the weapon read once (first_person_weapon_read_field: the ticks' thread changes it, see first_person_weapon_draw), so that the NONE it is checked against is the handle weapon_get is given */
+	weapon_index= first_person_weapon_read_field(&first_person_weapon->weapon_index);
+#else
+	weapon_index= first_person_weapon->weapon_index;
+#endif
+	if (weapon_index!=NONE &&
+		!weapon_try_and_get(weapon_index))
 	{
 		error(
 			_error_log,
 			"local player %d, weapon (0x%x), deleted unexpectedly",
 			local_player_index,
-			first_person_weapon->weapon_index);
+			weapon_index);
 		first_person_weapon_forget_weapon(local_player_index);
+		weapon_index= NONE;
 	}
 
-	if (first_person_weapon->weapon_index!=NONE)
+	if (weapon_index!=NONE)
 	{
-		struct weapon_datum *weapon= weapon_get(first_person_weapon->weapon_index);
+		struct weapon_datum *weapon= weapon_get(weapon_index);
 		struct weapon_definition *weapon_definition= weapon_definition_get(weapon->definition_index);
 		struct model *model= model_definition_get(
 			weapon_definition->weapon.interface_definition.first_person_model.index);

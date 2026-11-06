@@ -1738,7 +1738,8 @@ struct object_header_datum *tick_snapshot_object_header_try_and_get(long object_
 		tick than the partitions and the lights the frame reads, and the game state's own is being changed beside the drawing) */
 		if (s.pair_view)
 		{
-			if (!s.pair_absent++)
+			/* (NONE is no object that the pair lacks: a caller asking for an object it has not, and the log's one line is for a real one) */
+			if (object_index != NONE && !s.pair_absent++)
 				platform_log("tick snapshot: an object (%08lx) that the frame's pair of the ring does not hold was asked for by name; it does not exist for this frame (said once)", (unsigned long)object_index);
 			return NULL;
 		}
