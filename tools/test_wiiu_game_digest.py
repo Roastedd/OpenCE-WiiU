@@ -534,8 +534,8 @@ class FirstPersonWeaponSwitchTest(unittest.TestCase):
 
       draw: the draw sets weapon_index to NONE itself (every 4th draw) just before it asks for the unit's lighting, which is where the field was read again, as the ticks' thread
             would have set it there. Deterministic.
-      flap: the tick thread, at the end of each first_person_weapons_update, sets weapon_index to NONE for 200 microseconds and back, 20 times: the two threads at once, as on the
-            console, with a window as wide as many frames' worth of the console's switches.
+      flap: the tick thread, at the end of each first_person_weapons_update, sets weapon_index to NONE for 150 microseconds and back for 150, 100 times: the two threads at once, as
+            on the console, with a window as wide as many of the console's switches. (A race of two threads: the old sources halt in it in most runs, not in every one.)
 
     The old sources (OLD_REV, the console's build of that day) halt in both; the fixed ones draw the frames, and say in the log that the weapon was changed under a frame
     (`first person weapon: the weapon ... the frame chose was ...`) in the draw run, so that the test cannot pass for the interleaving not having happened."""
@@ -550,12 +550,12 @@ class FirstPersonWeaponSwitchTest(unittest.TestCase):
             "\t\t\t\textern int usleep(unsigned int);\n"
             "\t\t\t\tlong held= first_person_weapon->weapon_index;\n"
             "\t\t\t\tint flaps;\n\n"
-            "\t\t\t\tfor (flaps= 0; held!=NONE && flaps<20; flaps++)\n"
+            "\t\t\t\tfor (flaps= 0; held!=NONE && flaps<100; flaps++)\n"
             "\t\t\t\t{\n"
             "\t\t\t\t\tfirst_person_weapon->weapon_index= NONE;\n"
-            "\t\t\t\t\tusleep(200);\n"
+            "\t\t\t\t\tusleep(150);\n"
             "\t\t\t\t\tfirst_person_weapon->weapon_index= held;\n"
-            "\t\t\t\t\tusleep(50);\n"
+            "\t\t\t\t\tusleep(150);\n"
             "\t\t\t\t}\n"
             "\t\t\t}\n")
     # (a30: the player has a weapon in hand in the level's first frames, which are overlapped: LevelsTest's regression found the first person weapon there)
