@@ -747,7 +747,7 @@ static int png_chain_build(const void *png, unsigned long size, struct png_chain
 /* the images made ahead of the game thread's asking (menu art that the main menu will draw, decoded while the game loads its map): by the PNG's address
 and size. A slot is working (the helper thread has it), ready, or free. The game thread that wants one that is being made waits for it; one that is not
 there it makes itself, as before. */
-#define PREPARED_LIMIT 48
+#define PREPARED_LIMIT 128
 #define PREPARED_BYTES_LIMIT (32ul << 20)
 enum { PREPARED_FREE, PREPARED_WORKING, PREPARED_READY };
 
@@ -783,15 +783,22 @@ static void prepared_init(void)
 
 /* (any thread) the image of a PNG made, to be had by png_image when it asks; the PNG's bytes stay where they are */
 void dk_texture_prewarm_png(const void *png, unsigned long size);
+/* the same with the most the made images may hold (the menus' art, 32 MB; the HUD's: wiiu_hud_prewarm); 1 if the image is made or was, 0 if not */
+static int prewarm_png(const void *png, unsigned long size, unsigned long bytes_limit);
 
 void dk_texture_prewarm_png(const void *png, unsigned long size)
+{
+	prewarm_png(png, size, PREPARED_BYTES_LIMIT);
+}
+
+static int prewarm_png(const void *png, unsigned long size, unsigned long bytes_limit)
 {
 	int slot, free_slot = -1;
 	struct png_chain chain;
 	int made;
 
 	if (!png || !size)
-		return;
+		return 0;
 	prepared_init();
 	pthread_mutex_lock(&prepared_lock);
 	for (slot = 0; slot < PREPARED_LIMIT; slot++)
@@ -799,15 +806,15 @@ void dk_texture_prewarm_png(const void *png, unsigned long size)
 		if (prepared[slot].state != PREPARED_FREE && prepared[slot].png == png && prepared[slot].size == size)
 		{
 			pthread_mutex_unlock(&prepared_lock);
-			return;
+			return 1;
 		}
 		if (prepared[slot].state == PREPARED_FREE && free_slot < 0)
 			free_slot = slot;
 	}
-	if (free_slot < 0 || prepared_bytes >= PREPARED_BYTES_LIMIT)
+	if (free_slot < 0 || prepared_bytes >= bytes_limit)
 	{
 		pthread_mutex_unlock(&prepared_lock);
-		return;
+		return 0;
 	}
 	prepared[free_slot].png = png;
 	prepared[free_slot].size = size;
@@ -828,6 +835,7 @@ void dk_texture_prewarm_png(const void *png, unsigned long size)
 	}
 	pthread_cond_broadcast(&prepared_changed);
 	pthread_mutex_unlock(&prepared_lock);
+	return made;
 }
 
 /* the image made ahead, handed over (and its slot freed); 0 if there is none (or the making failed) */
@@ -1017,6 +1025,87 @@ static uint32_t hud_image(long asset, unsigned long *levels)
 	}
 	*levels = hud_images[asset].levels;
 	return hud_images[asset].id;
+}
+
+/* ---------- the HUD's images made ahead (halo/hud_prewarm.txt)
+
+The high-res HUD's sheets are decoded when the HUD first draws them, on the game thread (hud_image, png_image): 2026-11-06, in a joined game on Ratrace, the
+first frames of the HUD took 1559, 1214, 768 and 923 ms (the log's hitch lines: "its longest part of the rendering was hud"), one more sheet each time something new
+came into view, about 8.6 million pixels a second of the console's decoding (the start-up timeline's png_decode); the second map of the session, drawing the same
+sheets from the images kept, had none. The PC build decodes them on a thread of its own as the map loads (hud_hires.c, HUD_HIRES_DECODE_AHEAD); this does the same
+with the menus' prepared images (prewarm_png): the images are the same ones png_image makes, only decoded before the HUD asks.
+
+The file halo/hud_prewarm.txt holds the largest sheet to make ahead in thousands of pixels (1100: the sheets of a million pixels and under, 5.3 MB each with their
+mip levels; 4200 all of them, 22 MB each); no file, or 0, makes nothing ahead (the game thread decodes as it always did). The made images hold at most
+HUD_PREWARM_BYTES between them (and what the menus' art still holds) and wait in memory until the HUD asks for them. */
+#define HUD_PREWARM_BYTES (16ul << 20)
+#define HUD_PREWARM_ASSETS 256
+
+long wiiu_study_number(const char *name, long fallback);
+void wiiu_thread_off_game_core(void);
+
+static long hud_prewarm_list[HUD_PREWARM_ASSETS];
+static long hud_prewarm_count;
+static unsigned long hud_prewarm_largest;
+static volatile int hud_prewarm_running;
+
+static void *hud_prewarm_main(void *unused)
+{
+	long index, made = 0, skipped = 0, refused = 0;
+	STARTUP_TIMER(started);
+
+	(void)unused;
+	wiiu_thread_off_game_core();
+	for (index = 0; index < hud_prewarm_count; index++)
+	{
+		const long asset = hud_prewarm_list[index];
+		const struct hud_hires_embedded *embedded;
+
+		if (asset < 0 || asset >= (long)hud_hires_embedded_count)
+			continue;
+		embedded = &hud_hires_embedded[asset];
+		/* (titles are the menus', sheets above the file's size are left to the game thread, and one already made is not made again) */
+		if (embedded->title || (unsigned long)embedded->width * embedded->height > hud_prewarm_largest ||
+			(hud_images && hud_images[asset].tried))
+		{
+			skipped++;
+			continue;
+		}
+		if (prewarm_png(embedded->png, embedded->png_size, prepared_bytes + HUD_PREWARM_BYTES))
+			made++;
+		else
+			refused++;
+	}
+	platform_log("hud prewarm: %ld sheets made ahead of the HUD (%ld left to it, %ld not made: the images held are at their limit), %lu KB held, %lu ms",
+		made, skipped, refused, prepared_bytes >> 10, STARTUP_SINCE_MS(started));
+	hud_prewarm_running = 0;
+	return NULL;
+}
+
+/* (the game thread, a map has loaded: hud_hires_tags.c) the assets the map's HUD may draw; their images are made on a thread of its own */
+void wiiu_hud_prewarm(const long *assets, long count);
+
+void wiiu_hud_prewarm(const long *assets, long count)
+{
+	pthread_t thread;
+	pthread_attr_t attributes;
+	long largest = wiiu_study_number("hud_prewarm.txt", 0);
+
+	if (largest <= 0 || count <= 0 || hud_prewarm_running)
+		return;
+	prepared_init();
+	if (count > HUD_PREWARM_ASSETS)
+		count = HUD_PREWARM_ASSETS;
+	memcpy(hud_prewarm_list, assets, (size_t)count * sizeof(*assets));
+	hud_prewarm_count = count;
+	hud_prewarm_largest = (unsigned long)largest * 1000ul;
+	hud_prewarm_running = 1;
+	pthread_attr_init(&attributes);
+	pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
+	pthread_attr_setstacksize(&attributes, 64 * 1024);
+	if (pthread_create(&thread, &attributes, hud_prewarm_main, NULL) != 0)
+		hud_prewarm_running = 0;
+	pthread_attr_destroy(&attributes);
 }
 
 /* an entry's image and description: its replacement's, if it has one (as

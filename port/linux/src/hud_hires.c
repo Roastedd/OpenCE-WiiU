@@ -833,6 +833,12 @@ void hud_hires_map_loaded(const long *assets, long count)
 		for (index = 0; index < MAXIMUM_TEXTURES; index++)
 			textures[index].decode_state = _decode_none;
 	}
+#elif defined(HALO_WIIU)
+	/* (the texture cache's images made ahead on a thread of its own, if halo/hud_prewarm.txt says: xbox_textures_gx2.c) */
+	void wiiu_hud_prewarm(const long *assets, long count);
+
+	if (config_boolean("display.high_res_hud"))
+		wiiu_hud_prewarm(assets, count);
 #else
 	(void)assets;
 	(void)count;
