@@ -85,6 +85,7 @@ static boolean fake_slack_intact(void const *pointer)
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define _error_silent 0
 #define error(level, ...) ((void)0)
+#define platform_log(...) ((void)0)
 #define _progress_done 1
 
 /* the fake world: a clock, a folder of a few files, whether the map can be

@@ -901,6 +901,7 @@ static void game_state_image_release(
 	return;
 }
 
+#ifdef HALO_WIIU
 /* ---------- port: the checkpoint's write on a thread of its own */
 
 /* A checkpoint wrote the whole game state to z:\savegame.bin on the game thread: one write of 20 MiB (HALO_PORT_GAME_STATE_SIZE) and nothing else (no hash, no compression), which
@@ -1227,3 +1228,27 @@ int game_state_port_save_wait(
 {
 	return async_save_wait(timeout_ms);
 }
+#else
+/* (the checkpoint's write on a thread of its own is the Wii U's: elsewhere the write is made where it always was, and none is waited for) */
+void game_state_port_wait_for_save(
+	const char *why)
+{
+	(void)why;
+
+	return;
+}
+
+boolean game_state_port_save_lost(
+	void)
+{
+	return FALSE;
+}
+
+int game_state_port_save_wait(
+	unsigned long timeout_ms)
+{
+	(void)timeout_ms;
+
+	return 1;
+}
+#endif

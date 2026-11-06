@@ -4680,12 +4680,16 @@ static short lobby_browser_valid_games(struct p2p_listing *games, short count)
 	return written;
 }
 
-/* what a game's map is to this machine (p2p_lobby_filter): a Custom
-Edition map it has not can be downloaded as it joins, if map downloads are
-on (its host shares it, as hosts do unless they turned it off) */
+/* what a game's map is to this machine (p2p_lobby_filter). A listing names the map without its folder (the
+host's level name stripped: network_game_server_list), so a Custom Edition map's name is a stock map's to
+look at: one of the game's own maps is installed; so is a Custom Edition map this machine has under
+custom_maps\ that name. Any other can only be a Custom Edition map (the Gearbox-only maps are, as the
+game plays them), which this machine downloads as it joins if map downloads are on and it can run Custom
+Edition maps (its host shares it, as hosts do unless they turned it off: the listing does not say) */
 static int lobby_browser_map_state(char const *map)
 {
 	char const *const *names;
+	char level_name[CUSTOM_EDITION_MAXIMUM_LEVEL_NAME_LENGTH + 1];
 	short index;
 	short count;
 
@@ -4701,7 +4705,15 @@ static int lobby_browser_map_state(char const *map)
 		if (!_stricmp(scenario_name(names[index]), scenario_name(map)))
 			return P2P_LOBBY_MAP_INSTALLED;
 	}
-	return campaign_level_of(map) != NONE ? P2P_LOBBY_MAP_INSTALLED : P2P_LOBBY_MAP_MISSING;
+	if (campaign_level_of(map) != NONE)
+		return P2P_LOBBY_MAP_INSTALLED;
+	if (strlen(map) + sizeof(CUSTOM_EDITION_LEVEL_NAME_PREFIX) > sizeof(level_name))
+		return P2P_LOBBY_MAP_MISSING;
+	snprintf(level_name, sizeof(level_name), "%s%s", CUSTOM_EDITION_LEVEL_NAME_PREFIX, map);
+	if (custom_edition_maps_display_index(level_name) != NONE)
+		return P2P_LOBBY_MAP_INSTALLED;
+	return config_boolean("network.map_download") && halo_custom_edition_tag_cache() ? P2P_LOBBY_MAP_DOWNLOADABLE :
+		P2P_LOBBY_MAP_MISSING;
 }
 
 /* the settings' choices of games shown (the tab's source: source) */
@@ -4999,6 +5011,22 @@ static void lobby_browser_game_lines(struct p2p_listing const *game, wchar_t *pl
 	{
 		text_append(players, size, TICKER_SEPARATOR);
 		text_append_word(players, size, !game->open ? _browser_word_full : _browser_word_under_way);
+	}
+	/* (what the map is to this machine: nothing if it has it) */
+	{
+		int state = lobby_browser_map_state(game->map);
+
+		if (state != P2P_LOBBY_MAP_INSTALLED)
+		{
+			text_append(players, size, TICKER_SEPARATOR);
+			if (state == P2P_LOBBY_MAP_DOWNLOADABLE)
+				text_append(players, size, L"DOWNLOAD");
+			else
+			{
+				text_append(players, size, L"NEEDS ");
+				text_append(players, size, map);
+			}
+		}
 	}
 	rules[0] = 0;
 	if (game->network_version != HALO_PORT_NETWORK_VERSION)

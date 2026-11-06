@@ -98,6 +98,14 @@ each peer of a host */
 #define TUNNEL_IN_PROCESS "false"
 #endif
 
+/* network.map_seed's default: off on the Wii U, whose sockets and upload are few (port/wiiu/README.md, "The
+network"): it downloads maps, and sends the files it holds only as its host asks of it */
+#ifdef HALO_WIIU
+#define MAP_SEED "false"
+#else
+#define MAP_SEED "true"
+#endif
+
 /* debug.network_statistics's default: on the Wii U, whose network is the
 one still being measured */
 #ifdef HALO_WIIU
@@ -852,7 +860,7 @@ static const struct config_setting config_settings[] =
 		"Hosting: the most kilobytes a second the host sends of maps (16 to\n"
 		"20480: 20 MB/s), so that the game's own traffic keeps the rest of the\n"
 		"upload." },
-	{ "network.map_seed", _config_boolean, "true", "HALO_NET_MAP_SEED", _environment_value, _platform_all,
+	{ "network.map_seed", _config_boolean, MAP_SEED, "HALO_NET_MAP_SEED", _environment_value, _platform_all,
 		"Playing in another's game: help send its map to players who join\n"
 		"without it, as a torrent's peers do (the pieces this machine has, at\n"
 		"most network.map_seed_upload)." },
@@ -865,6 +873,11 @@ static const struct config_setting config_settings[] =
 		"download it (and the resource maps it needs) from the game's players\n"
 		"into custom_maps, if its host shares it (network.map_share); false\n"
 		"leaves the game, saying which map is missing." },
+	{ "network.map_download_limit", _config_integer, "0", "HALO_NET_MAP_DOWNLOAD_LIMIT", _environment_value,
+		_platform_all,
+		"Joining a game on a Custom Edition map this machine does not have: the\n"
+		"most megabytes a download may be (the map and the resource maps it\n"
+		"needs); a bigger one leaves the game, saying how big it is. 0: no limit." },
 	{ "network.coop_public", _config_boolean, "false", "HALO_NET_COOP_PUBLIC", _environment_value, _platform_all,
 		"Whether an online co-op game (Create Game > Internet, a SINGLEPLAYER\n"
 		"map) starts as PUBLIC or, false, PRIVATE: Server Setup's LISTING in\n"

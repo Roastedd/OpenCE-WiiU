@@ -493,6 +493,119 @@ boolean map_share_pieces_hashed(
 
 /* ---------- maps' hashes */
 
+#ifdef HALO_WIIU
+/* The Wii U keeps the maps' hashes it has found in a file beside them, so that a map it hashed or downloaded
+in an earlier run is not read through again on the game thread (a map of 100 MB takes the card ten seconds
+or more, and every game on a Custom Edition map asks for its version): one line a map, its hash in
+hexadecimal, its size, the time it was written and its file name; the last line of a name that holds the
+file's size and time is taken. A file with no time written (the card does not say) is hashed each run. */
+#define HASH_CACHE_FILE "map_hashes.txt"
+
+static boolean hash_cache_path(
+	char const *map_path,
+	char *cache_path,
+	long size)
+{
+	char const *slash = strrchr(map_path, '\\');
+	char const *other = strrchr(map_path, '/');
+	long folder_length;
+
+	if (other && (!slash || other > slash))
+		slash = other;
+	folder_length = slash ? (long)(slash - map_path) + 1 : 0;
+	if (folder_length + (long)sizeof(HASH_CACHE_FILE) > size)
+		return FALSE;
+	csmemcpy(cache_path, map_path, folder_length);
+	csstrncpy(cache_path + folder_length, HASH_CACHE_FILE, size - folder_length - 1);
+	cache_path[size - 1] = 0;
+	return TRUE;
+}
+
+static char const *hash_cache_name(
+	char const *map_path)
+{
+	char const *slash = strrchr(map_path, '\\');
+	char const *other = strrchr(map_path, '/');
+
+	if (other && (!slash || other > slash))
+		slash = other;
+	return slash ? slash + 1 : map_path;
+}
+
+/* the hash a map's file has in the cache file, if its size and time written are those it was found with */
+static boolean hash_cache_find(
+	char const *path,
+	unsigned long size,
+	unsigned long modified,
+	byte *hash)
+{
+	char cache_path[MAP_SHARE_PATH_SIZE];
+	char line[MAP_SHARE_PATH_SIZE + 2 * MAP_SHARE_HASH_BYTES + 32];
+	char const *name = hash_cache_name(path);
+	boolean found = FALSE;
+	FILE *stream;
+
+	if (!modified || !hash_cache_path(path, cache_path, sizeof(cache_path)) || !(stream = fopen(cache_path, "rb")))
+		return FALSE;
+	while (fgets(line, sizeof(line), stream))
+	{
+		byte parsed[MAP_SHARE_HASH_BYTES];
+		unsigned long line_size;
+		unsigned long line_modified;
+		char line_name[MAP_SHARE_PATH_SIZE];
+		short index;
+
+		line[strcspn(line, "\r\n")] = 0;
+		if (strlen(line) < 2 * MAP_SHARE_HASH_BYTES + 1 || line[2 * MAP_SHARE_HASH_BYTES] != ' ' ||
+			sscanf(line + 2 * MAP_SHARE_HASH_BYTES + 1, "%lu %lu %255[^\n]", &line_size, &line_modified, line_name) != 3 ||
+			csstrcasecmp(line_name, name) || line_size != size || line_modified != modified)
+		{
+			continue;
+		}
+		for (index = 0; index < MAP_SHARE_HASH_BYTES; index++)
+		{
+			unsigned int value;
+
+			if (sscanf(line + index * 2, "%2x", &value) != 1)
+				break;
+			parsed[index] = (byte)value;
+		}
+		if (index == MAP_SHARE_HASH_BYTES)
+		{
+			csmemcpy(hash, parsed, MAP_SHARE_HASH_BYTES);
+			found = TRUE;
+		}
+	}
+	fclose(stream);
+	return found;
+}
+
+static void hash_cache_store(
+	char const *path,
+	unsigned long size,
+	unsigned long modified,
+	byte const *hash)
+{
+	char cache_path[MAP_SHARE_PATH_SIZE];
+	byte known[MAP_SHARE_HASH_BYTES];
+	FILE *stream;
+	short index;
+
+	if (!modified || !hash_cache_path(path, cache_path, sizeof(cache_path)) ||
+		(hash_cache_find(path, size, modified, known) && !csmemcmp(known, hash, MAP_SHARE_HASH_BYTES)))
+	{
+		return;
+	}
+	stream = fopen(cache_path, "ab");
+	if (!stream)
+		return;
+	for (index = 0; index < MAP_SHARE_HASH_BYTES; index++)
+		fprintf(stream, "%02x", hash[index]);
+	fprintf(stream, " %lu %lu %s\r\n", size, modified, hash_cache_name(path));
+	fclose(stream);
+}
+#endif
+
 static struct known_hash *known_hash_find(
 	char const *path,
 	unsigned long size,
@@ -545,6 +658,9 @@ void map_share_map_hash_remember(
 		known->modified = modified;
 	}
 	csmemcpy(known->hash, hash, MAP_SHARE_HASH_BYTES);
+#ifdef HALO_WIIU
+	hash_cache_store(path, size, modified, hash);
+#endif
 }
 
 boolean map_share_map_hash(
@@ -579,7 +695,16 @@ boolean map_share_map_hash(
 			return TRUE;
 		}
 	}
-	/* (read here: a map takes a fraction of a second) */
+#ifdef HALO_WIIU
+	/* (found in an earlier run) */
+	if (hash_cache_find(path, size, modified, hash))
+	{
+		map_share_map_hash_remember(path, hash);
+		return TRUE;
+	}
+#endif
+	/* (read here: a map takes a fraction of a second on a desktop, the Wii U's card ten seconds or more
+	for a big one, once: hash_cache_store) */
 	csmemset(&job, 0, sizeof(job));
 	csstrncpy(job.path, path, sizeof(job.path) - 1);
 	hash_job_run(&job);

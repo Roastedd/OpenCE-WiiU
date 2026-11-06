@@ -47,6 +47,7 @@ what it says it has grows.
 #include "cseries/errors.h"
 #include "tag_files/tag_groups.h"
 #include "tag_files/tag_files.h"
+#include "bungie_net/common/thread.h"
 #include "bungie_net/network/transport.h"
 #include "bungie_net/network/transport_endpoint_winsock.h"
 #include "bungie_net/network/transport_address_constants.h"
@@ -90,6 +91,13 @@ boolean network_distributed_server_send_to_machine_reliably(long machine_index, 
 unsigned long network_game_server_machine_address(long machine_index);
 word network_game_server_get_state(struct network_game_server *server, short *substate);
 unsigned long system_milliseconds(void);
+void draw_quad(rectangle2d *rectangle, pixel32 color);
+/* (the platform layer's log: the Wii U's log.txt, where debug.txt is not read while the game runs) */
+void platform_log(char const *format, ...);
+#ifdef HALO_WIIU
+/* (port/wiiu/src/wiiu_card.c: the SD card's free bytes, which statvfs does not give) */
+int wiiu_card_free_bytes(unsigned long long *bytes);
+#endif
 
 /* ---------- constants */
 
@@ -168,6 +176,20 @@ enum
 	MINIMUM_UPLOAD_KILOBYTES = 16,
 	MAXIMUM_HOST_UPLOAD_KILOBYTES = 20480,
 	MAXIMUM_SEED_UPLOAD_KILOBYTES = 10240,
+
+	/* the card's room left past a download's files, so that it is never filled; the most a
+	download waits for the room to be known before it goes on; and the gap in this module's
+	updates (the console in the background, a long stall) after which the download's clocks
+	start again */
+	SPARE_BYTES = 32 << 20,
+	FREE_SPACE_TIMEOUT = 10000,
+	SUSPENDED_TIME = 5000,
+	/* the bytes a download has had before the time it has to go is told */
+	ESTIMATE_MINIMUM_BYTES = 1 << 20,
+	/* the Wii U's other sources of a download: its system gives a program 27 sockets and its
+	internet play about four peers (port/wiiu/README.md, "The network"), so it fetches from the host
+	alone over the internet, and from this many of a LAN's other machines */
+	WIIU_LAN_SOURCES = 2,
 
 	/* network_server_manager.c's host state in game, transport_endpoint_winsock.c's
 	stream endpoint and hud_messaging.c's centred text (their enums are their
@@ -355,6 +377,9 @@ struct download_file
 	char part_path[MAP_SHARE_PATH_SIZE];
 	char final_path[MAP_SHARE_PATH_SIZE];
 	FILE *stream;
+	/* the part file's length as written (a piece past it, on a file system that cannot be
+	written past its end, has the gap written with zeros first) */
+	unsigned long extent;
 };
 
 /* a machine the host named */
@@ -403,6 +428,15 @@ struct download
 	unsigned long last_window_bytes;
 	unsigned long last_window_time;
 	unsigned long logged_at;
+	/* the room the card must have for the files (their sizes and SPARE_BYTES), and whether it
+	has been looked at; the bytes the download had when its pieces began to come, and when */
+	unsigned long long space_needed;
+	boolean space_checked;
+	unsigned long started_at;
+	unsigned long started_bytes;
+	/* this module's last update, and the files being fetched this many megabytes at the last
+	log line (the progress shown in log.txt) */
+	unsigned long updated_at;
 };
 
 /* a piece asked of a connection */
@@ -1236,8 +1270,14 @@ static void listener_update(
 	void)
 {
 	struct map_share_globals *globals = &map_share_globals;
-	boolean want = map_share_network_game() &&
-		(map_share_sending() || globals->download.state == _download_transferring);
+	/* (the Wii U takes no connections for its download: it fetches from the machines it reaches, and its
+	sockets are few. It does for the files it sends, network.map_seed) */
+#ifdef HALO_WIIU
+	boolean downloading = FALSE;
+#else
+	boolean downloading = globals->download.state == _download_transferring;
+#endif
+	boolean want = map_share_network_game() && (map_share_sending() || downloading);
 	unsigned long now = system_milliseconds();
 
 	if (!want)
@@ -1272,6 +1312,68 @@ static void listener_update(
 			delete_transport_endpoint(globals->listener);
 			globals->listener = NULL;
 		}
+	}
+}
+
+/* ---------- the card's room */
+
+/* The card's free bytes are asked for on a thread of their own when a download is asked for: the Wii U's
+(FSAGetFreeSpaceSize) reads the card's allocation table, which can take a while on a big card, and the
+other platforms' is quick. The answer is checked against the files' sizes when both are known; a download
+whose room cannot be found out goes on, and one that does not fit fails before it writes a byte. The state
+is 0 not asked, 1 asking, 2 known, 3 not known. */
+static struct thread_reference *free_space_thread;
+static volatile long free_space_state;
+static unsigned long long free_space_bytes;
+static unsigned long free_space_asked_at;
+
+static boolean map_share_free_bytes(
+	unsigned long long *bytes)
+{
+#ifdef HALO_WIIU
+	return wiiu_card_free_bytes(bytes) != 0;
+#else
+	ULARGE_INTEGER available;
+	ULARGE_INTEGER total;
+	ULARGE_INTEGER total_free;
+
+	if (!GetDiskFreeSpaceExA(CUSTOM_EDITION_MAP_DIRECTORY, &available, &total, &total_free))
+		return FALSE;
+	*bytes = available.QuadPart;
+	return TRUE;
+#endif
+}
+
+static unsigned long __stdcall free_space_run(
+	void *input)
+{
+	unsigned long long bytes = 0;
+	boolean known = map_share_free_bytes(&bytes);
+
+	(void)input;
+	free_space_bytes = bytes;
+	free_space_state = known ? 2 : 3;
+	return 0;
+}
+
+static void free_space_ask(void)
+{
+	free_space_asked_at = system_milliseconds();
+	free_space_state = 1;
+	if (free_space_thread || !create_thread(1, free_space_run, NULL, &free_space_thread))
+	{
+		free_space_thread = NULL;
+		free_space_state = 3;
+	}
+}
+
+/* the thread collected once it has exited */
+static void free_space_update(void)
+{
+	if (free_space_thread && thread_has_exited(free_space_thread))
+	{
+		dispose_thread(free_space_thread);
+		free_space_thread = NULL;
 	}
 }
 
@@ -1379,6 +1481,7 @@ static void download_fail(
 	short index;
 
 	error(_error_silent, "map sharing: the download of %s failed: %s", download->level_name, reason);
+	platform_log("map download: %s failed: %s", download->level_name, reason);
 	snprintf(message, sizeof(message), "%s\r\n\r\n%s", download->message, reason);
 	for (index = 0; message[index] && index < NUMBEROF(text) - 1; index++)
 		text[index] = (wchar_t)(unsigned char)message[index];
@@ -1489,6 +1592,8 @@ boolean map_share_download_begin(
 		download->serial = ++serial;
 	}
 	download->state = _download_asking;
+	download->updated_at = system_milliseconds();
+	free_space_ask();
 	level_name_copy(download->level_name, level_name);
 	download->version = version;
 	csstrncpy(download->message, message ? message : "", sizeof(download->message) - 1);
@@ -1496,8 +1601,34 @@ boolean map_share_download_begin(
 	download->asked_at = system_milliseconds();
 	download->progress_at = download->asked_at;
 	error(_error_silent, "map sharing: asking the host for %s (files 0x%X)", level_name, (unsigned)wanted);
+	platform_log("map download: asking the host for %s (files 0x%X)", level_name, (unsigned)wanted);
 	download_ask();
 	return TRUE;
+}
+
+/* why map_share_download_begin did not take the level (appended to the message the player is shown, when the
+map is missing): the setting or the kind of build that stopped it, or nothing if it is none of these */
+void map_share_download_refusal(
+	char const *level_name,
+	unsigned long version,
+	char *message,
+	long size)
+{
+	char const *reason = NULL;
+	long length = (long)csstrlen(message);
+
+	if (!level_name || !custom_edition_level_name(level_name) || map_share_host() || strstr(message, "can't be played"))
+		return;
+	if (!config_boolean("network.map_download"))
+		reason = "Map downloads are off on this machine (network.map_download in config.toml).";
+	else if (!halo_custom_edition_tag_cache())
+		reason = "Custom Edition maps are off on this machine (game.custom_edition in config.toml), so the map cannot be downloaded.";
+	else if (!map_share_name_safe(tag_name_strip_path(level_name)))
+		reason = "The host's map has a name that cannot be a file name here, so it cannot be downloaded.";
+	else if (!version)
+		reason = "The host's build does not say which version of the map it plays, so it cannot be downloaded.";
+	if (reason && length + 8 < size)
+		snprintf(message + length, size - length, "\r\n\r\n%s", reason);
 }
 
 boolean map_share_downloading(
@@ -1539,6 +1670,7 @@ static boolean download_file_create(
 	file->stream = fopen(file->part_path, "r+b");
 	if (!file->stream)
 		return FALSE;
+	file->extent = 0;
 	file->state = _file_transferring;
 	return TRUE;
 }
@@ -1566,6 +1698,41 @@ static boolean download_file_open(
 		return TRUE;
 	}
 	return download_file_create(file);
+}
+
+/* whether the card has room for the download's files (and SPARE_BYTES past them), once both are known: if
+it has not, the download fails before it writes a byte, saying how much is needed. Called when the offer comes
+and each update until the room is known (or has not been in FREE_SPACE_TIMEOUT: the download goes on, and a
+write that fails still fails it, "is the disk full?"); TRUE if the download goes on. */
+static boolean download_space_check(void)
+{
+	struct download *download = &map_share_globals.download;
+	unsigned long now = system_milliseconds();
+	char reason[256];
+
+	if (download->space_checked || !download->space_needed)
+		return TRUE;
+	if (free_space_state == 1 && !elapsed(free_space_asked_at, now, FREE_SPACE_TIMEOUT))
+		return TRUE;
+	download->space_checked = TRUE;
+	if (free_space_state != 2)
+	{
+		error(_error_silent, "map sharing: the card's free space is not known: the download goes on");
+		platform_log("map download: the card's free space could not be read: going on");
+		return TRUE;
+	}
+	platform_log("map download: the card has %llu MB free, the files need %llu MB (and %d MB spare)",
+		free_space_bytes >> 20, (download->space_needed - SPARE_BYTES) >> 20, (int)(SPARE_BYTES >> 20));
+	if (free_space_bytes < download->space_needed)
+	{
+		snprintf(reason, sizeof(reason),
+			"There is not enough room on the card: the map is %lu MB to download and %lu MB is free (%d MB must stay free).",
+			(unsigned long)((download->space_needed - SPARE_BYTES + 0xFFFFF) >> 20),
+			(unsigned long)(free_space_bytes >> 20), (int)(SPARE_BYTES >> 20));
+		download_fail(reason);
+		return FALSE;
+	}
+	return TRUE;
 }
 
 /* the host's offer: the files to fetch */
@@ -1652,6 +1819,25 @@ static void download_offered(
 	download->offered_at = download->progress_at;
 	error(_error_silent, "map sharing: downloading %s, %d files, %lu bytes", download->level_name,
 		(int)download->file_count, download->total_bytes);
+	platform_log("map download: %s, %d files, %lu MB", download->level_name, (int)download->file_count,
+		download->total_bytes >> 20);
+	{
+		long limit = config_integer("network.map_download_limit");
+
+		/* (network.map_download_limit: the most megabytes a download may be; 0 no limit) */
+		if (limit > 0 && (unsigned long long)download->total_bytes > (unsigned long long)limit << 20)
+		{
+			char reason[256];
+
+			snprintf(reason, sizeof(reason),
+				"The map is %lu MB to download, more than network.map_download_limit allows (%ld MB).",
+				(download->total_bytes + 0xFFFFF) >> 20, limit);
+			download_fail(reason);
+			return;
+		}
+	}
+	download->space_needed = (unsigned long long)download->total_bytes + SPARE_BYTES;
+	download_space_check();
 }
 
 /* the host's sources: the client's to reach */
@@ -1735,6 +1921,20 @@ static boolean source_address(
 	return TRUE;
 }
 
+/* the machines besides the host that a download reaches at once. The Wii U has 27 sockets to share between
+the game's own and these, and about four internet play peers: it fetches from the host alone over the
+internet, and from a couple of a LAN's machines */
+static short download_sources_allowed(
+	boolean internet)
+{
+#ifdef HALO_WIIU
+	return internet ? 0 : WIIU_LAN_SOURCES;
+#else
+	(void)internet;
+	return MAXIMUM_OUTGOING;
+#endif
+}
+
 /* the sources reached: the host, and up to MAXIMUM_OUTGOING others */
 static void download_reach_sources(
 	void)
@@ -1750,7 +1950,7 @@ static void download_reach_sources(
 
 	for (index = 0; index < MAXIMUM_CONNECTIONS; index++)
 		outgoing += globals->connections[index].used && globals->connections[index].outgoing;
-	for (index = 0; index < download->source_count && outgoing < MAXIMUM_OUTGOING + 1; index++)
+	for (index = 0; index < download->source_count && outgoing < download_sources_allowed(internet) + 1; index++)
 	{
 		struct source *source = &download->sources[index];
 		struct connection *connection;
@@ -1790,6 +1990,39 @@ static void download_reach_sources(
 	}
 }
 
+/* The part file made long enough for a piece to be written at `offset`. Pieces come in any order, and
+a piece past the file's end is written there with a seek: the Wii U's card (Cafe OS's FAT) is not known to
+take a position past the end of a file, and cannot be lengthened by a truncation (posix_files.c), so on the
+Wii U a gap is written with zeros first. (Its pieces are asked for in order, piece_choose, so a gap is a few
+pieces at most.) Elsewhere the file system does as the seek says. */
+static boolean download_file_extend(
+	struct download_file *file,
+	unsigned long offset)
+{
+#ifdef HALO_WIIU
+	static byte const zeros[0x4000];
+
+	if (offset > file->extent)
+	{
+		if (fseek(file->stream, (long)file->extent, SEEK_SET) != 0)
+			return FALSE;
+		while (file->extent < offset)
+		{
+			unsigned long bytes = MIN((unsigned long)sizeof(zeros), offset - file->extent);
+
+			if (fwrite(zeros, 1, bytes, file->stream) != bytes)
+				return FALSE;
+			file->extent += bytes;
+		}
+	}
+	return TRUE;
+#else
+	(void)file;
+	(void)offset;
+	return TRUE;
+#endif
+}
+
 /* a piece had: written, told to every connection about its file */
 static void download_piece_had(
 	short file_index,
@@ -1805,11 +2038,18 @@ static void download_piece_had(
 
 	if (file->have[piece >> 3] & (1 << (piece & 7)))
 		return;
-	if (!file->stream || fseek(file->stream, (long)offset, SEEK_SET) != 0 ||
+	if (!file->stream || !download_file_extend(file, offset) || fseek(file->stream, (long)offset, SEEK_SET) != 0 ||
 		fwrite(data, 1, bytes, file->stream) != bytes)
 	{
 		download_fail("The map could not be written (is the disk full?).");
 		return;
+	}
+	if (offset + bytes > file->extent)
+		file->extent = offset + bytes;
+	if (!download->started_at)
+	{
+		download->started_at = system_milliseconds();
+		download->started_bytes = download->done_bytes;
 	}
 	file->have[piece >> 3] |= (byte)(1 << (piece & 7));
 	file->have_count++;
@@ -2006,6 +2246,8 @@ static void download_finish(
 		return;
 	}
 	error(_error_silent, "map sharing: downloaded %s (%lu bytes)", download->level_name, download->done_bytes);
+	platform_log("map download: %s done, %lu bytes in %lu seconds", download->level_name, download->done_bytes,
+		download->started_at ? (system_milliseconds() - download->started_at) / 1000 : 0UL);
 	/* (its scripts held to tighter rules: downloaded_maps_mark) */
 	for (index = 0; index < download->file_count; index++)
 	{
@@ -2048,6 +2290,10 @@ static long piece_choose(
 	/* (from a random place, so the machines downloading ask for different
 	pieces of the same rarity) */
 	start = (long)(((unsigned long)rand() << 15 ^ (unsigned long)rand()) % (unsigned long)file->piece_count);
+#ifdef HALO_WIIU
+	/* (in order, so that the part file grows from its end: download_file_extend) */
+	start = 0;
+#endif
 	for (step = 0; step < file->piece_count; step++)
 	{
 		long piece = (start + step) % file->piece_count;
@@ -2941,12 +3187,33 @@ static void download_update(
 		download_end(FALSE);
 		return;
 	}
+	/* (this module not updated for a while: the console was in the background, or the game thread held
+	for long. The clocks the download's failures are counted by start again, rather than failing it on the
+	first update after, the connections it lost made again) */
+	if (download->updated_at && elapsed(download->updated_at, now, SUSPENDED_TIME))
+	{
+		error(_error_silent, "map sharing: not updated for %lu ms: the download's timeouts start again",
+			now - download->updated_at);
+		platform_log("map download: not updated for %lu ms: its timeouts start again", now - download->updated_at);
+		download->asked_at = now;
+		download->progress_at = now;
+		download->window_at = now;
+		download->window_bytes = 0;
+		if (download->state == _download_transferring)
+		{
+			for (index = 0; index < download->source_count; index++)
+				download->sources[index].tried_at = 0;
+		}
+	}
+	download->updated_at = now;
 	if (download->state == _download_asking)
 	{
 		if (elapsed(download->asked_at, now, OFFER_TIMEOUT))
 			download_fail("The host did not answer the request for the map.");
 		return;
 	}
+	if (!download_space_check())
+		return;
 	for (index = 0; index < download->file_count; index++)
 	{
 		struct download_file *file = &download->files[index];
@@ -2964,6 +3231,7 @@ static void download_update(
 			it reaches, the last of them perhaps cut short and not taken) */
 			file->stream = piece_hashes && piece_count <= file->piece_count && size <= file->size ?
 				fopen(file->part_path, "r+b") : NULL;
+			file->extent = file->stream ? size : 0;
 			for (piece = 0; file->stream && piece < piece_count; piece++)
 			{
 				if (!csmemcmp(piece_hashes + piece * MAP_SHARE_HASH_BYTES, file->piece_hashes + piece * MAP_SHARE_HASH_BYTES,
@@ -3025,6 +3293,9 @@ static void download_update(
 		error(_error_silent, "map sharing: %lu of %lu bytes, %d connections, %lu bytes a second",
 			download->done_bytes, download->total_bytes, (int)connections,
 			download->last_window_time ? download->last_window_bytes * 1000 / download->last_window_time : 0);
+		platform_log("map download: %lu of %lu MB, %d connections, %lu KB/s", download->done_bytes >> 20,
+			download->total_bytes >> 20, (int)connections,
+			download->last_window_time ? download->last_window_bytes / download->last_window_time : 0);
 	}
 	if (elapsed(download->window_at, now, RATE_WINDOW))
 	{
@@ -3526,6 +3797,7 @@ void map_share_update(
 	short index;
 
 	map_share_files_update();
+	free_space_update();
 	/* (internet play: a player that shares answers the others, who reach it
 	by its key hash) */
 	p2p_set_answering_players(!map_share_host() && address_internet(host_address) && map_share_sending());
@@ -3556,22 +3828,76 @@ void map_share_update(
 	serve_blocks();
 }
 
+/* the time a download has to go, in words ("about 3 min", "under a minute"), or none yet */
+static void download_time_left(
+	char *text,
+	long size)
+{
+	struct download const *download = &map_share_globals.download;
+	unsigned long rate = download->last_window_time ? download->last_window_bytes * 1000 / download->last_window_time : 0;
+	unsigned long left = download->total_bytes > download->done_bytes ? download->total_bytes - download->done_bytes : 0;
+	unsigned long seconds;
+
+	text[0] = 0;
+	if (!rate || download->done_bytes - download->started_bytes < ESTIMATE_MINIMUM_BYTES)
+		return;
+	seconds = left / rate;
+	if (seconds < 60)
+		snprintf(text, size, ", under a minute left");
+	else if (seconds < 3600)
+		snprintf(text, size, ", about %lu min left", (seconds + 30) / 60);
+	else
+		snprintf(text, size, ", about %lu h %lu min left", seconds / 3600, (seconds % 3600 + 30) / 60);
+}
+
+/* the name of the file being fetched (the first not whole), and its place among the files */
+static void download_current_file(
+	char *text,
+	long size)
+{
+	struct download const *download = &map_share_globals.download;
+	short index;
+
+	text[0] = 0;
+	for (index = 0; index < download->file_count && download->files[index].state == _file_complete; index++)
+		;
+	if (index == download->file_count || download->file_count < 2)
+		return;
+	snprintf(text, size, "file %d of %d: %s%s", (int)index + 1, (int)download->file_count,
+		download->files[index].kind == _map_share_file_map ? "the map" :
+		resource_map_type_describe((enum resource_map_type)download->files[index].kind),
+		download->files[index].kind == _map_share_file_map ? "" : ".map");
+}
+
+/* The download's progress over the screen, at the top, on a dark band so that it reads over any menu (the
+lobby's, the game's loading) at 480 lines as at 720 (the font is the interface's terminal font, scaled with
+the screen): a line naming the map and the files, a bar, and a line of percent, size, speed and time left. */
 void map_share_render(
 	void)
 {
 	struct download *download = &map_share_globals.download;
 	long font_tag_index;
+	struct font_header *font;
+	short line_height;
 	real_argb_color color = { 1.0f, 1.0f, 1.0f, 1.0f };
 	rectangle2d bounds;
-	char text[160];
+	rectangle2d band;
+	char text[200];
+	char detail[64];
+	char file[96];
 	char const *name;
 	short base_length;
-	long percent;
+	long percent = 0;
+	short lines = 1;
 
 	if (download->state != _download_asking && download->state != _download_transferring)
 		return;
 	font_tag_index = interface_get_tag_index(_interface_font_terminal);
 	if (font_tag_index == NONE)
+		return;
+	font = font_definition_get(font_tag_index);
+	line_height = (short)(font->ascending_height + font->descending_height + font->leading_height);
+	if (line_height <= 0)
 		return;
 	name = tag_name_strip_path(download->level_name);
 	base_length = map_share_name_base_length(name);
@@ -3593,16 +3919,45 @@ void map_share_render(
 			sources += connection->used && connection->state == _connection_open && connection->hello_heard;
 		}
 		percent = download->total_bytes ? (long)(download->done_bytes / (download->total_bytes / 100 + 1)) : 0;
-		snprintf(text, sizeof(text), "Downloading the map %.*s: %ld%% of %lu MB from %d player%s, %lu KB/s",
-			(int)base_length, name, MIN(percent, 100), (download->total_bytes + 0x80000) >> 20, (int)sources,
-			sources == 1 ? "" : "s", rate >> 10);
+		download_current_file(file, sizeof(file));
+		download_time_left(detail, sizeof(detail));
+		snprintf(text, sizeof(text), "Downloading the map %.*s%s%s", (int)base_length, name, file[0] ? ", " : "", file);
+		lines = 2;
+		/* (the second line, below) */
+		snprintf(file, sizeof(file), "%ld%% of %lu MB, from %d player%s at %lu KB/s%s", MIN(percent, 100),
+			(download->total_bytes + 0x80000) >> 20, (int)sources, sources == 1 ? "" : "s", rate >> 10, detail);
 	}
-	/* (at the top of the screen, above the menus' safe area, where the
-	lobby's title is) */
 	bounds = render.camera.window_bounds;
 	offset_rectangle2d(&bounds, -render.camera.viewport_bounds.x0, -render.camera.viewport_bounds.y0);
-	bounds.y0 = 4;
-	bounds.y1 = 22;
+	/* (the band, the width of the screen less a margin each side, behind the lines and the bar) */
+	band.x0 = (short)(bounds.x0 + (bounds.x1 - bounds.x0) / 16);
+	band.x1 = (short)(bounds.x1 - (bounds.x1 - bounds.x0) / 16);
+	band.y0 = 2;
+	band.y1 = (short)(band.y0 + 4 + line_height * lines + (lines > 1 ? 8 : 0));
+	draw_quad(&band, 0xC0000000);
+	if (lines > 1)
+	{
+		/* (the bar: its track, and what has come) */
+		rectangle2d bar;
+
+		bar.x0 = (short)(band.x0 + 6);
+		bar.x1 = (short)(band.x1 - 6);
+		bar.y0 = (short)(band.y0 + 2 + line_height + 1);
+		bar.y1 = (short)(bar.y0 + 4);
+		draw_quad(&bar, 0xFF303030);
+		bar.x1 = (short)(bar.x0 + (long)(bar.x1 - bar.x0) * MIN(percent, 100) / 100);
+		draw_quad(&bar, 0xFF30B0FF);
+	}
 	draw_string_set_draw_mode(font_tag_index, NONE, _map_share_text_centered, 0, &color);
+	bounds.x0 = band.x0;
+	bounds.x1 = band.x1;
+	bounds.y0 = (short)(band.y0 + 2);
+	bounds.y1 = (short)(bounds.y0 + line_height);
 	rasterizer_draw_string(&bounds, NULL, NULL, 0, text);
+	if (lines > 1)
+	{
+		bounds.y0 = (short)(band.y0 + 2 + line_height + 8);
+		bounds.y1 = (short)(bounds.y0 + line_height);
+		rasterizer_draw_string(&bounds, NULL, NULL, 0, file);
+	}
 }
