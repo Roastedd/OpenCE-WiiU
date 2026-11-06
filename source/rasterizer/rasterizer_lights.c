@@ -103,6 +103,7 @@ symbols in this file:
 #include "rasterizer/xbox/rasterizer_xbox.h"
 #include "main/main.h"
 #include "view_fov.h" /* port: port/linux/game/view_fov.c */
+#include "render_governor.h" /* port: port/linux/game/render_governor.c */
 
 /* ---------- constants */
 
@@ -936,6 +937,7 @@ void rasterizer_lens_flares_draw(
 	{
 		short lens_flare_index;
 
+		render_governor_counts[RENDER_GOVERNOR_COUNT_LENS_FLARES] += (unsigned long)local_lens_flare_count;
 		rasterizer_widget_begin(_widget_type_internal_sprite, 0);
 
 		for (lens_flare_index = 0; lens_flare_index < local_lens_flare_count; lens_flare_index++)

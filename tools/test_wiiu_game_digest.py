@@ -10,7 +10,7 @@ build draw every frame of the game the same. A change to the rendering that keep
 the first tick it changes (tools/wiiu/digest_compare.py, which also compares the traces' lines, and in any order within a frame or a span).
 
     tools/test_wiiu_game_digest.py build [--name NAME] [--rev REV] [--mutate PATH BEFORE AFTER]... [--poison]
-    tools/test_wiiu_game_digest.py run RUN [--name NAME] [--poison] [--ticks N] [--trace FIRST-LAST|all] [--detail TICK] [--random] [--mode host|local|solo|solo-bloodgulch|solo-deathless|menu|menu-cycle|menu-campaign|menu-solo]
+    tools/test_wiiu_game_digest.py run RUN [--name NAME] [--poison] [--ticks N] [--trace FIRST-LAST|all] [--detail TICK] [--random] [--level NAME [--init LINE]... [--cues "SECOND LINE|..."]] [--mode host|local|solo|solo-bloodgulch|solo-deathless|menu|menu-cycle|menu-campaign|menu-solo]
     tools/test_wiiu_game_digest.py compare RUN_A RUN_B [digest_compare.py's options]
     GAME_DIGEST=1 python3 -m unittest tools.test_wiiu_game_digest      (GAME_DIGEST_TICKS: the ticks each run plays, 300 by default)
 
@@ -20,6 +20,12 @@ init.txt; it opens with a cinematic of about 1,070 ticks), solo-bloodgulch (a mu
 cheat_deathless_player and cheat_infinite_ammo, so that the fight goes on). HALO_TICK_* in the environment, and GAME_DIGEST_ENV="NAME=VALUE,NAME=VALUE" for the others
 (HALO_RENDER_REPEAT=3), go to the game. menu, menu-cycle and menu-campaign are the main menu and the way back to it (a game started from it, the main menu
 again, and so on: network_test.c's solo: and its main_menu cue); their --ticks counts frames.
+
+--level NAME plays a stock level (a10 ... d40, or a multiplayer map's name) as a game of one player, with --init's lines of init.txt before its map_name (cheats) and --cues "<second> <console
+line>|..." run from the first tick (debug.network_test_cues; a console line has no outer parentheses). GAME_DIGEST_SCENE="GROUP:tag name:COUNT|..." makes objects in front of a fixed
+camera (port/wiiu/tests/game_digest/game_digest_scene.c has its settings), GAME_DIGEST_PASSES=1 counts the draws of each render pass, GAME_DIGEST_KEYS=/out/keys.txt writes the pixel keys,
+GAME_DIGEST_READS=/out/reads.txt the map's reads, GAME_DIGEST_DOCKER_ARGS more arguments of docker run (a sampling profiler's folder) and GAME_DIGEST_CONTAINER_PREFIX a name for the
+containers (all through GAME_DIGEST_ENV or the environment). reports/research/2026-11-04/banshee.md used them.
 
 A build named here (the default) is this checkout's; another is a copy of the sources in build/game-digest/trees/NAME, of this checkout's files or of
 a commit's (--rev, git archive), with this checkout's game digest folder over it (a branch before it has none) and --mutate's changes made in it
@@ -36,6 +42,7 @@ tool's, on made-up runs, always run.
 import argparse
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -48,7 +55,8 @@ import digest_compare  # noqa: E402
 
 IMAGE = "opence-ppc-be"
 DIGEST = ROOT / "build" / "game-digest"
-HARNESS = ["port/wiiu/tests/game_digest/build.py", "port/wiiu/tests/game_digest/game_digest_glue.c", "port/wiiu/tests/game_digest/game_digest_padding.c"]
+HARNESS = ["port/wiiu/tests/game_digest/build.py", "port/wiiu/tests/game_digest/game_digest_glue.c", "port/wiiu/tests/game_digest/game_digest_padding.c",
+           "port/wiiu/tests/game_digest/game_digest_scene.c"]
 # the host runs' settings (runs/host-mac-perf-20261031/ticks/baseline-ppc-command.json), without the null renderer and debug.exit_after: the
 # layer draws, and the glue ends the run at its tick
 GAME_ENVIRONMENT = {
@@ -157,20 +165,34 @@ def build(name: str = "here", rev: str = None, mutations=(), poison: bool = Fals
     return program
 
 
-def start(program: Path, run: str, ticks: int, trace: str = None, detail: str = None, random: bool = False, mode: str = "host", extra: dict = None):
+def level_path(level: str) -> str:
+    """the scenario path of a stock level by its map's name: the campaign's levels\\a10\\a10, the multiplayer maps' levels\\test\\bloodgulch\\bloodgulch"""
+    campaign = {"a10", "a30", "a50", "b30", "b40", "c10", "c20", "c40", "d20", "d40"}
+    return f"levels\\{level}\\{level}" if level in campaign else f"levels\\test\\{level}\\{level}"
+
+
+def start(program: Path, run: str, ticks: int, trace: str = None, detail: str = None, random: bool = False, mode: str = "host", level: str = None,
+          init: tuple = (), cues: str = None, extra: dict = None):
     """a run of the program to the frame of the game at tick ticks, in build/game-digest/runs/RUN, started; (its process, its folder)"""
     folder = DIGEST / "runs" / run
     shutil.rmtree(folder, ignore_errors=True)
     (folder / "data").mkdir(parents=True)
     (folder / "out").mkdir()
     (folder / "data" / "empty-brokers.txt").write_text("")
-    if mode in SOLO_INIT:
+    if level:
+        # (a stock level as a game of one player, with the lines of init.txt before its map_name: cheats, a game variant)
+        mode = "solo"
+        (folder / "data" / "init.txt").write_text("".join(line + "\n" for line in init) + f"map_name {level_path(level)}\n")
+    elif mode in SOLO_INIT:
         (folder / "data" / "init.txt").write_text(SOLO_INIT[mode])
     environment = dict(GAME_ENVIRONMENT, HALO_NETWORK_TEST=MODES[mode], GAME_DIGEST_DIR="/out", GAME_DIGEST_TICKS=str(ticks),
                        GAME_DIGEST_TRACE={None: "0", "all": "1"}.get(trace, trace), GAME_DIGEST_DETAIL=detail or "",
                        GAME_DIGEST_RANDOM="1" if random else "0")
     if mode in MENU_MODES:
         environment.update(GAME_DIGEST_TICKS="0", GAME_DIGEST_FRAMES=str(ticks), HALO_NETWORK_TEST_CUES=MENU_CUES.get(mode, ""))
+    if cues:
+        # (debug.network_test_cues: "<second> <console line>|...", from the first tick the player has a unit)
+        environment["HALO_NETWORK_TEST_CUES"] = cues
     # (the tick owners' settings of the environment, to compare the switch on and off: HALO_TICK_*)
     environment.update({key: value for key, value in os.environ.items() if key.startswith("HALO_TICK_")})
     # (and any others, "NAME=VALUE,NAME=VALUE": the render probe's HALO_RENDER_REPEAT=3)
@@ -179,10 +201,14 @@ def start(program: Path, run: str, ticks: int, trace: str = None, detail: str = 
         environment[key] = value
     # (a run's own settings, over the rest: PLAIN is the build with none of the smooth defaults, whatever the map)
     environment.update(extra or {})
-    command = ["docker", "run", "--rm", "--network", "none", "--ulimit", "core=0", "-v", f"{program}:/program:ro", "-v", f"{folder / 'data'}:/data",
+    # (GAME_DIGEST_CONTAINER_PREFIX: the container is named PREFIX+RUN, so that a session's own runs can be told from others)
+    named = ["--name", os.environ["GAME_DIGEST_CONTAINER_PREFIX"] + run] if os.environ.get("GAME_DIGEST_CONTAINER_PREFIX") else []
+    command = ["docker", "run", "--rm", *named, "--network", "none", "--ulimit", "core=0", "-v", f"{program}:/program:ro", "-v", f"{folder / 'data'}:/data",
                "-v", f"{folder / 'out'}:/out", "-v", f"{maps_folder()}:/data/maps:ro", "-w", "/data"]
     for key, value in environment.items():
         command += ["-e", f"{key}={value}"]
+    # (GAME_DIGEST_DOCKER_ARGS: more arguments of docker run, such as -v for a sampling profiler's folder)
+    command += shlex.split(os.environ.get("GAME_DIGEST_DOCKER_ARGS", ""))
     command += [IMAGE, "timeout", "-s", "KILL", str(600 + ticks), "qemu-ppc", "-cpu", "750", "-L", "/usr/powerpc-linux-gnu", "/program/halo",
                 "--config", "/data/config.toml"]
     stderr = open(folder / "out" / "stderr.txt", "w")
@@ -398,6 +424,9 @@ def main() -> int:
     run_parser.add_argument("--detail", help="TICK, fFRAME or fFIRST-LAST: those frames' constants and formats to detail.txt")
     run_parser.add_argument("--random", action="store_true", help="each frame's callers of the local random numbers to random.txt")
     run_parser.add_argument("--mode", choices=sorted(MODES), default="host")
+    run_parser.add_argument("--level", help="play this stock level (a10 ... d40, bloodgulch ...) as a game of one player (the solo mode's, with --init's lines)")
+    run_parser.add_argument("--init", action="append", default=[], help="a line of init.txt before the map_name (--level), such as cheat_deathless_player 1")
+    run_parser.add_argument("--cues", help="debug.network_test_cues: <second> <console line>, joined with |")
     compare_parser = commands.add_parser("compare", help="tools/wiiu/digest_compare.py on two runs (names under build/game-digest/runs, or folders)")
     compare_parser.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -406,7 +435,7 @@ def main() -> int:
         return 0
     if args.command == "run":
         program = (ROOT if args.name == "here" else DIGEST / "trees" / args.name) / "build" / ("game-digest-poison" if args.poison else "game-digest")
-        summary = finish(*start(program, args.run, args.ticks, args.trace, args.detail, args.random, args.mode))
+        summary = finish(*start(program, args.run, args.ticks, args.trace, args.detail, args.random, args.mode, args.level, tuple(args.init), args.cues))
         print(" ".join(f"{name} {value}" for name, value in summary.items()))
         return 0
     arguments = [str(DIGEST / "runs" / a / "out") if not a.startswith("-") and not Path(a).exists() and (DIGEST / "runs" / a).is_dir() else a

@@ -424,6 +424,10 @@ static void governor_log(double now_ms)
 		delta[RENDER_GOVERNOR_COUNT_SHADOWS_DRAWN] / frames, delta[RENDER_GOVERNOR_COUNT_SHADOWS_SKIPPED] / frames,
 		delta[RENDER_GOVERNOR_COUNT_DECALS_DRAWN] / frames, delta[RENDER_GOVERNOR_COUNT_DECALS_SKIPPED] / frames,
 		delta[RENDER_GOVERNOR_COUNT_PARTICLES_DRAWN] / frames, delta[RENDER_GOVERNOR_COUNT_PARTICLES_SKIPPED] / frames);
+	platform_log("governor: drawn by kind a frame: vehicles %.1f, bipeds %.1f, projectiles %.1f, lens flares %.1f, contrails %.1f (%.0f points)",
+		delta[RENDER_GOVERNOR_COUNT_VEHICLES_DRAWN] / frames, delta[RENDER_GOVERNOR_COUNT_BIPEDS_DRAWN] / frames,
+		delta[RENDER_GOVERNOR_COUNT_PROJECTILES_DRAWN] / frames, delta[RENDER_GOVERNOR_COUNT_LENS_FLARES] / frames,
+		delta[RENDER_GOVERNOR_COUNT_CONTRAILS_DRAWN] / frames, delta[RENDER_GOVERNOR_COUNT_CONTRAIL_POINTS] / frames);
 	governor.log_work = governor.log_tick = governor.log_render = governor.log_worst = 0.0;
 	governor.frames_in_log = 0;
 	governor.last_log = now_ms;

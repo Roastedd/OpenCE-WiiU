@@ -752,9 +752,34 @@ short __real_cache_file_read(long tag_index, long offset, long size, void *buffe
 
 static int stream_free(void);
 
+/* GAME_DIGEST_READS=path: a line for every read of the map's tags (bitmap pixels, sound samples): the frame, the tag index, the offset and the size, so that what a scene
+first draws costs in reads (the card gives about 14 MB a second for big reads and takes 4 ms for a small one) can be counted; nothing is written when it is not set */
+static void reads_note(long tag_index, long offset, long size)
+{
+	static int tried;
+	static FILE *file;
+
+	if (!tried)
+	{
+		const char *path = getenv("GAME_DIGEST_READS");
+
+		tried = 1;
+		if (path && *path)
+			file = fopen(path, "w");
+	}
+	if (file)
+	{
+		fprintf(file, "frame %lu tag %ld offset %ld size %ld\n", (unsigned long)clock_frames, tag_index, offset, size);
+		fflush(file);
+	}
+}
+
 short __wrap_cache_file_read(long tag_index, long offset, long size, void *buffer, unsigned char *completion, unsigned char blocking)
 {
-	short request = __real_cache_file_read(tag_index, offset, size, buffer, completion, blocking);
+	short request;
+
+	reads_note(tag_index, offset, size);
+	request = __real_cache_file_read(tag_index, offset, size, buffer, completion, blocking);
 
 	unsigned long spins = 0;
 
@@ -873,17 +898,22 @@ void __wrap_rasterizer_set_model_lighting(const void *lighting)
 	__real_rasterizer_set_model_lighting(lighting);
 }
 
-#ifdef GAME_DIGEST_POISON
+/* the scene (game_digest_scene.c) gives a frame its fixed camera before it is drawn, when GAME_DIGEST_SCENE says so; with --poison the frame's
+rendering has its stack filled first */
+void game_digest_scene_render_frame(void *windows, short window_count);
+
 void __real_render_frame(void *windows, short window_count, const void *screenshot_page_index, const void *screenshot_index, void *bitmap,
 	float time_delta_since_tick);
 
 void __wrap_render_frame(void *windows, short window_count, const void *screenshot_page_index, const void *screenshot_index, void *bitmap,
 	float time_delta_since_tick)
 {
+#ifdef GAME_DIGEST_POISON
 	stack_fill(0xa5);
+#endif
+	game_digest_scene_render_frame(windows, window_count);
 	__real_render_frame(windows, window_count, screenshot_page_index, screenshot_index, bitmap, time_delta_since_tick);
 }
-#endif
 
 /* ---------- the GX2 thread's and the console platform's answers (replay_world.c's, and the console's defaults) */
 
