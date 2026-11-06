@@ -8,9 +8,10 @@
 - splash-tv.png, 1280x720, shown on the TV while the app starts (--tv-image);
 - splash-drc.png, 854x480, shown on the GamePad meanwhile (--drc-image).
 
-The art is the port's own and made here from shapes and text, so that the file can be made again: a hexagon with "CE" in it (Combat Evolved),
-on a dark gradient; the title is set in Overpass (port/assets/fonts, SIL Open Font License 1.1). It uses no picture of the game, of its
-characters or of its logo, which belong to Microsoft; the splash screens say that the port is unofficial and needs the player's own copy.
+The look is the Wii U's own shell: a clean white and pale-blue picture with soft round shapes, a glossy blue-and-teal ring (a ring world, drawn here from
+circles and gradients: it is not the game's logo or any picture of the game, which belong to Microsoft) with "CE" (Combat Evolved) in it, a bold title with a
+thick rounded outline, and a pill for the subtitle. The title is set in Overpass (port/assets/fonts, SIL Open Font License 1.1); the outline is drawn by
+Pillow's stroke, which has round joins. The splash screens say that the port is unofficial and needs the player's own copy.
 Needs Pillow only (no NumPy); every shape is drawn by Pillow's own rasteriser at four times the size and scaled down with LANCZOS, so another Pillow
 version may differ by a level or two at an edge (--check allows a mean difference of half a level).
 """
@@ -20,7 +21,7 @@ import math
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageStat
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageStat
 
 ROOT = Path(__file__).resolve().parent.parent
 META = ROOT / "port/wiiu/meta"
@@ -32,13 +33,15 @@ TITLE = "OPENCE-U"
 SUBTITLE = "Halo: Combat Evolved for Wii U"
 NOTICE = "Unofficial fan port. Not made, endorsed or supported by Microsoft or the game's makers. It needs your own copy of the game."
 
-SKY_TOP = (13, 38, 66)
-SKY_BOTTOM = (3, 10, 20)
-ACCENT_LIGHT = (96, 232, 214)
-ACCENT_DARK = (18, 148, 160)
-FACE = (6, 20, 34)
-WHITE = (244, 250, 252)
-MUTED = (150, 178, 196)
+PAPER_TOP = (252, 254, 255)
+PAPER_BOTTOM = (206, 232, 248)
+RING_LIGHT = (96, 226, 236)
+RING_DARK = (16, 84, 196)
+INK = (14, 70, 150)
+OUTLINE = (24, 128, 220)
+WHITE = (255, 255, 255)
+MUTED = (84, 118, 150)
+PILL = (230, 244, 252)
 SCALE = 4
 
 
@@ -51,12 +54,6 @@ def gradient(size, top, bottom):
         t = y / max(1, height - 1)
         draw.line([(0, y), (width, y)], fill=tuple(round(top[c] + (bottom[c] - top[c]) * t) for c in range(3)))
     return image
-
-
-def hexagon(centre, radius, turn=90.0):
-    """the corners of a regular hexagon, one pointing up (turn 90)"""
-    return [(centre[0] + radius * math.cos(math.radians(turn + 60 * i)),
-             centre[1] - radius * math.sin(math.radians(turn + 60 * i))) for i in range(6)]
 
 
 def text_width(font, text, spacing):
@@ -72,74 +69,145 @@ def draw_text(draw, anchor, text, font, fill, spacing=0.0, align="left"):
         x += font.getlength(letter) + spacing
 
 
-def emblem(image, centre, radius):
-    """the badge: a hexagon in the accent's gradient, a dark face inside it, "CE" on the face and two chevrons under it"""
-    draw = ImageDraw.Draw(image)
-    outer = hexagon(centre, radius)
-    # (the rim: the accent's gradient, light at the top)
-    rim = gradient(image.size, ACCENT_LIGHT, ACCENT_DARK)
-    mask = Image.new("L", image.size, 0)
-    ImageDraw.Draw(mask).polygon(outer, fill=255)
-    image.paste(rim, (0, 0), mask)
-    draw.polygon(hexagon(centre, radius * 0.86), fill=FACE)
-    draw.polygon(hexagon(centre, radius * 0.80), outline=ACCENT_DARK, width=max(1, round(radius * 0.02)))
-    font = ImageFont.truetype(str(BLACK_FONT), round(radius * 0.74))
-    draw_text(draw, (centre[0], centre[1] + radius * 0.20), "CE", font, WHITE, spacing=radius * 0.02, align="centre")
-    for i, shade in enumerate((ACCENT_LIGHT, ACCENT_DARK)):
-        y = centre[1] + radius * (0.40 + 0.14 * i)
-        half = radius * 0.22
-        draw.line([(centre[0] - half, y), (centre[0], y - half * 0.55), (centre[0] + half, y)], fill=shade, width=max(2, round(radius * 0.045)),
-                  joint="curve")
+def diagonal(size, first, second):
+    """a gradient from the top left corner (first) to the bottom right (second)"""
+    ramp = Image.linear_gradient("L")
+    vertical = ramp.resize(size, Image.BILINEAR)
+    horizontal = ramp.transpose(Image.ROTATE_90).resize(size, Image.BILINEAR)
+    mix = ImageChops.add(vertical.point(lambda v: v // 2), horizontal.point(lambda v: v // 2))
+    return Image.composite(Image.new("RGB", size, second), Image.new("RGB", size, first), mix)
 
 
-def lattice(image, step, colour):
-    """a faint pattern of hexagons over the background (the splash screens'): each as wide as step, in rows that interlock"""
+def blurred(mask, radius):
+    return mask.filter(ImageFilter.GaussianBlur(radius))
+
+
+def outlined_text(image, anchor, text, font, fill, outline, stroke, shadow=None, spacing=0.0, align="left"):
+    """text with a thick outline of round joins and, if shadow is (dx, dy, blur, alpha), a soft shadow under it: letters one by one, baseline at anchor[1]"""
+    width = text_width(font, text, spacing)
+    x0 = anchor[0] - {"left": 0, "centre": width / 2, "right": width}[align]
+    if shadow:
+        dx, dy, radius, alpha = shadow
+        layer = Image.new("L", image.size, 0)
+        x = x0
+        for letter in text:
+            ImageDraw.Draw(layer).text((x + dx, anchor[1] + dy), letter, font=font, fill=255, anchor="ls", stroke_width=stroke)
+            x += font.getlength(letter) + spacing
+        layer = blurred(layer, radius).point(lambda v: v * alpha)
+        image.paste(Image.new("RGB", image.size, INK), (0, 0), layer)
     draw = ImageDraw.Draw(image)
-    radius = step / math.sqrt(3)
-    row = 0
-    y = -radius
-    while y < image.height + radius:
-        x = -step + (step / 2 if row % 2 else 0)
-        while x < image.width + step:
-            draw.polygon(hexagon((x, y), radius), outline=colour, width=max(1, round(image.height / 360)))
-            x += step
-        y += radius * 1.5
-        row += 1
+    x = x0
+    for letter in text:
+        draw.text((x, anchor[1]), letter, font=font, fill=fill, anchor="ls", stroke_width=stroke, stroke_fill=outline)
+        x += font.getlength(letter) + spacing
+
+
+def ring(image, centre, radius, letters=True):
+    """the badge: a glossy ring (blue and teal, a soft shadow under it, a bright arc along its upper left edge, a small moon on its rim) with "CE" in it"""
+    size = image.size
+    cx, cy = centre
+    # (the shadow, a little below and to the right)
+    shadow = Image.new("L", size, 0)
+    ImageDraw.Draw(shadow).ellipse([cx - radius, cy - radius + radius * 0.07, cx + radius, cy + radius + radius * 0.07], fill=170)
+    image.paste(Image.new("RGB", size, (96, 150, 196)), (0, 0), blurred(shadow, radius * 0.05))
+    # (the band: outer circle minus the inner one, filled with the gradient)
+    band = Image.new("L", size, 0)
+    d = ImageDraw.Draw(band)
+    d.ellipse([cx - radius, cy - radius, cx + radius, cy + radius], fill=255)
+    d.ellipse([cx - radius * 0.70, cy - radius * 0.70, cx + radius * 0.70, cy + radius * 0.70], fill=0)
+    image.paste(diagonal(size, RING_LIGHT, RING_DARK), (0, 0), band)
+    # (the inside of the ring: a paler disc, so that the letters stand on something)
+    disc = Image.new("L", size, 0)
+    ImageDraw.Draw(disc).ellipse([cx - radius * 0.70, cy - radius * 0.70, cx + radius * 0.70, cy + radius * 0.70], fill=255)
+    image.paste(diagonal(size, (255, 255, 255), (214, 236, 250)), (0, 0), disc)
+    # (the rim lights: a thin white line inside the band's edges, and the bright arc at the upper left)
+    draw = ImageDraw.Draw(image)
+    line = max(2, round(radius * 0.025))
+    draw.ellipse([cx - radius * 0.985, cy - radius * 0.985, cx + radius * 0.985, cy + radius * 0.985], outline=(214, 248, 250), width=line)
+    gloss = Image.new("L", size, 0)
+    ImageDraw.Draw(gloss).arc([cx - radius * 0.90, cy - radius * 0.90, cx + radius * 0.90, cy + radius * 0.90], 195, 275, fill=255, width=max(3, round(radius * 0.07)))
+    image.paste(Image.new("RGB", size, WHITE), (0, 0), blurred(gloss, radius * 0.012))
+    # (the ring world's segments: short light ticks along the middle of the band)
+    ticks = Image.new("L", size, 0)
+    td = ImageDraw.Draw(ticks)
+    for i in range(36):
+        angle = math.radians(i * 10 + 5)
+        inner, outer = radius * 0.80, radius * 0.90
+        td.line([(cx + inner * math.cos(angle), cy + inner * math.sin(angle)), (cx + outer * math.cos(angle), cy + outer * math.sin(angle))],
+                fill=110, width=max(2, round(radius * 0.022)))
+    image.paste(Image.new("RGB", size, WHITE), (0, 0), ticks)
+    # (the moon on the rim at the upper right, with its own small gloss)
+    mx, my, mr = cx + radius * 0.74, cy - radius * 0.74, radius * 0.13
+    draw.ellipse([mx - mr * 1.5, my - mr * 1.5, mx + mr * 1.5, my + mr * 1.5], fill=WHITE)
+    draw.ellipse([mx - mr, my - mr, mx + mr, my + mr], fill=RING_DARK)
+    draw.ellipse([mx - mr * 0.55, my - mr * 0.6, mx - mr * 0.05, my - mr * 0.1], fill=(170, 226, 250))
+    if letters:
+        font = ImageFont.truetype(str(BLACK_FONT), round(radius * 0.62))
+        outlined_text(image, (cx, cy + radius * 0.22), "CE", font, WHITE, OUTLINE, max(2, round(radius * 0.05)),
+                      shadow=(0, radius * 0.03, radius * 0.02, 0.35), spacing=radius * 0.01, align="centre")
+
+
+def sparkle(image, centre, radius, alpha=230):
+    """a four-pointed star, the Wii U shell's twinkle"""
+    layer = Image.new("L", image.size, 0)
+    cx, cy = centre
+    k = radius * 0.22
+    ImageDraw.Draw(layer).polygon([(cx, cy - radius), (cx + k, cy - k), (cx + radius, cy), (cx + k, cy + k), (cx, cy + radius), (cx - k, cy + k),
+                                   (cx - radius, cy), (cx - k, cy - k)], fill=alpha)
+    image.paste(Image.new("RGB", image.size, WHITE), (0, 0), blurred(layer, radius * 0.02))
+
+
+def background(size):
+    """the white and pale-blue paper of the Wii U's shell, with soft round bubbles"""
+    width, height = size
+    image = gradient(size, PAPER_TOP, PAPER_BOTTOM)
+    bubbles = Image.new("L", size, 0)
+    d = ImageDraw.Draw(bubbles)
+    for x, y, r, a in ((0.10, 0.20, 0.20, 90), (0.88, 0.14, 0.15, 70), (0.78, 0.92, 0.30, 90), (0.30, 0.98, 0.22, 70), (0.97, 0.55, 0.10, 60), (0.52, 0.06, 0.07, 60)):
+        d.ellipse([width * x - height * r, height * y - height * r, width * x + height * r, height * y + height * r], fill=a)
+    image.paste(Image.new("RGB", size, WHITE), (0, 0), blurred(bubbles, height * 0.004))
+    return image
 
 
 def icon():
     size = 128 * SCALE
-    image = gradient((size, size), SKY_TOP, SKY_BOTTOM)
-    emblem(image, (size / 2, size / 2), size * 0.44)
-    return image.resize((128, 128), Image.LANCZOS)
+    image = background((size, size))
+    # (a tile with round corners, as the Wii U's channels are: the picture shows through outside it)
+    ring(image, (size / 2, size / 2), size * 0.38)
+    mask = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, size - 1, size - 1], radius=size * 0.20, fill=255)
+    result = Image.new("RGB", (size, size), PAPER_BOTTOM)
+    result.paste(image, (0, 0), mask)
+    return result.resize((128, 128), Image.LANCZOS)
+
+
+def pill(image, box, fill):
+    ImageDraw.Draw(image).rounded_rectangle(box, radius=(box[3] - box[1]) / 2, fill=fill)
 
 
 def splash(width, height):
-    """the start-up picture: the emblem at the left, the title, the subtitle and the notice at the right (everything in proportion to the height)"""
+    """the start-up picture: the ring at the left, the title, the subtitle in its pill and the notice at the right (everything in proportion to the height)"""
     w, h = width * SCALE, height * SCALE
-    image = gradient((w, h), SKY_TOP, SKY_BOTTOM)
-    # (the lattice is faint: a few levels brighter than the sky)
-    layer = gradient((w, h), (22, 56, 88), (10, 24, 38))
-    pattern = Image.new("L", (w, h), 0)
-    lattice(pattern, h / 9.0, 255)
-    pattern = pattern.point(lambda v: v * 0.22)
-    image.paste(layer, (0, 0), pattern)
-    draw = ImageDraw.Draw(image)
+    image = background((w, h))
     unit = h / 720.0
-    emblem(image, (w * 0.22, h * 0.46), h * 0.29)
-    left = w * 0.43
-    # (the title as large as fits between the emblem and the right edge's margin, at most 112 px of a 720-line picture)
-    size = round(112 * unit)
-    while size > 8 and text_width(ImageFont.truetype(str(BLACK_FONT), size), TITLE, 4 * unit) > w - left - 70 * unit:
+    ring(image, (w * 0.24, h * 0.47), h * 0.30)
+    for x, y, r in ((0.43, 0.20, 0.030), (0.93, 0.80, 0.026), (0.075, 0.82, 0.022), (0.40, 0.88, 0.016)):
+        sparkle(image, (w * x, h * y), h * r)
+    left = w * 0.46
+    # (the title as large as fits between the ring and the right edge's margin, at most 120 px of a 720-line picture)
+    size = round(120 * unit)
+    while size > 8 and text_width(ImageFont.truetype(str(BLACK_FONT), size), TITLE, 4 * unit) > w - left - 90 * unit:
         size -= 1
     title = ImageFont.truetype(str(BLACK_FONT), size)
-    draw_text(draw, (left, h * 0.45 + 18 * unit), TITLE, title, WHITE, spacing=4 * unit)
-    draw.rectangle([left, h * 0.45 + 112 * unit, left + 120 * unit, h * 0.45 + 118 * unit], fill=ACCENT_LIGHT)
-    sub = ImageFont.truetype(str(MEDIUM_FONT), round(34 * unit))
-    draw_text(draw, (left, h * 0.45 + 168 * unit), SUBTITLE, sub, ACCENT_LIGHT, spacing=2 * unit)
+    outlined_text(image, (left, h * 0.45), TITLE, title, WHITE, OUTLINE, round(7 * unit), shadow=(0, 8 * unit, 6 * unit, 0.30), spacing=4 * unit)
+    sub = ImageFont.truetype(str(MEDIUM_FONT), round(32 * unit))
+    sub_width = text_width(sub, SUBTITLE, 1.5 * unit)
+    top = h * 0.45 + 48 * unit
+    pill(image, [left, top, left + sub_width + 56 * unit, top + 60 * unit], PILL)
+    draw_text(ImageDraw.Draw(image), (left + 28 * unit, top + 42 * unit), SUBTITLE, sub, INK, spacing=1.5 * unit)
     note = ImageFont.truetype(str(MEDIUM_FONT), round(17 * unit))
     words, lines, line = NOTICE.split(" "), [], ""
-    limit = w - left - 60 * unit
+    limit = w - left - 70 * unit
     for word in words:
         trial = (line + " " + word).strip()
         if text_width(note, trial, 0) > limit and line:
@@ -149,7 +217,7 @@ def splash(width, height):
             line = trial
     lines.append(line)
     for i, text in enumerate(lines):
-        draw_text(draw, (left, h * 0.45 + 232 * unit + i * 24 * unit), text, note, MUTED)
+        draw_text(ImageDraw.Draw(image), (left, h * 0.45 + 150 * unit + i * 25 * unit), text, note, MUTED)
     return image.resize((width, height), Image.LANCZOS)
 
 
