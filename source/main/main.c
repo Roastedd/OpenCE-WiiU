@@ -3803,6 +3803,30 @@ static void main_smooth_defaults_recheck(
 	}
 }
 
+/* port: whether a checkpoint that is waiting for its quiet moment (game_save: main_save_map_private asks every 10 ticks whether the players are safe, and gives up after 8 s,
+or never for game_save_no_timeout) makes the frames the serial loop's. It did, and a wait is as long as the fight that holds it off: 246 s of the owner's 30 minutes of
+a50 (2026-11-06, 13 waits of up to 82 s), at 44.9 frames a second against 53.6 overlapped, 38% of their windows under 45, and the governor at its last step in 62% of
+them. The wait needs nothing of the serial loop: main_save_map_private is asked at the top of each overlapped frame with the tick thread idle (above, in the main loop), a
+save it finds safe is made at the next top, as an unsafe one always was, and the frame after it is the overlap's again. halo/tick_overlap_save_serial.txt holding a number
+above 0 (HALO_TICK_OVERLAP_SAVE_SERIAL on the host) brings the old behaviour back, for a test or an A/B. Said once in the log. */
+static boolean main_overlap_save_makes_serial(
+	void)
+{
+	static long serial = -1;
+
+	if (serial < 0)
+	{
+		long wiiu_study_number(const char *name, long fallback);
+		void platform_log(char const *format, ...);
+
+		serial = wiiu_study_number("tick_overlap_save_serial.txt", 0) > 0;
+		platform_log("tick overlap: a checkpoint waiting for a quiet moment %s (halo/tick_overlap_save_serial.txt: %s)",
+			serial ? "makes the frames serial" : "keeps the frames overlapped", serial ? "1" : "absent or 0; 1 makes them serial");
+	}
+
+	return serial != 0;
+}
+
 /* port: whether this frame's tick side may be the tick thread's, beside the drawing (tick_overlap.h): a game of this machine alone and one player, in
 the game's own time, with nothing that shows or changes the world in a way the ring of the snapshot cannot follow. Asked by the game thread with the
 tick thread idle. Anything else is the serial loop's frame. */
@@ -3840,7 +3864,7 @@ boolean main_overlap_eligible(
 		reason = "the game paused";
 	else if (game_time_get_speed() != 1.0f)
 		reason = "the game's speed is not 1";
-	else if (main_globals.saving_map)
+	else if (main_globals.saving_map && main_overlap_save_makes_serial())
 		reason = "a save";
 	else if (tick_overlap_late())
 		reason = "the tick thread was late";
