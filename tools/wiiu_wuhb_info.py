@@ -4,7 +4,7 @@ text (meta/meta.ini: the names and author Aroma shows), and the size of each pic
 wuhbtool made from the PNG files, gzipped).
 
     python3 tools/wiiu_wuhb_info.py build/linux-wiiu/halo.wuhb [--extract FOLDER]   (--extract writes the files of meta/)
-    python3 tools/wiiu_wuhb_info.py halo.wuhb --expect-name "Halo: Combat Evolved (OpenCE)"   (exit 1 if it differs)
+    python3 tools/wiiu_wuhb_info.py halo.wuhb --expect-name "OpenCE-U"   (exit 1 if it differs)
 """
 import argparse
 import gzip

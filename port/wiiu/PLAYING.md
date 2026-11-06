@@ -1,4 +1,4 @@
-# Halo: Combat Evolved (OpenCE) on the Wii U: player's guide
+# OpenCE-U (Halo: Combat Evolved on the Wii U): player's guide
 
 This is the guide for players. How the port is built and how it works are in [README.md](README.md).
 
@@ -36,7 +36,7 @@ repository); the licence covers the work of OpenCE's authors and gives no rights
    - `brokers.txt` (for internet games only; system link works without it)
    - a folder `data/maps/` holding every converted map. **Put all of them there**: a campaign level whose next map is missing stops the game
      at the end of the level before it.
-3. Put the card in the Wii U and start **Halo: Combat Evolved (OpenCE)** from the Aroma menu. The first start takes longer while the game makes its
+3. Put the card in the Wii U and start **OpenCE-U** from the Aroma menu. The first start takes longer while the game makes its
    cache files.
 
 The game keeps its settings in `wiiu/apps/halo/config.toml` (made at the first start; every setting has a comment saying what it does) and its

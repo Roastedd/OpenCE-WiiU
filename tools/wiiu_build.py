@@ -117,9 +117,9 @@ WIIU_LINK_FLAGS = ["-g", "-specs=$$WUT_ROOT/share/wut.specs", WIIU_MARCH, "-meab
 WIIU_LIBS = ["-L$$WUT_ROOT/lib", "-lwut", "-lm"]
 
 
-# the app's names in Aroma's menu (wuhbtool --name, --short-name, --author): the game's name, and that this is the OpenCE project's port
-WUHB_NAME = "Halo: Combat Evolved (OpenCE)"
-WUHB_SHORT_NAME = "Halo CE (OpenCE)"
+# the app's names in Aroma's menu (wuhbtool --name, --short-name, --author): OpenCE-U, the OpenCE project's port to the Wii U
+WUHB_NAME = "OpenCE-U"
+WUHB_SHORT_NAME = "OpenCE-U"
 WUHB_AUTHOR = "OpenCE"
 
 

@@ -36,7 +36,7 @@ class AppArtTest(unittest.TestCase):
 class BuildNamesTest(unittest.TestCase):
     def test_the_wuhb_rule_carries_the_name_and_the_pictures(self):
         text = (ROOT / "tools" / "wiiu_build.py").read_text()
-        self.assertIn('WUHB_NAME = "Halo: Combat Evolved (OpenCE)"', text)
+        self.assertIn('WUHB_NAME = "OpenCE-U"', text)
         self.assertIn("--icon=$icon --tv-image=$tv_image --drc-image=$drc_image", text)
 
 

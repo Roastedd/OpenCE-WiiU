@@ -28,8 +28,8 @@ FONTS = ROOT / "port/assets/fonts"
 BLACK_FONT = FONTS / "Overpass-900.ttf"
 MEDIUM_FONT = FONTS / "Overpass-750.ttf"
 
-TITLE = "HALO: COMBAT EVOLVED"
-SUBTITLE = "OpenCE for Wii U"
+TITLE = "OPENCE-U"
+SUBTITLE = "Halo: Combat Evolved for Wii U"
 NOTICE = "Unofficial fan port. Not made, endorsed or supported by Microsoft or the game's makers. It needs your own copy of the game."
 
 SKY_TOP = (13, 38, 66)
@@ -128,14 +128,12 @@ def splash(width, height):
     unit = h / 720.0
     emblem(image, (w * 0.22, h * 0.46), h * 0.29)
     left = w * 0.43
-    # (the title as large as fits between the emblem and the right edge's margin, at most 76 px of a 720-line picture)
-    size = round(76 * unit)
-    while size > 8 and text_width(ImageFont.truetype(str(BLACK_FONT), size), "COMBAT EVOLVED", 3 * unit) > w - left - 70 * unit:
+    # (the title as large as fits between the emblem and the right edge's margin, at most 112 px of a 720-line picture)
+    size = round(112 * unit)
+    while size > 8 and text_width(ImageFont.truetype(str(BLACK_FONT), size), TITLE, 4 * unit) > w - left - 70 * unit:
         size -= 1
     title = ImageFont.truetype(str(BLACK_FONT), size)
-    # (the title in two lines, which fits both pictures: HALO: / COMBAT EVOLVED)
-    draw_text(draw, (left, h * 0.45), "HALO:", title, WHITE, spacing=6 * unit)
-    draw_text(draw, (left, h * 0.45 + 84 * unit), "COMBAT EVOLVED", title, WHITE, spacing=3 * unit)
+    draw_text(draw, (left, h * 0.45 + 18 * unit), TITLE, title, WHITE, spacing=4 * unit)
     draw.rectangle([left, h * 0.45 + 112 * unit, left + 120 * unit, h * 0.45 + 118 * unit], fill=ACCENT_LIGHT)
     sub = ImageFont.truetype(str(MEDIUM_FONT), round(34 * unit))
     draw_text(draw, (left, h * 0.45 + 168 * unit), SUBTITLE, sub, ACCENT_LIGHT, spacing=2 * unit)
