@@ -16,15 +16,37 @@ console, big-endian, must find the same hashes. */
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #x); exit(1); } } while (0)
 
 static char last_log[512];
-static unsigned log_lines;
+/* the lines that name a key drawn with another's shader, those that write a stand-in key out, and those that say the draws */
+static unsigned log_lines, dump_lines, drew_lines, summary_lines;
+static char dump_log[8][512], drew_log[512];
 
 void platform_log(const char *format, ...)
 {
 	va_list arguments;
+	char text[512];
 
 	va_start(arguments, format);
-	vsnprintf(last_log, sizeof(last_log), format, arguments);
+	vsnprintf(text, sizeof(text), format, arguments);
 	va_end(arguments);
+	if (!strncmp(text, "shaders: key P ", 15))
+	{
+		if (dump_lines < 8)
+			strcpy(dump_log[dump_lines], text);
+		dump_lines++;
+		return;
+	}
+	if (!strncmp(text, "shaders: stand-in key ", 22))
+	{
+		drew_lines++;
+		strcpy(drew_log, text);
+		return;
+	}
+	if (strstr(text, " keys have been drawn with another key's shader"))
+	{
+		summary_lines++;
+		return;
+	}
+	strcpy(last_log, text);
 	log_lines++;
 }
 
@@ -253,7 +275,12 @@ static void restart(void)
 	found_told = 0;
 	refused = 0;
 	queued_pixel = queued_vertex = unavailable = 0;
-	log_lines = 0;
+	log_lines = dump_lines = drew_lines = summary_lines = 0;
+	memset(nonexact, 0, sizeof(nonexact));
+	nonexact_count = nonexact_dumped = 0;
+	nonexact_full = 0;
+	nonexact_current = NONEXACT_NONE;
+	debug_standin = 0;
 }
 
 static const char *shader_of(uint32_t handle)
@@ -634,6 +661,50 @@ static void check_lookup(void)
 	refused = 0;
 	CHECK(pixel(&key, DK_SHADER_FOUND_FALLBACK) && queued_pixel == 8 && last_queued == hash_of(&key));
 	CHECK(pixel(&key, DK_SHADER_FOUND_FALLBACK) && queued_pixel == 8);
+	/* the draws made are counted for the key of the last lookup (a repeat of it, answered from the memo, too) and said once, in the window they were made in; a key with its
+	own shader has none */
+	{
+		struct nv2a_pixel_shader_key own;
+		char hash_text[17];
+
+		dk_shader_note_draw();
+		dk_shader_note_draw();
+		CHECK(pixel(&key, DK_SHADER_FOUND_FALLBACK));
+		dk_shader_note_draw();
+		snprintf(hash_text, sizeof(hash_text), "%016llx", (unsigned long long)hash_of(&key));
+		drew_lines = summary_lines = 0;
+		dk_shader_nonexact_report();
+		CHECK(drew_lines == 1);
+		CHECK(strstr(drew_log, hash_text) && strstr(drew_log, "drew 3 times in this window (3 in all)"));
+		CHECK(summary_lines == 1);
+		drew_lines = summary_lines = 0;
+		dk_shader_nonexact_report();
+		CHECK(drew_lines == 0 && summary_lines == 0);
+		key_of(fixture_named("cube"), &own);
+		CHECK(!strcmp(pixel(&own, DK_SHADER_FOUND_EXACT), "cube"));
+		dk_shader_note_draw();
+		dk_shader_nonexact_report();
+		CHECK(drew_lines == 0 && summary_lines == 0);
+	}
+	/* halo/debug_standin.txt: a stand-in draw is given the stand-in that draws C0 (wiiu_gx2.c makes C0 magenta); a key the pack has its own shader for, or its canonical key's,
+	is not */
+	{
+		struct nv2a_pixel_shader_key tinted;
+
+		key_of(fixture_named("volume"), &tinted);
+		tinted.fog_enable = !tinted.fog_enable;
+		tinted.fog_table_mode = (unsigned char)(tinted.fog_table_mode + 1);
+		debug_standin = 1;
+		CHECK(!strcmp(pixel(&tinted, DK_SHADER_FOUND_FALLBACK), stand_in_name(numbered[SHADER_KEY_FALLBACK_TINT])));
+		key_of(fixture_named("bg"), &tinted);
+		CHECK(!strcmp(pixel(&tinted, DK_SHADER_FOUND_EQUIVALENT), "bg's canonical key"));
+		debug_standin = 0;
+		key_of(fixture_named("volume"), &tinted);
+		tinted.fog_enable = !tinted.fog_enable;
+		tinted.fog_table_mode = (unsigned char)(tinted.fog_table_mode + 1);
+		/* (the tinted answer was remembered with the key: a key asked for after the tint is off is found the same way until the game's next map) */
+		CHECK(pixel(&tinted, DK_SHADER_FOUND_FALLBACK));
+	}
 	/* random keys: each its own stand-in (or none, for NEVER), each written down once; the lines in the log stop at their limit */
 	queued_before = queued_pixel;
 	for (i = 0; i < 3000; i++)
@@ -648,6 +719,12 @@ static void check_lookup(void)
 		CHECK(queued_pixel == queued_before + i + 1 && last_queued == hash_of(&key));
 	}
 	CHECK(found_told == FOUND_TOLD_LIMIT && log_lines == FOUND_TOLD_LIMIT);
+	/* the stand-in keys are written out whole, four lines each, for the first NONEXACT_DUMP_LIMIT of them (the 256 bytes in 128 hex digits a line), and the table of the
+	keys drawn with another's shader is bounded */
+	CHECK(nonexact_dumped == NONEXACT_DUMP_LIMIT && dump_lines == 4 * NONEXACT_DUMP_LIMIT);
+	CHECK(nonexact_count == NONEXACT_LIMIT && nonexact_full > 0);
+	CHECK(!strncmp(dump_log[0], "shaders: key P ", 15) && strstr(dump_log[0], " 1/4 ") && strlen(strstr(dump_log[0], " 1/4 ") + 5) == 128);
+	CHECK(strstr(dump_log[3], " 4/4 ") && strlen(strstr(dump_log[3], " 4/4 ") + 5) == 128);
 	/* and what was found before is found the same after many other keys */
 	key_of(fixture_named("bg"), &key);
 	CHECK(!strcmp(pixel(&key, DK_SHADER_FOUND_EQUIVALENT), "bg's canonical key"));

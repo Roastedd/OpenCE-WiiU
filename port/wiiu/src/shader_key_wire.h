@@ -257,6 +257,10 @@ uniforms and samplers are those of every pixel shader, so it meets every vertex 
 stand-in of the texture times stage 0's constant, black there, in color and alpha drew nothing.) */
 #define SHADER_KEY_FALLBACKS 114
 
+/* the untextured stand-in whose color and alpha are C0's, with no alpha test: 96 + (color constant 1) + 3 * (alpha constant 1) + 9 * (no alpha test 0). The debug
+tint of the stand-in draws (halo/debug_standin.txt) is this shader with C0 magenta */
+#define SHADER_KEY_FALLBACK_TINT 100u
+
 /* what a stand-in samples (stage 0's sampler), and the sources of its color and alpha */
 enum { SHADER_KEY_FALLBACK_UNTEXTURED, SHADER_KEY_FALLBACK_2D, SHADER_KEY_FALLBACK_3D, SHADER_KEY_FALLBACK_CUBE };
 enum { SHADER_KEY_FALLBACK_DIFFUSE, SHADER_KEY_FALLBACK_CONSTANT, SHADER_KEY_FALLBACK_ONE, SHADER_KEY_FALLBACK_ZERO };

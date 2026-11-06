@@ -23,6 +23,7 @@ Not run on a console.
 #include "port_config.h"
 #include "wiiu_indices.h"
 #include "wiiu_mip.h"
+#include "wiiu_texture_layout.h"
 #include "wiiu_font.h"
 #include "wiiu_gx2_mip.h"
 #include "wiiu_overlay.h"
@@ -159,6 +160,14 @@ static struct
 	struct dk_stage_texture stages[4];
 	GX2Sampler samplers[4];
 	GX2Texture white;
+	/* what a stage samples when the game's image for it is not usable (never made, or no memory for it): a transparent mid grey (missing_make) */
+	GX2Texture missing;
+	/* the draws made while a stage's image was not usable, and the first few images told by number (texture_unusable_note) */
+	unsigned unusable_draws, unusable_told;
+	/* halo/debug_standin.txt: the draws with a stand-in are magenta */
+	int tint_standin;
+	/* halo/volume.txt 0: 3D textures are not made, as they were not until 2026-11-06 (the volume of the dynamic lights' falloff did not fit its surface); their draws sample white */
+	int volume_off;
 	/* what the GPU's registers hold */
 	const struct shader *regs_vs, *regs_ps, *cur_vs, *cur_ps;
 	const struct fetch *cur_fetch;
@@ -198,7 +207,7 @@ static struct
 	unsigned skipped_left_out; /* of those, the draws whose key was left out of the pack on purpose (tools/wiiu/shader_exclude.txt) */
 	unsigned drawn_equivalent, drawn_fallback; /* of draws_made, those whose pixel key the pack lacks, drawn with its canonical key's shader or its stand-in */
 	uint32_t vs_found, ps_found; /* how the pack answered the keys of vs_handle and ps_handle (DK_SHADER_FOUND_*) */
-	unsigned textures_made, textures_unsupported, texture_short, layouts_logged;
+	unsigned textures_made, textures_unsupported, texture_short, layouts_logged, textures_reduced;
 	int mip_gpu_enabled;
 	unsigned mip_gpu_calls, mip_cpu_calls, mip_gpu_fallbacks, mip_reuses, mip_failed;
 	unsigned long long mip_gpu_pixels, mip_cpu_pixels, mip_failed_pixels;
@@ -340,6 +349,11 @@ static void *gx_alloc(uint32_t size, uint32_t alignment)
 
 /* gx2_shaders.c: where in the pack the shader of a handle is */
 const void *dk_shader_blob(uint32_t handle, uint32_t *size, uint32_t *stage);
+
+/* gx2_shaders.c: the draws of the pixel keys drawn with another's shader counted, said in the 5-second note, and halo/debug_standin.txt */
+void dk_shader_note_draw(void);
+void dk_shader_nonexact_report(void);
+void dk_shader_debug_standin(int on);
 
 enum
 {
@@ -1329,6 +1343,14 @@ static void uniforms_apply(const struct shader *vs, const struct shader *ps)
 		gx.pixel_parameters_dirty = 0;
 		gx.regs_ps = ps;
 	}
+	if (gx.tint_standin && gx.ps_found == DK_SHADER_FOUND_FALLBACK)
+	{
+		/* (halo/debug_standin.txt: gx2_shaders.c gave this draw the stand-in that draws C0; C0 is magenta, and the next draw writes its own constants again) */
+		static const float magenta[1][4] = { { 1.0f, 0.0f, 1.0f, 1.0f } };
+
+		pixel_array(ps, PS_C0, magenta, 1);
+		gx.regs_ps = NULL;
+	}
 }
 
 /* ---------- textures */
@@ -1339,7 +1361,9 @@ struct image
 {
 	int used;
 	int supported;
-	uint32_t kind, format, width, height, depth, levels, requested_levels;
+	/* width, height and depth are the texture the game made, requested_levels its levels; the surface holds `levels` of them from level `skip` on (0 unless the
+	heap had no block for the whole texture: wiiu_texture_layout.h), so that a level of the surface is level + skip of the game's */
+	uint32_t kind, format, width, height, depth, levels, requested_levels, skip;
 	/* a cube's six faces and a 3D texture's slices are slices of one surface */
 	uint32_t slices;
 	unsigned block_bytes;
@@ -1414,8 +1438,8 @@ static void level_layout(const struct image *image, GX2SurfaceFormat format, GX2
 
 	memset(&surface, 0, sizeof(surface));
 	surface.dim = GX2_SURFACE_DIM_TEXTURE_2D;
-	surface.width = level_size(image->width, level);
-	surface.height = level_size(image->height, level);
+	surface.width = level_size(image->width, level + image->skip);
+	surface.height = level_size(image->height, level + image->skip);
 	surface.depth = 1;
 	surface.mipLevels = 1;
 	surface.format = format;
@@ -1471,7 +1495,7 @@ static int image_surface(struct image *image, uint32_t kind, uint32_t format, ui
 	image->requested_levels = levels;
 	image->compressed = format_of(format, &gx_format, &block_bytes);
 	image->block_bytes = block_bytes;
-	if (!width || !height || kind > DK_TEXTURE_CUBE || (kind != DK_TEXTURE_2D && (gx.features_off & 2)))
+	if (!width || !height || kind > DK_TEXTURE_CUBE || (kind != DK_TEXTURE_2D && (gx.features_off & 2)) || (kind == DK_TEXTURE_3D && gx.volume_off))
 		return 0;
 	if (gx.features_off & 1)
 		levels = 1;
@@ -1486,23 +1510,41 @@ static int image_surface(struct image *image, uint32_t kind, uint32_t format, ui
 	image->levels = levels;
 	image->slices = kind == DK_TEXTURE_CUBE ? 6 : kind == DK_TEXTURE_3D ? image->depth : 1;
 	mode = image->compressed ? GX2_TILE_MODE_TILED_1D_THIN1 : GX2_TILE_MODE_LINEAR_ALIGNED;
-	surface->dim = kind == DK_TEXTURE_CUBE ? GX2_SURFACE_DIM_TEXTURE_CUBE : kind == DK_TEXTURE_3D ? GX2_SURFACE_DIM_TEXTURE_3D : GX2_SURFACE_DIM_TEXTURE_2D;
-	surface->width = width;
-	surface->height = height;
-	surface->depth = kind == DK_TEXTURE_CUBE ? 6 : kind == DK_TEXTURE_3D ? image->depth : 1;
-	surface->mipLevels = levels;
-	surface->format = gx_format;
-	surface->aa = GX2_AA_MODE1X;
-	surface->use = GX2_SURFACE_USE_TEXTURE;
-	surface->tileMode = mode;
-	GX2CalcSurfaceSizeAndAlignment(surface);
-	total = surface->imageSize + (levels > 1 ? surface->mipmapSize : 0);
-	image->base = gx_alloc_raw(total, surface->alignment ? surface->alignment : 256);
-	if (!image->base)
+	/* the texture whole, and if the heap has no block for it, a 2D texture without its top levels (wiiu_texture_layout.h) */
+	for (image->skip = 0;; image->skip++)
 	{
-		wiiu_log("GX2: no memory for a %ux%u texture (%u bytes)", (unsigned)width, (unsigned)height, (unsigned)total);
-		return 0;
+		const unsigned skip = image->skip;
+
+		memset(&image->texture, 0, sizeof(image->texture));
+		surface->dim = kind == DK_TEXTURE_CUBE ? GX2_SURFACE_DIM_TEXTURE_CUBE : kind == DK_TEXTURE_3D ? GX2_SURFACE_DIM_TEXTURE_3D : GX2_SURFACE_DIM_TEXTURE_2D;
+		surface->width = level_size(width, skip);
+		surface->height = level_size(height, skip);
+		surface->depth = kind == DK_TEXTURE_CUBE ? 6 : kind == DK_TEXTURE_3D ? image->depth : 1;
+		surface->mipLevels = levels - skip;
+		surface->format = gx_format;
+		surface->aa = GX2_AA_MODE1X;
+		surface->use = GX2_SURFACE_USE_TEXTURE;
+		surface->tileMode = mode;
+		GX2CalcSurfaceSizeAndAlignment(surface);
+		total = surface->imageSize + (levels - skip > 1 ? surface->mipmapSize : 0);
+		image->base = gx_alloc_raw(total, surface->alignment ? surface->alignment : 256);
+		if (image->base)
+			break;
+		wiiu_log("GX2: no memory for a %ux%u texture (%u bytes)%s", (unsigned)surface->width, (unsigned)surface->height, (unsigned)total,
+			wiiu_texture_can_skip(kind, width, height, levels, skip + 1) ? ": made again without its top level" : "");
+		if (!wiiu_texture_can_skip(kind, width, height, levels, skip + 1))
+		{
+			image->skip = 0;
+			return 0;
+		}
 	}
+	if (image->skip)
+	{
+		wiiu_log("GX2: a %ux%u texture of %u levels is made as %ux%u of %u levels (%u bytes): the heap had no block for the whole of it", (unsigned)width,
+			(unsigned)height, (unsigned)levels, (unsigned)surface->width, (unsigned)surface->height, (unsigned)(levels - image->skip), (unsigned)total);
+		gx.textures_reduced++;
+	}
+	levels -= image->skip;
 	memset(image->base, 0, total);
 	for (level = 0; level < levels; level++)
 	{
@@ -1511,18 +1553,20 @@ static int image_surface(struct image *image, uint32_t kind, uint32_t format, ui
 		the console's numbers for a 64 x 64 BC1 texture are 2048 512 1024) */
 		image->level_offset[level] = level == 0 ? 0 : surface->mipLevelOffset[0] + (level == 1 ? 0 : surface->mipLevelOffset[level - 1]);
 	}
+	/* (a level holds its own slices: a 3D texture's depth halves a level at a time) */
 	for (level = 0; level < levels; level++)
-		if ((uint64_t)image->level_offset[level] + (uint64_t)image->level_slice_bytes[level] * image->slices > total)
+		if (!wiiu_texture_level_fits(image->level_offset[level], image->level_slice_bytes[level], wiiu_texture_slices_at(kind, image->depth, level), total))
 		{
 			if (gx.layouts_logged < 12)
-				wiiu_log("GX2: texture %ux%u kind %u: level %u (%u + %u x %u) does not fit its %u bytes; the texture is its first level only", (unsigned)width,
+				wiiu_log("GX2: texture %ux%u kind %u: level %u (%u + %u x %u) does not fit its %u bytes; the texture is its first %u levels only", (unsigned)width,
 					(unsigned)height, (unsigned)kind, level, (unsigned)image->level_offset[level], (unsigned)image->level_slice_bytes[level],
-					(unsigned)image->slices, (unsigned)total);
+					(unsigned)wiiu_texture_slices_at(kind, image->depth, level), (unsigned)total, level);
 			gx.layouts_logged++;
-			if (level == 0 || kind != DK_TEXTURE_2D)
+			if (level == 0)
 			{
 				MEMFreeToDefaultHeap(image->base);
 				image->base = NULL;
+				image->skip = 0;
 				return 0;
 			}
 			levels = level;
@@ -1561,7 +1605,7 @@ static int image_surface(struct image *image, uint32_t kind, uint32_t format, ui
 /* one slice of one level, from rows of texels or blocks (no padding) */
 static void image_write_slice(const struct image *image, unsigned level, unsigned slice, const uint8_t *source)
 {
-	const uint32_t width = level_size(image->width, level), height = level_size(image->height, level);
+	const uint32_t width = level_size(image->width, level + image->skip), height = level_size(image->height, level + image->skip);
 	uint8_t *destination = image_level(image, level, slice);
 
 	if (image->compressed)
@@ -1575,7 +1619,7 @@ static void image_write_slice(const struct image *image, unsigned level, unsigne
 	}
 }
 
-/* the bytes of one slice of a level in the source */
+/* the bytes of one slice of a level in the source (the game's level: counted from the texture it made, not from the surface's first) */
 static uint32_t level_source_bytes(const struct image *image, unsigned level)
 {
 	const uint32_t width = level_size(image->width, level), height = level_size(image->height, level);
@@ -1593,7 +1637,8 @@ static void image_write(struct image *image, const uint8_t *source, uint32_t sou
 	{
 		uint32_t at = face * face_bytes;
 
-		for (level = 0; level < image->levels; level++)
+		/* (the source's levels are the game's: those left off the surface's top are stepped over) */
+		for (level = 0; level < image->skip + image->levels; level++)
 		{
 			const uint32_t slices = image->kind == DK_TEXTURE_3D ? level_size(image->depth, level) : 1;
 			const uint32_t bytes = level_source_bytes(image, level);
@@ -1603,8 +1648,9 @@ static void image_write(struct image *image, const uint8_t *source, uint32_t sou
 				gx.texture_short++;
 				goto done;
 			}
-			for (slice = 0; slice < slices; slice++)
-				image_write_slice(image, level, image->kind == DK_TEXTURE_CUBE ? face : slice, source + at + (size_t)slice * bytes);
+			if (level >= image->skip)
+				for (slice = 0; slice < slices; slice++)
+					image_write_slice(image, level - image->skip, image->kind == DK_TEXTURE_CUBE ? face : slice, source + at + (size_t)slice * bytes);
 			at += bytes * slices;
 		}
 	}
@@ -1661,14 +1707,16 @@ static void texture_rows(const struct dk_command_texture_rows *command)
 	if (!images || !command->id || command->id >= DK_TEXTURE_LIMIT)
 		return;
 	image = &images[command->id];
-	if (!image->used || !image->supported || image->format != DK_TEXTURE_BGRA || image->kind != DK_TEXTURE_2D || command->level >= image->levels)
+	/* (the command's level is the game's; the surface's first is the game's level `skip`, and the levels left off have nowhere to go) */
+	if (!image->used || !image->supported || image->format != DK_TEXTURE_BGRA || image->kind != DK_TEXTURE_2D || command->level < image->skip ||
+		command->level - image->skip >= image->levels)
 		return;
 	width = level_size(image->width, command->level);
 	height = level_size(image->height, command->level);
 	if (command->top + command->rows > height || command->source_bytes < command->rows * width * 4)
 		return;
 	for (row = 0; row < command->rows; row++)
-		memcpy(image_level(image, command->level, 0) + (size_t)(command->top + row) * image->level_pitch[command->level] * 4,
+		memcpy(image_level(image, command->level - image->skip, 0) + (size_t)(command->top + row) * image->level_pitch[command->level - image->skip] * 4,
 			(const uint8_t *)(uintptr_t)command->source + (size_t)row * width * 4, (size_t)width * 4);
 	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, image->base, image->texture.surface.imageSize + (image->levels > 1 ? image->texture.surface.mipmapSize : 0));
 }
@@ -2030,6 +2078,24 @@ static const GX2Texture *stage_texture(const struct dk_stage_texture *stage, uns
 		*levels = images[stage->id].levels;
 		return &images[stage->id].texture;
 	}
+	if (stage->id && stage->id < DK_TEXTURE_LIMIT && images && images[stage->id].used && images[stage->id].kind == DK_TEXTURE_3D && gx.volume_off)
+		return &gx.white;
+	if (stage->id && stage->id < DK_TEXTURE_LIMIT && images)
+	{
+		/* an image the game named that is not usable (its memory was refused, or it was not made): a transparent grey texel, not an opaque white one, which a vertex
+		color made a block of itself (the scope mask: alpha 1 everywhere, a black screen) */
+		gx.unusable_draws++;
+		if (gx.unusable_told < 12)
+		{
+			const struct image *image = &images[stage->id];
+
+			gx.unusable_told++;
+			wiiu_log("GX2: a draw samples image %u, which is not usable (%s; %ux%u kind %u, %u levels asked for): a transparent grey texel stands in", (unsigned)stage->id,
+				image->used ? "it has no memory or is not a kind GX2 takes here" : "it was never made, or was freed", (unsigned)image->width, (unsigned)image->height,
+				(unsigned)image->kind, (unsigned)image->requested_levels);
+		}
+		return &gx.missing;
+	}
 	if (!stage->id && stage->composite)
 	{
 		const GX2Texture *texture = composite_sampled(stage->target, stage->composite);
@@ -2109,6 +2175,42 @@ static int white_make(void)
 	gx.white.viewNumSlices = 1;
 	gx.white.compMap = GX2_COMP_MAP(GX2_SQ_SEL_R, GX2_SQ_SEL_G, GX2_SQ_SEL_B, GX2_SQ_SEL_A);
 	GX2InitTextureRegs(&gx.white);
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, surface->image, surface->imageSize);
+	return 1;
+}
+
+/* the texel an unusable image is sampled as: mid grey with no alpha, so that a mask or a sprite whose image is missing draws nothing, and a surface only grey */
+static int missing_make(void)
+{
+	GX2Surface *surface = &gx.missing.surface;
+
+	surface->dim = GX2_SURFACE_DIM_TEXTURE_2D;
+	surface->width = 1;
+	surface->height = 1;
+	surface->depth = 1;
+	surface->mipLevels = 1;
+	surface->format = GX2_SURFACE_FORMAT_UNORM_R8_G8_B8_A8;
+	surface->aa = GX2_AA_MODE1X;
+	surface->use = GX2_SURFACE_USE_TEXTURE;
+	surface->tileMode = GX2_TILE_MODE_LINEAR_ALIGNED;
+	GX2CalcSurfaceSizeAndAlignment(surface);
+	surface->image = gx_alloc_raw(surface->imageSize, surface->alignment ? surface->alignment : 256);
+	if (!surface->image)
+		return 0;
+	{
+		uint8_t *texels = (uint8_t *)surface->image;
+		uint32_t i;
+
+		for (i = 0; i + 3 < surface->imageSize; i += 4)
+		{
+			texels[i] = texels[i + 1] = texels[i + 2] = 0x80;
+			texels[i + 3] = 0x00;
+		}
+	}
+	gx.missing.viewNumMips = 1;
+	gx.missing.viewNumSlices = 1;
+	gx.missing.compMap = GX2_COMP_MAP(GX2_SQ_SEL_R, GX2_SQ_SEL_G, GX2_SQ_SEL_B, GX2_SQ_SEL_A);
+	GX2InitTextureRegs(&gx.missing);
 	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, surface->image, surface->imageSize);
 	return 1;
 }
@@ -2543,6 +2645,8 @@ static void draw(const struct dk_command_draw *command)
 		gx.drawn_equivalent++;
 	else if (gx.ps_found == DK_SHADER_FOUND_FALLBACK)
 		gx.drawn_fallback++;
+	if (gx.ps_found == DK_SHADER_FOUND_EQUIVALENT || gx.ps_found == DK_SHADER_FOUND_FALLBACK)
+		dk_shader_note_draw();
 	if (!(gx.draw_total & 31))
 		gpu_poll();
 }
@@ -2610,7 +2714,7 @@ static int initialize(void)
 		return 0;
 	}
 	images = calloc(DK_TEXTURE_LIMIT, sizeof(*images));
-	if (!images || !white_make())
+	if (!images || !white_make() || !missing_make())
 	{
 		wiiu_log("GX2: no memory for the texture table");
 		return 0;
@@ -2851,6 +2955,20 @@ static int initialize(void)
 
 		wiiu_memcpy_touch = wiiu_study_number("memcpy_touch.txt", 0) > 0;
 		wiiu_log("memcpy: the copy asks for the source's lines ahead (dcbt) %s (halo/memcpy_touch.txt: 1 asks for them)", wiiu_memcpy_touch ? "- yes" : "- no");
+	}
+	{
+		/* halo/debug_standin.txt: 1 makes the draws that use a stand-in (a pixel key of a shader class the pack has none of) magenta, so that a picture shows where they are;
+		absent or 0: they draw as the stand-in does */
+		long wiiu_study_number(const char *name, long fallback);
+
+		/* halo/volume.txt: 0 leaves the 3D textures out (the dynamic lights' falloff volume is then a white texel, as it was in every log before 2026-11-06); absent or 1: made */
+		gx.volume_off = wiiu_study_number("volume.txt", 1) <= 0;
+		if (gx.volume_off)
+			wiiu_log("GX2: 3D textures are not made (halo/volume.txt is 0): the dynamic lights' falloff is a white texel");
+		gx.tint_standin = wiiu_study_number("debug_standin.txt", 0) > 0;
+		dk_shader_debug_standin(gx.tint_standin);
+		if (gx.tint_standin)
+			wiiu_log("GX2: the draws with a stand-in are magenta (halo/debug_standin.txt)");
 	}
 	wiiu_log("memcpy/memset self-test (wiiu_memcpy.c): %d wrong", wiiu_memcpy_selftest());
 	wiiu_bw_start();
@@ -4659,6 +4777,10 @@ static void present(const struct dk_command_present *command)
 			"full; %u clears made as rectangles; %u textures made (%u not 2D, %u short), ring overflows %u", gx.draws_made, gx.drawn_equivalent,
 			gx.drawn_fallback, gx.skipped_target, gx.skipped_state, gx.skipped_missing, gx.skipped_left_out, gx.skipped_shader, gx.skipped_ring,
 			gx.rectangle_clears, gx.textures_made, gx.textures_unsupported, gx.texture_short, gx.ring_overflows);
+		/* (the line above is cut at 199 characters: its texture counts are said here) */
+		wiiu_log("GX2:   textures: %u made, %u not usable, %u short, %u made smaller than the game's; draws that sampled an image that was not usable: %u", gx.textures_made,
+			gx.textures_unsupported, gx.texture_short, gx.textures_reduced, gx.unusable_draws);
+		dk_shader_nonexact_report();
 		if (gx.gpu_window_frames)
 			wiiu_log("GX2:   the GPU's own time for a frame's draws (bottom-of-pipe samples, at most what it took): %.2f ms on average over %u frames, %.2f the longest",
 				(double)OSTicksToMicroseconds(gx.gpu_window_ticks) / 1000.0 / (double)gx.gpu_window_frames, gx.gpu_window_frames,
@@ -4765,7 +4887,7 @@ static void present(const struct dk_command_present *command)
 		gx.draws_made = gx.skipped_target = gx.skipped_state = gx.skipped_missing = gx.skipped_shader = gx.skipped_ring = 0;
 		gx.skipped_left_out = gx.drawn_equivalent = gx.drawn_fallback = 0;
 		gx.rectangle_clears = 0;
-		gx.textures_made = gx.textures_unsupported = 0;
+		gx.textures_made = gx.textures_unsupported = gx.textures_reduced = gx.unusable_draws = 0;
 	}
 	ring_next();
 	deferred_flush(0);
