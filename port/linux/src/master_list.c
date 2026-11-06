@@ -7,6 +7,7 @@ The server browser's master servers (master_list.h).
 #include "platform.h"
 #include "port_config.h"
 #include "master_list.h"
+#include "http_date.h"
 #include "p2p.h"
 #include "p2p_internal.h"
 #include "server_json.h"
@@ -340,6 +341,8 @@ struct fetched
 	unsigned long size;
 	char signature[128];
 	char key[32];
+	/* the answer's Date header as Unix seconds (0: none): the Wii U's clock is the console's own, and may be hours off */
+	double server_time;
 };
 
 /* whether the text begins with the name, in either case */
@@ -379,6 +382,32 @@ static void header_value(const char *headers, const char *name, char *value, int
 		if (line)
 			line++;
 	}
+}
+
+/* the time a list is checked against: this machine's clock; on the Wii U, when its clock is more than the list's freshness from the time of the TLS answer that
+brought the list (the answer's Date, which a certificate vouches for), that time, said once in the log */
+static unsigned long list_check_time(const struct fetched *fetched, const char *master)
+{
+	unsigned long now = (unsigned long)time(NULL);
+#ifdef HALO_WIIU
+	static int said;
+
+	if (fetched->server_time > 0.0 && (fetched->server_time - (double)now > FRESH_SECONDS || (double)now - fetched->server_time > FRESH_SECONDS))
+	{
+		if (!said)
+		{
+			said = 1;
+			platform_log("server browser: this console's clock is %.0f seconds %s of %s's (its answer's Date): the list is checked against that time. "
+				"Setting the console's clock right (System Settings) removes this.", fetched->server_time > (double)now ? fetched->server_time - (double)now :
+				(double)now - fetched->server_time, fetched->server_time > (double)now ? "behind" : "ahead", master);
+		}
+		return (unsigned long)fetched->server_time;
+	}
+#else
+	(void)fetched;
+	(void)master;
+#endif
+	return now;
 }
 
 #if defined(HALO_WEB)
@@ -502,6 +531,12 @@ static int fetch(const char *url, struct fetched *fetched)
 	fetched->size = response.body_size;
 	header_value(response.headers, "Signature", fetched->signature, sizeof(fetched->signature));
 	header_value(response.headers, "Signature-Key", fetched->key, sizeof(fetched->key));
+	{
+		char date[64];
+
+		header_value(response.headers, "Date", date, sizeof(date));
+		fetched->server_time = http_date_parse(date);
+	}
 #ifdef HALO_WIIU
 	platform_log("server browser: https GET %s: %lu bytes", url, response.body_size);
 #endif
@@ -666,7 +701,7 @@ static void *list_thread_main(void *argument)
 				platform_log("server browser: %s answered %d", urls[index], fetched.status);
 			}
 			else if (!master_list_verify(fetched.body, fetched.size, fetched.signature, fetched.key, keys[index],
-				(unsigned long)time(NULL), why, sizeof(why)))
+				list_check_time(&fetched, urls[index]), why, sizeof(why)))
 			{
 				platform_log("server browser: %s's list refused: %s", urls[index], why);
 			}
