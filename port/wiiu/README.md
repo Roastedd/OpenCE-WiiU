@@ -465,8 +465,13 @@ Written and tested on the build machine (branch `wiiu-drs`), not run on a consol
 - **The steps** are 1, 0.9, 0.8 and 0.75 of the ceiling: 720, 648, 576 and 540 lines, or 1080, 972, 864 and 810.
   `halo/drs_lines.txt` (a number of lines, 240 to the ceiling) fixes one for the whole run, with the controller off whatever
   `display.dynamic_resolution` says.
-- **The controller** (`src/wiiu_drs.c`, run in `present()` on the GX2 thread) drops a step when the last 8 frames' GPU time averages over 0.9
-  of the budget (16.7 ms, 33.3 at 30 frames a second) and the frame waited more than 1 ms for the flip; it raises one when the time
+- **The controller** (`src/wiiu_drs.c`, run in `present()` on the GX2 thread) drops a step when the median of the last 8 frames' GPU time
+  is over 0.9 of the budget (16.7 ms, 33.3 at 30 frames a second); the GPU's time plus 2.5 ms of blits is at least 0.9 of the frames' interval
+  over the last 64 frames; the median of the 8 backlogs is over 0.06 of the budget; and the frame waited more than 1 ms for the flip. The
+  interval is what tells a GPU that is the limit (0.86 to 1.02 in c10, b40 and the a30 shore) from a game thread that is (0.59 to 0.85 in the a30
+  fight and b30, where the GPU's time still reads 16 to 18 ms). The backlog is the part of a frame's GPU time still to run when the game thread
+  had handed over its last draw; the display holds nearly every early frame (11 to 16 ms a frame at 60 in the console's logs), so a wait for the
+  flip is no sign of a GPU that is behind. It raises a step when the median
   predicted at the step above fits in 0.75 of the budget, or after 120 frames without a wait. It holds 30 frames after any change and 3 s
   after a drop, and is off while a menu has the screen (the menus draw every line). `display.dynamic_resolution` (off by default; the graphics
   mode Quality turns it on) and `display.dynamic_resolution_floor` (540) set it.
@@ -478,7 +483,7 @@ Written and tested on the build machine (branch `wiiu-drs`), not run on a consol
 The log says, at the start, `GX2: dynamic resolution: the frames draw N of the targets' M lines for this run (halo/drs_lines.txt)` when the
 note is there, and at the first present (and each change of the settings) `GX2: dynamic resolution is on|off ...`; every 5 s, with the other
 notes, `GX2:   dynamic resolution: N of M lines (...); since the last note D drops and R rises, W of F frames waited over 1 ms for the
-flip, K had a menu; the GPU's time at this step ... ms on average over n frames; C targets cleared at a change of step`. The frame times'
+flip, K had a menu; the GPU's time at this step ... ms on average and in the median, its backlog ... ms in the median, over n frames, and ... of the frames' interval over 64 (the share the controller drops at); C targets cleared at a change of step`. The frame times'
 percentiles are the line before it, `GX2:   frame times: median ..., 95th percentile ..., 99th ... ms`. The overlay shows the size drawn.
 
 ### The console's tests
@@ -486,6 +491,11 @@ percentiles are the line before it, `GX2:   frame times: median ..., 95th percen
 For the session that has the console. Copy the build's `halo.wuhb`/`halo.rpx`; keep the card's other notes as that session's practice has
 them. Each run: read `log.txt` afterwards.
 
+0. **The backlog, controller off.** Before any of the below, with `display.dynamic_resolution = false` and no note: the 5 s log has the line
+   `GX2:   of it still to run when the game thread had handed over the frame's last draw (the GPU's backlog ...): X ms on average, Y the longest,
+   N of M frames over 2 ms` after the GPU's time. Expected from the old logs (estimated, not measured): about 0 in Blood Gulch, a10, a50 and in
+   fights the game thread limits (a30 firefight, b30); 3 to 8 ms in c10, b40 and the a30 shore at 45 to 50 frames a second. The controller's
+   threshold (`BACKLOG_SHARE` in `src/wiiu_drs.c`, 0.06 of the budget, 1 ms at 60) is to be set from these figures.
 1. **Each forced step in a10, a30 and Blood Gulch.** At 720 lines (the default), put `648`, then `576`, then `540` in `halo/drs_lines.txt`
    (one run each), and once `1080` lines (`display.render_lines = 1080`, or `halo/render_height.txt` 1080) with `810`. In each map, look at:
    - the HUD (meters, motion sensor, reticle, the text and waypoints): where it is at 720 without the note, only softer;

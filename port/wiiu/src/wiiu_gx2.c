@@ -266,9 +266,17 @@ static struct
 	uint8_t gpu_slot_state[GPU_SAMPLE_SLOTS];
 	OSTime gpu_slot_ended[GPU_SAMPLE_SLOTS];
 	unsigned gpu_slot_lines[GPU_SAMPLE_SLOTS]; /* the lines each slot's frame drew of the back buffer (dynamic resolution's step) */
+	/* when each slot's frame began (its first draw) and when its last commands were handed to the GPU (the present's first GX2Flush; gpu_handing: the
+	slot, plus 1, waiting for that), the time between them being the game thread's to hand the frame over; and the five seconds' backlog, the part of
+	the GPU's time that was still to run after that (a GPU that kept up with a late game thread has none) */
+	OSTime gpu_slot_begun[GPU_SAMPLE_SLOTS], gpu_slot_handed[GPU_SAMPLE_SLOTS];
+	unsigned gpu_handing;
+	OSTime gpu_window_backlog_ticks, gpu_window_backlog_longest;
+	unsigned gpu_window_backlog_over;
+	float gpu_ms; /* the last frame's read, the lines it drew, and how many frames have been read */
+	float gpu_backlog_ms; /* its backlog, or -1 if its hand-over was not timed */
 	OSTime gpu_window_ticks, gpu_window_longest;
 	unsigned gpu_window_frames;
-	float gpu_ms; /* the last frame's read, the lines it drew, and how many frames have been read */
 	unsigned gpu_lines;
 	unsigned long gpu_reads;
 	unsigned overlay_frame;
@@ -3421,6 +3429,8 @@ static void gpu_frame_begin(void)
 	}
 	gpu_sample(&gpu_samples[slot][0]);
 	gx.gpu_slot_state[slot] = 1;
+	gx.gpu_slot_begun[slot] = OSGetSystemTime();
+	gx.gpu_slot_handed[slot] = 0;
 	gx.gpu_frame_open = 1;
 }
 
@@ -3436,9 +3446,20 @@ static void gpu_frame_end(unsigned lines)
 		gx.gpu_slot_state[slot] = 2;
 		gx.gpu_slot_ended[slot] = OSGetSystemTime();
 		gx.gpu_slot_lines[slot] = lines;
+		gx.gpu_handing = slot + 1;
 		gx.gpu_slot = (slot + 1) % GPU_SAMPLE_SLOTS;
 	}
 	gx.gpu_frame_open = 0;
+}
+
+/* right after the present's GX2Flush that hands the frame's last commands (its end sample among them) to the GPU: the time the game thread took to hand
+the frame over ends here. (The GPU starts a frame at the first flush after its begin sample, a stream's worth after the frame's first draw, so the span
+this makes is a little longer than the one the GPU had, and the backlog a little shorter than it was.) */
+static void gpu_handed(void)
+{
+	if (gx.gpu_handing)
+		gx.gpu_slot_handed[gx.gpu_handing - 1] = OSGetSystemTime();
+	gx.gpu_handing = 0;
 }
 
 /* the frames whose samples the GPU has written: polled between draws and while waiting for the flip */
@@ -3484,6 +3505,19 @@ static void gpu_poll(void)
 				if (gx.perf_fast_active)
 					perf_meter_gpu(&gx.perf_fast, gx.gpu_ms);
 				gx.gpu_lines = gx.gpu_slot_lines[slot];
+				if (gx.gpu_slot_handed[slot] > gx.gpu_slot_begun[slot])
+				{
+					const OSTime span = gx.gpu_slot_handed[slot] - gx.gpu_slot_begun[slot];
+					const OSTime backlog = ticks > span ? ticks - span : 0;
+
+					gx.gpu_backlog_ms = (float)OSTicksToMicroseconds(backlog) / 1000.0f;
+					gx.gpu_window_backlog_ticks += backlog;
+					if (backlog > gx.gpu_window_backlog_longest)
+						gx.gpu_window_backlog_longest = backlog;
+					gx.gpu_window_backlog_over += backlog > OSMillisecondsToTicks(2);
+				}
+				else
+					gx.gpu_backlog_ms = -1.0f;
 				gx.gpu_reads++;
 				gx.gpu_window_ticks += ticks;
 				if (ticks > gx.gpu_window_longest)
@@ -4109,6 +4143,7 @@ static void drs_present(const struct dk_command_present *command, OSTime wait_ti
 	{
 		frame.gpu_ms = gx.gpu_ms;
 		frame.gpu_lines = gx.gpu_lines;
+		frame.gpu_backlog_ms = gx.gpu_backlog_ms;
 		gx.drs_gpu_reads = gx.gpu_reads;
 	}
 	frame.flip_wait_ms = (float)OSTicksToMicroseconds(wait_ticks) / 1000.0f;
@@ -4446,6 +4481,7 @@ static void present(const struct dk_command_present *command)
 	GX2CopyColorBufferToScanBuffer(WHBGfxGetDRCColourBuffer(), GX2_SCAN_TARGET_DRC);
 	/* (the frame's work is handed to the GPU before the swap, whose wait for the display is then not in the time the work is said to have taken) */
 	GX2Flush();
+	gpu_handed();
 	{
 		/* the swap's interval (halo/pacing.txt: the policy; off: whatever GX2 has, which is 1, or 0 with display.vsync false) and, for mode 2, the frames held to a refresh each */
 		const OSTime swap_time = OSGetSystemTime();
@@ -4627,8 +4663,15 @@ static void present(const struct dk_command_present *command)
 			wiiu_log("GX2:   the GPU's own time for a frame's draws (bottom-of-pipe samples, at most what it took): %.2f ms on average over %u frames, %.2f the longest",
 				(double)OSTicksToMicroseconds(gx.gpu_window_ticks) / 1000.0 / (double)gx.gpu_window_frames, gx.gpu_window_frames,
 				(double)OSTicksToMicroseconds(gx.gpu_window_longest) / 1000.0);
+		if (gx.gpu_window_frames)
+			wiiu_log("GX2:   of it still to run when the game thread had handed over the frame's last draw (the GPU's backlog; 0 for a GPU that kept up with a late "
+				"game thread): %.2f ms on average, %.2f the longest, %u of %u frames over 2 ms",
+				(double)OSTicksToMicroseconds(gx.gpu_window_backlog_ticks) / 1000.0 / (double)gx.gpu_window_frames,
+				(double)OSTicksToMicroseconds(gx.gpu_window_backlog_longest) / 1000.0, gx.gpu_window_backlog_over, gx.gpu_window_frames);
 		gx.gpu_window_ticks = gx.gpu_window_longest = 0;
 		gx.gpu_window_frames = 0;
+		gx.gpu_window_backlog_ticks = gx.gpu_window_backlog_longest = 0;
+		gx.gpu_window_backlog_over = 0;
 		wiiu_log("GX2:   per frame over %u frames: %.1f ms in the stream (of which %.1f in draws, %.1f in textures), %.1f ms presenting", gx.window_frames,
 			(double)OSTicksToMicroseconds(gx.submit_ticks - gx.present_ticks) / 1000.0 / (double)gx.window_frames,
 			(double)OSTicksToMicroseconds(gx.draw_ticks) / 1000.0 / (double)gx.window_frames,
@@ -4701,9 +4744,10 @@ static void present(const struct dk_command_present *command)
 				gx.drs_lines, gx.render_height, gx.drs_clears);
 		else if (gx.drs_on)
 			wiiu_log("GX2:   dynamic resolution: %u of %u lines (the controller); since the last note %u drops and %u rises, %u of %u frames waited over "
-				"1 ms for the flip, %u had a menu; the GPU's time at this step %.2f ms on average over %u frames (-1: none yet); %u targets cleared at "
-				"a change of step", gx.drs_lines, gx.render_height, gx.drs_drops, gx.drs_rises, gx.drs_waits, gx.drs_frames, gx.drs_menu_frames,
-				(double)wiiu_drs_average(&gx.drs), gx.drs.gpu_count, gx.drs_clears);
+				"1 ms for the flip, %u had a menu; the GPU's time at this step %.2f ms on average, %.2f the median, its backlog %.2f the median, over %u frames, and %.2f of the frames' interval "
+				"over %u (-1: none yet); %u targets cleared at a change of step", gx.drs_lines, gx.render_height, gx.drs_drops, gx.drs_rises, gx.drs_waits, gx.drs_frames,
+				gx.drs_menu_frames, (double)wiiu_drs_average(&gx.drs), (double)wiiu_drs_median(&gx.drs), (double)wiiu_drs_backlog(&gx.drs), gx.drs.gpu_count,
+				(double)wiiu_drs_utilisation(&gx.drs), gx.drs.busy_count, gx.drs_clears);
 		gx.drs_drops = gx.drs_rises = gx.drs_waits = gx.drs_frames = gx.drs_menu_frames = gx.drs_clears = 0;
 		wiiu_log("GX2:   frame times: longest %llu ms, %u over 40 ms; shaders loaded %u (%llu ms loading)", (unsigned long long)OSTicksToMilliseconds(gx.longest_frame),
 			gx.slow_frames, gx.shaders_loaded, (unsigned long long)OSTicksToMilliseconds(gx.shader_ticks));
