@@ -995,6 +995,8 @@ static struct
 	BOOL tried;
 } *hud_images;
 
+unsigned long system_milliseconds(void);
+
 static uint32_t hud_image(long asset, unsigned long *levels)
 {
 	if (asset < 0 || asset >= (long)hud_hires_embedded_count)
@@ -1008,12 +1010,22 @@ static uint32_t hud_image(long asset, unsigned long *levels)
 	if (!hud_images[asset].tried)
 	{
 		const struct hud_hires_embedded *embedded = &hud_hires_embedded[asset];
+		/* (the first draw that needs the image decodes it, makes its levels and sends it, on the game thread: the 700 to 1,600 ms hitches in the HUD pass of the console's
+		logs. Said by name, once each, to tell which bitmap a hitch was, and how big the image the GX2 thread is to find memory for) */
+		static unsigned told;
+		const unsigned long started = system_milliseconds();
 
 		hud_images[asset].tried = TRUE;
 		hud_images[asset].id = png_image(embedded->png, embedded->png_size, &hud_images[asset].levels);
 		if (!hud_images[asset].id)
 			platform_log("high-res hud: could not decode the texture for %s bitmap %d", embedded->tag,
 				embedded->bitmap);
+		else if (told < 80)
+		{
+			told++;
+			platform_log("high-res hud: image %u made for %s bitmap %d (the game's bitmap is %ux%u; the image has %lu levels) in %lu ms", (unsigned)hud_images[asset].id, embedded->tag,
+				embedded->bitmap, embedded->width, embedded->height, hud_images[asset].levels, system_milliseconds() - started);
+		}
 	}
 	*levels = hud_images[asset].levels;
 	return hud_images[asset].id;
