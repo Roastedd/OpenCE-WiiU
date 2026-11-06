@@ -5925,3 +5925,48 @@ static void object_compute_change_colors(
 
 	return;
 }
+
+#ifdef HALO_WIIU
+/* port: how many objects of each type are in use, for the Wii U's log (wiiu_tick_parts.c, every 150 ticks, beside the tick parts): the objects pass of a joined
+game's ticks grew from 2.8 to 7.5 ms a tick over the 293 s of Beaver Creek on 2026-11-06 (2.8 ms at 330 s, 7.5 at 480 s; Ratrace stayed at 4.5), and the log
+could not say what the objects were. Only the headers' types are read. */
+void objects_wiiu_census(void)
+{
+	static const char *const names[NUMBER_OF_OBJECT_TYPES] =
+	{
+		"biped", "vehicle", "weapon", "equipment", "garbage", "projectile", "scenery", "machine", "control", "light_fixture", "placeholder", "sound_scenery",
+	};
+	void platform_log(const char *format, ...);
+	long counts[NUMBER_OF_OBJECT_TYPES];
+	char line[240];
+	struct data_iterator iterator;
+	struct object_header_datum const *header;
+	long type, total = 0, used = 0;
+
+	if (!object_header_data || !object_header_data->valid)
+	{
+		return;
+	}
+	csmemset(counts, 0, sizeof(counts));
+	data_iterator_new(&iterator, object_header_data);
+	while ((header = (struct object_header_datum const *)data_iterator_next(&iterator)) != NULL)
+	{
+		if (header->type < NUMBER_OF_OBJECT_TYPES)
+		{
+			counts[header->type]++;
+		}
+		total++;
+	}
+	for (type = 0; type < NUMBER_OF_OBJECT_TYPES; type++)
+	{
+		if (counts[type] && (size_t)used < sizeof(line) - 24)
+		{
+			used += (long)sprintf(line + used, "%s%s %ld", used ? ", " : "", names[type], counts[type]);
+		}
+	}
+	line[used] = 0;
+	platform_log("objects in use: %ld of %d (%s)", total, (int)object_header_data->maximum_count, used ? line : "none");
+
+	return;
+}
+#endif

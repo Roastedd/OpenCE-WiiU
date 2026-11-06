@@ -16,6 +16,8 @@ void platform_log(const char *format, ...);
 
 /* wiiu_bw_kernels.c: what the game asked of the Broadway kernels' functions in these ticks */
 void wiiu_bw_tick_report(unsigned long ticks);
+/* objects.c: the objects in use, by type, in a line of the log */
+void objects_wiiu_census(void);
 
 #define PART_LIMIT 32
 
@@ -138,6 +140,7 @@ void wiiu_tick_done(long long started)
 		platform_log("tick parts, counters of core %u, a tick: %s %.2f M, %s %.2f M, %s %.1f K, %s %.1f K", counters_core, wiiu_perfmon_name(0), v[0] / 1e6, wiiu_perfmon_name(1), v[1] / 1e6,
 			wiiu_perfmon_name(2), v[2] / 1e3, wiiu_perfmon_name(3), v[3] / 1e3);
 	}
+	objects_wiiu_census();
 	wiiu_bw_tick_report(game_ticks);
 	for (index = 0; index < part_count; index++)
 		parts[index].ticks = 0;
