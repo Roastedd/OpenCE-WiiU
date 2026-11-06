@@ -5,7 +5,7 @@ back on each other's channels before either was told gone; one told again on its
 lowest free player even if it was remembered for one that is away (the replacement of a controller whose battery ran out);
 a controller without an address is never taken for another without one; "auto" shares the GamePad's player while there is
 one player and gives each its own once a second joins, only at rest; "separate" leaves a fourth controller without a player
-and "merged" keeps channel n on port n; the lights show the port's number. Each fault below must fail one of the checks."""
+and "merged" keeps channel n on port n; the lights show the port's number; a Wii Remote's face button held is no rest. Each fault below must fail one of the checks."""
 import os
 import subprocess
 import sys
@@ -44,6 +44,8 @@ FAULTS = {
     "no_same_controller": ("if (!memcmp(players->channels[channel].address, address, WIIU_PAD_ADDRESS_SIZE))\n"
                            "\t\t\treturn players->channels[channel].player;",
                            "if (0)\n\t\t\treturn players->channels[channel].player;"),
+    # (a Remote's face button held does not keep the controllers from moving ports)
+    "xbox_face_at_rest": ("return !pad->buttons && !pad->xbox_faces && pad->left_x", "return !pad->buttons && pad->left_x"),
 }
 
 CHECKS = r'''
@@ -167,6 +169,12 @@ int main(void)
 	pad.left_y = 0.0f;
 	pad.right_x = 0.9f;
 	CHECK(!wiiu_pad_players_at_rest(&pad), 74);
+	/* (a Wii Remote's face button, the Xbox's own, is a button held too) */
+	pad.right_x = 0.0f;
+	pad.xbox_faces = WIIU_XBOX_B;
+	CHECK(!wiiu_pad_players_at_rest(&pad), 76);
+	pad.xbox_faces = 0;
+	CHECK(wiiu_pad_players_at_rest(&pad), 77);
 	/* (a channel out of range drives nothing) */
 	CHECK(wiiu_pad_players_port(&p, -1) == -1 && wiiu_pad_players_port(&p, WIIU_PAD_CHANNELS) == -1, 80);
 	CHECK(wiiu_pad_players_connect(&p, WIIU_PAD_CHANNELS, A) == -1, 81);

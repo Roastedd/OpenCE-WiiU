@@ -62,12 +62,21 @@ saves in `wiiu/apps/halo/data/`. Copy `data/` to keep your saves, and put it bac
 | Performance overlay | L + R + − |
 
 In the menus, **A selects and B goes back**, as on other Nintendo games, and you can tap items on the GamePad's touch screen. In the game, the face
-buttons sit where the Xbox's do, so jump is under your thumb; the on-screen prompts show the Wii U's letters. Wii Remote with Nunchuk is not supported.
+buttons sit where the Xbox's do, so jump is under your thumb; the on-screen prompts show the Wii U's letters. A **Wii Remote with a Nunchuk** plays too (below); a Wii Remote alone only works the menus.
 
 - **Gyro aiming**: turn on *Gyro aim* in Settings → your profile → Gamepad Setup → **Wii U GamePad** ("Always", or "Zoomed" for scopes only).
   The GamePad then points the view like a mouse: turn it left and right however you hold it, tilt it to look up and down. Rest a thumb on the
   touch screen to hold the view still while you bring the GamePad back to a comfortable position. Sensitivity 1 turns the view as far as the
   GamePad turns; most players like 2 to 4. (Written and tested on a computer; not yet checked on a console.)
+- **Wii Remote with Nunchuk** (sync it with the Wii U's SYNC button, as for any Wii Remote; its lights show its player's number). The Nunchuk's stick
+  moves. B fires, A jumps, Nunchuk Z throws a grenade, C crouches, 1 reloads and uses, 2 is the melee; on the d-pad, up switches weapons, left is the
+  flashlight, right switches grenades, down zooms; + pauses and − is Back. (Setting `input.wiiu_wiimote_layout = "z_fire"` in `config.toml` has Z fire and
+  B throw grenades.) A Wii Remote without a Nunchuk has the menus' buttons: d-pad, A selects, B goes back, 1 and 2 are the X and Y prompts.
+  To look around, point at the screen (needs a sensor bar: the Wii U's own, or the GamePad as one through the *DRC Sensorbar* Aroma plugin): the view
+  does not turn while you point inside the middle of the screen, and turns faster the further out you point (`input.wiiu_wiimote_pointer_box` and
+  `_pointer_speed` set the size of the middle and the speed). A **Wii Remote Plus** (or a MotionPlus adapter) needs no bar: it turns the view as you
+  turn it, and holding it still for a second and a half zeroes it. `input.wiiu_wiimote_look` chooses between the two (`"auto"` prefers the MotionPlus).
+  (Written and tested on a computer; not yet checked on a console.)
 - **Skip a cutscene**: hold B (the jump button), + or a finger on the touch screen for one second.
 
 ## Settings that matter
@@ -101,7 +110,7 @@ purpose. They are still being qualified: if the game halts with them on, take th
 
 ## Split screen (two to four players)
 
-The GamePad is always player 1. Connect up to three more controllers: Pro Controllers, Classic Controllers on Wii Remotes, or other pads through
+The GamePad is always player 1. Connect up to three more controllers: Pro Controllers, Classic Controllers on Wii Remotes, Wii Remotes with Nunchuks, or other pads through
 Bloopair. While you play alone, any of them plays as player 1 with the GamePad, so you can play on the TV with a Pro Controller.
 
 - **Multiplayer**: create a game (LAN, or internet), pick a map, and in the lobby choose **ADD PLAYER**. The controllers then become players of their
@@ -165,7 +174,7 @@ found that no Custom Edition map was available on the development machines, so t
   few things out there on purpose. The game is not yet at a steady 60 in every fight. Heavy scenes can still have a hitch
   the first time a room is drawn (the textures are read from the card then).
 - **Not tried on a console**: voice chat, Halo Custom Edition maps, split screen with three or four players, the gyro aim's sensitivity, mods, and
-  anything with 24 or more players. Wii Remote with Nunchuk is not supported; USB headsets do not work.
+  anything with 24 or more players, and the Wii Remote with Nunchuk (the pointer, the MotionPlus, the buttons). USB headsets do not work.
 - **Automatic updates** are built but nothing is published to update from yet.
 - A graphics shader that `shaders.pack` lacks is drawn with the closest one it has, or a plain stand-in: if something looks wrong (a meter, a scope, a
   sky), say what and in which level, and which `shaders.pack` you have.

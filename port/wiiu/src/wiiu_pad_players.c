@@ -163,7 +163,7 @@ int wiiu_pad_players_lights(const struct wiiu_pad_players *players, int channel)
 
 int wiiu_pad_players_at_rest(const struct wiiu_pad *pad)
 {
-	return !pad->buttons && pad->left_x < AT_REST_STICK && pad->left_x > -AT_REST_STICK && pad->left_y < AT_REST_STICK &&
+	return !pad->buttons && !pad->xbox_faces && pad->left_x < AT_REST_STICK && pad->left_x > -AT_REST_STICK && pad->left_y < AT_REST_STICK &&
 		pad->left_y > -AT_REST_STICK && pad->right_x < AT_REST_STICK && pad->right_x > -AT_REST_STICK && pad->right_y < AT_REST_STICK &&
 		pad->right_y > -AT_REST_STICK;
 }

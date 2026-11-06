@@ -143,7 +143,7 @@ The decisions and the files (the queue, the watch, the records) are plain C with
 
 ## Controls
 
-The GamePad is the first controller, player 1. The Pro and Classic Controllers take the players' places as `input.wiiu_controller_layout` says:
+The GamePad is the first controller, player 1. The Pro and Classic Controllers, and the Wii Remotes (next section), take the players' places as `input.wiiu_controller_layout` says:
 `"auto"` (the default) has every controller play as player 1 with the GamePad while one person plays, and gives each its own player, 2 to 4, once a
 second joins (ADD PLAYER in the lobby, or CO-OP CAMPAIGN); `"separate"` gives each its own player always; `"merged"` is the layout before these, the
 controller of the first KPAD channel joining the GamePad and those of the other three the other players. A controller keeps its player while it goes and comes back,
@@ -182,7 +182,116 @@ each. The menus are drawn centred in the picture's 852 columns, with the offset 
 is drawn (`MENUS_DRAWN_CENTERED` in `d3d8_gx2.c`; on 2026-10-22 the renderer still drew them at the left). Not measured: rumble (it cannot be seen), the Pro and Classic
 Controllers (none was connected), split screen play, a real finger (the calibration is the system's, to 854x480). Also written, not run on a
 console: the GamePad's gyro aiming (`input.wiiu_gyro_aim` "always" or "zoom"; off by default; the axes' signs and scale are unmeasured), a tap outside the
-menus that skips a cinematic, and Classic Controllers. Not done: Wii Remote and Nunchuk.
+menus that skips a cinematic, Classic Controllers, and the Wii Remote with a Nunchuk (next section).
+
+## Wii Remote
+
+Branch `wiiu-wimote`. A Wii Remote is read like the Pro and Classic Controllers: its own KPAD channel, a player in `src/wiiu_pad_players.c`'s map by its
+Bluetooth address, the player's number on its lights, the motor for the game's rumble. Written and tested on the desktop; nothing here has run with a real
+Remote (see "What only the console can say").
+
+**What is read** (`src/wiiu_input.c`; the pure parts, tested on the desktop, are `src/wiiu_wimote.c`, which wiiu_input.c calls with the values from
+`KPADReadEx`):
+
+- The extension, `KPADStatus.extensionType`: a Remote with nothing, with a Nunchuk (`WPAD_EXT_NUNCHUK`), with the MotionPlus (`WPAD_EXT_MPLUS`, a Wii
+  Remote Plus or an adapter) or with both (`WPAD_EXT_MPLUS_NUNCHUK`). A Remote with a Classic Controller is still read as the Classic Controller, and a Pro
+  Controller as one.
+- The buttons (`hold`, and the Nunchuk's Z and C from `nunchuk.hold`: the rest of that field is the stick's emulated d-pad, which is not taken), the
+  Nunchuk's stick (`nunchuk.stick`: a dead centre of a tenth, and 0.85 of the way out is the full throw), the pointer (`pos` and `posValid`), the
+  accelerometer and, with the MotionPlus on, its turn rates (`mplus.acc`, taken to be degrees a second; `mplus.angles` is only logged).
+- The Remote's face buttons reach the game as the Xbox's own A, B, X and Y (`wiiu_pad.xbox_faces`), not through the Wii U's by-place or by-letter match
+  (`input.wiiu_face_buttons` does not change them), so A selects in the menus and jumps in the game. Hold-to-skip and the updater's panel see them as the
+  letters of the same name.
+
+**Layouts** (`input.wiiu_wiimote_layout`; the Xbox's meaning is what the game gets, the same as the table in Controls):
+
+| Remote and Nunchuk | `"default"` | `"z_fire"` | Xbox pad |
+| --- | --- | --- | --- |
+| Nunchuk stick | move | move | left stick |
+| B (trigger) | fire | throw grenade | right trigger / left trigger |
+| Nunchuk Z | throw grenade | fire | left trigger / right trigger |
+| A | jump | jump | A |
+| 2 | melee | melee | B |
+| 1 | action, reload | action, reload | X |
+| D-pad up | switch weapons | switch weapons | Y |
+| D-pad left | flashlight | flashlight | white |
+| D-pad right | switch grenades | switch grenades | black |
+| D-pad down | zoom | zoom | right stick click |
+| Nunchuk C | crouch | crouch | left stick click |
+| + | pause | pause | Start |
+| − | Back | Back | Back |
+
+A Remote without a Nunchuk has the menus' layout whatever the setting says: the d-pad, A (Xbox A: selects), B (Xbox B: goes back), 1 (Xbox X), 2 (Xbox Y),
++ (Start) and − (Back). The Nunchuk plugged in or out changes it at once. HOME is the system's.
+
+**Looking** (`input.wiiu_wiimote_look`, one source for each Remote at a time):
+
+- `"auto"` (the default): the MotionPlus if the Remote has it (switched on) and it is the first player's; else the pointer, while it sees the sensor bar;
+  else none. `"pointer"`, `"motion"` (the MotionPlus, first player only) and `"off"` choose one.
+- **Pointer**: a free-aim box in the middle of the pointer's range (`input.wiiu_wiimote_pointer_box`, the half width as a share of the range, 0.3). Inside
+  it the view does not turn. Outside it the view turns at a rate that grows with the distance past the box's edge, gently at first, up to the full push of
+  the right stick at the edge of the screen (`input.wiiu_wiimote_pointer_speed`, 1; the box is checked on each axis alone). The rate goes to the game as the
+  right stick, lifted past its dead range so that it starts from nothing, so the game's look acceleration, inversion and aim assist apply as to a stick; not
+  in the menus. No sensor bar seen (`posValid` 0): no turning. The pointer is switched on with `KPADEnableDPD` for "auto" and "pointer" and off otherwise.
+- **MotionPlus**: `KPADSetMplsWorkarea` is given a buffer of `KPADGetMplsWorkSize()` bytes once, and `KPADEnableMpls` is asked for when a Remote connects
+  (`WPAD_MPLS_MODE_MPLS_NUNCHUK` with a Nunchuk, `WPAD_MPLS_MODE_MPLS_ONLY` without; again if the extension changes, at most three times). The callback's
+  success or failure is in the log ("MotionPlus is on" or "could not be started": a Remote that is not a Plus, with no adapter, says the second, once, and
+  is not asked again). The turn then comes the way the GamePad's gyro does (`halo_linux_mouse_look`, as a mouse: not through the stick): the same
+  `input.wiiu_gyro_space` ("player", "turn", "lean"), `input.wiiu_gyro_sensitivity`, `input.wiiu_gyro_invert_y` (false: lifting the Remote's nose looks up),
+  `input.wiiu_gyro_pause` ("touch" is the GamePad's screen, "stick" the right stick) and the tightening of small rates. It replaces the GamePad's gyro
+  while the first player's Remote has it, and aims whatever `input.wiiu_gyro_aim` says (that is the GamePad's). Only the first player's Remote turns the
+  view this way (the game's mouse path is the first player's); a Remote with a MotionPlus that is another player's falls back to the pointer. The Remote's
+  motor is not rumbled while its motion turns the view. **To recentre, hold the Remote still for a second and a half**: it asks the library to zero the
+  MotionPlus (`KPADResetMpls`) once for each time it is held still (the log says so); a drifting view is cured by that. The view is turned by the rates, so
+  the Remote's own idea of its angle does not matter. `input.wiiu_wiimote_motion_invert_x` turns the turn round, since its direction is a guess.
+- The log, in the format of the other `Input:` lines, says at connect which extension, layout and look a Remote has ("Input: a Wii Remote on channel 1
+  (...) is player 1's", then "Input: at connect: channel 1's Wii Remote: extension a Nunchuk, layout default, look none (the setting is auto: the pointer
+  once it sees the sensor bar)"), the same again with "now" when the extension or the look changes (the MotionPlus came on, the pointer found the bar), the
+  pointer finding and losing the sensor bar, and, while the MotionPlus turns, now and then the rates' peak against how far KPAD's own angle changed in the
+  same second (`MotionPlus: rates peaked at ...; the angles changed ...`: if the units are degrees a second, the angle's change is about the peak's rate
+  times a second, and when it is not, that line says what the scale should be).
+
+**Players.** Each Remote is a player the way a Pro Controller is (`input.wiiu_controller_layout`); the GamePad's gyro is player 1's only, and so is the
+MotionPlus look. The pointer look and the buttons work for every player.
+
+**Not done.** The settings have no GamePad-screen menu page (the config rows only). The virtual-pad test layer (`wiiu_virtual_pads`) was not extended
+with a Remote kind: it feeds the Xbox pad under the Remote layer, so a kind of its own would test nothing the layer does. The speaker, the balance board,
+the Remote's own sound and a pointer cursor in the menus are not used.
+
+**Tests.** Host: `tools/harness/tests/test_wiiu_wimote.py` compiles `wiiu_wimote.c` against injected values: every button of the three layouts, the
+Nunchuk's stick, the box's edges and rate curve with its clamp and the lift, `posValid` 0, the look source for every setting, extension, player and pointer
+state, the MotionPlus mode asked for each extension, the turn and tilt from injected rates (level, tilted, pointed up, the Remote's own yaw and roll, tightening,
+the sample's time limit, signs), and the zeroing after being held still; each of 20 faults must fail it. The existing pad-player and virtual-pad tests still
+pass, and the game's default host digest is unchanged. The Wii U build compiles, links and passes `readrpl`.
+
+**What only the console can say.**
+
+- Whether `KPADReadEx` reports the pointer steadily (`posValid`), and its range and sign (the code takes positive as right and down, as the header says; the
+  box and speed are shares of the range), at the owner's distance, with the Wii U's sensor bar and with the GamePad as one.
+- The units and signs of the MotionPlus rates (`mplus.acc`), and whether `KPADResetMpls` is the zeroing the library has for a Remote held still. The log's
+  peak-and-angle line says the units; the direction of the turn is `input.wiiu_wiimote_motion_invert_x`, the pitch `input.wiiu_gyro_invert_y`.
+- Whether a Remote Plus starts with `WPAD_MPLS_MODE_MPLS_NUNCHUK` with a Nunchuk plugged in, what `extensionType` it then reports, and what the extension
+  does while it starts (the code holds a Remote's state for a second if it is unknown).
+- The Nunchuk's real reach and centre (the stick's dead centre of a tenth and its reach of 0.85 are guesses); the channel and the address when a Remote sleeps.
+
+**A test plan for the owner** (nothing needs the game's levels beyond the first; end with `gx2_thread 0` as for any session):
+
+1. Sync a Wii Remote with a Nunchuk (SYNC on the console, then the Remote's red button). The log should say the Remote is on a channel and is player 1's;
+   its first light should be on. In the menus the Nunchuk's stick moves, A selects and 2 goes back (with a Nunchuk the Remote's B is the game's fire, not a
+   menu button). Take the Nunchuk out: the menus' layout (d-pad, B goes back) returns.
+2. In a level with no sensor bar and a plain Remote (not Plus): the buttons of the table; the view does not turn; the log says the MotionPlus could not be
+   started, once.
+3. With the Wii U's sensor bar placed as for any Wii game, or the GamePad as one (the *DRC Sensorbar* plugin, the GamePad facing the player at one to three
+   feet): the log says "sees the sensor bar" when the Remote points at it. Point inside the middle: the view holds still. Point out towards each edge: it
+   turns, faster further out; away from the bar, it stops. Change `input.wiiu_wiimote_pointer_box` and `_pointer_speed` and see the middle grow and the
+   turning quicken.
+4. A Wii Remote Plus (or a plain Remote with a MotionPlus adapter), with and without a sensor bar: the log should say the MotionPlus is on, the look should
+   be "the MotionPlus", and the view should follow the Remote as a mouse. If left and right are the wrong way, set `input.wiiu_wiimote_motion_invert_x`
+   to true; if up and down, `input.wiiu_gyro_invert_y`. Send the log's "rates peaked at ... the angles changed ..." lines. Hold the Remote still on a table
+   for two seconds: "was held still" in the log, and no creeping of the view.
+5. The Remote alone (no Nunchuk, Plus or not): the menus work with it; it is player 1's, then player 2's once ADD PLAYER makes the controllers players of
+   their own (with the lights showing 2).
+6. Rumble: the Remote's motor with a pointer look; none while its MotionPlus turns the view.
 
 ## Split screen for three and four players
 
