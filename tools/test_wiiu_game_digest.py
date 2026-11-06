@@ -186,7 +186,9 @@ def build(name: str = "here", rev: str = None, mutations=(), poison: bool = Fals
     folder"""
     sources = tree(name, rev, mutations)
     folder = "build/game-digest-poison" if poison else "build/game-digest-input" if wiiu_input else "build/game-digest"
-    run_command(["docker", "run", "--rm", "-v", f"{sources}:/src", "-w", "/src", IMAGE, "python3", "port/wiiu/tests/game_digest/build.py",
+    # (GAME_DIGEST_RELEASE=1: the release flavour, configure.py --release's HALO_RELEASE, as the Wii U's RELEASE=1 build has it)
+    run_command(["docker", "run", "--rm", "-e", f"GAME_DIGEST_RELEASE={os.environ.get('GAME_DIGEST_RELEASE', '0')}", "-e", f"HALO_NO_HUD_SENTINEL={os.environ.get('HALO_NO_HUD_SENTINEL', '0')}", "-v", f"{sources}:/src",
+                 "-w", "/src", IMAGE, "python3", "port/wiiu/tests/game_digest/build.py",
                  "--build-dir", folder, *(["--poison"] if poison else []), *(["--wiiu-input"] if wiiu_input else [])], timeout=3600)
     program = sources / folder
     if not (program / "halo").is_file():

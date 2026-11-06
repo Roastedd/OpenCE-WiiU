@@ -11,6 +11,8 @@
   reference photos by Aerocatia. The corrected rocket/sniper reticles and
   sniper zoom labels (2x, 10x) use artwork supplied by the project owner
   (`port/assets/hud/corrections`); original artist attribution is unverified.
+- **The Wii U app's icon and start-up pictures** (`port/wiiu/meta`): drawn for the Wii U port by `tools/wiiu_app_art.py` from shapes and Overpass
+  (`port/assets/fonts`); they use no artwork of the game.
 - **The menus' mouse cursor** (the blue arrow the menus show for the
   mouse): by pugzysixtyfour (`port/assets/cursor`).
 

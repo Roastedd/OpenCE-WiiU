@@ -117,6 +117,12 @@ WIIU_LINK_FLAGS = ["-g", "-specs=$$WUT_ROOT/share/wut.specs", WIIU_MARCH, "-meab
 WIIU_LIBS = ["-L$$WUT_ROOT/lib", "-lwut", "-lm"]
 
 
+# the app's names in Aroma's menu (wuhbtool --name, --short-name, --author): the game's name, and that this is the OpenCE project's port
+WUHB_NAME = "Halo: Combat Evolved (OpenCE)"
+WUHB_SHORT_NAME = "Halo CE (OpenCE)"
+WUHB_AUTHOR = "OpenCE"
+
+
 def update_defines(release: bool) -> str:
     """The Wii U updater's configuration (port/wiiu/src/wiiu_update.c), from configure.py's environment: the build number
     (HALO_BUILD_NUMBER, as the desktop updater's: updater_defines), the repository its releases are published in
@@ -274,11 +280,11 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
         rspfile_content="$in_newline",
     )
     n.rule(name="wiiu_rpx", command="$wiiu_elf2rpl $in $out", description="WIIU RPX $out")
-    # (what Aroma's menu lists, with its name, icon and splash screens (port/wiiu/meta, made by
-    # tools/app_icon.py --wiiu); the same program as the RPX)
+    # (what Aroma's menu lists, with its name, icon and splash screens (port/wiiu/meta, drawn by
+    # tools/wiiu_app_art.py); the same program as the RPX)
     n.rule(
         name="wiiu_wuhb",
-        command='wuhbtool $in $out --name "Halo" --short-name "Halo" --author "OpenCE"'
+        command=f'wuhbtool $in $out --name "{WUHB_NAME}" --short-name "{WUHB_SHORT_NAME}" --author "{WUHB_AUTHOR}"'
                 " --icon=$icon --tv-image=$tv_image --drc-image=$drc_image",
         description="WIIU WUHB $out",
     )

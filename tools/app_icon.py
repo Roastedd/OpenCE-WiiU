@@ -11,10 +11,8 @@
   framing): the Android app's launcher icon;
 - opence-icon.png again: the web page's icons (port/web/site/icons), its tab's,
   the installed web app's and the home screen's;
-- the Wii U app's (port/wiiu/meta): the icon Aroma's menu shows (128x128)
-  and the splash screens shown while the app starts, the TV's (1280x720) and
-  the GamePad's (854x480): the render on the background's gradient.
-  `python tools/app_icon.py --wiiu` writes only these.
+- (The Wii U app's icon and splash screens, port/wiiu/meta, are drawn by
+  tools/wiiu_app_art.py: pictures of their own, not this artwork.)
 
 The launcher icon is an adaptive one (Android 8 and later): the render as its
 foreground layer, the background's gradient as its background layer, and the
@@ -53,9 +51,6 @@ WINDOWS_SIZES = [16, 20, 24, 32, 40, 48, 64, 128, 256]
 # manifest's (192, 512)
 WEB_ICONS = ROOT / "port/web/site/icons"
 WEB_SIZES = [32, 180, 192, 512]
-# the Wii U app's icon and splash screens (wuhbtool's --icon, --tv-image, --drc-image)
-WIIU_ASSETS = ROOT / "port/wiiu/meta"
-WIIU_SPLASHES = {"splash-tv.png": (1280, 720), "splash-drc.png": (854, 480)}
 
 
 def background_gradient(icon: Image.Image, render: Image.Image) -> tuple:
@@ -107,35 +102,9 @@ def web_icons(icon: Image.Image) -> None:
     print(f"{WEB_ICONS.relative_to(ROOT)}: {', '.join(str(size) for size in WEB_SIZES)}")
 
 
-def wiiu_images(icon: Image.Image, render: Image.Image) -> None:
-    """the icon, and each splash screen: the background's gradient from top to
-    bottom with the render standing on the bottom edge (its picture is cut
-    there), 92% of the screen's height, its cut sides faded into the gradient"""
-    WIIU_ASSETS.mkdir(parents=True, exist_ok=True)
-    icon.convert("RGB").resize((128, 128), Image.LANCZOS).save(WIIU_ASSETS / "icon.png", optimize=True)
-    top, bottom = background_gradient(icon, render)
-    for name, (width, height) in WIIU_SPLASHES.items():
-        weight = np.linspace(0.0, 1.0, height)[:, None, None]
-        rows = (1.0 - weight) * np.array(top, dtype=np.float64) + weight * np.array(bottom, dtype=np.float64)
-        screen = Image.fromarray(np.repeat(rows, width, axis=1).round().astype(np.uint8), "RGB")
-        side = height * 92 // 100
-        helmet = render.resize((side, side), Image.LANCZOS)
-        fade = np.minimum(1.0, np.minimum(np.arange(side), np.arange(side)[::-1]) / (side * 0.2))
-        alpha = np.asarray(helmet.getchannel("A"), dtype=np.float64) * fade[None, :]
-        helmet.putalpha(Image.fromarray(alpha.round().astype(np.uint8), "L"))
-        screen.paste(helmet, ((width - side) // 2, height - side), helmet)
-        screen.save(WIIU_ASSETS / name, optimize=True)
-    print(f"{WIIU_ASSETS.relative_to(ROOT)}: icon 128x128, " +
-          ", ".join(f"{name} {width}x{height}" for name, (width, height) in WIIU_SPLASHES.items()))
-
-
 def main() -> None:
     icon = Image.open(ICON).convert("RGBA")
     render = Image.open(RENDER).convert("RGBA")
-
-    wiiu_images(icon, render)
-    if "--wiiu" in sys.argv[1:]:
-        return
 
     # the desktop's icons
     icon.resize((256, 256), Image.LANCZOS).save(WINDOW_ICON, optimize=True)

@@ -532,7 +532,7 @@ static void hud_update_unit_local_player(
 	long return_eip = get_return_eip();
 	long stack_buffer[STACK_BUFFER_LENGTH];
 
-	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 
 	if (local_player_get_player_index(local_player_index) != NONE)
 	{
@@ -803,7 +803,7 @@ void hud_render_unit_interface(
 	long return_eip = get_return_eip();
 	long stack_buffer[STACK_BUFFER_LENGTH];
 
-	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 	match_assert(
 		"c:\\halo\\SOURCE\\interface\\hud_unit.c",
 		0x209,

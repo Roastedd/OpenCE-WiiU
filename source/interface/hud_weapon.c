@@ -570,10 +570,7 @@ static void render_grenade_hud(
 	struct grenade_hud_interface_definition *definition;
 	short draw_flags;
 
-	csmemset(
-		stack_buffer,
-		0x62,
-		sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 
 	unit = unit_get(unit_index);
 	weapon_index = unit_inventory_get_weapon(
@@ -704,10 +701,7 @@ static void hud_update_weapon_local_player(
 	struct crosshair_hud_state *crosshair;
 	struct weapon_hud_interface_definition *root_definition;
 
-	csmemset(
-		stack_buffer,
-		0x62,
-		sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 	player = player_get(local_player_get_player_index(local_player_index));
 	unit_index = player->unit_index;
 	unit = unit_try_and_get(unit_index);
@@ -984,10 +978,7 @@ static void crosshairs_draw(
 	/* port: project the passenger's shot once for all pieces of its reticle */
 	if (!passenger_camera_reticle_begin(player->local_player_index, weapon_index))
 		return;
-	csmemset(
-		stack_buffer,
-		0x62,
-		sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 	if (TEST_FLAG(weapon_hud_globals->script_flags, _hud_crosshair_show_bit) &&
 		hud_index != NONE)
 	{
@@ -1403,10 +1394,7 @@ static void render_weapon_hud(
 	short map_type_flags;
 	short element_index;
 
-	csmemset(
-		stack_buffer,
-		0x62,
-		sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 	definition = weapon_hud_interface_definition_get(hud_index);
 	hud_state = get_hud_state(local_player_index);
 
@@ -1955,10 +1943,7 @@ void hud_update_weapon(
 	long stack_buffer[STACK_BUFFER_LENGTH];
 	short local_player_index;
 
-	csmemset(
-		stack_buffer,
-		0x62,
-		sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 
 	for (local_player_index = local_player_get_next(NONE);
 		local_player_index != NONE;

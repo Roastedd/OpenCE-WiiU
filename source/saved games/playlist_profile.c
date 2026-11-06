@@ -76,6 +76,9 @@ symbols in this file:
 
 /* ---------- headers */
 
+/* port: a failed assertion here stops the game in a release build too (cseries.h, HALO_ASSERTS_STOP) */
+#define HALO_ASSERTS_STOP
+
 #include "cseries/cseries.h"
 #include "saved games/playlist_profile.h"
 #include "bungie_net/common/thread.h"

@@ -74,7 +74,9 @@ python tools/ci_build.py linux release   # what CI builds
 | `HALO_ARM64_GUEST` | Android | The guest's ABI (ILP32 AArch64) |
 | `HALO_WEB` | Web | The browser: its frames, storage, sockets and WebGL 2's limits (with `HALO_GLES`, not `HALO_ANDROID`) |
 | `HALO_WINDOWS` | Windows (`halo_windows_prefix.h`) | The Windows build |
-| `HALO_RELEASE` | `--release` | No assertions checked |
+| `HALO_RELEASE` | `--release` | A failed assertion is noted in `debug.txt` and the game goes on (the expressions are still evaluated); the HUD's stack sentinel (`hud_draw.h`) is left out |
+| `HALO_NO_HUD_SENTINEL` | `HALO_NO_HUD_SENTINEL=1` in `configure.py`'s environment (the Wii U's `LEAN=1`) | The HUD's stack sentinel is left out of a build that is not a release one |
+| `HALO_ASSERTS_STOP` | defined at the top of a source file (the saved games' five) | With `HALO_RELEASE`: a failed fatal assertion in that file still stops the game, after its note |
 | `HALO_PROFILE` | `--profile` | The profiling build; a normal build must be unchanged by it |
 | `HALO_BW_KERNELS` | the Wii U build; a host build with `HALO_BW_MODEL=1` in `configure.py`'s environment | The Broadway kernels (`port/wiiu/src/bw`) are called where the game's maths, collision and animation functions have them, behind a switch that is off until the card's `halo/broadway.txt` turns it on |
 | `HALO_BW_MODEL` | a host build with `HALO_BW_MODEL=1` in `configure.py`'s environment | The kernels are their scalar C models (`port/linux/include/halo_bw_model.h`), on from the start (`HALO_BW_KERNELS=0` in a run's environment turns them off): to prove the call sites on the big-endian host |

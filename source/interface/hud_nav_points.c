@@ -691,7 +691,9 @@ void custom_render_nav_point(
 	real a, b, ab, bx, ay;
 	real theta;
 
+#if !defined(HALO_RELEASE) && !defined(HALO_NO_HUD_SENTINEL)
 	memset(stack_buffer, 0x62, sizeof(stack_buffer));
+#endif
 	arrow = TAG_BLOCK_GET_ELEMENT(&hud_globals->waypoint.arrows, nav_index, struct hud_waypoint_arrow);
 	position = *position_pointer;
 
@@ -918,7 +920,7 @@ static void hud_update_nav_point_local_player(
 	long unit_index;
 	short nav_point_index;
 
-	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+	hud_stack_sentinel_fill(stack_buffer);
 
 	datum = get_nav_point_datum(local_player_index);
 	unit_index = local_player_get_player_index(local_player_index)==NONE ?
