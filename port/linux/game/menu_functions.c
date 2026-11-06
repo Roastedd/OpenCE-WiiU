@@ -4686,7 +4686,7 @@ look at: one of the game's own maps is installed; so is a Custom Edition map thi
 custom_maps\ that name. Any other can only be a Custom Edition map (the Gearbox-only maps are, as the
 game plays them), which this machine downloads as it joins if map downloads are on and it can run Custom
 Edition maps (its host shares it, as hosts do unless they turned it off: the listing does not say) */
-static int lobby_browser_map_state(char const *map)
+static int lobby_browser_map_state_uncached(char const *map)
 {
 	char const *const *names;
 	char level_name[CUSTOM_EDITION_MAXIMUM_LEVEL_NAME_LENGTH + 1];
@@ -4714,6 +4714,52 @@ static int lobby_browser_map_state(char const *map)
 		return P2P_LOBBY_MAP_INSTALLED;
 	return config_boolean("network.map_download") && halo_custom_edition_tag_cache() ? P2P_LOBBY_MAP_DOWNLOADABLE :
 		P2P_LOBBY_MAP_MISSING;
+}
+
+/* The browser asks about every listed game's map every frame (the filter), and the answer looks for files in
+the maps folders: a few milliseconds each on the Wii U's SD card, 40 games over 400 ms a frame. So an answer is
+kept for a few seconds, by the map's name (a download that ends, or a map put on the card, shows within them). */
+#define LOBBY_BROWSER_MAP_MEMO 128
+#define LOBBY_BROWSER_MAP_MEMO_MS 3000
+
+static int lobby_browser_map_state(char const *map)
+{
+	static struct
+	{
+		char name[64];
+		int state;
+		unsigned long at;
+		boolean used;
+	} memo[LOBBY_BROWSER_MAP_MEMO];
+	static short next;
+	unsigned long now = system_milliseconds();
+	short index;
+	short free_slot = NONE;
+
+	if (strlen(map) >= sizeof(memo[0].name))
+		return lobby_browser_map_state_uncached(map);
+	for (index = 0; index < LOBBY_BROWSER_MAP_MEMO; index++)
+	{
+		if (memo[index].used && !_stricmp(memo[index].name, map))
+		{
+			if (now - memo[index].at < LOBBY_BROWSER_MAP_MEMO_MS)
+				return memo[index].state;
+			free_slot = index;
+			break;
+		}
+		if (!memo[index].used && free_slot == NONE)
+			free_slot = index;
+	}
+	if (free_slot == NONE)
+	{
+		free_slot = next;
+		next = (short)((next + 1) % LOBBY_BROWSER_MAP_MEMO);
+	}
+	memo[free_slot].state = lobby_browser_map_state_uncached(map);
+	memo[free_slot].at = now;
+	memo[free_slot].used = TRUE;
+	strcpy(memo[free_slot].name, map);
+	return memo[free_slot].state;
 }
 
 /* the settings' choices of games shown (the tab's source: source) */
