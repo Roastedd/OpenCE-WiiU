@@ -451,6 +451,8 @@ static void network_test_log_players(
 		long divergence_samples, divergence_apart;
 		real divergence_mean, divergence_largest;
 
+		/* port: the test driver's reads of the world mark nothing for the tick snapshot (objects.h) */
+		OBJECTS_READ_ONLY_BEGIN();
 		object_iterator_new(&objects, _object_mask_weapon | _object_mask_equipment, 0);
 		while (object_iterator_next(&objects))
 		{
@@ -463,6 +465,7 @@ static void network_test_log_players(
 				ground_items++;
 			}
 		}
+		OBJECTS_READ_ONLY_END();
 		network_distributed_statistics(&sent, &received, &corrections);
 		network_distributed_item_statistics(&creates, &deletes, &failures, &removed);
 		network_damage_statistics(&sent_reports, &dealt_reports, &rejected_reports, &replayed_events);
@@ -514,6 +517,8 @@ boolean network_test_hunt_target(
 	local_player_index = local_player_get_player_index(0);
 	if (local_player_index == NONE || player_get(local_player_index)->unit_index == NONE)
 		return FALSE;
+	/* port: reads only: nothing it gets is marked for the tick snapshot (objects.h) */
+	OBJECTS_READ_ONLY_BEGIN();
 	own = object_get(player_get(local_player_index)->unit_index);
 	unit = unit_get(player_get(local_player_index)->unit_index);
 	object_iterator_new(&objects, _object_mask_biped, 0);
@@ -534,6 +539,7 @@ boolean network_test_hunt_target(
 			nearest_distance = apart;
 		}
 	}
+	OBJECTS_READ_ONLY_END();
 	if (!nearest)
 		return FALSE;
 	/* (at the unit's eye, about 0.6 above its feet, the target's middle) */
@@ -574,6 +580,8 @@ static void network_test_log_scene(
 	if (logged_time >= 0 && game_time_get() - logged_time < TICKS_PER_SECOND)
 		return;
 	logged_time = game_time_get();
+	/* port: reads only: nothing it gets is marked for the tick snapshot (objects.h) */
+	OBJECTS_READ_ONLY_BEGIN();
 	if (local_player_index != NONE && player_get(local_player_index)->unit_index != NONE)
 		own = object_get(player_get(local_player_index)->unit_index);
 	memset(counts, 0, sizeof(counts));
@@ -602,6 +610,7 @@ static void network_test_log_scene(
 				nearest = distance;
 		}
 	}
+	OBJECTS_READ_ONLY_END();
 	objects_information_get(&information);
 	data_iterator_new(&actors, actor_data);
 	while ((actor = (struct actor_datum *)data_iterator_next(&actors)) != NULL)

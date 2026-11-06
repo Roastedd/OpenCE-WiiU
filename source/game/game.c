@@ -118,6 +118,7 @@ struct game_options;
 
 /* ---------- headers */
 
+#include "render_governor.h" /* port: port/linux/game/render_governor.c */
 #include "cseries/cseries.h"
 #include "game/game.h"
 #include "game_modes.h" /* port: port/linux/game/game_modes.c */
@@ -186,6 +187,7 @@ struct game_options;
 #ifdef HALO_WIIU
 #include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
 #include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
+#include "smooth_defaults.h" /* port: port/linux/game/smooth_defaults.c */
 #endif
 #ifdef HALO_PROFILE
 #include "profile_console.h" /* port: port/linux/game/profile_console.c */
@@ -335,11 +337,12 @@ void game_initialize(
 #if defined(HALO_WIIU) && !defined(HALO_PROFILE)
 /* port: on the Wii U each part of the tick its sections name is timed (port/wiiu/src/wiiu_tick_parts.c) */
 long long wiiu_tick_part_now(void);
+long long wiiu_tick_begin(void);
 void wiiu_tick_part(const char *name, long long started);
 void wiiu_tick_done(long long started);
 #undef profile_scope
 #define profile_scope(variable, statement) { long long tick_part_started = wiiu_tick_part_now(); statement wiiu_tick_part(#variable, tick_part_started); }
-#define TICK_PARTS_BEGIN() long long tick_started = wiiu_tick_part_now();
+#define TICK_PARTS_BEGIN() long long tick_started = wiiu_tick_begin();
 #define TICK_PARTS_END() wiiu_tick_done(tick_started);
 #else
 #define TICK_PARTS_BEGIN()
@@ -673,6 +676,22 @@ void network_objects_placed(void);
 void game_initialize_for_new_map(
 	void)
 {
+	/* port: dynamic quality (render_governor.c): a map has started */
+	render_governor_new_map();
+#ifdef HALO_WIIU
+	/* port: the smooth defaults (smooth_defaults.h) are decided again for the map: one local player and no network get the ticks beside the drawing and the dynamic
+	quality, anything else the serial loop. The tick thread is idle (the main loop's map changes are made at its sync point) */
+	smooth_defaults_new_map();
+	{
+		/* port: and the map summary (port/wiiu/src/wiiu_map_summary.h) begins: the note at the map's end says how it went */
+		void wiiu_map_summary_begin(char const *label);
+		char label[160];
+
+		csprintf(label, "%s, %s", game_globals->options.map_name, smooth_defaults_label());
+		wiiu_map_summary_begin(label);
+	}
+#endif
+
 	match_assert(
 		"c:\\halo\\SOURCE\\game\\game.c",
 		0x1D1,
@@ -944,6 +963,12 @@ void game_dispose_from_old_map(
 	void)
 {
 #ifdef HALO_WIIU
+	{
+		/* port: the map that ends says how it went (port/wiiu/src/wiiu_map_summary.h) */
+		void wiiu_map_summary_end(void);
+
+		wiiu_map_summary_end();
+	}
 	/* port: the tick owners' queues (tick_owners.h): what they carried this map, and what is still waiting names
 	nothing that stays */
 	tick_overlap_map_reset();

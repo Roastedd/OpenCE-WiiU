@@ -24,6 +24,7 @@ struct dk_stage_facts
 	uint32_t mipmapped; /* more than one level */
 	uint32_t hires;
 	uint32_t hires_coverage;
+	uint32_t hires_point_threshold; /* its red holds the meter's discrete thresholds, read unfiltered (nv2a_psh.c: point_threshold) */
 	float scale[2]; /* a linear texture's 1 / width and height, else 1 */
 };
 

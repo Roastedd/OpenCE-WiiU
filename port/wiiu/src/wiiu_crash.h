@@ -21,6 +21,8 @@ void wiiu_crash_install(const char *path, const char *const *phase, const char *
 access itself (wiiu_align_fixup.c) and the game goes on. How many times, and the program counters it happened at (look them up
 in the link map), for finding the places in the game to fix: place index 0, 1, ... gives the pc (0 past the last) and its count. */
 uint32_t wiiu_crash_fixups(void);
+/* the ones taken on the calling thread's core (the tick snapshot's timers: the captures run on core 0, the blends on core 1) */
+uint32_t wiiu_crash_fixups_here(void);
 uint32_t wiiu_crash_fixup_place(uint32_t index, uint32_t *count);
 
 #endif

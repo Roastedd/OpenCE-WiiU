@@ -586,7 +586,7 @@ static struct lights_port_cache lights_port_live;
 #ifdef HALO_WIIU
 /* (the drawing thread's, when it draws beside the tick thread: kept for the capture it draws from) */
 static struct lights_port_cache lights_port_view;
-#define lights_port (*(tick_snapshot_headers ? &lights_port_view : &lights_port_live))
+#define lights_port (*(tick_snapshot_lights_in_view && tick_snapshot_headers ? &lights_port_view : &lights_port_live))
 #else
 #define lights_port lights_port_live
 #endif
@@ -943,6 +943,9 @@ long light_new(
 		|| definition->lens_flare.index != NONE)
 	{
 		light_index = datum_new(light_data);
+#ifdef HALO_WIIU
+		tick_overlap_jitter(); /* (test aid) */
+#endif
 		/* port: no light if the new one can't be had (data.c's data_usable) */
 		if (light_index != NONE && !datum_try_and_get(light_data, light_index))
 			light_index = NONE;
@@ -1046,6 +1049,14 @@ long light_new_unattached(
 }
 
 #ifdef HALO_WIIU
+/* port: the kept cluster lists forgotten (a bsp switched: the clusters are another's, and the generations they were kept under may come round again) */
+void lights_port_forget(
+	void)
+{
+	memset(&lights_port_live, 0, sizeof(lights_port_live));
+	memset(&lights_port_view, 0, sizeof(lights_port_view));
+}
+
 /* port: the lights that fade (a light a moment after the effect that made it, light_port_glow and the game's own passing lights: parent_light_index is
 the time it began to fade) let go of when they have, and the ones that follow an object moved with it. Done by lights_preprocess_scene at each frame
 of the serial loop's; in a frame drawn beside the tick thread (tick_overlap.h) the drawing changes none of the light data, so the tick thread does it,
@@ -1074,11 +1085,13 @@ void lights_fade_update(
 					&light_cluster_partition,
 					light_index,
 					&light_get(light_index)->cluster_reference);
+				tick_overlap_jitter(); /* (test aid) */
 				datum_delete(light_data, light_index);
 			}
 			else if (object_try_and_get(light->object_index))
 			{
 				light_disconnect_from_map(light_index);
+				tick_overlap_jitter(); /* (test aid) */
 				light_reconnect_to_map(light_index);
 			}
 		}
@@ -1108,6 +1121,17 @@ void lights_preprocess_scene(
 	/* port: a frame drawn beside the tick thread (tick_overlap.h) changes none of the light data, which the ticks change meanwhile: the lights that
 	fade are let go of and moved by the tick thread (lights_fade_update), and the shield glow, which makes lights from the drawing, is left out */
 	overlap = tick_overlap_frame_active();
+	/* (the check of the console's halt of 2026-11-03: a frame that changes the lights - the serial loop's - must be reading the game state's own, not a copy of the ring's; said once) */
+	if (!overlap && LIGHT_DATA() != light_data)
+	{
+		static boolean said = FALSE;
+
+		if (!said)
+		{
+			said = TRUE;
+			platform_log("lights: a serial frame is reading a copy of the lights, and would let go of the faded ones and move the others in the copy (tick_snapshot_light_array)");
+		}
+	}
 	if (!overlap)
 		lights_port_recover();
 	if (!overlap)
@@ -1498,6 +1522,9 @@ void light_delete(
 		&light_cluster_partition,
 		light_index,
 		&light->cluster_reference);
+#ifdef HALO_WIIU
+	tick_overlap_jitter(); /* (test aid) */
+#endif
 	datum_delete(light_data, light_index);
 
 	return;

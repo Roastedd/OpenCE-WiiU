@@ -112,6 +112,7 @@ symbols in this file:
 #include "saved games/game_state.h"
 #include "rasterizer/rasterizer_console_vars.h"
 #include "rasterizer/rasterizer_model_types.h"
+#include "render_governor.h" /* port: port/linux/game/render_governor.c */
 
 /* ---------- constants */
 
@@ -445,6 +446,41 @@ static boolean render_object_visit(
 	return first;
 }
 
+#ifdef HALO_WIIU
+/* port: what the render's object search considered (a candidate of a rendered cluster it had not met this frame), found inside the view, and what the render
+then drew (after the governor's size cull): counts for the performance overlay (port/wiiu/src/wiiu_perf.h), written by the game thread, 32 bits so that another
+thread reads them whole. Only this search: the lights' (object_lights.c) is another call of the same function */
+static volatile unsigned long render_object_perf_considered = 0;
+static volatile unsigned long render_object_perf_found = 0;
+static volatile unsigned long render_object_perf_drawn = 0;
+
+void render_objects_perf(
+	unsigned long *considered,
+	unsigned long *found,
+	unsigned long *drawn)
+{
+	*considered = render_object_perf_considered;
+	*found = render_object_perf_found;
+	*drawn = render_object_perf_drawn;
+
+	return;
+}
+
+static void render_object_counted_bounding_sphere(
+	long object_index,
+	real_point3d *center,
+	real *radius)
+{
+	render_object_perf_considered++;
+	object_get_render_bounding_sphere(object_index, center, radius);
+
+	return;
+}
+#define RENDER_OBJECT_BOUNDING_SPHERE render_object_counted_bounding_sphere
+#else
+#define RENDER_OBJECT_BOUNDING_SPHERE object_get_render_bounding_sphere
+#endif
+
 static void find_rendered_objects(
 	void)
 {
@@ -455,7 +491,7 @@ static void find_rendered_objects(
 		MAXIMUM_RENDERED_OBJECTS,
 		cluster_get_first_collideable_object,
 		cluster_get_next_collideable_object,
-		object_get_render_bounding_sphere,
+		RENDER_OBJECT_BOUNDING_SPHERE,
 		render_object_unvisited,
 		render_object_visit);
 
@@ -465,9 +501,13 @@ static void find_rendered_objects(
 		MAXIMUM_RENDERED_OBJECTS - render_object_globals.rendered_object_count,
 		cluster_get_first_noncollideable_object,
 		cluster_get_next_noncollideable_object,
-		object_get_render_bounding_sphere,
+		RENDER_OBJECT_BOUNDING_SPHERE,
 		render_object_unvisited,
 		render_object_visit);
+
+#ifdef HALO_WIIU
+	render_object_perf_found += (unsigned long)render_object_globals.rendered_object_count;
+#endif
 
 	if (render_object_globals.rendered_object_count == MAXIMUM_RENDERED_OBJECTS &&
 		!reported_rendered_object_overflow)
@@ -1182,6 +1222,15 @@ static void render_object(
 		{
 			real level_of_detail_pixels;
 			real shadow_darkness;
+			/* port: dynamic quality (render_governor.c): the small cast no shadow while the frames run long */
+			real governed_shadow_pixels = render_governor_values()->shadow_min_pixels;
+
+			if (governed_shadow_pixels > OBJECT_SHADOW_MINIMUM_PIXELS &&
+				object_get_level_of_detail_pixels(data->object_index) < governed_shadow_pixels)
+			{
+				render_governor_counts[RENDER_GOVERNOR_COUNT_SHADOWS_SKIPPED]++;
+				return;
+			}
 
 			data->lighting = object_get_cached_render_lighting(
 				data->object_index,
@@ -1203,6 +1252,7 @@ static void render_object(
 
 				if (render_object_shadow_begin(data, darkness_fraction * size_fraction))
 				{
+					render_governor_counts[RENDER_GOVERNOR_COUNT_SHADOWS_DRAWN]++;
 					render_object_list(data, NULL, data->object_index);
 					render_object_shadow_end(data);
 				}
@@ -1213,6 +1263,25 @@ static void render_object(
 	{
 		struct object_datum *object = object_get(data->object_index);
 		boolean needs_lighting;
+
+		/* port: dynamic quality (render_governor.c): the small and far, by their kind, are neither lit nor drawn while the frames run long.
+		Never a projectile, and the first person camera's own unit and what a cinematic stars are not small */
+		{
+			struct render_governor_values const *shed = render_governor_values();
+			real cull_pixels = TEST_FLAG(_object_mask_unit, object->object.type) ? shed->cull_unit_pixels :
+				TEST_FLAG(_object_mask_item, object->object.type) ? shed->cull_item_pixels :
+				TEST_FLAG(_object_mask_projectile, object->object.type) ? 0.f : shed->cull_scenery_pixels;
+
+			if (cull_pixels > 0.f && object_get_level_of_detail_pixels(data->object_index) < cull_pixels)
+			{
+				render_governor_counts[RENDER_GOVERNOR_COUNT_OBJECTS_CULLED]++;
+				return;
+			}
+			render_governor_counts[RENDER_GOVERNOR_COUNT_OBJECTS_DRAWN]++;
+#ifdef HALO_WIIU
+			render_object_perf_drawn++;
+#endif
+		}
 
 		if (!TEST_FLAG(object->object.flags, _object_invisible_bit) ||
 			object->object.first_child_object_index != NONE ||

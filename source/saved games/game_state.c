@@ -367,6 +367,18 @@ void game_state_port_restamp_revert_time(
 void game_state_revert(
 	void)
 {
+#ifdef HALO_WIIU
+	void platform_log(char const *format, ...);
+	unsigned long revert_start;
+
+	/* port: the checkpoint's write may still be on its way to the file this reads (game_state_xbox.c): it is waited for, and if it was lost
+	there is no saved state to go back to */
+	game_state_port_wait_for_save("a revert");
+	if (game_state_port_save_lost())
+	{
+		game_state_globals.saved_game_valid = FALSE;
+	}
+#endif
 	if (!game_state_globals.saved_game_valid && !recover_saved_games_hack)
 	{
 		main_reset_map();
@@ -376,6 +388,9 @@ void game_state_revert(
 
 	game_state_note_event("checkpoint revert");
 	game_state_call_before_load_procs();
+#ifdef HALO_WIIU
+	revert_start = system_milliseconds();
+#endif
 	/* port: a file that is not a saved game of this build is not taken, and
 	the map starts over */
 	if (!game_state_read_from_file())
@@ -383,6 +398,11 @@ void game_state_revert(
 		game_state_globals.saved_game_valid = FALSE;
 		main_reset_map();
 	}
+#ifdef HALO_WIIU
+	/* port: how long the revert took (the file read, the state taken), for the frame pacing notes */
+	platform_log("checkpoint: reverted to the saved game%s in %lu ms", game_state_globals.saved_game_valid ? "" : " - NOT TAKEN, the map starts over -",
+		system_milliseconds() - revert_start);
+#endif
 	game_state_call_after_load_procs();
 
 	return;
@@ -703,6 +723,22 @@ void game_state_tick_hash(
 		}
 		platform_log("%s", line);
 	}
+}
+
+/* port: the game state's pool for the performance overlay (port/wiiu/src/wiiu_perf.h): the KiB its allocations have taken (the CPU part and the GPU part:
+what the game sized its pools to, not what its objects fill of them) and its size. FALSE before it is made. */
+boolean game_state_usage(
+	unsigned long *used_kib,
+	unsigned long *capacity_kib)
+{
+	if (!game_state_globals.base_address)
+	{
+		return FALSE;
+	}
+	*used_kib = ((unsigned long)game_state_globals.cpu_allocation_size + (unsigned long)game_state_globals.gpu_allocation_size + 1023ul) >> 10;
+	*capacity_kib = (unsigned long)GAME_STATE_SIZE >> 10;
+
+	return TRUE;
 }
 
 void *game_state_gpu_malloc(

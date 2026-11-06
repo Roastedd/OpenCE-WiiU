@@ -263,6 +263,8 @@ static boolean cache_file_structure_bsp_tag_valid(
 /* ---------- globals */
 
 static struct cache_file_globals cache_file_globals = { 0 };
+/* port: the bytes of the loaded bsp (the tag cache's use beside the tags': the performance overlay's TAGS pool) */
+static unsigned long cache_file_bsp_bytes = 0;
 /* port: the name the map loaded last was loaded by (scenario_tags_load) */
 static char cache_file_loaded_name[64];
 extern struct cache_file_tag_instance *global_tag_instances;
@@ -370,6 +372,39 @@ static boolean cache_file_region_contains(
 		(unsigned long)address >= (unsigned long)region &&
 		offset <= region_size &&
 		(unsigned long)count <= (region_size - offset) / (unsigned long)element_size;
+}
+
+/* port: the tag cache's pool for the performance overlay (port/wiiu/src/wiiu_perf.h): the KiB the loaded map's tags and bsp take of it, and its size (22 MiB,
+or a Custom Edition map's 23). FALSE when no map is loaded. */
+boolean cache_file_tag_usage(
+	unsigned long *used_kib,
+	unsigned long *capacity_kib)
+{
+	unsigned long used, capacity;
+
+	if (custom_edition_cache_tags_loaded())
+	{
+		used = custom_edition_cache_loaded_bytes();
+		capacity = CUSTOM_EDITION_TAG_CACHE_BYTES;
+	}
+	else if (cache_file_globals.tags_loaded)
+	{
+		used = (unsigned long)cache_file_globals.header.tag_data_size;
+		capacity = TAG_CACHE_SIZE;
+	}
+	else
+	{
+		return FALSE;
+	}
+	used += cache_file_bsp_bytes;
+	if (used > capacity)
+	{
+		used = capacity;
+	}
+	*used_kib = (used + 1023ul) >> 10;
+	*capacity_kib = capacity >> 10;
+
+	return TRUE;
 }
 
 /* port: whether size bytes at address lie in the tag cache the loaded map's
@@ -1503,6 +1538,7 @@ boolean scenario_structure_bsp_load(
 		return FALSE;
 
 	cache_file_globals.structure_bsp_header = structure_bsp_header;
+	cache_file_bsp_bytes = (unsigned long)reference->file_size;
 	match_assert(
 		"c:\\halo\\SOURCE\\cache\\cache_files.c",
 		0xE0,
@@ -1566,6 +1602,7 @@ void scenario_structure_bsp_unload(
 		tag_instance->group_tag==STRUCTURE_BSP_TAG);
 	tag_instance->base_address = NULL;
 	cache_file_globals.structure_bsp_header = NULL;
+	cache_file_bsp_bytes = 0;
 
 	return;
 }

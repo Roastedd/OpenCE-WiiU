@@ -32,6 +32,8 @@ static struct
 	volatile uint32_t count;
 } fixup_places[FIXUP_PLACES];
 static volatile uint32_t fixup_total;
+/* by the core the faulting thread was on (a handler runs on it): the tick snapshot's timers ask for the calling core's, to say how many a capture took */
+static volatile uint32_t fixup_core[3];
 static volatile uint32_t fixup_place_count;
 /* how long the faulting thread waits for its note to be written */
 #define WAIT_MILLISECONDS 3000
@@ -199,6 +201,12 @@ static void record_fixup(uint32_t pc)
 	uint32_t i;
 
 	__sync_fetch_and_add(&fixup_total, 1);
+	{
+		const uint32_t core = OSGetCoreId();
+
+		if (core < 3)
+			__sync_fetch_and_add(&fixup_core[core], 1);
+	}
 	for (;;)
 	{
 		const uint32_t known = fixup_place_count;
@@ -226,6 +234,13 @@ static void record_fixup(uint32_t pc)
 uint32_t wiiu_crash_fixups(void)
 {
 	return fixup_total;
+}
+
+uint32_t wiiu_crash_fixups_here(void)
+{
+	const uint32_t core = OSGetCoreId();
+
+	return core < 3 ? fixup_core[core] : 0;
 }
 
 uint32_t wiiu_crash_fixup_place(uint32_t index, uint32_t *count)

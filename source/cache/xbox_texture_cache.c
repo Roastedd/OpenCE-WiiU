@@ -125,6 +125,8 @@ symbols in this file:
 
 #ifdef HALO_WIIU
 void platform_log(char const *format, ...);
+long wiiu_study_number(const char *name, long fallback);
+#include "texture_stream.h" /* port: port/linux/game/texture_stream.h */
 #endif
 
 #ifdef HALO_ANDROID
@@ -296,6 +298,14 @@ static boolean texture_cache_start_loading_bitmap(
 	boolean block);
 static boolean texture_cache_bitmap_valid(
 	struct bitmap_data *bitmap);
+#ifdef HALO_WIIU
+static boolean texture_cache_stream_start(
+	struct bitmap_data *bitmap,
+	long cache_block_index,
+	byte *base_address,
+	struct xbox_texture_cache_texture *texture,
+	boolean block);
+#endif
 
 /* ---------- globals */
 
@@ -351,6 +361,66 @@ struct texture_cache_debug_options texture_cache_debug_options = {0};
 boolean debug_texture_cache = FALSE;
 static unsigned long texture_cache_last_failure_time = 0;
 
+#ifdef HALO_WIIU
+/* port: texture streaming (halo/stream.txt, default 0; port/linux/game/texture_stream.h has the plan). The texture of a block whose map read was cut in two: the tail
+(the small mipmaps, read first) is described by a second header at the tail's first level. A block's state is here, by the block's index. */
+struct texture_stream_state
+{
+	D3DBaseTexture header; /* the tail alone: its Lock says whether a draw reads it */
+	volatile boolean tail_loaded; /* set by the cache file thread: TRUE, or failed */
+	boolean active; /* the block's read was cut in two and the texture has not been given whole yet */
+	boolean tail_used; /* drawn from its tail at least once */
+	long level;
+	unsigned long first_ms;
+};
+
+static struct texture_stream_state texture_streams[XBOX_TEXTURE_CACHE_PAGE_COUNT];
+/* (a block's index is a datum index: its salt in the high 16 bits and its place, which is the cache's page index, in the low) */
+#define TEXTURE_STREAM_STATE(block_index) (&texture_streams[(block_index) & 0xFFFF])
+static long texture_stream_setting = -1;
+
+/* what streaming did, for the log */
+static struct
+{
+	unsigned long tails_drawn; /* textures drawn from their tails */
+	unsigned long tail_binds; /* binds of a tail */
+	unsigned long whole_after_ms; /* the sum, over those, of the time from the first bind of the tail to the whole texture */
+	unsigned long longest_ms;
+	unsigned long tail_waits; /* binds that waited for a tail still being read */
+	unsigned long tail_wait_ms;
+	unsigned long old_waits; /* binds of a texture that was not cut, which waited as the game always did */
+	unsigned long old_wait_ms;
+	unsigned long cut; /* textures read in two */
+	unsigned long not_cut; /* ... and not */
+	unsigned long last_note;
+	unsigned long said;
+} texture_stream_totals;
+
+/* the thread that draws is told (d3d8_gx2.c) that a block of the cache is read for a texture by another one, which must not hand the draws over */
+extern int halo_texture_stream_on;
+
+boolean texture_cache_stream_enabled(
+	void)
+{
+	if (texture_stream_setting < 0)
+	{
+		texture_stream_setting = wiiu_study_number("stream.txt", 0) > 0 ? 1 : 0;
+		halo_texture_stream_on = (int)texture_stream_setting;
+		if (texture_stream_setting)
+			platform_log("stream: texture streaming is on (halo/stream.txt): the tail of a bitmap's mipmaps is read first and drawn from while the rest comes");
+	}
+	return texture_stream_setting > 0;
+}
+
+static boolean texture_stream_block_busy(
+	long block_index)
+{
+	struct texture_stream_state *stream = TEXTURE_STREAM_STATE(block_index);
+
+	return stream->active && (!stream->tail_loaded || IDirect3DBaseTexture8_IsBusy(&stream->header));
+}
+#endif
+
 /* ---------- public code */
 
 void texture_cache_delete(
@@ -372,6 +442,27 @@ void texture_cache_open(
 	data_make_valid(xbox_texture_cache_globals.textures);
 
 	return;
+}
+
+/* port: the texture cache's pool for the performance overlay (port/wiiu/src/wiiu_perf.h): the KiB its blocks hold, of those the KiB used in this
+frame or the last, and its size. The game thread's, which owns the cache. FALSE before the cache is made. */
+boolean texture_cache_usage(
+	unsigned long *resident_kib,
+	unsigned long *hot_kib,
+	unsigned long *capacity_kib)
+{
+	long resident, hot, pages;
+
+	if (!xbox_texture_cache_globals.cache)
+	{
+		return FALSE;
+	}
+	lruv_cache_usage(xbox_texture_cache_globals.cache, 2, &resident, &hot, &pages);
+	*resident_kib = (unsigned long)resident << (xbox_texture_cache_globals.cache->page_size_bits - 10);
+	*hot_kib = (unsigned long)hot << (xbox_texture_cache_globals.cache->page_size_bits - 10);
+	*capacity_kib = (unsigned long)pages << (xbox_texture_cache_globals.cache->page_size_bits - 10);
+
+	return TRUE;
 }
 
 void texture_cache_idle(
@@ -589,6 +680,9 @@ static boolean texture_cache_locked_block_proc(
 		block_index);
 
 	return !texture->loaded ||
+#ifdef HALO_WIIU
+		texture_stream_block_busy(block_index) ||
+#endif
 		IDirect3DBaseTexture8_IsBusy(&texture->hardware_format);
 }
 
@@ -608,7 +702,13 @@ static void texture_cache_delete_block_proc(
 			block_index);
 	}
 	while (!cache_entry->loaded ||
+#ifdef HALO_WIIU
+		texture_stream_block_busy(block_index) ||
+#endif
 		IDirect3DBaseTexture8_IsBusy(&cache_entry->hardware_format));
+#ifdef HALO_WIIU
+	TEXTURE_STREAM_STATE(block_index)->active = FALSE;
+#endif
 
 	match_assert(
 		"c:\\halo\\SOURCE\\cache\\xbox_texture_cache.c",
@@ -894,6 +994,12 @@ static boolean texture_cache_start_loading_bitmap(
 				texture->loaded = TRUE;
 				texture->read_request_handle = NONE;
 			}
+#ifdef HALO_WIIU
+			else if (texture_cache_stream_start(bitmap, cache_block_index, base_address, texture, block))
+			{
+				/* port: the read is in two (texture streaming): the tail's and then the rest's, asked for */
+			}
+#endif
 			else
 			{
 				texture->read_request_handle = cache_file_read(
@@ -911,6 +1017,214 @@ static boolean texture_cache_start_loading_bitmap(
 
 	return FALSE;
 }
+
+#ifdef HALO_WIIU
+/* port: cuts the read of a bitmap's pixels in two, if streaming is on and the bitmap is one it can serve from a tail (a 2D bitmap with mipmaps of the swizzled or
+compressed layout, not a palettized or linear one), and makes the tail's header; returns TRUE if the two reads were asked for */
+static boolean texture_cache_stream_start(
+	struct bitmap_data *bitmap,
+	long cache_block_index,
+	byte *base_address,
+	struct xbox_texture_cache_texture *texture,
+	boolean block)
+{
+	struct texture_stream_state *stream = TEXTURE_STREAM_STATE(cache_block_index);
+	struct texture_stream_plan plan;
+	long sizes[TEXTURE_STREAM_MAXIMUM_LEVELS];
+	short max_level, level;
+
+	stream->active = FALSE;
+	stream->tail_loaded = FALSE;
+	stream->tail_used = FALSE;
+	if (!texture_cache_stream_enabled() || custom_edition_cache_tags_loaded())
+	{
+		return FALSE;
+	}
+	if (bitmap->type != _bitmap_type_2d ||
+		TEST_FLAG(bitmap->flags, _bitmap_linear_bit) ||
+		TEST_FLAG(bitmap->flags, _bitmap_palettized_bit) ||
+		TEST_FLAG(bitmap->flags, _bitmap_v16u16_bit) ||
+		!TEST_FLAG(bitmap->flags, _bitmap_has_power_of_two_dimensions_bit) ||
+		bitmap->format == _bitmap_format_p8_bump)
+	{
+		texture_stream_totals.not_cut++;
+		return FALSE;
+	}
+	max_level = rasterizer_xbox_bitmap_get_max_mipmap_count(bitmap);
+	if (max_level < 2 || max_level >= TEXTURE_STREAM_MAXIMUM_LEVELS)
+	{
+		texture_stream_totals.not_cut++;
+		return FALSE;
+	}
+	for (level = 0; level <= max_level; level++)
+	{
+		sizes[level] = bitmap_mipmap_get_pixel_data_size(bitmap, level);
+	}
+	texture_stream_plan_make(&plan, bitmap->width, bitmap->height, max_level, sizes, bitmap->pixels_size);
+	if (!plan.eligible)
+	{
+		texture_stream_totals.not_cut++;
+		return FALSE;
+	}
+	/* the tail's header: this texture's, of its tail's levels alone, at the tail's first level */
+	stream->header = texture->hardware_format;
+	stream->header.Lock = 0;
+	stream->header.Format =
+		(stream->header.Format & ~(D3DFORMAT_USIZE_MASK | D3DFORMAT_VSIZE_MASK | D3DFORMAT_MIPMAP_MASK)) |
+		((unsigned long)plan.width_log2 << D3DFORMAT_USIZE_SHIFT) |
+		((unsigned long)plan.height_log2 << D3DFORMAT_VSIZE_SHIFT) |
+		((unsigned long)plan.levels << D3DFORMAT_MIPMAP_SHIFT);
+	IDirect3DBaseTexture8_Register(&stream->header, base_address + plan.level_offset);
+	stream->level = plan.level;
+	stream->first_ms = 0;
+	stream->active = TRUE;
+	texture_stream_totals.cut++;
+	if (texture_stream_totals.cut <= 6)
+	{
+		platform_log("stream: %s (%dx%d, %ld KB) is read in two: the head %lu KB, the tail %lu KB from level %d (%dx%d)", tag_get_name(bitmap->tag_index), (int)bitmap->width,
+			(int)bitmap->height, (long)(bitmap->pixels_size / 1024), plan.tail_offset / 1024, plan.tail_size / 1024, plan.level, (int)(bitmap->width >> plan.level),
+			(int)(bitmap->height >> plan.level));
+	}
+	/* the tail first (it goes before the reads that are waiting), then the rest; they write no byte twice */
+	cache_file_read_first(
+		bitmap->tag_index,
+		bitmap->pixels_offset + (long)plan.tail_offset,
+		(long)plan.tail_size,
+		base_address + plan.tail_offset,
+		(boolean *)&stream->tail_loaded);
+	texture->read_request_handle = cache_file_read(
+		bitmap->tag_index,
+		bitmap->pixels_offset,
+		(long)plan.tail_offset,
+		base_address,
+		&texture->loaded,
+		block);
+
+	return TRUE;
+}
+
+static void texture_cache_stream_note(
+	unsigned long now)
+{
+	if ((long)(now - texture_stream_totals.last_note) >= 10000 && (texture_stream_totals.cut || texture_stream_totals.not_cut))
+	{
+		texture_stream_totals.last_note = now;
+		platform_log(
+			"stream: %lu bitmaps read in two and %lu not; %lu drawn from their tails (%lu binds), whole after %lu ms on average and %lu ms at most; "
+			"%lu binds waited %lu ms for a tail, %lu waited %lu ms for a whole bitmap as the game does",
+			texture_stream_totals.cut, texture_stream_totals.not_cut, texture_stream_totals.tails_drawn, texture_stream_totals.tail_binds,
+			texture_stream_totals.tails_drawn ? texture_stream_totals.whole_after_ms / texture_stream_totals.tails_drawn : 0,
+			texture_stream_totals.longest_ms, texture_stream_totals.tail_waits, texture_stream_totals.tail_wait_ms,
+			texture_stream_totals.old_waits, texture_stream_totals.old_wait_ms);
+	}
+}
+
+/* port: what the renderer binds for a bitmap with streaming on: the texture if it is in, else the texture's tail (the small mipmaps, read first) if that is in
+(waiting for it a moment if it is not: it is a few KB, and goes before the other reads), else the texture as the game takes it, waiting for all of it */
+void *texture_cache_bitmap_get_hardware_format_streaming(
+	struct bitmap_data *bitmap)
+{
+	void *hardware_format = _texture_cache_bitmap_get_hardware_format(bitmap, FALSE, TRUE);
+	long block_index = bitmap->cache_block_index;
+
+	if (TEST_FLAG(bitmap->flags, _bitmap_cached_bit) && block_index != NONE)
+	{
+		struct texture_stream_state *stream = TEXTURE_STREAM_STATE(block_index);
+
+		if (hardware_format && !stream->active)
+		{
+			return hardware_format; /* (what nearly every ask is: nothing more is done) */
+		}
+		if (hardware_format)
+		{
+			const unsigned long now = system_milliseconds();
+
+			if (stream->tail_used)
+			{
+				const unsigned long milliseconds = now - stream->first_ms;
+
+				texture_stream_totals.tails_drawn++;
+				texture_stream_totals.whole_after_ms += milliseconds;
+				if (milliseconds > texture_stream_totals.longest_ms)
+				{
+					texture_stream_totals.longest_ms = milliseconds;
+				}
+				if (texture_stream_totals.said < 12)
+				{
+					texture_stream_totals.said++;
+					platform_log("stream: %s (%ld KB) was drawn from its tail (level %ld) for %lu ms until the whole of it was in", tag_get_name(bitmap->tag_index),
+						(long)(bitmap->pixels_size / 1024), stream->level, milliseconds);
+				}
+			}
+			stream->active = FALSE;
+			texture_cache_stream_note(now);
+
+			return hardware_format;
+		}
+		if (stream->active && !bitmap->hardware_format)
+		{
+			struct xbox_texture_cache_texture *texture = datum_try_and_get(
+				xbox_texture_cache_globals.textures,
+				block_index);
+
+			if (texture && texture->bitmap == bitmap)
+			{
+				const unsigned long now = system_milliseconds();
+
+				if (!stream->tail_loaded)
+				{
+					/* the tail goes before the other reads: a few ms; the sound is kept going as the game's wait keeps it */
+					unsigned long waited = 0;
+
+					while (!stream->tail_loaded && (waited = system_milliseconds() - now) < 100)
+					{
+						if (system_milliseconds() - sound_render_time() > 132)
+						{
+							sound_idle();
+						}
+						SwitchToThread();
+					}
+					texture_stream_totals.tail_waits++;
+					texture_stream_totals.tail_wait_ms += waited;
+				}
+				if (stream->tail_loaded == TRUE && !texture->loaded)
+				{
+					lruv_block_touch(
+						xbox_texture_cache_globals.cache,
+						block_index);
+					if (!stream->tail_used)
+					{
+						stream->tail_used = TRUE;
+						stream->first_ms = now;
+					}
+					texture_stream_totals.tail_binds++;
+					texture_cache_stream_note(now);
+
+					return &stream->header;
+				}
+			}
+		}
+	}
+	else if (hardware_format)
+	{
+		return hardware_format;
+	}
+	/* the game's way: wait for all of it (a bitmap that was not cut, or whose tail did not come) */
+	{
+		const unsigned long started = system_milliseconds();
+
+		hardware_format = _texture_cache_bitmap_get_hardware_format(bitmap, TRUE, TRUE);
+		if (system_milliseconds() - started >= 2)
+		{
+			texture_stream_totals.old_waits++;
+			texture_stream_totals.old_wait_ms += system_milliseconds() - started;
+		}
+		texture_cache_stream_note(system_milliseconds());
+	}
+
+	return hardware_format;
+}
+#endif
 
 void texture_cache_debug_render(
 	void)

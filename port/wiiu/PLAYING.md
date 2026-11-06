@@ -55,7 +55,7 @@ buttons sit where the Xbox's do, so jump is under your thumb; the on-screen prom
   touch screen to hold the view still while you bring the GamePad back to a comfortable position. Sensitivity 1 turns the view as far as the
   GamePad turns; most players like 2 to 4.
 - **Skip a cutscene**: hold B (the jump button), + or a finger on the touch screen for one second.
-- **Performance overlay**: L + R + − shows or hides frame rate and timing at the top of the screen.
+- **Performance overlay**: L + R + − goes round off, a compact strip (frame rate, frame time, CPU and GPU share) and a detailed panel (where the frame's time goes and how full the memory pools are) at the top left of the screen. `halo/overlay.txt` holds 0, 1 or 2 to start in one of them.
 
 ## Split screen (two to four players)
 

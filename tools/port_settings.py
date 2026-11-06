@@ -400,6 +400,9 @@ SCREENS["video_settings/fov_viewmodels"] = {
 SCREENS["video_settings/detail"] = {
     "screen": "detail_settings_screen", "header": _video["header"], "spacing": 30,
     "rows": [
+            # (the frame-time governor: port/linux/game/render_governor.c; Performance turns it on)
+            ("AUTO DETAIL:", "display.dynamic_quality", ON_OFF,
+             "Leaves out small and far things, a step at a time,\nwhile the frames take over 22 ms; puts them back.", None),
             ("GRASS:", "display.grass", ON_OFF,
              "The grass, pebbles and plants near you. Off\nsaves the game's time in fields of grass.", None),
             ("DECALS:", "display.decals", ON_OFF,

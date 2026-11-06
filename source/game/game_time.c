@@ -667,6 +667,7 @@ static long game_time_run_ticks(
 		{
 			game_tick();
 #ifdef HALO_WIIU
+			tick_overlap_jitter(); /* (test aid: halo/tick_overlap_jitter.txt) */
 			if (capture_last < 0)
 			{
 				/* the chain of snapshots of each object that the serial frames blend (render_interpolation.c) */
@@ -679,6 +680,7 @@ static long game_time_run_ticks(
 				/* (the overlap's: the ring, committed with the cameras when the job is over) */
 				tick_snapshot_capture_tick(game_time_globals->local_time + 1, FALSE);
 			}
+			tick_overlap_jitter(); /* (test aid) */
 #else
 			profile_scope(game_time_render_interpolation_tick_section, render_interpolation_tick();)
 #endif

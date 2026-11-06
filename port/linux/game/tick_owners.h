@@ -41,6 +41,8 @@ Everything here is for the Wii U (HALO_WIIU) and is not compiled otherwise.
 
 /* 0, 1 or 2 (above); read once, logged once */
 long tick_owners_mode(void);
+/* a map starts (tick_overlap_decide): read again, for the map the overlap is or is not requested for */
+void tick_owners_decide(void);
 /* (what it read, -1 before: the checks on the game's hot paths are a load and a compare) */
 extern long tick_owners_mode_value;
 

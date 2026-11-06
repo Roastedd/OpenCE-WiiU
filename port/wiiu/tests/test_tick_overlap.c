@@ -64,8 +64,14 @@ void platform_log(char const *format, ...)
 
 long wiiu_study_number(const char *name, long fallback)
 {
-	(void)name;
-	(void)fallback;
+	/* (every study file is on, but the test aid that waits for each job: the hand-off is tested with the threads beside each other) */
+	if (!strcmp(name, "tick_overlap_serialize.txt"))
+		return fallback;
+	/* (nor the fall back to the serial loop when the tick thread is late: the test's frames are not a game's) */
+	if (!strcmp(name, "tick_overlap_late.txt"))
+		return 0;
+	if (!strcmp(name, "tick_overlap_jitter.txt") || !strcmp(name, "tick_overlap_force_serial.txt") || !strcmp(name, "tick_overlap_frame_stall.txt"))
+		return 0;
 	return 1;
 }
 
@@ -73,6 +79,16 @@ int tick_snapshot_enabled(void)
 {
 	return 1;
 }
+
+/* the smooth defaults' (smooth_defaults.c): what the map gets of the switches; the test turns the map into one that is not */
+static long smooth_stub_value = 1;
+long smooth_defaults_value(enum smooth_switch which)
+{
+	(void)which;
+	return smooth_stub_value;
+}
+int smooth_defaults_decided(void) { return 1; }
+void tick_snapshot_decide(void) {}
 
 int halo_interpolation_enabled(void)
 {
@@ -135,6 +151,17 @@ void tick_input_release(void) {}
 void player_control_sync_display_facing(void) {}
 void observer_sync_published(void) {}
 void render_interpolation_overlap_set(boolean on, long tick) { (void)on; (void)tick; }
+void render_interpolation_blend_log(double ticks_per_ms, unsigned long frames) { (void)ticks_per_ms; (void)frames; }
+void tick_snapshot_view_log(double ticks_per_ms) { (void)ticks_per_ms; }
+void tick_snapshot_say(char const *format, ...) { (void)format; }
+int wiiu_perfmon_set(void) { return 0; }
+void wiiu_perfmon_start(void) {}
+void wiiu_perfmon_read(unsigned long values[4]) { values[0] = values[1] = values[2] = values[3] = 0; }
+const char *wiiu_perfmon_name(int counter) { (void)counter; return ""; }
+unsigned wiiu_perfmon_core(void) { return 0; }
+void wiiu_tick_thread_move(int to_the_calling_core) { (void)to_the_calling_core; }
+unsigned wiiu_core_here(void) { return 1; }
+unsigned wiiu_tick_thread_core_set(void) { return 0; }
 
 #define SLOTS 4
 #define WORDS 128
@@ -323,8 +350,9 @@ static void test_frames(long frames)
 		applied_at_sync = game_applied_count;
 		if (frame == frames / 2)
 		{
-			/* a map ends and another starts: the tick thread idle, everything forgotten */
-			tick_overlap_map_reset();
+			/* a map ends and another starts, and the smooth defaults are decided again for it: the tick thread idle, everything forgotten */
+			tick_overlap_decide(0);
+			CHECK(tick_overlap_enabled());
 			tick_ring_reset(&ring, SLOTS);
 			world_time = 0;
 		}
@@ -442,12 +470,69 @@ static void test_frames(long frames)
 	CHECK(tick_requests_applied > frames);
 }
 
+/* the overlap stops cleanly for a map that is not one for it, and starts again for the next */
+static void test_decisions(void)
+{
+	long frame;
+
+	game_thread = pthread_self();
+	tick_overlap_note_render_thread();
+	tick_ring_reset(&ring, SLOTS);
+	setenv("HALO_TICK_OWNERS", "2", 1);
+	smooth_stub_value = 1;
+	tick_overlap_decide(0);
+	CHECK(tick_overlap_enabled() && tick_owners_threaded() && tick_overlap_listeners_frozen);
+	for (frame = 0; frame < 300; frame++)
+	{
+		tick_overlap_sync_point();
+		eligible = 1;
+		tick_overlap_post_frame(0.033f);
+		if (tick_overlap_frame_active())
+			tick_overlap_draw_done();
+		tick_overlap_frame_end();
+	}
+	/* a hosted game: off, with a job possibly in flight */
+	smooth_stub_value = 0;
+	tick_overlap_decide(1);
+	CHECK(!tick_overlap_enabled() && !tick_owners_threaded() && !tick_overlap_listeners_frozen);
+	/* (in the middle of a map the owners' queues keep their mode: a sound started as a ticket is not a datum) */
+	CHECK(tick_owners_mode() == 2);
+	CHECK(!tick_overlap_job_in_flight() && !tick_overlap_frame_active());
+	for (frame = 0; frame < 100; frame++)
+	{
+		tick_overlap_sync_point();
+		CHECK(!tick_overlap_post_frame(0.033f));
+		CHECK(!tick_overlap_frame_active());
+		tick_overlap_frame_end();
+	}
+	/* and a level of one player again */
+	smooth_stub_value = 1;
+	world_time = 0;
+	tick_ring_reset(&ring, SLOTS);
+	tick_overlap_decide(0);
+	CHECK(tick_overlap_enabled() && tick_owners_threaded() && tick_overlap_listeners_frozen);
+	for (frame = 0; frame < 300; frame++)
+	{
+		tick_overlap_sync_point();
+		eligible = 1;
+		tick_overlap_post_frame(0.033f);
+		if (tick_overlap_frame_active())
+			tick_overlap_draw_done();
+		tick_overlap_frame_end();
+	}
+	tick_overlap_sync_point();
+	tick_overlap_decide(0);
+	CHECK(!tick_overlap_job_in_flight());
+}
+
 int main(int count, char **arguments)
 {
 	const char *which = count > 1 ? arguments[1] : "frames";
 
 	if (!strcmp(which, "frames"))
 		test_frames(3000);
+	else if (!strcmp(which, "decisions"))
+		test_decisions();
 	else if (!strcmp(which, "small"))
 	{
 		small_queues = 1;

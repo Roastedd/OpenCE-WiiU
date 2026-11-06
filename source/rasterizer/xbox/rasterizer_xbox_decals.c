@@ -139,6 +139,7 @@ symbols in this file:
 #include "rasterizer/xbox/rasterizer_xbox.h"
 #include "rasterizer/xbox/rasterizer_xbox_pixel_shader.h"
 #include "saved games/game_state.h"
+#include "render_governor.h" /* port: port/linux/game/render_governor.c */
 
 /* ---------- constants */
 
@@ -370,6 +371,10 @@ static long rasterizer_decals_draw_order(
 	short cluster_index)
 {
 	long count = 0, first, decal_index;
+	/* port: dynamic quality (render_governor.c): while the frames run long, the decals far from the camera are not drawn, nor some of the rest (by
+	decal, so the same ones each frame); they are still made and age as they would */
+	struct render_governor_values const *shed = render_governor_values();
+	real shed_radius_squared = shed->decal_radius * shed->decal_radius;
 
 	for (decal_index = decal_get_first_decal_index(cluster_index, local_layer);
 		decal_index != NONE && count < MAXIMUM_DECALS_PER_MAP;
@@ -378,6 +383,23 @@ static long rasterizer_decals_draw_order(
 		struct decal_datum *decal = DECAL_GET(decal_index);
 		struct decal_definition *definition = decal_definition_get(decal->definition_index);
 		short framebuffer_blend_function = definition->shader.framebuffer_blend_function;
+
+		if (shed->decal_keep < 16 || shed->decal_radius > 0.f || shed->decal_max)
+		{
+			real_point3d const *camera = &global_window_parameters.camera.position;
+			real dx = decal->position.x - camera->x, dy = decal->position.y - camera->y, dz = decal->position.z - camera->z;
+
+			/* (and no more than the step's budget a frame, of those that are near and kept) */
+			if ((shed->decal_radius > 0.f && dx * dx + dy * dy + dz * dz > shed_radius_squared) ||
+				(int)(((unsigned int)decal_index * 2654435761u) >> 28) >= shed->decal_keep ||
+				(shed->decal_max && render_governor_budget_used[RENDER_GOVERNOR_BUDGET_DECALS] >= (unsigned long)shed->decal_max))
+			{
+				render_governor_counts[RENDER_GOVERNOR_COUNT_DECALS_SKIPPED]++;
+				continue;
+			}
+		}
+		render_governor_budget_used[RENDER_GOVERNOR_BUDGET_DECALS]++;
+		render_governor_counts[RENDER_GOVERNOR_COUNT_DECALS_DRAWN]++;
 
 		decal_draw_order[count] = decal_index;
 		decal_draw_keys[count] = rasterizer_decal_blend_function_commutes(framebuffer_blend_function) &&

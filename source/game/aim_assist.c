@@ -417,6 +417,8 @@ static short find_aim_assist_targets_recursive(
 {
 	short target_count= 0;
 
+	/* port: it reads objects and writes none (the tick snapshot is told, objects.h) */
+	OBJECTS_READ_ONLY_BEGIN();
 	do
 	{
 		struct object_datum *object= object_get(object_index);
@@ -453,6 +455,7 @@ static short find_aim_assist_targets_recursive(
 		object_index= object->object.next_object_index;
 	}
 	while (object_index!=NONE && target_count<maximum_target_count);
+	OBJECTS_READ_ONLY_END();
 
 	return target_count;
 }

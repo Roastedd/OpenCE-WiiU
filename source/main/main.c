@@ -389,6 +389,7 @@ symbols in this file:
 #include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
 #include "tick_input.h" /* port: port/linux/game/tick_input.c */
 #include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
+#include "smooth_defaults.h" /* port: port/linux/game/smooth_defaults.c */
 #endif
 #include "map_share.h" /* port: port/linux/game/map_share.c */
 #include "profile_sections.h" /* port: port/linux/include/profile_sections.h */
@@ -703,6 +704,28 @@ static real main_fixed_step(
 {
 	return halo_fixed_step() ? 1.0f / TICKS_PER_SECOND : seconds_elapsed;
 }
+
+#ifdef HALO_WIIU
+#include <stdlib.h>
+/* port: a test aid of the host (HALO_TICK_FRAME_MS in the environment, in milliseconds; the console has no environment and never asks): a game of this machine alone is given this much
+time each frame whatever time has passed, with debug.fixed_step off (HALO_FIXED_STEP=0), so that a host run has the console's cadence - 16.7 ms makes two frames a tick, a frame
+with no tick in it among them - at any speed of the emulator. 0: not asked for. */
+static real main_test_frame_seconds(
+	void)
+{
+	static real seconds = -1.0f;
+
+	if (seconds < 0.0f)
+	{
+		char const *value = getenv("HALO_TICK_FRAME_MS");
+
+		seconds = value && *value ? (real)atof(value) / 1000.0f : 0.0f;
+		if (seconds < 0.0f)
+			seconds = 0.0f;
+	}
+	return seconds;
+}
+#endif
 
 /* ---------- prototypes */
 
@@ -2137,7 +2160,12 @@ static void main_skip_private(
 static void main_saving_map_private(
 	void)
 {
+	/* port: how long a checkpoint takes (the whole game state, written to the card while the game stands still), for the frame pacing notes */
+	void platform_log(char const *format, ...);
+	const unsigned long save_start = system_milliseconds();
+
 	game_state_save();
+	platform_log("checkpoint: the game state saved in %lu ms", system_milliseconds() - save_start);
 	hud_autosave(FALSE);
 	main_globals.save_map_completed = FALSE;
 	return;
@@ -2536,6 +2564,12 @@ static void main_update_time_unthrottled(
 	{
 		seconds_elapsed = main_globals.recording_dt;
 	}
+#ifdef HALO_WIIU
+	else if (main_test_frame_seconds() > 0.0f && main_globals.connection == _game_connection_local)
+	{
+		seconds_elapsed = main_test_frame_seconds();
+	}
+#endif
 	else if (halo_fixed_step() && main_globals.connection == _game_connection_local)
 	{
 		/* port: debug.fixed_step, a frame a tick whatever time has passed, as
@@ -2787,6 +2821,12 @@ static void main_update_time(
 	{
 		seconds_elapsed = main_globals.recording_dt;
 	}
+#ifdef HALO_WIIU
+	else if (main_test_frame_seconds() > 0.0f && main_globals.connection == _game_connection_local)
+	{
+		seconds_elapsed = main_test_frame_seconds();
+	}
+#endif
 	else if (halo_fixed_step() && main_globals.connection == _game_connection_local)
 	{
 		/* port: debug.fixed_step, as main_update_time_unthrottled */
@@ -3471,13 +3511,13 @@ static void main_game_time_update_work(
 static void main_game_time_update(
 	real time_delta_sec)
 {
-	if (main_tick_thread.state < 0)
-	{
-		main_tick_thread.state = 0;
-		if (main_study_setting("HALO_TICK_THREAD", 0) > 0)
-			main_tick_thread.state = tick_overlap_start_thread() ? 1 : 0;
-	}
-	if (!main_tick_thread.state)
+	/* (the ticks on a thread of their own, the serial loop's stage 1: halo/tick_thread.txt for a map the smooth defaults are for, smooth_defaults.h; decided at each map start, so a
+	network game, a split screen game and the main menu run their ticks on the game thread whatever the file holds. The thread is made on the first map that wants it) */
+	const boolean wanted = smooth_defaults_value(SMOOTH_TICK_THREAD) > 0;
+
+	if (wanted && main_tick_thread.state < 0)
+		main_tick_thread.state = tick_overlap_start_thread() ? 1 : 0;
+	if (!wanted || main_tick_thread.state <= 0)
 	{
 		game_time_update(time_delta_sec);
 		return;
@@ -3713,6 +3753,56 @@ static void main_game_render(
 }
 
 #ifdef HALO_WIIU
+/* port: whether the map that has just been loaded is one the smooth defaults are for (smooth_defaults.h): NULL if it is, else why not. Asked at each map start
+(game_initialize_for_new_map), before the map's players exist: the players of a split screen game are counted by the menu's player_spawn_count, not yet by
+local_player_count, which still holds the last map's. The tick thread is idle. The frames of a map that is one are still the serial loop's whenever main_overlap_eligible
+says so (a pause, a cinematic, a save). */
+static char const *main_smooth_defaults_reason_for(
+	boolean at_map_start)
+{
+	boolean network_game_should_accept_remote_connections(void);
+	boolean network_game_is_splitscreen_local(void);
+	struct network_game_client *global_network_game_client_get(void);
+	struct network_game_server *global_network_game_server_get(void);
+	struct smooth_defaults_map map;
+
+	map.main_menu = main_globals.main_menu_scenario_loaded != 0;
+	map.connection = main_globals.connection == _game_connection_local ? SMOOTH_CONNECTION_LOCAL :
+		main_globals.connection == _game_connection_network_server ? SMOOTH_CONNECTION_SERVER :
+		main_globals.connection == _game_connection_network_client ? SMOOTH_CONNECTION_CLIENT :
+		main_globals.connection == _game_connection_film_playback ? SMOOTH_CONNECTION_FILM : SMOOTH_CONNECTION_OTHER;
+	/* (a client, or a server that takes remote connections: a lobby or a game with peers. A server that does not is the split screen of this machine's players) */
+	map.network_session = global_network_game_client_get() != NULL || (global_network_game_server_get() != NULL && network_game_should_accept_remote_connections());
+	map.local_server = network_game_is_splitscreen_local() != 0;
+	map.dedicated_server = halo_server_mode() != 0;
+	map.editor = game_in_editor() != 0;
+	map.recording = main_globals.movie != 0;
+	map.interpolation = halo_interpolation_enabled() != 0;
+	map.spawn_players = player_spawn_count;
+	map.local_players = !at_map_start && game_time_get() >= 3 ? local_player_count() : 0;
+	return smooth_defaults_reason(&map);
+}
+
+char const *main_smooth_defaults_reason(
+	void)
+{
+	return main_smooth_defaults_reason_for(TRUE);
+}
+
+/* port: each frame, at the sync point: a map the smooth defaults were switched on for that stops being one (a second local player counted after the map began, a network
+session opened, a film) is decided again, as a map start is: the overlap stops cleanly and the frames are the serial loop's from here */
+static void main_smooth_defaults_recheck(
+	void)
+{
+	void platform_log(char const *format, ...);
+
+	if (smooth_defaults_map_ok() && main_smooth_defaults_reason_for(FALSE))
+	{
+		platform_log("smooth defaults: this map stops being one for them (%s)", main_smooth_defaults_reason_for(FALSE));
+		smooth_defaults_map_stops();
+	}
+}
+
 /* port: whether this frame's tick side may be the tick thread's, beside the drawing (tick_overlap.h): a game of this machine alone and one player, in
 the game's own time, with nothing that shows or changes the world in a way the ring of the snapshot cannot follow. Asked by the game thread with the
 tick thread idle. Anything else is the serial loop's frame. */
@@ -3752,6 +3842,20 @@ boolean main_overlap_eligible(
 		reason = "the game's speed is not 1";
 	else if (main_globals.saving_map)
 		reason = "a save";
+	else if (tick_overlap_late())
+		reason = "the tick thread was late";
+	else
+	{
+		/* (a test aid: halo/tick_overlap_force_serial.txt 1 makes every frame the serial loop's, with the overlap's switches on, so that the serial frames of the overlap's build are
+		run for as long as a test wants: they are the frames of a save, a pause, a cinematic. HALO_TICK_OVERLAP_FORCE_SERIAL on the host.) */
+		static long forced = -1;
+		long wiiu_study_number(const char *name, long fallback);
+
+		if (forced < 0)
+			forced = wiiu_study_number("tick_overlap_force_serial.txt", 0);
+		if (forced > 0)
+			reason = "forced by halo/tick_overlap_force_serial.txt (a test)";
+	}
 	/* (the reason for a frame of the serial loop's, said when it changes: the log is where a run says why the overlap was not used) */
 	if (reason != last_reason)
 	{
@@ -3783,8 +3887,10 @@ long main_overlap_tick_side(
 	tick_owners_drain(TICK_OWNER_TICK);
 	player_control_update(dt);
 	ticks_run = game_time_overlap_run(ticks_elapsed, leftover_after);
+	tick_overlap_jitter(); /* (test aid) */
 	/* port: the lights that fade, which the drawing of the serial loop's frames lets go of (object_lights.c) */
 	lights_fade_update();
+	tick_overlap_jitter(); /* (test aid) */
 	director_update(dt);
 	observer_update(dt);
 	game_engine_update_non_deterministic(dt);
@@ -3792,6 +3898,7 @@ long main_overlap_tick_side(
 	and the cameras attached to the capture of the last tick and the ring's new ticks made visible (tick_snapshot.c) */
 	player_control_publish_display_facing();
 	tick_input_release();
+	tick_overlap_jitter(); /* (test aid) */
 	tick_snapshot_job_end(game_time_overlap_time(), ticks_run, previous_job_tick);
 
 	return ticks_run;
@@ -3885,6 +3992,7 @@ static boolean main_loop_iteration(
 		/* port: the tick thread's job of the last frame is over before anything else is done with the game state (the map changes, the saves
 		and the rest of this frame's work below): tick_overlap.h */
 		tick_overlap_sync_point();
+		main_smooth_defaults_recheck();
 #endif
 		if (!game_in_editor())
 		{
@@ -4229,7 +4337,18 @@ static boolean main_loop_iteration(
 			}
 
 			if (!halo_server_mode())
+			{
+#ifdef HALO_WIIU
+				/* port: the throttle's time, for the detailed overlay's VSYNC (port/wiiu/src/d3d8_gx2.c) */
+				void wiiu_frame_part(int part, int ticks);
+
+				wiiu_frame_part(4, 0);
+#endif
 				profile_scope(main_throttle_section, main_rasterizer_throttle();)
+#ifdef HALO_WIIU
+				wiiu_frame_part(5, 0);
+#endif
+			}
 
 			if (render_frame && !debug_no_drawing)
 			{

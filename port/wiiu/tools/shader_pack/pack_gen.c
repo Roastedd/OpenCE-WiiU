@@ -5,11 +5,15 @@ The GLSL for the shader keys the console wrote to shaders_missing.txt (gx2_shade
 ES path, as gen_shaders/gen.c uses them). tools/wiiu/shader_pack.sh builds it with the Linux port's flags and runs it under qemu-i386.
 
 	pack_gen <keys.txt> <directory>
+	pack_gen --check <count> <seed>      shader_key_wire.h's canonical keys and stand-ins checked on that many random pixel keys; nothing written
 
 keys.txt, one key a line:
 	V <program hash, 16 hex digits> <packed attribute mask> <instruction count> <the words, hex>      a vertex program
 	P <the pixel key, shader_key_wire.h, in hex>                                                    a pixel shader
 The files are named by the key's hash (shader_key_wire.h: the hash gx2_shaders.c looks the shader up by): vs_<hash>.vert and ps_<hash>.frag; one that is there already is left.
+A pixel key's shader is written under its canonical key's hash too (shader_key_canonical: the console asks for that when the pack lacks the key), once
+the two keys' GLSL is found to be the same text; a key whose canonical key has other GLSL stops the run. The stand-ins' shaders (shader_key_fallback)
+are written whatever the keys.
 */
 
 #include "xgpu.h"
@@ -86,15 +90,199 @@ static int hex_digit(int c)
 	return -1;
 }
 
+static uint64_t pixel_hash(const struct nv2a_pixel_shader_key *key)
+{
+	unsigned char wire[SHADER_KEY_WIRE_BYTES];
+
+	shader_key_write(key, wire);
+	return shader_key_hash(SHADER_KEY_HASH_INIT, wire, sizeof(wire));
+}
+
+static void pixel_print(const char *what, const struct nv2a_pixel_shader_key *key)
+{
+	unsigned char wire[SHADER_KEY_WIRE_BYTES];
+	unsigned i;
+
+	shader_key_write(key, wire);
+	fprintf(stderr, "%s: P ", what);
+	for (i = 0; i < SHADER_KEY_WIRE_BYTES; i++)
+		fprintf(stderr, "%02x", wire[i]);
+	fprintf(stderr, "\n");
+}
+
+static char *pixel_glsl(const struct nv2a_pixel_shader_key *key, const char *what)
+{
+	char *source = nv2a_pixel_shader_to_glsl(key);
+
+	if (!source)
+	{
+		fprintf(stderr, "%s: no GLSL for the pixel key\n", what);
+		exit(1);
+	}
+	return source;
+}
+
+/* a pixel shader's file, unless it is there already (1 if written); the text is freed */
+static int pixel_write(const char *directory, uint64_t hash, char *source)
+{
+	char path[512];
+
+	snprintf(path, sizeof(path), "%s/ps_%016llx.frag", directory, (unsigned long long)hash);
+	if (exists(path))
+	{
+		free(source);
+		return 0;
+	}
+	write_file(path, source);
+	return 1;
+}
+
+/* ---------- the check: random keys, with each field's values that the generator tells apart likely */
+
+static uint32_t random_state;
+
+static uint32_t random32(void)
+{
+	random_state ^= random_state << 13;
+	random_state ^= random_state >> 17;
+	random_state ^= random_state << 5;
+	return random_state;
+}
+
+static unsigned random_below(unsigned limit)
+{
+	return random32() % limit;
+}
+
+static void random_key(struct nv2a_pixel_shader_key *key)
+{
+	static const unsigned long functions[] = { 0, D3DCMP_NEVER, D3DCMP_LESS, D3DCMP_EQUAL, D3DCMP_LESSEQUAL, D3DCMP_GREATER, D3DCMP_NOTEQUAL,
+		D3DCMP_GREATEREQUAL, D3DCMP_ALWAYS, 1, 0x208 };
+	unsigned i;
+
+	memset(key, 0, sizeof(*key));
+	for (i = 0; i < D3DRS_PS_MAX; i++)
+	{
+		/* an input byte's register 0 to 15, its alpha and its mapping, or a word of anything */
+		key->combiner_state[i] = random32();
+		if (random_below(4) == 0)
+			key->combiner_state[i] &= 0x3f3f3f3f;
+	}
+	key->combiner_state[D3DRS_PSCOMBINERCOUNT] = random_below(11) | (random32() & 0x11100u);
+	if (random_below(4) == 0)
+		key->combiner_state[D3DRS_PSCOMBINERCOUNT] |= random32() & 0xfffe0000u;
+	if (random_below(3) == 0)
+		key->combiner_state[D3DRS_PSFINALCOMBINERINPUTSABCD] = key->combiner_state[D3DRS_PSFINALCOMBINERINPUTSEFG] = 0;
+	for (i = 0; i < 4; i++)
+	{
+		const unsigned mode = random_below(8) ? random_below(0x13) : random_below(32);
+
+		key->texture_modes |= (DWORD)mode << (5 * i);
+		key->sampler_type[i] = (unsigned char)(random_below(16) ? random_below(4) : random32());
+		key->alpha_kill[i] = (unsigned char)(random_below(2) ? 0 : random_below(4) ? 1 : random32());
+		key->color_sign[i] = (unsigned char)(random_below(2) ? 0 : random32());
+	}
+	if (random_below(4) == 0)
+		key->texture_modes |= random32() & 0xfff00000u;
+	key->alpha_test_function = random_below(8) ? functions[random_below(sizeof(functions) / sizeof(functions[0]))] : random32();
+	key->fog_enable = (unsigned char)(random_below(4) ? random_below(2) : random32());
+	key->fog_table_mode = (unsigned char)random_below(6);
+	key->count_samples = (unsigned char)(random_below(4) ? 0 : random32());
+	key->coverage_alpha = (unsigned char)(random_below(2) ? 0 : random_below(3));
+	key->point_threshold = (unsigned char)(random_below(2) ? 0 : random_below(3));
+	key->per_pixel_lighting = (unsigned char)(random_below(2) ? 0 : random_below(4));
+	key->alpha_test_samples = (unsigned char)(random_below(2) ? 0 : random_below(9));
+	key->source_blend = (unsigned char)(random_below(2) ? 0 : random32());
+}
+
+static int check(unsigned long count, uint32_t seed)
+{
+	uint64_t numbered[SHADER_KEY_FALLBACKS];
+	unsigned long n, collapsed = 0, stood_in = 0;
+	unsigned i;
+
+	for (i = 0; i < SHADER_KEY_FALLBACKS; i++)
+	{
+		struct nv2a_pixel_shader_key fallback;
+
+		shader_key_fallback_numbered(i, &fallback);
+		numbered[i] = pixel_hash(&fallback);
+	}
+	random_state = seed ? seed : 1;
+	for (n = 0; n < count; n++)
+	{
+		struct nv2a_pixel_shader_key key, canonical, twice, fallback, canonical_fallback;
+		char *text, *canonical_text;
+		int has, canonical_has;
+
+		random_key(&key);
+		shader_key_canonical(&key, &canonical);
+		shader_key_canonical(&canonical, &twice);
+		if (pixel_hash(&twice) != pixel_hash(&canonical))
+		{
+			pixel_print("key", &key);
+			fprintf(stderr, "check %lu: the canonical key of a canonical key is another\n", n);
+			return 1;
+		}
+		text = pixel_glsl(&key, "check");
+		canonical_text = pixel_glsl(&canonical, "check");
+		if (strcmp(text, canonical_text) != 0)
+		{
+			pixel_print("key", &key);
+			pixel_print("canonical", &canonical);
+			fprintf(stderr, "check %lu: the key and its canonical key have different GLSL:\n----\n%s----\n%s----\n", n, text, canonical_text);
+			return 1;
+		}
+		collapsed += pixel_hash(&canonical) != pixel_hash(&key);
+		free(text);
+		free(canonical_text);
+		/* the stand-in: one of the numbered ones, the same for the canonical key, none only for an alpha test that passes nothing */
+		has = shader_key_fallback(&key, &fallback);
+		canonical_has = shader_key_fallback(&canonical, &canonical_fallback);
+		if (has != canonical_has || has != (key.alpha_test_function != D3DCMP_NEVER) ||
+			(has && pixel_hash(&fallback) != pixel_hash(&canonical_fallback)))
+		{
+			pixel_print("key", &key);
+			fprintf(stderr, "check %lu: the stand-ins of the key and of its canonical key differ\n", n);
+			return 1;
+		}
+		if (has)
+		{
+			for (i = 0; i < SHADER_KEY_FALLBACKS && numbered[i] != pixel_hash(&fallback); i++)
+				;
+			if (i == SHADER_KEY_FALLBACKS)
+			{
+				pixel_print("key", &key);
+				fprintf(stderr, "check %lu: the key's stand-in is none of the numbered ones\n", n);
+				return 1;
+			}
+			stood_in++;
+		}
+	}
+	printf("pack_gen: %lu random pixel keys have the GLSL of their canonical keys (%lu of them another key), and %lu a numbered stand-in\n", count,
+		collapsed, stood_in);
+	return 0;
+}
+
+static int compare_hashes(const void *a, const void *b)
+{
+	const uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+
+	return x < y ? -1 : x > y;
+}
+
 int main(int argc, char **argv)
 {
 	static char line[1 << 16];
 	FILE *keys;
-	unsigned long vertex_count = 0, pixel_count = 0, line_number = 0;
+	unsigned long vertex_count = 0, pixel_count = 0, canonical_count = 0, fallback_count = 0, line_number = 0, pixel_keys = 0, n, distinct;
+	uint64_t *canonical_hashes = NULL;
 
+	if (argc == 4 && !strcmp(argv[1], "--check"))
+		return check(strtoul(argv[2], NULL, 10), (uint32_t)strtoul(argv[3], NULL, 10));
 	if (argc != 3 || !(keys = fopen(argv[1], "r")))
 	{
-		fprintf(stderr, "usage: pack_gen <keys.txt> <directory>\n");
+		fprintf(stderr, "usage: pack_gen <keys.txt> <directory> | pack_gen --check <count> <seed>\n");
 		return 1;
 	}
 	while (fgets(line, sizeof(line), keys))
@@ -146,9 +334,10 @@ int main(int argc, char **argv)
 		else if (line[0] == 'P' && line[1] == ' ')
 		{
 			unsigned char wire[SHADER_KEY_WIRE_BYTES];
-			struct nv2a_pixel_shader_key key;
+			struct nv2a_pixel_shader_key key, canonical;
+			uint64_t hash, canonical_hash;
 			unsigned i;
-			char *source;
+			char what[64], *source;
 
 			for (i = 0; i < SHADER_KEY_WIRE_BYTES; i++)
 			{
@@ -161,23 +350,58 @@ int main(int argc, char **argv)
 				}
 				wire[i] = (unsigned char)(high << 4 | low);
 			}
-			snprintf(path, sizeof(path), "%s/ps_%016llx.frag", argv[2],
-				(unsigned long long)shader_key_hash(SHADER_KEY_HASH_INIT, wire, sizeof(wire)));
-			if (!exists(path))
+			shader_key_read(wire, &key);
+			hash = shader_key_hash(SHADER_KEY_HASH_INIT, wire, sizeof(wire));
+			shader_key_canonical(&key, &canonical);
+			canonical_hash = pixel_hash(&canonical);
+			snprintf(what, sizeof(what), "line %lu", line_number);
+			source = pixel_glsl(&key, what);
+			if (canonical_hash != hash)
 			{
-				shader_key_read(wire, &key);
-				source = nv2a_pixel_shader_to_glsl(&key);
-				if (!source)
+				char *same = pixel_glsl(&canonical, what);
+
+				if (strcmp(source, same) != 0)
 				{
-					fprintf(stderr, "line %lu: no GLSL for the pixel key\n", line_number);
+					fprintf(stderr, "line %lu: the pixel key %016llx and its canonical key %016llx have different GLSL: shader_key_canonical "
+						"(shader_key_wire.h) clears something nv2a_psh.c reads\n", line_number, (unsigned long long)hash,
+						(unsigned long long)canonical_hash);
 					return 1;
 				}
-				write_file(path, source);
-				pixel_count++;
+				canonical_count += pixel_write(argv[2], canonical_hash, same);
 			}
+			pixel_count += pixel_write(argv[2], hash, source);
+			canonical_hashes = realloc(canonical_hashes, (pixel_keys + 1) * sizeof(*canonical_hashes));
+			if (!canonical_hashes)
+			{
+				fprintf(stderr, "no memory\n");
+				return 1;
+			}
+			canonical_hashes[pixel_keys++] = canonical_hash;
 		}
 	}
 	fclose(keys);
-	printf("pack_gen: %lu vertex shaders, %lu pixel shaders written\n", vertex_count, pixel_count);
+	for (n = 0; n < SHADER_KEY_FALLBACKS; n++)
+	{
+		struct nv2a_pixel_shader_key fallback, canonical;
+
+		shader_key_fallback_numbered((unsigned)n, &fallback);
+		shader_key_canonical(&fallback, &canonical);
+		if (pixel_hash(&canonical) != pixel_hash(&fallback))
+		{
+			fprintf(stderr, "stand-in %lu is not a canonical key (shader_key_fallback_make)\n", n);
+			return 1;
+		}
+		fallback_count += pixel_write(argv[2], pixel_hash(&fallback), pixel_glsl(&fallback, "a stand-in"));
+	}
+	distinct = 0;
+	if (pixel_keys)
+	{
+		qsort(canonical_hashes, pixel_keys, sizeof(*canonical_hashes), compare_hashes);
+		for (n = 0; n < pixel_keys; n++)
+			distinct += !n || canonical_hashes[n] != canonical_hashes[n - 1];
+	}
+	free(canonical_hashes);
+	printf("pack_gen: %lu vertex shaders, %lu pixel shaders written; %lu more under canonical keys (%lu pixel keys, %lu canonical keys), %lu stand-ins\n",
+		vertex_count, pixel_count, canonical_count, pixel_keys, distinct, fallback_count);
 	return 0;
 }

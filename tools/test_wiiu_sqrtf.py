@@ -39,8 +39,8 @@ class SqrtfTest(unittest.TestCase):
             self.assertIn("every input matches", result.stdout)
 
     def test_a_wrong_correction_is_caught(self):
-        # (the halfway-point check moves the root only when the rounded double is a float away: never, over all 2^32 inputs, with four Newton
-        # steps; it is what makes the result correct by construction rather than by this test. A check the wrong way round is caught.)
+        # (the halfway-point check moves the root only when the rounded double is a float away: with three Newton steps the
+        # estimate is 0.0006 of a place out, so seldom; it is what makes the result correct by construction rather than by this test. A check the wrong way round is caught.)
         text = SOURCE.read_text()
         before = "if (above * above < d)"
         self.assertEqual(text.count(before), 1)
@@ -51,9 +51,9 @@ class SqrtfTest(unittest.TestCase):
     def test_too_few_newton_steps_are_caught(self):
         text = SOURCE.read_text()
         step = "\ty = y * (1.5 - 0.5 * scaled * y * y);\n"
-        self.assertEqual(text.count(step), 4)
+        self.assertEqual(text.count(step), 3)
         with tempfile.TemporaryDirectory(prefix="opence-sqrtf-") as folder:
-            result = self.run_check(self.build(folder, text.replace(step * 4, step * 2)), sampled=True)
+            result = self.run_check(self.build(folder, text.replace(step * 3, step * 2)), sampled=True)
             self.assertNotEqual(result.returncode, 0)
 
 

@@ -7,6 +7,7 @@ every run. Built as the platform layer is (the game's ABI and the Xbox headers).
 */
 
 #include "replay.h"
+#include "platform.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -98,6 +99,12 @@ void *physical_memory_get_tag_cache_base_address(void)
 void *halo_custom_edition_tag_cache(void)
 {
 	return NULL;
+}
+
+/* the layer's note of the card's files (xbox_files.c's counters, which the replay does not link): none were read */
+void platform_file_io_snapshot(struct platform_file_io *out)
+{
+	memset(out, 0, sizeof(*out));
 }
 
 /* ---------- the log: counted, and the lines that say a state was found changed with no setter are counted apart */
@@ -239,6 +246,26 @@ int startup_option(unsigned long bit)
 }
 
 /* hud_hires_tags.c's: no menu has the screen, so dynamic resolution's controller would run (it is off: host_gx2_drs_lines answers no step) */
+/* port/linux/game/render_governor.c's (the layer asks for the dynamic quality's model level of detail and tells it each frame's work): not on here */
+float render_governor_lod_scale(void)
+{
+	return 1.0f;
+}
+
+void render_governor_frame(double work_ms, double tick_ms, double render_ms, double now_ms)
+{
+	(void)work_ms;
+	(void)tick_ms;
+	(void)render_ms;
+	(void)now_ms;
+}
+
+/* wiiu_map_summary.c: the time between two presents, for the log's note at the end of a map; the replay's game has no maps */
+void wiiu_map_summary_frame(double frame_ms)
+{
+	(void)frame_ms;
+}
+
 int port_menus_active(void)
 {
 	return 0;
@@ -415,6 +442,12 @@ long hud_hires_override_find(unsigned long address, unsigned long width, unsigne
 }
 
 int hud_hires_override_coverage(long asset)
+{
+	(void)asset;
+	return 0;
+}
+
+int hud_hires_override_point_threshold(long asset)
 {
 	(void)asset;
 	return 0;

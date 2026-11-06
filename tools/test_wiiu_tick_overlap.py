@@ -15,7 +15,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / 'port/wiiu/tests/test_tick_overlap.c'
-CASES = ['frames', 'small']
+CASES = ['frames', 'small', 'decisions']
 
 
 class TickOverlapTests(unittest.TestCase):

@@ -76,6 +76,10 @@ void tick_overlap_sync_point(void);
 /* The tick side of this frame, if it is the overlap's: the job is posted and the picture of the frame is set up (the view of the clock, the pair
 of the ring); the frame's dt is what the serial loop gives player_control_update and the clock. FALSE if the frame is the serial loop's. */
 boolean tick_overlap_post_frame(real dt);
+/* a line of the log said in lines that fit the console's (tick_snapshot.c) */
+void tick_snapshot_say(char const *format, ...);
+/* the tick thread was late for a while (tick_overlap.c): the frames are the serial loop's until it is tried again */
+boolean tick_overlap_late(void);
 /* whether the frame being run is the overlap's (the main loop's game thread, until the frame has been presented) */
 boolean tick_overlap_frame_active(void);
 /* the job is still running (the game thread draws meanwhile) */
@@ -87,6 +91,11 @@ void tick_overlap_frame_end(void);
 /* a map starts or ends, a game state is loaded: the tick thread is idle (the main loop's flags are handled at the sync point); forget the ring and the
 shadows */
 void tick_overlap_map_reset(void);
+/* the map's decision (smooth_defaults.c): the overlap, the snapshot behind it and the owners' queues made again for the map, from nothing; the tick thread idle */
+void tick_overlap_decide(int mid_map);
+void tick_snapshot_decide(void);
+/* the numbers the map summary reads, since the start of the run: frames, overlapped frames, serial frames, falls back to the serial loop, times the clock was held */
+void tick_overlap_summary_counts(unsigned long counts[5]);
 
 /* ---------- what the queues ask (tick_owners.c) */
 
@@ -130,6 +139,9 @@ void tick_overlap_note_publish(unsigned long long elapsed);
 /* a producer waits for room in a queue */
 void tick_overlap_note_push_wait(void);
 void tick_overlap_log(unsigned long long now);
+/* the overlap's monotonic counts for the detailed performance overlay (port/wiiu/src/wiiu_perf.h), written into the overlap_ fields of totals */
+struct perf_totals;
+void tick_overlap_perf_read(struct perf_totals *totals);
 
 /* ---------- the other units' (tick_snapshot.c, game_time.c, render_interpolation.c) */
 
@@ -143,9 +155,25 @@ boolean tick_snapshot_pin(long tick);
 void tick_snapshot_unpin(void);
 void tick_snapshot_job_end(long tick, long ticks_in_job, long previous_job_tick);
 real_matrix4x3 const *tick_snapshot_previous_node_matrices(long object_index, short node_count);
+long tick_snapshot_pose_serial(long absolute_index, boolean previous);
+int tick_snapshot_rotation_cache(void);
 int tick_snapshot_view_cameras(short local_player_index, struct observer_result const **previous, struct observer_result const **latest);
 void render_interpolation_camera_between(struct observer_result const *a, struct observer_result const *b, real t, struct observer_result *result);
 void render_interpolation_overlap_set(boolean on, long tick);
+/* the fine timers of the copies (tick_snapshot.c, render_interpolation.c): the game thread's reads, and the blends' numbers, said by the overlap's log */
+void tick_snapshot_reads_total(unsigned long *reads, unsigned long *fallbacks, unsigned long *applied);
+void render_interpolation_blend_log(double ticks_per_ms, unsigned long frames);
+void tick_snapshot_view_log(double ticks_per_ms);
+
+/* a test aid (halo/tick_overlap_jitter.txt, milliseconds; the host: HALO_TICK_OVERLAP_JITTER): the tick thread sleeps a random time up to that, at a quarter of the places it calls this from, while
+a job runs, so that the drawing thread meets the game state at all the moments a tick leaves it in: between a light's leaving its clusters and its being let go of, between a tick and the capture,
+and so on. It does nothing on any other thread, outside a job, and with the file absent. */
+void tick_overlap_jitter(void);
+
+/* Something the tick thread's job does that cannot be done beside a frame being drawn - a structure bsp switched (a campaign script's switch_bsp: the bsp's tag data is let go of and another
+loaded, and every cluster number the frame's copies hold is another's) - is done by the game thread instead, at its sync point, where it waits for the job, while the tick thread waits here for
+it to be done: the script goes on after it as it did with the ticks on one thread. FALSE (nothing done, nothing waited for) if the caller is not the tick thread in an overlap job: it does it itself. */
+boolean tick_overlap_game_thread_do(void (*function)(void *), void *argument);
 
 /* the lights that fade (object_lights.c), once after the ticks of each job */
 void lights_fade_update(void);

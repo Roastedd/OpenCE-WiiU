@@ -747,6 +747,24 @@ A unit that replaces an excluded source goes in `src/` (its README says how), an
 
 The files (`posix_files.c`'s `UTIME_OMIT`, `pread` and `pwrite`), the null renderer, and the Wii U's input; each replaces stubs.
 
+## Shaders the pack lacks
+
+The shaders are compiled ahead of time into `halo/shaders.pack` (`gx2_shaders.c`, `tools/wiiu/shader_pack.sh`), so a key nobody
+met before has none. A pixel key holds render states its shader never reads (the combiner stages past the count keep the values
+of the last draw that used them): the 2200 pixel keys met by 2026-10-30 have 186 shaders between them. So a pixel key the pack
+lacks is looked for again as its canonical key (`shader_key_canonical`, `shader_key_wire.h`: what `nv2a_psh.c` does not read
+set to 0), whose shader is the same; the pack builder writes every key's shader under its canonical key too, and stops if the two
+GLSL texts differ (`pack_gen.c`; `pack_gen --check` tries random keys). Failing that, the draw is made with a stand-in
+(`shader_key_fallback`): what the key's final color and alpha depend on is followed through its combiner program, and the
+stand-in keeps what it can of that: stage 0's texture (2D, 3D or cube, as the key samples it) times the diffuse color, each where
+the color or the alpha depends on them (untextured, the diffuse color, else C0, else nothing), with the key's alpha test and alpha
+kill. It is itself a key, generated like every other, so it meets every vertex shader; the pack has all 114 of them. Models, the
+first-person weapon, the sky and the HUD are then drawn roughly rather than not at all (on 2026-10-31, with 29 of Blood Gulch's
+shaders taken out of a test pack, 8400 of 11100 draws were stand-ins, and the sky was drawn once its stand-in followed its alpha).
+A key in `tools/wiiu/shader_exclude.txt` is marked in the pack (stage 2 or 3, no shader) and still skipped, and a vertex key the
+pack lacks still skips the draw. The 5-second log counts the draws made with a canonical key's shader and with a stand-in, and the
+first 40 such keys are logged by name; each key is written down for the next pack as before.
+
 ## Owned missing-shader capture
 
 `gx2_shaders.c` queues one attempt per `(stage, lookup hash)` from its single
@@ -878,6 +896,80 @@ GPU pixels. The fixed shader's sources and byte identity live in
 `shaders/mip.*`; regenerate the embedded GFD with
 `python3 port/wiiu/tools/embed_mip_shader.py --compiler <existing-glslcompiler>`.
 
+## Smooth by default: the tick overlap and the governor (since `wiiu-rc4`)
+
+A game of **one local player with no network of any kind** is smooth with no card file at all: the game's ticks run on a thread of their own on core 2 beside the
+drawing (the tick overlap, with the tick snapshot behind it), and the dynamic quality governor holds the frame near 22 ms (steps 0 to 3: it sheds only small, far or
+thin things, never a unit, a vehicle, a weapon or a projectile). On the console, in the scripted one-player b30 fight, that was about 25 to 31 frames a second without
+it and 45 to 47 with it (`reports/research/2026-11-01/ticks-stage4.md` sections 11 to 15, `ticks-stage5-snapshot-cost.md`); the owner's 25 minutes of rc2 with it ran at a
+mean of 58.7 (`reports/research/2026-11-04/rc4-defaults.md` has the figures and the checks).
+
+**The map decides, at each map start.** The log says it, once a map: `smooth defaults: ON for this map (one local player, no network)` or
+`smooth defaults: OFF for this map: <the reason>`, and then what each of the four switches came to and where it came from. The smooth settings are for a map with
+exactly one local player, no network session of any kind (hosted, joined, system link, internet: a network game stays the serial loop, with the ticks on the game
+thread), no split screen, no saved film, no dedicated server, no editor, not the main menu's scene, and `display.interpolation` on. Every other map, and the start-up
+before the first map, runs as the build without the smooth defaults does. The decision is taken again at every map start (a level change, the way back to the main menu,
+a game started from it, a loaded save), and the overlap's state is made again from nothing each time: the tick thread idle, the snapshot's ring and its marks, the owners'
+queues' mode, the late state, the listeners. A map that was one and stops being one (a second local player counted after the map began, a network session opened, a film)
+is decided again at the next frame's sync point (`smooth defaults: this map stops being one for them`). A revert to a checkpoint is the same map: the decision stands and
+the ring is forgotten (as before). The serial fallback stays: when the tick thread is late the clock is held to one tick a frame, and below 20 ticks a second the frames
+are the serial loop's for 10 s and more (`tick_overlap_late.txt`). The tick thread is never on core 0 by default (`tick_core.txt`: absent means core 2).
+
+**The four card files** (`tick_thread.txt`, `tick_snapshot.txt`, `tick_overlap.txt`, `governor.txt`) **changed meaning in `wiiu-rc4`**: before, absent and -1 meant off, and now they mean
+the default, which is on for a map of one player. The other files of this section keep -1 as "no file".
+
+| Word in the file | Meaning | In the log |
+| --- | --- | --- |
+| absent, or -1 (`governor.txt`: or a first word of -1 or `default`) | **the default: the smooth setting, for a map the smooth defaults are for; off for any other** | `<switch> on, the default (halo/<file>: absent or -1)` |
+| 0 (`governor.txt`: `off`) | **off, for every map**: an explicit opt-out for a test or a comparison. One 0 among the first three turns the whole tick overlap off (it needs the thread and the snapshot; the other two then default to off, not to half of it); the governor is its own | `<switch> off: its card file holds 0` / `off: another of the three is 0` |
+| above 0 (`governor.txt`: `on`, `1`, or any line of settings) | on, as it has always been (the snapshot's number is its bits), **but never for a map that is not one for them**: a network game, a split screen game and the main menu stay the serial loop whatever the file holds | `<switch> on, its card file`; for a map that is not one: `off: not for this map`, and `a card file that holds 1 is on only for the maps the smooth settings are for` |
+
+The owner's card (`tick_thread.txt` 1, `tick_snapshot.txt` 1, `tick_overlap.txt` 1, `governor.txt` `on`) is therefore the default for him in a one-player map, and
+now also off in a network game and in split screen, where before the overlap's switches were on in the build and the frames were the serial loop's. A harness that writes
+-1 to put a file back now puts the default back, which is on: **write 0 for off.** `gpu_offload.txt` is not part of this: it stays off unless the file says 1 (not
+reproduced on the console). Off by default and unchanged: `gpu_offload`, `hotpaths`, the Broadway kernels, `stream`, `pacing`, dynamic resolution, the overlay (L + R + - on
+the GamePad).
+
+**The map summary.** At the end of each map (a level change, the way back to the main menu, the game's quit) the log says how it played: `map summary (levels\b30\b30,
+smooth defaults on): 18432 frames in 312.4 s, mean 59.0 fps, 1% low 41.2 fps (24.3 ms), longest frame 190 ms, hitches over 100 ms: 3`, then the share of the map's 5 s
+windows at 57 fps and over, 45 to 57 and under 45, the overlap's falls back to the serial loop and times the clock was held, and the share of frames at each governor
+step. The 5 s lines of the log are unchanged.
+
+## Threading study files on the card
+
+These files of `wiiu/apps/halo/` hold one number each and are read once at start. **A negative number (-1) is the same as no file** (the default),
+so that a harness that must not delete a card file can write -1 to put one back. 0 and the positive numbers keep their meanings. **Except the four of the section above**
+(`tick_thread.txt`, `tick_snapshot.txt`, `tick_overlap.txt`, `governor.txt`), whose default is now the smooth setting for a map of one local player.
+
+| File | Absent or -1 | Meaning |
+| --- | --- | --- |
+| `tick_thread.txt` | **on** for a map of one local player (0 for any other) | 1: the game's ticks run on a thread of their own; 0: off |
+| `tick_overlap.txt` | **on** for a map of one local player | 1: the ticks run beside the drawing (needs `tick_thread.txt` and `tick_snapshot.txt` not 0); 0: off |
+| `tick_snapshot.txt` | **1** for a map of one local player | bits: 1 on, 128 the check of the objects left out, 256 to 2048 turn one change off, 16384 the tick thread writes its copies back to memory, 32768 the game thread asks for the newest copies' cache lines when a frame begins (the last two are off unless set; the report `reports/research/2026-11-01/ticks-stage5-snapshot-cost.md`); 0: off |
+| `tick_core.txt` | 2 with the overlap on (the default for one player), else 0 | the core of the tick thread: 0, 1 or 2 |
+| `tick_priority.txt` | 0 | the tick thread's priority offset below the game's, 0 to 8 |
+| `gx2_idle_sleep.txt` | 0 | microseconds the GX2 thread sleeps between looks for work when the tick thread shares its core; 0 is the yield |
+| `tick_quantum.txt` | the system's | microseconds: the tick thread's run quantum (`OSSetThreadRunQuantum`), untouched if absent |
+| `stream_slots.txt` | 6 | 2 to 8: the stream slots the Direct3D layer uses (the game thread waits for a free one) |
+| `tick_overlap_late.txt` | 1 | the answer to a late tick thread (under 25 ticks a second over 5 s, and the thread busy over 95% or the picture 1.5 ticks behind): the clock held to one tick a frame, and the serial loop only if the game is then under 20 ticks a second. 0 off, 1 on, above 1 the fewest frames a window needs, for tests (the clock alone then makes a window late) |
+| `tick_overlap_serialize.txt`, `tick_overlap_stall.txt`, `tick_overlap_jitter.txt` (ms), `tick_overlap_force_serial.txt` (1), `tick_overlap_frame_stall.txt` (ms) | 0 | test aids of the host runs: wait for each job; hold each job back; the tick thread sleeps at random at 9 places of a job; every frame is the serial loop's |
+| `perf_counters.txt` | 0 | 1, 2 or 3: the event set of the cores' performance counters |
+| `tick_owners.txt` | 0 | the tick owners' queues, mode 1 or 2 |
+| `game_core.txt` | 1 | the core of the game thread: 0, 1 or 2 |
+| `gx2_thread.txt` | 7 | the GX2 thread's mode (0: the game thread makes the calls) |
+| `gpu_offload.txt` | 0 | bits: 1 the interpolation's blends without square roots, 2 the GX2 census lines, 4 host-only comparison; 0 or a negative number: none |
+| `governor.txt` | **on** (the capped governor: target 22 ms, steps 0 to 3) for a map of one local player; elsewhere as `display.dynamic_quality` sets it | text, not a number: a first word `on`/`off`/`1`/`0`, or settings (`step 2`, `target 25`, `max_step 3`); **a file whose first word is -1 or `default` is the same as no file**; `off` is off for every map, `on` and settings are on only for the maps the smooth defaults are for |
+| `hotpaths.txt` | 0 | 1: while an object or an actor updates, the tick asks (dcbt) for the cache lines of the next ones (`halo_ppc_hotpaths.h`); an A/B switch, off unless 1. The memory probe of 2026-11-04 found sequential loads with dcbt slower than without, so time it both ways |
+| `memcpy_touch.txt` | 0 | 1: the port's memcpy (`wiiu_memcpy.c`) asks for the source's lines 96 bytes ahead with dcbt (as it did until 2026-11-04); 0, absent or -1: it does not (the default: three alternating pairs of fight runs on the console had the tick thread 0.7 to 1.8 ms faster and the objects pass 0.5 to 1.4 ms faster without it; the dcbt of the destination (dcbz) stays) |
+| `async_save.txt` | absent | 0: a checkpoint's 20 MiB write to `z/savegame.bin` is made on the game thread, as it was until 2026-11-04 (the game stood still 1.3 to 1.6 s at every checkpoint); 1, absent or -1: the game thread copies the game state (a few ms) and a writer thread (core 0, below the game thread) writes it in pieces; a revert, a load, the next checkpoint and the app's close wait for the write (`port/linux/game/async_save.c`, `source/saved games/game_state_xbox.c`; reports/research/2026-11-04/async-save.md) |
+| `async_save_verify.txt` | 0 | 1: every checkpoint is checked (the copy against the game state, the file read back against the copy) and the copy's CRC is logged; costs a second or two per checkpoint, for tests |
+| `async_save_piece_kb.txt` | 1024 | the size of the pieces the writer makes the write in (64 to 4096) |
+| `async_save_fault.txt` | 0 | a test's faults on the checkpoint's write: 1 every second write fails after its first piece (the game thread writes it again), 2 and the second try fails too (the checkpoint is lost), 3 a write takes 800 ms more, 4 4 s more, 5 9 s more and the waits for it give up after 0.5 s. Only with the card snapshotted: it touches `z/savegame.bin`, the session's own scratch file, nothing of a profile |
+| `stream.txt` | 0 | 1: texture streaming (the section below); `stream_delay.txt` (milliseconds, a test aid for hosts) |
+| `overlay.txt` | 0 | 0 off, 1 the compact strip, 2 the detailed panel (L + R + - on the GamePad goes round the three); -1 is off |
+| `pacing.txt` | 0 | text: `0` off, `1 [D]` tear when the frame is late, `2 [D]` never wait for the vsync (D: at most 1 or 2 swaps wait for their flip); -1 is off |
+| `broadway.txt` | 0 | 1: the Broadway kernels that pass the self-test, 2: the self-test only, 3: 1 and GQR5. The console's self-test of 2026-11-04 failed `matrix4x3_multiply` (wide and denormal cases): it stays off |
+
 ## Start-up
 
 The log says where the first seconds go. Once the main menu's widgets have been processed (the first time its highlight can be drawn) and the menu has been
@@ -904,6 +996,43 @@ Four things the start-up does differently from before, each switched off by its 
 | 16 | the card's free space is asked on a thread of its own, which the saved games' checks do not wait for |
 | 32 | after the main menu's pictures, those of the screens its items open, as far as 32 MB of ready images go (the first page of each costs about 45 ms a picture otherwise) |
 
+## Texture streaming (`halo/stream.txt`, default 0)
+
+The game thread waits for a bitmap's pixels the first time the renderer draws with it (`rasterizer_set_texture_bitmap_data` asks the texture cache to block): the
+map's file is read by the cache file thread and the game thread spins until the read is in. On the console that is 50 ms or more for a 350 KB bitmap (the card gives
+about 14 MB a second for big reads and takes 4 ms for a small one), a second and more when a room's worth is drawn for the first time. With `halo/stream.txt` set to 1:
+
+- a 2D bitmap with at least 48 KB of pixels before its small mipmaps (`port/linux/game/texture_stream.h`: swizzled or compressed, power of two, three or more
+  levels, not palettized) is read in two reads that write no byte twice: the tail (the levels of 32 by 32 texels and under, 0.5 to 8 KB) first, before the reads that
+  are waiting (`cache_file_read_first`), then the rest as the read always was;
+- while the rest is not in, the renderer draws with the tail: a second texture header (`xbox_texture_cache.c`, `texture_streams`) whose data pointer is at the tail's first
+  level and whose size and level count are the tail's. The picture is the texture at 32 texels or less, and the full one from the frame after the rest is in;
+- a bitmap that is not cut (small, cube, 3D, linear, palettized), or whose tail has not come in 100 ms, is waited for as before;
+- the fences are the layer's own: a texture's block is not given to another while the draws that used the texture or its tail are not over (`texture_cache_locked_block_proc`
+  asks both headers' `Lock`, the GX2 thread's retired submission), and the cache file thread's writes announced to the layer (`halo_stream_before_write`) never hand the
+  draws over, which are the game thread's.
+
+`halo/stream_delay.txt` (milliseconds, default 0) makes the cache file thread wait before each read that does not go first, to test the path on a machine whose reads are
+quick. The log says `stream: <bitmap> is read in two ...` for the first six, `stream: <bitmap> was drawn from its tail ... until the whole of it was in` for the first twelve
+that were, and every 10 s the totals (bitmaps cut and not, drawn from tails, the time to the whole bitmap, the waits). With the file absent or 0 the code does what it
+did (the digest harness's `game-digest` is `ceb14fd37a6d23ee` over 1,400 ticks, as before).
+
 `halo/startup.txt` `0` is the old start-up (the menus' tags look their names up in hash tables, and the texture work is done a word at a time, in either).
 The drawn frames are the same with any of them (the digest harness: tools/test_wiiu_game_digest.py), but for the first two of the main menu, where the highlight is
 there a frame or two sooner with bit 1.
+
+## Taking drawing work off the game thread (`halo/gpu_offload.txt`)
+
+`halo/gpu_offload.txt` is a number (no file, `0` or a negative number: none on, the frames drawn exactly as `wiiu-big-endian` draws them). The study behind it
+(`reports/research/2026-11-03/gpu-offload.md`) found that almost none of the game thread's drawing time can move to the GPU in this renderer: its vertex programs are the
+Xbox's, their constants are the 192 uniform registers of one shader mode, and a GX2 call costs the GX2 thread about 0.1 microsecond. The bits are what it did find:
+
+| bit | what | cost, gain (console, expected; the log lines say what happened) |
+| --- | --- | --- |
+| 1 | the interpolation's blends without square roots: the test that a basis is a rotation compares squared lengths, the quaternion of a basis and the normalising of a blend use 1 / sqrt from `frsqrte` and three Newton steps (`port/linux/game/render_interpolation_fast.h`) | the blends were 2.3 ms of a fight's frame, nine correctly rounded square roots (about 140 cycles each) and seven divisions for each node, 40 percent of its 3,200 cycles; expected 0.7 to 1.0 ms less. The poses differ by a few units in a float's last place |
+| 2 | the census: the GX2 thread times its state derivation, the shader keys' lookup and the decals' expansion, and counts the draws that repeat the draw before, an earlier draw of the frame (state, shaders and textures), and the same mesh with them | about 0.1 ms a frame on the GX2 thread; changes nothing drawn |
+| 4 | with bit 1: every blend is made both ways and the largest difference said every 600 frames | doubles the blends' cost: for the host's runs |
+
+The log says the bits at the first draw (`gpu offload (halo/gpu_offload.txt found): ...`), the census every five seconds (`gpu offload: the GX2 thread per frame ...`,
+`gpu offload: of N draws a frame ...`) and the check (`gpu offload check: ...`). The blends' time is the objects pass's and the `blends` figure of the overlap's log lines.
+`tools/test_wiiu_gpu_offload.py` checks the arithmetic against the original's over 400,000 random bases, natively and big-endian under qemu.

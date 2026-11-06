@@ -47,6 +47,17 @@ static int ax_owned; /* this output initialized AX and must shut it down */
 static int mixer_profile_enabled;
 static struct wiiu_audio_mix_pressure mix_pressure;
 
+/* the mixer's time, for the detailed overlay (wiiu_perf.h): monotonic counts, written by the audio thread only, 32 bits so that another thread reads them whole */
+static volatile uint32_t perf_mixer_ticks, perf_mixer_chunks;
+
+void wiiu_audio_perf(uint32_t *mixer_ticks, uint32_t *mixer_chunks);
+
+void wiiu_audio_perf(uint32_t *mixer_ticks, uint32_t *mixer_chunks)
+{
+	*mixer_ticks = perf_mixer_ticks;
+	*mixer_chunks = perf_mixer_chunks;
+}
+
 int wiiu_audio_profile_is_enabled(void)
 {
 	return mixer_profile_enabled;
@@ -186,7 +197,14 @@ static int audio_thread(int argc, const char **argv)
 				memset(&mix_pressure, 0, sizeof(mix_pressure));
 				render_started = OSGetSystemTime();
 			}
-			render(mixed, CHUNK_FRAMES);
+			{
+				/* (two reads of the time base a chunk, 750 chunks a second: the detailed overlay's AUDIO) */
+				const OSTime mix_started = OSGetSystemTime();
+
+				render(mixed, CHUNK_FRAMES);
+				perf_mixer_ticks += (uint32_t)(OSGetSystemTime() - mix_started);
+				perf_mixer_chunks++;
+			}
 			if (mixer_profile_enabled)
 				wiiu_mixer_profile_chunk(&profile, (uint64_t)(OSGetSystemTime() - render_started), budget, &mix_pressure);
 			for (i = 0; i < CHUNK_FRAMES; i++)
@@ -345,6 +363,15 @@ int wiiu_audio_open(void (*mixer)(float *output, unsigned long frames))
 }
 
 /* The app goes to the background (HOME): the system takes the sound engine. The mixer thread is parked first, then the voices let go and AX quit. */
+/* the mixer thread's core time (the shell's log of the threads' shares of their cores): nanoseconds it has been given, and how many times it was woken; 0 if there is none */
+uint64_t wiiu_audio_thread_cpu_ns(uint64_t *wakes);
+
+uint64_t wiiu_audio_thread_cpu_ns(uint64_t *wakes)
+{
+	*wakes = started ? thread.wakeCount : 0;
+	return started ? thread.coreTimeConsumedNs : 0;
+}
+
 void wiiu_audio_suspend(void);
 void wiiu_audio_resume(void);
 

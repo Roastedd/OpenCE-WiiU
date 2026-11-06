@@ -27,7 +27,25 @@ long wiiu_study_number(const char *name, long fallback)
 	if (fscanf(file, "%ld", &number) != 1)
 		number = fallback;
 	fclose(file);
-	return number;
+	/* (a negative number, -1 by convention, is the same as no file: a harness that must not delete a card file writes -1 to put it back) */
+	return number < 0 ? fallback : number;
+}
+
+/* halo/governor.txt (the dynamic quality's settings, port/linux/game/render_governor.c): its text in text (size bytes with the end), 0 if there is no such file */
+int render_governor_settings_text(char *text, unsigned long size)
+{
+	char path[256];
+	FILE *file;
+	size_t length;
+
+	snprintf(path, sizeof(path), "%s/governor.txt", WIIU_DATA_DIRECTORY);
+	file = fopen(path, "r");
+	if (!file)
+		return 0;
+	length = fread(text, 1, size - 1, file);
+	fclose(file);
+	text[length] = 0;
+	return 1;
 }
 
 /* The tick thread (source/main/main.c) says once, in the log, that it runs and on which core, and what its FPU's status register holds: Cafe OS starts

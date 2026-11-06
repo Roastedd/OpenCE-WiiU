@@ -131,4 +131,301 @@ static inline uint64_t shader_vertex_key(uint64_t program_hash, uint32_t packed_
 	return shader_key_hash(SHADER_KEY_HASH_INIT, bytes, 12);
 }
 
+/* ---------- pixel keys the pack has no shader for (gx2_shaders.c dk_shader_for_draw; pack_gen.c writes the shaders these name)
+
+A key holds what the render states held when the draw was made, and some of that its shader never reads: the general combiner stages past the count
+keep the values of the last draw that used them, for one. Keys that differ only there have the same shader. The 2200 pixel keys met by 2026-10-30
+have 186 shaders between them, and 94 of the 95 keys Blood Gulch missed that day had their shader in the pack already, under another key. */
+
+/* the texture stage modes (D3DRS_PSTEXTUREMODES, five bits a stage) that matter here, as nv2a_psh.c numbers them */
+#define SHADER_KEY_MODE_NONE 0x00
+#define SHADER_KEY_MODE_PROJECT2D 0x01
+#define SHADER_KEY_MODE_PROJECT3D 0x02
+#define SHADER_KEY_MODE_CUBEMAP 0x03
+#define SHADER_KEY_MODE_PASSTHRU 0x04
+#define SHADER_KEY_MODE_CLIPPLANE 0x05
+#define SHADER_KEY_MODE_DOT_ZW 0x0a
+#define SHADER_KEY_MODE_DOT_PRODUCT 0x11
+
+/* a texture stage's mode as nv2a_psh.c's texture_stage takes it: a stage with no texture samples nothing */
+static inline unsigned shader_key_stage_mode(const struct nv2a_pixel_shader_key *key, unsigned stage)
+{
+	const unsigned mode = (unsigned)(key->texture_modes >> (5 * stage)) & 0x1f;
+
+	if (key->sampler_type[stage] == _xgpu_sampler_none && mode != SHADER_KEY_MODE_PASSTHRU && mode != SHADER_KEY_MODE_CLIPPLANE &&
+		mode != SHADER_KEY_MODE_DOT_PRODUCT && mode != SHADER_KEY_MODE_DOT_ZW)
+		return SHADER_KEY_MODE_NONE;
+	return mode;
+}
+
+/* The key with all that port/linux/src/nv2a_psh.c (the generator of the pack's GLSL) does not read set to 0, and each flag it only tests set to 1:
+the general combiner stages past the count, the constants (uniforms), compare modes of stages that are not clip planes, the alpha kill, signs and 2D
+sampler of a stage that samples nothing, the mode bits above the four stages' (the Switch renderer's: NV2A_PIXEL_KEY_CLIP, NV2A_PIXEL_KEY_WARP_BLEND),
+an alpha test that writes no test, and so on. Two keys with the same canonical key have the same GLSL, word for word: pack_gen.c writes each key's
+shader under its canonical key's hash as well, after checking that the two texts are the same, so that a key the pack lacks finds the shader of
+another. */
+static inline void shader_key_canonical(const struct nv2a_pixel_shader_key *key, struct nv2a_pixel_shader_key *out)
+{
+	const uint32_t count_word = key->combiner_state[D3DRS_PSCOMBINERCOUNT];
+	unsigned count = count_word & 0xff, stage, mode;
+	uint32_t compare = 0;
+
+	*out = *key;
+	if (count > 8)
+		count = 8;
+	/* (the count's flags, unique C0 and C1 and the mux's bit, are read by the stages it runs) */
+	out->combiner_state[D3DRS_PSCOMBINERCOUNT] = count ? (count_word & 0x11100u) | count : 0;
+	for (stage = count; stage < 8; stage++)
+	{
+		out->combiner_state[D3DRS_PSALPHAINPUTS0 + stage] = 0;
+		out->combiner_state[D3DRS_PSALPHAOUTPUTS0 + stage] = 0;
+		out->combiner_state[D3DRS_PSRGBINPUTS0 + stage] = 0;
+		out->combiner_state[D3DRS_PSRGBOUTPUTS0 + stage] = 0;
+	}
+	for (stage = 0; stage < 8; stage++)
+	{
+		out->combiner_state[D3DRS_PSCONSTANT0_0 + stage] = 0;
+		out->combiner_state[D3DRS_PSCONSTANT1_0 + stage] = 0;
+	}
+	out->combiner_state[D3DRS_PSFINALCOMBINERCONSTANT0] = 0;
+	out->combiner_state[D3DRS_PSFINALCOMBINERCONSTANT1] = 0;
+	/* (no render state is numbered between the count and the dot mapping) */
+	out->combiner_state[D3DRS_PSCOMBINERCOUNT + 1] = 0;
+	out->texture_modes &= 0xfffffu;
+	for (stage = 0; stage < 4; stage++)
+	{
+		mode = shader_key_stage_mode(key, stage);
+		if (mode == SHADER_KEY_MODE_CLIPPLANE)
+			compare |= key->combiner_state[D3DRS_PSCOMPAREMODE] & (0xfu << (4 * stage));
+		if (mode == SHADER_KEY_MODE_NONE)
+		{
+			out->alpha_kill[stage] = 0;
+			out->color_sign[stage] = 0;
+			/* (declared and never sampled: anything but a 3D or cube sampler is declared a sampler2D) */
+			if (key->sampler_type[stage] != _xgpu_sampler_3d && key->sampler_type[stage] != _xgpu_sampler_cube)
+				out->sampler_type[stage] = _xgpu_sampler_none;
+		}
+		else
+		{
+			out->alpha_kill[stage] = key->alpha_kill[stage] != 0;
+			out->color_sign[stage] = key->color_sign[stage] & 0xf;
+		}
+	}
+	out->combiner_state[D3DRS_PSCOMPAREMODE] = compare;
+	/* the alpha test: ALWAYS, and any value that is not a comparison, writes none; the samples' coverage goes with an ordering only */
+	switch (key->alpha_test_function)
+	{
+	case D3DCMP_LESS:
+	case D3DCMP_LESSEQUAL:
+	case D3DCMP_GREATER:
+	case D3DCMP_GREATEREQUAL:
+		break;
+	case D3DCMP_NEVER:
+	case D3DCMP_EQUAL:
+	case D3DCMP_NOTEQUAL:
+		out->alpha_test_samples = 0;
+		break;
+	default:
+		out->alpha_test_function = 0;
+		out->alpha_test_samples = 0;
+		break;
+	}
+	out->fog_enable = key->fog_enable != 0;
+	if (!key->fog_enable || (key->fog_table_mode != D3DFOG_EXP && key->fog_table_mode != D3DFOG_EXP2 && key->fog_table_mode != D3DFOG_LINEAR))
+		out->fog_table_mode = 0;
+	out->count_samples = key->count_samples != 0;
+	out->coverage_alpha = key->coverage_alpha != 0;
+	mode = shader_key_stage_mode(key, 0);
+	out->point_threshold = key->point_threshold && (mode == SHADER_KEY_MODE_PROJECT2D || mode == SHADER_KEY_MODE_PROJECT3D) &&
+		key->sampler_type[0] == _xgpu_sampler_2d;
+	if (key->per_pixel_lighting && key->per_pixel_lighting != 2)
+		out->per_pixel_lighting = 1;
+	if (key->source_blend)
+		out->source_blend = (unsigned char)(((key->source_blend - 1) & 3) + 1);
+}
+
+/* The stand-in for a pixel key the pack has no shader for under any key (the fallback). What the key's final color and alpha depend on is followed
+through its combiner program (shader_key_sources), and the stand-in keeps the part of that it can: stage 0's texture times the diffuse color, each
+where the key's color or alpha depends on them; with no texture, the diffuse color, else C0, else nothing (a fade or a flash the stand-in cannot
+follow is better transparent than a black or white screen); with the key's alpha test and stage 0's alpha kill, and nothing more (no other stage, no
+fog). Models, the first-person weapon, the sky and the HUD
+are drawn so, roughly, rather than not at all, until the key, written down as before (shader-misses-*.txt), has a shader of its own in the next pack.
+Each stand-in is a key like any other, its shader written by the same generator (pack_gen.c writes all SHADER_KEY_FALLBACKS of them): its varyings,
+uniforms and samplers are those of every pixel shader, so it meets every vertex shader.
+
+(Blood Gulch's sky, 2026-10-31: its color reads stage 1's constant only to blend toward it, and the texture's alpha blends it over the screen; a
+stand-in of the texture times stage 0's constant, black there, in color and alpha drew nothing.) */
+#define SHADER_KEY_FALLBACKS 114
+
+/* what a stand-in samples (stage 0's sampler), and the sources of its color and alpha */
+enum { SHADER_KEY_FALLBACK_UNTEXTURED, SHADER_KEY_FALLBACK_2D, SHADER_KEY_FALLBACK_3D, SHADER_KEY_FALLBACK_CUBE };
+enum { SHADER_KEY_FALLBACK_DIFFUSE, SHADER_KEY_FALLBACK_CONSTANT, SHADER_KEY_FALLBACK_ONE, SHADER_KEY_FALLBACK_ZERO };
+
+/* what a pixel key's final color and alpha depend on (shader_key_sources) */
+#define SHADER_KEY_FROM_T0 1u /* stage 0's texel, when it samples a texture */
+#define SHADER_KEY_FROM_V0 2u /* the diffuse color's red, green or blue */
+#define SHADER_KEY_FROM_V0_ALPHA 4u
+#define SHADER_KEY_FROM_C0 8u /* a C0 constant's color */
+#define SHADER_KEY_FROM_C0_ALPHA 16u
+#define SHADER_KEY_FROM_OTHER 32u /* the other stages, V1, C1, the fog, the final combiner's constants */
+
+/* the sources a combiner input reads, from[register][0 color, 1 alpha]: a register general combiner stages have not (6, 7, 14 and 15) is zero there;
+an input of the alpha portion without the alpha's bit reads the blue, a color's */
+static inline unsigned shader_key_input_sources(unsigned input, unsigned from[16][2])
+{
+	const unsigned reg = input & 0x0f;
+
+	if (reg == 6 || reg == 7 || reg >= 14)
+		return 0;
+	return from[reg][(input & 0x10) ? 1 : 0];
+}
+
+/* and of the final combiner, whose C0 and C1 are constants of its own, and which has V1 plus R0 (14) and E times F (15), whose alpha is 0 */
+static inline unsigned shader_key_final_sources(unsigned input, uint32_t efg, unsigned from[16][2])
+{
+	const unsigned reg = input & 0x0f;
+
+	if (reg == 1 || reg == 2)
+		return SHADER_KEY_FROM_OTHER;
+	if (reg == 14)
+		return (input & 0x10) ? 0 : from[5][0] | from[12][0];
+	if (reg == 15)
+		return (input & 0x10) ? 0 : shader_key_input_sources((efg >> 24) & 0xff, from) | shader_key_input_sources((efg >> 16) & 0xff, from);
+	return shader_key_input_sources(input, from);
+}
+
+/* What a key's final color and alpha depend on (SHADER_KEY_FROM_*), following its program as nv2a_psh.c writes it: the stages' texels (stage 0's
+counted apart when it samples a texture, a stage that samples nothing zero), R0's alpha first stage 0's, each general combiner stage the count runs
+writing its products and sums, the mux reading R0's alpha, then the final combiner, or R0 when there is none. */
+static inline void shader_key_sources(const struct nv2a_pixel_shader_key *key, unsigned *color, unsigned *alpha)
+{
+	const DWORD *state = key->combiner_state;
+	const uint32_t abcd = state[D3DRS_PSFINALCOMBINERINPUTSABCD], efg = state[D3DRS_PSFINALCOMBINERINPUTSEFG];
+	unsigned from[16][2], next[16][2], count = state[D3DRS_PSCOMBINERCOUNT] & 0xff, stage, portion, i;
+
+	memset(from, 0, sizeof(from));
+	from[1][0] = SHADER_KEY_FROM_C0;
+	from[1][1] = SHADER_KEY_FROM_C0_ALPHA;
+	from[2][0] = from[2][1] = from[3][0] = from[3][1] = SHADER_KEY_FROM_OTHER;
+	from[4][0] = SHADER_KEY_FROM_V0;
+	from[4][1] = SHADER_KEY_FROM_V0_ALPHA;
+	from[5][0] = from[5][1] = SHADER_KEY_FROM_OTHER;
+	for (stage = 0; stage < 4; stage++)
+	{
+		const unsigned mode = shader_key_stage_mode(key, stage);
+
+		if (mode != SHADER_KEY_MODE_NONE)
+			from[8 + stage][0] = from[8 + stage][1] = stage == 0 && (mode == SHADER_KEY_MODE_PROJECT2D || mode == SHADER_KEY_MODE_PROJECT3D ||
+				mode == SHADER_KEY_MODE_CUBEMAP) ? SHADER_KEY_FROM_T0 : SHADER_KEY_FROM_OTHER;
+	}
+	from[12][1] = from[8][1];
+	if (count > 8)
+		count = 8;
+	for (stage = 0; stage < count; stage++)
+	{
+		memcpy(next, from, sizeof(from));
+		/* (both portions read before either writes; the color's writes first, the alpha's after, as the generator orders them) */
+		for (portion = 0; portion < 2; portion++)
+		{
+			const uint32_t inputs = state[(portion ? D3DRS_PSALPHAINPUTS0 : D3DRS_PSRGBINPUTS0) + stage];
+			const uint32_t outputs = state[(portion ? D3DRS_PSALPHAOUTPUTS0 : D3DRS_PSRGBOUTPUTS0) + stage];
+			const unsigned flags = outputs >> 12;
+			const unsigned ab = shader_key_input_sources((inputs >> 24) & 0xff, from) | shader_key_input_sources((inputs >> 16) & 0xff, from);
+			const unsigned cd = shader_key_input_sources((inputs >> 8) & 0xff, from) | shader_key_input_sources(inputs & 0xff, from);
+			const unsigned sum = ab | cd | ((flags & 0x04) ? from[12][1] : 0);
+			const unsigned ab_register = (outputs >> 4) & 0x0f, cd_register = outputs & 0x0f, sum_register = (outputs >> 8) & 0x0f;
+			const unsigned written[3] = { ab_register, cd_register, sum_register }, value[3] = { ab, cd, sum };
+
+			for (i = 0; i < 3; i++)
+			{
+				const unsigned reg = written[i];
+
+				if (reg != 4 && reg != 5 && (reg < 8 || reg > 13))
+					continue;
+				next[reg][portion] = value[i];
+				/* (the color portion's AB or CD may write its blue to the register's alpha as well) */
+				if (!portion && ((i == 0 && (flags & 0x80)) || (i == 1 && (flags & 0x40))))
+					next[reg][1] = value[i];
+			}
+		}
+		memcpy(from, next, sizeof(from));
+	}
+	if (!abcd && !efg)
+	{
+		*color = from[12][0];
+		*alpha = from[12][1];
+		return;
+	}
+	*color = 0;
+	for (i = 0; i < 4; i++)
+		*color |= shader_key_final_sources((abcd >> (8 * i)) & 0xff, efg, from);
+	*alpha = shader_key_final_sources((efg >> 8) & 0xff, efg, from);
+}
+
+/* the stand-in of a kind: textured, stage 0's texture times color (the diffuse color or one) in color, and in alpha the texture's alpha
+(texture_alpha) times alpha (the diffuse color's or one); untextured, color in color and alpha in alpha (the diffuse color's, C0's, one or zero) */
+static inline void shader_key_fallback_make(unsigned kind, unsigned color, int texture_alpha, unsigned alpha, int alpha_test, int alpha_kill,
+	struct nv2a_pixel_shader_key *out)
+{
+	/* combiner inputs: a register (zero 0, C0 1, V0 4, T0 8), 0x10 for its alpha, 0x20 inverted (zero inverted is one) */
+	static const unsigned char color_input[4] = { 0x04, 0x01, 0x20, 0x20 }, alpha_input[4] = { 0x14, 0x11, 0x20, 0x20 };
+	static const unsigned char modes[4] = { SHADER_KEY_MODE_NONE, SHADER_KEY_MODE_PROJECT2D, SHADER_KEY_MODE_PROJECT3D, SHADER_KEY_MODE_CUBEMAP };
+	static const unsigned char samplers[4] = { _xgpu_sampler_none, _xgpu_sampler_2d, _xgpu_sampler_3d, _xgpu_sampler_cube };
+
+	kind &= 3;
+	color &= 3;
+	alpha &= 3;
+	memset(out, 0, sizeof(*out));
+	out->texture_modes = modes[kind];
+	out->sampler_type[0] = samplers[kind];
+	/* one general combiner stage, r0 = A * B in both portions; no final combiner, so the result is r0 */
+	out->combiner_state[D3DRS_PSCOMBINERCOUNT] = 1;
+	out->combiner_state[D3DRS_PSRGBINPUTS0] = (uint32_t)(kind ? 0x08 : color == SHADER_KEY_FALLBACK_ZERO ? 0x00 : 0x20) << 24 |
+		(uint32_t)color_input[color] << 16;
+	out->combiner_state[D3DRS_PSALPHAINPUTS0] = (uint32_t)(kind && texture_alpha ? 0x18 : alpha == SHADER_KEY_FALLBACK_ZERO ? 0x00 : 0x20) << 24 |
+		(uint32_t)alpha_input[alpha] << 16;
+	out->combiner_state[D3DRS_PSRGBOUTPUTS0] = 0xc0;
+	out->combiner_state[D3DRS_PSALPHAOUTPUTS0] = 0xc0;
+	out->alpha_kill[0] = kind && alpha_kill;
+	out->alpha_test_function = alpha_test ? D3DCMP_GREATER : 0;
+}
+
+/* the stand-in numbered index, 0 to SHADER_KEY_FALLBACKS - 1: 32 for each textured kind (the color the diffuse color or one, the texture's alpha or
+not, the alpha the diffuse color's or one, the alpha test, the alpha kill), then 18 untextured (the color and the alpha each the diffuse color's,
+C0's or zero, the alpha test) */
+static inline void shader_key_fallback_numbered(unsigned index, struct nv2a_pixel_shader_key *out)
+{
+	static const unsigned char untextured[3] = { SHADER_KEY_FALLBACK_DIFFUSE, SHADER_KEY_FALLBACK_CONSTANT, SHADER_KEY_FALLBACK_ZERO };
+
+	if (index < 96)
+		shader_key_fallback_make(1 + index / 32, (index & 1) ? SHADER_KEY_FALLBACK_ONE : SHADER_KEY_FALLBACK_DIFFUSE, !((index >> 1) & 1),
+			((index >> 2) & 1) ? SHADER_KEY_FALLBACK_ONE : SHADER_KEY_FALLBACK_DIFFUSE, (index >> 3) & 1, (index >> 4) & 1, out);
+	else
+		shader_key_fallback_make(SHADER_KEY_FALLBACK_UNTEXTURED, untextured[(index - 96) % 3], 0, untextured[(index - 96) / 3 % 3], (index - 96) / 9 % 2, 0,
+			out);
+}
+
+/* the stand-in for a key; 0 for none (an alpha test of NEVER: its draws draw nothing) */
+static inline int shader_key_fallback(const struct nv2a_pixel_shader_key *key, struct nv2a_pixel_shader_key *out)
+{
+	const unsigned mode = shader_key_stage_mode(key, 0);
+	const int alpha_test = key->alpha_test_function == D3DCMP_GREATER || key->alpha_test_function == D3DCMP_GREATEREQUAL;
+	unsigned color, alpha;
+
+	if (key->alpha_test_function == D3DCMP_NEVER)
+		return 0;
+	shader_key_sources(key, &color, &alpha);
+	if (mode == SHADER_KEY_MODE_PROJECT2D || mode == SHADER_KEY_MODE_PROJECT3D || mode == SHADER_KEY_MODE_CUBEMAP)
+		shader_key_fallback_make(key->sampler_type[0] == _xgpu_sampler_cube ? SHADER_KEY_FALLBACK_CUBE : key->sampler_type[0] == _xgpu_sampler_3d ?
+			SHADER_KEY_FALLBACK_3D : SHADER_KEY_FALLBACK_2D, (color & SHADER_KEY_FROM_V0) ? SHADER_KEY_FALLBACK_DIFFUSE : SHADER_KEY_FALLBACK_ONE,
+			(alpha & SHADER_KEY_FROM_T0) != 0, (alpha & (SHADER_KEY_FROM_V0 | SHADER_KEY_FROM_V0_ALPHA)) ? SHADER_KEY_FALLBACK_DIFFUSE :
+			SHADER_KEY_FALLBACK_ONE, alpha_test, key->alpha_kill[0] != 0, out);
+	else
+		shader_key_fallback_make(SHADER_KEY_FALLBACK_UNTEXTURED, (color & SHADER_KEY_FROM_V0) ? SHADER_KEY_FALLBACK_DIFFUSE : (color &
+			SHADER_KEY_FROM_C0) ? SHADER_KEY_FALLBACK_CONSTANT : SHADER_KEY_FALLBACK_ZERO, 0, (alpha & (SHADER_KEY_FROM_V0 | SHADER_KEY_FROM_V0_ALPHA)) ?
+			SHADER_KEY_FALLBACK_DIFFUSE : (alpha & (SHADER_KEY_FROM_C0 | SHADER_KEY_FROM_C0_ALPHA)) ? SHADER_KEY_FALLBACK_CONSTANT : SHADER_KEY_FALLBACK_ZERO,
+			alpha_test, 0, out);
+	return 1;
+}
+
 #endif

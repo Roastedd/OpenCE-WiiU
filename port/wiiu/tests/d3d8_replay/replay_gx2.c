@@ -41,6 +41,14 @@ static struct
 	uint32_t most_queued; /* the most streams posted and not yet run at once */
 } gx;
 
+/* what the streams hold, counted as they are read (replay_gx2_totals: the game digest's per-pass counts); nothing in a line or a digest */
+static unsigned long totals[REPLAY_TOTAL_COUNT];
+
+void replay_gx2_totals(unsigned long out[REPLAY_TOTAL_COUNT])
+{
+	memcpy(out, totals, sizeof(totals));
+}
+
 static void line(const char *format, ...) __attribute__((format(printf, 1, 2)));
 
 static void line(const char *format, ...)
@@ -145,6 +153,12 @@ static void draw(const struct dk_command_draw *command)
 
 	gx.draw++;
 	gx.draws++;
+	totals[REPLAY_TOTAL_DRAWS]++;
+	totals[REPLAY_TOTAL_INDICES] += command->count;
+	if (command->index_address)
+		totals[REPLAY_TOTAL_INDEXED]++;
+	if (command->primitive & DK_DRAW_DECALS)
+		totals[REPLAY_TOTAL_DECAL_DRAWS]++;
 	if (gx.color.kind == DK_SURFACE_NONE && gx.depth.kind == DK_SURFACE_NONE)
 	{
 		line("draw %lu.%lu: no target", gx.frame, gx.draw);
@@ -283,11 +297,14 @@ static void run_stream(const unsigned char *at, const unsigned char *end)
 		{
 			const struct dk_command_constants *constants = (const struct dk_command_constants *)header;
 
+			totals[REPLAY_TOTAL_CONSTANT_ROWS] += constants->count;
+
 			if (constants->first < 192 && constants->count && constants->first + constants->count <= 192)
 				memcpy(gx.constants[constants->first], constants->data, constants->count * 4 * sizeof(float));
 			break;
 		}
 		case DK_COMMAND_VERTEX_FORMAT:
+			totals[REPLAY_TOTAL_FORMATS]++;
 			gx.format = ((const struct dk_command_vertex_format *)header)->format;
 			gx.format_set = 1;
 			break;
@@ -305,9 +322,11 @@ static void run_stream(const unsigned char *at, const unsigned char *end)
 			composite_receive((const struct dk_command_composite *)header);
 			break;
 		case DK_COMMAND_STATE_WRITES:
+			totals[REPLAY_TOTAL_STATE_WRITES] += ((const struct dk_command_state_writes *)header)->count;
 			dk_derive_writes(dk_derive_get(), (const struct dk_command_state_writes *)header);
 			break;
 		case DK_COMMAND_DRAW_FACTS:
+			totals[REPLAY_TOTAL_FACTS]++;
 			if (header->size >= sizeof(struct dk_command_draw_facts))
 				dk_derive_facts(dk_derive_get(), &((const struct dk_command_draw_facts *)header)->facts);
 			break;
@@ -416,6 +435,11 @@ unsigned long replay_gx2_most_queued(void)
 }
 
 /* ---------- what the layer asks of wiiu_gx2.c */
+
+int host_gx2_stream_slots(void)
+{
+	return 6;
+}
 
 int host_gx2_async(void)
 {

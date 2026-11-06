@@ -28,6 +28,8 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 #include "wiiu_missing_keys.h"
 #include "wiiu_shell_watch.h"
 #include "wiiu_update.h"
+#include "wiiu_map_summary.h"
+#include "../../linux/game/smooth_defaults.h" /* the cards and the map (smooth_defaults.c): whether the ticks run beside the drawing */
 
 #include <coreinit/core.h>
 #include <sysapp/launch.h>
@@ -447,6 +449,8 @@ void wiiu_request_exit(void)
 	if (asked)
 		return;
 	asked = 1;
+	/* the map that was playing says how it went (wiiu_map_summary.h) */
+	wiiu_map_summary_end();
 	/* the missing shaders' records are written only outside gameplay (wiiu_missing_keys.c), and once the Menu is asked for the app is in
 	the background, where the close does not write them: the quit, which is not gameplay, gives them up to five seconds first (64 records
 	took several on the console's SD card: a scan of the folder, then a file per 8 records, each flushed). As "always", a gameplay flag the
@@ -459,7 +463,9 @@ void wiiu_request_exit(void)
 		do
 		{
 			wiiu_missing_keys_counts_get(&counts);
-			if ((!counts.queue_pending && !counts.batch_records && counts.phase == 0) || counts.failed || waited >= 5000u)
+			/* (all the accepted records are written, and nothing is pending: the first look came before the writer had taken the records the always flag
+			releases, saw nothing pending and left after 0 ms, so a session's 13 missing keys were lost: 2026-11-04) */
+			if ((counts.written >= counts.accepted && !counts.queue_pending && !counts.batch_records && counts.phase == 0) || counts.failed || waited >= 5000u)
 				break;
 			sleep_ms(5);
 			waited += 5u;
@@ -484,6 +490,19 @@ void wiiu_thread_off_game_core(void)
 	OSSleepTicks(OSMillisecondsToTicks(1));
 }
 
+/* The checkpoint's writer (port/linux/game/async_save.c): on core 0, named, and below the game thread's priority like the other workers (setup_thread): it waits for the card
+most of its time, and what it has to do on a core is a piece of the file at a time. */
+void wiiu_thread_background(const char *name);
+void wiiu_thread_background(const char *name)
+{
+	OSThread *self = OSGetCurrentThread();
+
+	wiiu_thread_off_game_core();
+	OSSetThreadName(self, name);
+	OSSetThreadPriority(self, main_priority < 27 ? main_priority + 4 : 31);
+	wiiu_tag_thread(name);
+}
+
 /* The tick thread (port/linux/game/tick_overlap.c): an OSThread made on core 0, not a pthread. wut makes a pthread with OSCreateThread at priority 16 with
 every core allowed (OS_THREAD_ATTRIB_AFFINITY_ANY) and resumes it at once; OSSetThreadAffinity from inside it did not keep it on core 0 (2026-11-02:
 it said core 2, and core 1 after a sleep of 1 ms). Made with the affinity, as the game thread, the audio and the debug server are, it is on core 0 from
@@ -494,6 +513,62 @@ int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes);
 static OSThread tick_thread;
 static uint8_t *tick_thread_stack;
 static void *(*tick_thread_entry)(void *);
+/* the core the tick thread is made on (halo/tick_core.txt: 0, 1 or 2; 0 if none), and the one it is on now (it is moved to the game thread's while the overlap is late) */
+static unsigned tick_core;
+static unsigned tick_core_now;
+/* the GX2 thread's core (-1: none), the tick thread's priority offset below the game's when it shares that core (halo/tick_priority.txt), and the GX2 thread's sleep between looks then
+(halo/gx2_idle_sleep.txt, microseconds): see wiiu_gx2.c's wiiu_gx2_idle_sleep_set */
+static int gx2_core = -1;
+static int tick_priority_offset = -1; /* -1: not set by the card (0: the game's priority) */
+static long gx2_sleep_us = 0; /* 0: the GX2 thread waits for work yielding, as always */
+static long tick_quantum_us = -1; /* -1: the thread's own run quantum is left as the system made it */
+int wiiu_gx2_thread_core_planned(void);
+void wiiu_gx2_idle_sleep_set(uint32_t microseconds);
+
+/* a number from a file of the app's card folder, or the fallback (-1 for no file) */
+static long card_number(char const *name, long fallback)
+{
+	char path[256];
+	FILE *file;
+	long value = fallback;
+
+	snprintf(path, sizeof(path), WIIU_DATA_DIRECTORY "/%s", name);
+	file = fopen(path, "r");
+	if (file)
+	{
+		if (fscanf(file, "%ld", &value) != 1)
+			value = fallback;
+		fclose(file);
+	}
+	/* (a negative number, -1 by convention, is the same as no file: a harness that must not delete a card file writes -1 to put it back) */
+	return value < 0 ? fallback : value;
+}
+
+/* the tick thread's priority (the game's, plus halo/tick_priority.txt), its run quantum (halo/tick_quantum.txt, microseconds, left alone if absent), and the GX2 thread's way of waiting for work when the
+tick thread shares its core (halo/gx2_idle_sleep.txt: microseconds, 0 is the yield). The defaults are the plain core-2 setting of the console's first matrix (30 ticks a second, 14 ms a tick): the second
+matrix (2026-11-03) found the priority one below with a sleep of 100 microseconds fixed the stream slot waits (0.06 ms a frame against 2.9) and slowed the tick (28 ms against 16), a loss. */
+static void tick_core_settle(int log)
+{
+	const int shares = gx2_core >= 0 && (int)tick_core_now == gx2_core;
+	const int offset = tick_priority_offset >= 0 ? tick_priority_offset : 0;
+	const int priority = main_priority + offset > 31 ? 31 : (int)main_priority + offset;
+
+	if (tick_thread_stack)
+	{
+		OSSetThreadPriority(&tick_thread, priority);
+		if (tick_quantum_us > 0)
+			OSSetThreadRunQuantum(&tick_thread, (uint32_t)tick_quantum_us);
+	}
+	wiiu_gx2_idle_sleep_set(shares && gx2_sleep_us > 0 ? (uint32_t)gx2_sleep_us : 0);
+	if (log)
+		wiiu_log("The tick thread is at priority %d (the game's %d, halo/tick_priority.txt), run quantum %ld us (halo/tick_quantum.txt; -1: as made)%s%s", priority, (int)main_priority, tick_quantum_us,
+			shares ? ", on the GX2 thread's core; the GX2 thread's wait for work: " : "", shares ? (gx2_sleep_us > 0 ? "a sleep of that many microseconds (halo/gx2_idle_sleep.txt)" : "a yield (halo/gx2_idle_sleep.txt 0)") : "");
+}
+
+static OSThreadAttributes core_attribute(unsigned core)
+{
+	return (OSThreadAttributes)(core == 1 ? OS_THREAD_ATTRIB_AFFINITY_CPU1 : core == 2 ? OS_THREAD_ATTRIB_AFFINITY_CPU2 : OS_THREAD_ATTRIB_AFFINITY_CPU0);
+}
 
 static int tick_thread_main(int argc, const char **argv)
 {
@@ -514,8 +589,26 @@ int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes)
 		return -1;
 	}
 	tick_thread_entry = entry;
-	if (!OSCreateThread(&tick_thread, tick_thread_main, 0, NULL, tick_thread_stack + stack_bytes, stack_bytes, main_priority,
-			OS_THREAD_ATTRIB_AFFINITY_CPU0))
+	{
+		/* (no file: core 2 when the ticks run beside the drawing and the game thread is not on it - core 0 has the audio mixer and the system's threads, and its L2 was 3 times as slow in
+		a heavy scene on 2026-11-03; core 2 has the GX2 thread, which sleeps between looks then - else core 0, as before) */
+		const long set = card_number("tick_core.txt", -1);
+		/* (the overlap as the cards and the map have it for the map that wants the thread: smooth_defaults.h) */
+		const int overlap = smooth_defaults_value(SMOOTH_TICK_OVERLAP) > 0;
+
+		tick_core = set >= 0 && set <= 2 ? (unsigned)set : (set < 0 && overlap && OSGetCoreId() != 2) ? 2u : 0u;
+		tick_core_now = tick_core;
+		gx2_core = wiiu_gx2_thread_core_planned();
+		tick_priority_offset = (int)card_number("tick_priority.txt", -1);
+		if (tick_priority_offset > 8)
+			tick_priority_offset = 8;
+		gx2_sleep_us = card_number("gx2_idle_sleep.txt", 0);
+		tick_quantum_us = card_number("tick_quantum.txt", -1);
+		wiiu_log("The tick thread is made on core %u (halo/tick_core.txt: 0, 1 or 2%s), the game thread is on core %u (halo/game_core.txt), the GX2 thread on core %d%s", tick_core,
+			set < 0 ? "; absent: 2 with the overlap on (the default for one local player), else 0" : "", (unsigned)OSGetCoreId(), gx2_core,
+			tick_core == (unsigned)OSGetCoreId() ? ": the tick thread is on the game thread's core, and the two cannot run beside each other" : "");
+	}
+	if (!OSCreateThread(&tick_thread, tick_thread_main, 0, NULL, tick_thread_stack + stack_bytes, stack_bytes, main_priority, core_attribute(tick_core)))
 	{
 		wiiu_log("OSCreateThread failed for the tick thread");
 		MEMFreeToDefaultHeap(tick_thread_stack);
@@ -523,8 +616,37 @@ int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes)
 		return -1;
 	}
 	OSSetThreadName(&tick_thread, "ticks");
+	tick_core_settle(1);
 	OSResumeThread(&tick_thread);
 	return 1;
+}
+
+/* the tick thread moved to the calling thread's core (the game thread's, while the overlap is late: the game thread waits for it then, and the plain loop's core is the one with the big
+L2), or back to the core it was made on. Called with the tick thread idle (waiting for a job): it takes the core when it is next scheduled. */
+void wiiu_tick_thread_move(int to_the_calling_core);
+void wiiu_tick_thread_move(int to_the_calling_core)
+{
+	const unsigned target = to_the_calling_core ? (unsigned)OSGetCoreId() : tick_core;
+
+	if (!tick_thread_stack || target == tick_core_now)
+		return;
+	OSSetThreadAffinity(&tick_thread, core_attribute(target));
+	tick_core_now = target;
+	wiiu_log("The tick thread is moved to core %u", target);
+	tick_core_settle(1);
+}
+
+/* the core the tick thread is set to (tick_overlap.c's log), and the calling thread's */
+unsigned wiiu_tick_thread_core_set(void);
+unsigned wiiu_tick_thread_core_set(void)
+{
+	return tick_core_now;
+}
+
+unsigned wiiu_core_here(void);
+unsigned wiiu_core_here(void)
+{
+	return (unsigned)OSGetCoreId();
 }
 
 /* the tick thread (source/main/main.c) at the game thread's priority: above the workers (the log, the debug server, the voice thread run at the game's +4,
@@ -641,6 +763,8 @@ static uint32_t on_close(void *unused)
 	wiiu_shell_watch_arm_exit(&shell_watch, shell_ms(), WIIU_WATCH_CLOSE_MS);
 	wiiu_phase("closing");
 	wiiu_log("The system asks the app to close (%u s to do it)", (unsigned)(WIIU_WATCH_CLOSE_MS / 1000u));
+	/* the map that was playing says how it went (wiiu_map_summary.h) */
+	wiiu_map_summary_end();
 	return 0;
 }
 
@@ -765,6 +889,52 @@ static void tell_new_fixups(uint32_t *told)
 end of the process would be a second exit from another thread) */
 static volatile uint32_t main_returning;
 
+/* The core time of the app's main threads over the last beat, from the OS's own account (OSThread::coreTimeConsumedNs, which leaves out the slice a thread is in, and the number of times
+it was woken): the game thread, the tick thread, the audio mixer and the GX2 thread, each with the core it is allowed (the first of its affinity). A tick thread that is busy for the whole
+of a job but is given a third of the core's time is one a higher priority thread (the mixer, at 10, on core 0) shares its core with. */
+uint64_t wiiu_audio_thread_cpu_ns(uint64_t *wakes);
+uint64_t wiiu_gx2_thread_cpu_ns(uint64_t *wakes);
+
+static unsigned affinity_core(const OSThread *thread)
+{
+	const unsigned mask = (unsigned)OSGetThreadAffinity((OSThread *)thread);
+
+	return mask & 1u ? 0u : mask & 2u ? 1u : 2u;
+}
+
+static void threads_report(uint32_t window_ms)
+{
+	static uint64_t last_ns[4], last_wakes[4];
+	uint64_t ns[4], wakes[4];
+	char text[200];
+	size_t used = 0;
+	int which;
+	static const char *const names[4] = { "game", "ticks", "audio mixer", "GX2" };
+	unsigned cores[4];
+
+	ns[0] = game_thread.coreTimeConsumedNs;
+	wakes[0] = game_thread.wakeCount;
+	ns[1] = tick_thread_stack ? tick_thread.coreTimeConsumedNs : 0;
+	wakes[1] = tick_thread_stack ? tick_thread.wakeCount : 0;
+	ns[2] = wiiu_audio_thread_cpu_ns(&wakes[2]);
+	ns[3] = wiiu_gx2_thread_cpu_ns(&wakes[3]);
+	cores[0] = affinity_core(&game_thread);
+	cores[1] = tick_thread_stack ? affinity_core(&tick_thread) : 0;
+	cores[2] = 0;
+	cores[3] = 2;
+	for (which = 0; which < 4; which++)
+	{
+		if (ns[which] && used < sizeof(text) - 60)
+		{
+			used += (size_t)snprintf(text + used, sizeof(text) - used, "%s%s %.2f s on core %u (woken %u)", used ? ", " : "", names[which],
+				(double)(ns[which] - last_ns[which]) / 1e9, cores[which], (unsigned)(wakes[which] - last_wakes[which]));
+		}
+		last_ns[which] = ns[which];
+		last_wakes[which] = wakes[which];
+	}
+	wiiu_log("threads: core time in the last %.1f s: %s", (double)window_ms / 1000.0, text);
+}
+
 static void *watchdog_main(void *unused)
 {
 	uint32_t frames_before = 0;
@@ -811,6 +981,7 @@ static void *watchdog_main(void *unused)
 			snprintf(last_beat, sizeof(last_beat), "%s", text);
 			wiiu_log("beat: %s; %u log lines waiting; %u misaligned accesses made by the handler", text, (unsigned)pending,
 				(unsigned)wiiu_crash_fixups());
+			threads_report(now - last_beat_ms);
 			frames_before = shell_watch.frames;
 			last_beat_ms = now;
 		}
@@ -923,9 +1094,12 @@ static int start_game(void)
 
 		if (file)
 		{
-			unsigned mode = 0;
+			int mode_number = 0;
+			unsigned mode;
 			unsigned long off = 0;
-			int read = fscanf(file, "%u %li", &mode, (long *)&off);
+			int read = fscanf(file, "%d %li", &mode_number, (long *)&off);
+
+			mode = mode_number < 0 ? 0 : (unsigned)mode_number; /* (-1: as no file) */
 
 			if (read >= 1 && mode >= 1 && mode <= 2)
 			{
@@ -948,8 +1122,11 @@ static int start_game(void)
 
 		if (file)
 		{
-			if (fscanf(file, "%u", &game_core) != 1 || game_core > 2)
-				game_core = 1;
+			int number = 1;
+
+			if (fscanf(file, "%d", &number) != 1 || number < 0 || number > 2) /* (-1: as no file) */
+				number = 1;
+			game_core = (unsigned)number;
 			fclose(file);
 		}
 	}
@@ -1174,6 +1351,13 @@ int wiiu_shell_run(int (*game_main)(void))
 		whose game never started has not used it) */
 		if (foreground && started_game)
 			GX2DrawDone();
+	}
+	/* a checkpoint's write still on its way to the card (the file is the game's own scratch, read again only by this run's revert: nothing is lost if it does not end) is waited for
+	a moment, so that the card is not taken away from under it; the close does not wait longer */
+	{
+		int game_state_port_save_wait(unsigned long timeout_ms);
+
+		exit_note(game_state_port_save_wait(1500) ? "no checkpoint write is running" : "a checkpoint write still running after 1500 ms");
 	}
 	wiiu_phase("shutting down");
 	box_stopping = 1;

@@ -1686,6 +1686,8 @@ static boolean object_test_vector(
 {
 	boolean hit = FALSE;
 
+	/* port: it reads objects, and writes none (the marker aside): what it gets is not marked for the tick snapshot (objects.h) */
+	OBJECTS_READ_ONLY_BEGIN();
 	do
 	{
 		struct object_datum const *object = object_get(object_index);
@@ -1778,6 +1780,7 @@ static boolean object_test_vector(
 		object_index = object->object.next_object_index;
 	}
 	while (object_index != NONE);
+	OBJECTS_READ_ONLY_END();
 
 	return hit;
 }
@@ -1792,6 +1795,8 @@ static void object_get_features_in_sphere(
 	long ignore_object_index,
 	struct collision_feature_list *features)
 {
+	/* port: it reads objects, and writes none: what it gets is not marked for the tick snapshot (objects.h) */
+	OBJECTS_READ_ONLY_BEGIN();
 	do
 	{
 		struct object_datum *object = object_get(object_index);
@@ -1908,6 +1913,7 @@ static void object_get_features_in_sphere(
 		object_index = object->object.next_object_index;
 	}
 	while (object_index != NONE);
+	OBJECTS_READ_ONLY_END();
 
 	return;
 }

@@ -30,6 +30,7 @@ symbols in this file:
 #include "units/unit_definitions.h"
 #include "units/units.h"
 #include "view_fov.h" /* port: port/linux/game/view_fov.c */
+#include "render_governor.h" /* port: port/linux/game/render_governor.c */
 
 /* ---------- constants */
 
@@ -329,7 +330,23 @@ void render_particles(
 									&position,
 									radius);
 
-							if (diameter > definition->lod_cutoff)
+							/* port: dynamic quality (render_governor.c): while the frames run long, the smallest particles are left out
+							(their cutoff raised) and some of the rest, by particle. A particle left out is kept as one drawn: the update
+							deletes the ones not drawn for a while (MAXIMUM_PARTICLE_UNRENDERED_FRAME_COUNT), and the picture shed is not the
+							game's to lose */
+							struct render_governor_values const *shed = render_governor_values();
+
+							if (diameter > definition->lod_cutoff &&
+								(diameter <= definition->lod_cutoff * shed->particle_lod_scale ||
+									(shed->particle_keep < 16 &&
+										(int)(((unsigned int)rendered_particle->particle_index * 2654435761u) >> 28) >= shed->particle_keep) ||
+									(shed->particle_max &&
+										render_governor_budget_used[RENDER_GOVERNOR_BUDGET_PARTICLES] >= (unsigned long)shed->particle_max)))
+							{
+								render_governor_counts[RENDER_GOVERNOR_COUNT_PARTICLES_SKIPPED]++;
+								particle->last_rendered_frame_index = render.frame_index;
+							}
+							else if (diameter > definition->lod_cutoff)
 							{
 								real fade;
 								real scale;
@@ -337,6 +354,8 @@ void render_particles(
 								unsigned long flags;
 								word particle_flags;
 
+								render_governor_counts[RENDER_GOVERNOR_COUNT_PARTICLES_DRAWN]++;
+								render_governor_budget_used[RENDER_GOVERNOR_BUDGET_PARTICLES]++;
 								fade = 1.0f;
 								built_particle_count++;
 								scale =

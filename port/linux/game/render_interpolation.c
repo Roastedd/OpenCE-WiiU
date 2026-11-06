@@ -50,6 +50,14 @@ tick, such as a nav marker, is moved as far as the object is drawn from there
 #include "units/units.h"
 #ifdef HALO_WIIU
 #include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
+#include "tick_perf.h"
+#include "render_interpolation_fast.h" /* port: the blends without the square roots (halo/gpu_offload.txt bit 1) */
+/* port/wiiu/src/wiiu_gpu_offload.c */
+unsigned wiiu_gpu_offload_bits(void);
+#define WIIU_GPU_OFFLOAD_BLEND_BIT 1u
+/* whether this frame's blends are made with render_interpolation_fast.h's arithmetic (set at the frame's begin) */
+static boolean interpolation_fast_blends, interpolation_check_blends;
+#define WIIU_GPU_OFFLOAD_CHECK_BIT 4u
 #endif
 
 /* port/linux/src/port_config.c */
@@ -57,6 +65,7 @@ int config_boolean(const char *name);
 unsigned long config_changes(void);
 
 #include <math.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -177,6 +186,18 @@ matrices of the two ticks the ring of the snapshot holds for it (tick_snapshot.c
 after it, and the cameras of the same two. All of it is the game thread's. */
 static boolean overlap_frame;
 
+/* The rotations of the nodes of one capture's pose of an object, found once (a pose is the "previous" of one frame and the "latest" of the one before, and several frames
+are drawn from a pair): kept under the number of the capture the pose was copied in, which names it for good (tick_snapshot.c: the copy of an object that did not change is not made again,
+and keeps its number). Four to an object, one for each slot of the ring. */
+struct overlap_rotations
+{
+	long serial; /* the capture's number, 0 when unused */
+	long object_index;
+	short node_count;
+	short capacity;
+	struct interpolation_rotation *rotations;
+};
+
 struct overlap_object
 {
 	long object_index; /* the object the blend is of, NONE when unused */
@@ -186,8 +207,27 @@ struct overlap_object
 	real_matrix4x3 *nodes;
 };
 
+/* (by absolute index, in static memory and not in the records above: the heap's blocks are as they were without the keeping) */
+#define OVERLAP_KEPT 4
+static struct overlap_rotations overlap_kept[MAXIMUM_INTERPOLATED_OBJECTS][OVERLAP_KEPT];
+#define ROTATION_ARENA_ROTATIONS 65536
+static struct interpolation_rotation rotation_arena[ROTATION_ARENA_ROTATIONS];
+static long rotation_arena_used;
+
 static struct overlap_object *overlap_objects;
 static struct observer_result overlap_cameras[MAXIMUM_LOCAL_PLAYERS];
+
+/* The blends' fine timers, in the console's clock ticks (tick_overlap_now), the game thread's: said with the overlap's log (render_interpolation_blend_log). A mark is a read of the time base. */
+static struct
+{
+	unsigned long long lookup, snap, rotations, blend, copy;
+	unsigned long asked, repeated, no_object, no_previous, blended, snapped, nodes, rotation_nodes, rotations_kept, fixups;
+	struct tick_perf perf; /* the counters of the core over the calls that made a blend or looked for one (tick_perf.h) */
+} blend_stats;
+
+uint32_t wiiu_crash_fixups_here(void);
+void platform_log(char const *format, ...);
+void tick_snapshot_say(char const *format, ...);
 #endif
 
 /* ---------- blending */
@@ -308,21 +348,35 @@ static void basis_from_quaternion(struct interpolation_quaternion const *q, real
 	matrix->up.k = 1.0f - 2.0f * (ii + jj);
 }
 
-static void rotation_from_matrix(real_matrix4x3 const *matrix, struct interpolation_rotation *rotation)
+/* the rotation of a basis: with render_interpolation_fast.h's arithmetic if fast (HALO_WIIU, halo/gpu_offload.txt bit 1), else the original's */
+static void rotation_from_matrix_with(real_matrix4x3 const *matrix, struct interpolation_rotation *rotation, boolean fast)
 {
+#ifdef HALO_WIIU
+	if (fast)
+	{
+		rotation->is_rotation = interpolation_basis_is_rotation_fast(&matrix->forward.i, &matrix->left.i, &matrix->up.i) != 0;
+		if (rotation->is_rotation)
+			interpolation_quaternion_from_basis_fast(matrix->forward.i, matrix->forward.j, matrix->forward.k, matrix->left.i, matrix->left.j, matrix->left.k,
+				matrix->up.i, matrix->up.j, matrix->up.k, &rotation->quaternion.i, &rotation->quaternion.j, &rotation->quaternion.k, &rotation->quaternion.w);
+		return;
+	}
+#else
+	(void)fast;
+#endif
 	rotation->is_rotation = basis_is_rotation(matrix);
 	if (rotation->is_rotation)
 		quaternion_from_basis(matrix, &rotation->quaternion);
 }
 
 /* a matrix a fraction t of the way from a to b, their rotations found */
-static void matrix_blend_rotations(
+static void matrix_blend_rotations_with(
 	real_matrix4x3 const *a,
 	real_matrix4x3 const *b,
 	struct interpolation_rotation const *rotation_a,
 	struct interpolation_rotation const *rotation_b,
 	real t,
-	real_matrix4x3 *result)
+	real_matrix4x3 *result,
+	boolean fast)
 {
 	result->scale = lerp(a->scale, b->scale, t);
 	point_lerp(&a->position, &b->position, t, &result->position);
@@ -343,6 +397,25 @@ static void matrix_blend_rotations(
 		q.j = lerp(qa.j, qb.j, t);
 		q.k = lerp(qa.k, qb.k, t);
 		q.w = lerp(qa.w, qb.w, t);
+#ifdef HALO_WIIU
+		if (fast)
+		{
+			const real squared = q.i * q.i + q.j * q.j + q.k * q.k + q.w * q.w;
+
+			if (squared > 1e-12f)
+			{
+				const real inverse = interpolation_rsqrt(squared);
+
+				q.i *= inverse;
+				q.j *= inverse;
+				q.k *= inverse;
+				q.w *= inverse;
+				basis_from_quaternion(&q, result);
+				return;
+			}
+			goto unblended;
+		}
+#endif
 		length = (real)sqrt(q.i * q.i + q.j * q.j + q.k * q.k + q.w * q.w);
 		if (length > 1e-6f)
 		{
@@ -355,6 +428,9 @@ static void matrix_blend_rotations(
 		}
 	}
 	/* a basis a quaternion cannot hold (scaled or mirrored): blend it as is */
+#ifdef HALO_WIIU
+unblended:
+#endif
 	result->forward.i = lerp(a->forward.i, b->forward.i, t);
 	result->forward.j = lerp(a->forward.j, b->forward.j, t);
 	result->forward.k = lerp(a->forward.k, b->forward.k, t);
@@ -365,6 +441,89 @@ static void matrix_blend_rotations(
 	result->up.j = lerp(a->up.j, b->up.j, t);
 	result->up.k = lerp(a->up.k, b->up.k, t);
 }
+
+#ifdef HALO_WIIU
+/* halo/gpu_offload.txt bit 4: every blend made both ways, and the largest difference said (for the host's runs: it doubles the cost) */
+static struct
+{
+	unsigned long rotations, decisions_differ, blends;
+	double worst_quaternion, worst_matrix;
+} interpolation_check;
+
+static void rotation_from_matrix(real_matrix4x3 const *matrix, struct interpolation_rotation *rotation)
+{
+	rotation_from_matrix_with(matrix, rotation, interpolation_fast_blends);
+	if (interpolation_fast_blends && interpolation_check_blends)
+	{
+		struct interpolation_rotation reference;
+		double difference;
+
+		rotation_from_matrix_with(matrix, &reference, FALSE);
+		interpolation_check.rotations++;
+		if (reference.is_rotation != rotation->is_rotation)
+			interpolation_check.decisions_differ++;
+		else if (reference.is_rotation)
+		{
+			difference = fabs((double)reference.quaternion.i - rotation->quaternion.i);
+			difference = fmax(difference, fabs((double)reference.quaternion.j - rotation->quaternion.j));
+			difference = fmax(difference, fabs((double)reference.quaternion.k - rotation->quaternion.k));
+			difference = fmax(difference, fabs((double)reference.quaternion.w - rotation->quaternion.w));
+			if (difference > interpolation_check.worst_quaternion)
+				interpolation_check.worst_quaternion = difference;
+		}
+	}
+}
+
+static void matrix_blend_rotations(
+	real_matrix4x3 const *a,
+	real_matrix4x3 const *b,
+	struct interpolation_rotation const *rotation_a,
+	struct interpolation_rotation const *rotation_b,
+	real t,
+	real_matrix4x3 *result)
+{
+	matrix_blend_rotations_with(a, b, rotation_a, rotation_b, t, result, interpolation_fast_blends);
+	if (interpolation_fast_blends && interpolation_check_blends)
+	{
+		real_matrix4x3 reference;
+		const real *x = (const real *)result, *y = (const real *)&reference;
+		unsigned index;
+
+		matrix_blend_rotations_with(a, b, rotation_a, rotation_b, t, &reference, FALSE);
+		interpolation_check.blends++;
+		for (index = 0; index < sizeof(reference) / sizeof(real); index++)
+			if (fabs((double)x[index] - y[index]) > interpolation_check.worst_matrix)
+				interpolation_check.worst_matrix = fabs((double)x[index] - y[index]);
+	}
+}
+
+/* said with the frames' end, every 600th */
+static void interpolation_check_say(void)
+{
+	void platform_log(char const *format, ...);
+
+	if (interpolation_check_blends && interpolation_fast_blends)
+		platform_log("gpu offload check: %lu rotations found both ways (%lu judged differently), worst quaternion difference %g; %lu blends, worst matrix difference %g",
+			interpolation_check.rotations, interpolation_check.decisions_differ, interpolation_check.worst_quaternion, interpolation_check.blends,
+			interpolation_check.worst_matrix);
+}
+#else
+static void rotation_from_matrix(real_matrix4x3 const *matrix, struct interpolation_rotation *rotation)
+{
+	rotation_from_matrix_with(matrix, rotation, FALSE);
+}
+
+static void matrix_blend_rotations(
+	real_matrix4x3 const *a,
+	real_matrix4x3 const *b,
+	struct interpolation_rotation const *rotation_a,
+	struct interpolation_rotation const *rotation_b,
+	real t,
+	real_matrix4x3 *result)
+{
+	matrix_blend_rotations_with(a, b, rotation_a, rotation_b, t, result, FALSE);
+}
+#endif
 
 /* the vector's parts' sum, large enough to be a correction (so written that
 one not a number is none) */
@@ -455,6 +614,8 @@ void render_interpolation_tick(void)
 			interpolated_objects[index].object_index = NONE;
 	}
 
+	/* port: it reads every object's node matrices and writes the records here and no object: not marked for the tick snapshot (objects.h) */
+	OBJECTS_READ_ONLY_BEGIN();
 	object_iterator_new(&iterator, _object_mask_all, 0);
 	while ((object = (struct object_datum *)object_iterator_next(&iterator)) != NULL)
 	{
@@ -523,6 +684,7 @@ void render_interpolation_tick(void)
 		record->has_previous = continuing;
 		record->blended_frame = NONE;
 	}
+	OBJECTS_READ_ONLY_END();
 }
 
 /* a new map (game.c): its objects take the indices of the last one's, and
@@ -530,6 +692,12 @@ nothing of theirs is drawn from */
 void render_interpolation_reset(void)
 {
 	long index;
+
+#ifdef HALO_WIIU
+	/* (the rotations kept for a pose of the overlap's blends: the arena is let go of, and no object keeps any) */
+	memset(overlap_kept, 0, sizeof(overlap_kept));
+	rotation_arena_used = 0;
+#endif
 
 	if (interpolated_objects)
 	{
@@ -545,9 +713,61 @@ void render_interpolation_reset(void)
 }
 
 #ifdef HALO_WIIU
+/* the rotations of a capture's pose of an object, from the keeping if they are there (the same matrices, the same function: the same rotations), else found and kept in the entry
+that is not the other pose's of the pair (or the older of the two); NULL if there is no room, and the caller finds them */
+static struct interpolation_rotation const *overlap_rotations_kept(struct overlap_object *record, long absolute_index, long serial, real_matrix4x3 const *nodes, short node_count, long other_serial)
+{
+	struct overlap_rotations *const kept = overlap_kept[absolute_index];
+	struct overlap_rotations *entry = NULL;
+	short node_index;
+	int which;
+
+	if (serial <= 0)
+		return NULL;
+	for (which = 0; which < OVERLAP_KEPT; which++)
+	{
+		if (kept[which].serial == serial && kept[which].object_index == record->object_index && kept[which].node_count == node_count)
+		{
+			blend_stats.rotations_kept += (unsigned long)node_count;
+			return kept[which].rotations;
+		}
+	}
+	for (which = 0; which < OVERLAP_KEPT; which++)
+	{
+		struct overlap_rotations *candidate = &kept[which];
+
+		if (candidate->serial == other_serial && candidate->object_index == record->object_index)
+			continue;
+		if (!entry || candidate->serial < entry->serial)
+			entry = candidate;
+	}
+	if (!entry)
+		return NULL;
+	if (entry->capacity < node_count)
+	{
+		/* (from an arena of static memory and not the heap: the game's pictures depend on where its heap blocks lie, and a block more moved some of them; a pose that finds the arena full is
+		found each frame, as without the keeping. The arena is let go of when a map starts, render_interpolation_reset.) */
+		if (rotation_arena_used + node_count > ROTATION_ARENA_ROTATIONS)
+		{
+			entry->serial = 0;
+			return NULL;
+		}
+		entry->rotations = rotation_arena + rotation_arena_used;
+		rotation_arena_used += node_count;
+		entry->capacity = node_count;
+	}
+	for (node_index = 0; node_index < node_count; node_index++)
+		rotation_from_matrix(&nodes[node_index], &entry->rotations[node_index]);
+	entry->serial = serial;
+	entry->object_index = record->object_index;
+	entry->node_count = node_count;
+	blend_stats.rotation_nodes += (unsigned long)node_count;
+	return entry->rotations;
+}
+
 /* the blend a frame of the overlap draws an object with (render_interpolation_object_node_matrices): NULL if the object has no pose of the tick before
 (it is the tick's own) */
-static real_matrix4x3 *overlap_object_node_matrices(long object_index)
+static real_matrix4x3 *overlap_object_node_matrices_inner(long object_index)
 {
 	struct overlap_object *record;
 	struct object_datum *object;
@@ -557,7 +777,8 @@ static real_matrix4x3 *overlap_object_node_matrices(long object_index)
 	long absolute_index;
 	short node_count, node_index;
 	boolean snap;
-	unsigned long long started;
+	unsigned long long started, entered, looked_up, snap_tested, rotated;
+	unsigned long fixups_before;
 
 	if (object_index == NONE)
 		return NULL;
@@ -576,19 +797,32 @@ static real_matrix4x3 *overlap_object_node_matrices(long object_index)
 	}
 	record = &overlap_objects[absolute_index];
 	if (record->frame == interpolation_frame && record->object_index == object_index)
+	{
+		blend_stats.repeated++;
 		return record->blended ? record->nodes : NULL;
+	}
+	entered = tick_overlap_now();
+	fixups_before = wiiu_crash_fixups_here();
+	blend_stats.asked++;
 	object = object_try_and_get(object_index);
 	record->frame = interpolation_frame;
 	record->object_index = object_index;
 	record->blended = FALSE;
 	if (!object)
+	{
+		blend_stats.no_object++;
 		return NULL;
+	}
 	node_count = (short)(object->object.node_matrices.size / (short)sizeof(real_matrix4x3));
 	if (node_count <= 0 || node_count > MAXIMUM_INTERPOLATED_NODES || object->object.node_matrices.offset <= 0)
 		return NULL;
 	previous = tick_snapshot_previous_node_matrices(object_index, node_count);
 	if (!previous)
+	{
+		blend_stats.no_previous++;
+		blend_stats.lookup += tick_overlap_now() - entered;
 		return NULL;
+	}
 	started = tick_overlap_now();
 	latest = (real_matrix4x3 const *)((byte const *)object + object->object.node_matrices.offset);
 	if (record->capacity < node_count)
@@ -601,6 +835,7 @@ static real_matrix4x3 *overlap_object_node_matrices(long object_index)
 		record->capacity = node_count;
 	}
 	blended = record->nodes;
+	looked_up = tick_overlap_now();
 	/* (as the serial frames' blend above: a pose that moved too far for one tick is another, not this one moving; so written that a position not a
 	number snaps) */
 	snap = !(distance_squared(&previous[0].position, &latest[0].position) <= OBJECT_SNAP_DISTANCE * OBJECT_SNAP_DISTANCE);
@@ -612,20 +847,40 @@ static real_matrix4x3 *overlap_object_node_matrices(long object_index)
 		matrix4x3_inverse_transform_point(&latest[0], &latest[node_index].position, &latest_local);
 		snap = !(distance_squared(&previous_local, &latest_local) <= NODE_SNAP_DISTANCE * NODE_SNAP_DISTANCE);
 	}
+	snap_tested = tick_overlap_now();
 	if (snap)
 	{
 		memcpy(blended, latest, node_count * sizeof(real_matrix4x3));
+		rotated = snap_tested;
+		blend_stats.snapped++;
 	}
 	else
 	{
-		struct interpolation_rotation previous_rotations[MAXIMUM_INTERPOLATED_NODES];
-		struct interpolation_rotation latest_rotations[MAXIMUM_INTERPOLATED_NODES];
+		struct interpolation_rotation previous_found[MAXIMUM_INTERPOLATED_NODES];
+		struct interpolation_rotation latest_found[MAXIMUM_INTERPOLATED_NODES];
+		struct interpolation_rotation const *previous_rotations = NULL;
+		struct interpolation_rotation const *latest_rotations = NULL;
 
-		for (node_index = 0; node_index < node_count; node_index++)
+		if (tick_snapshot_rotation_cache())
 		{
-			rotation_from_matrix(&previous[node_index], &previous_rotations[node_index]);
-			rotation_from_matrix(&latest[node_index], &latest_rotations[node_index]);
+			const long latest_serial = tick_snapshot_pose_serial(absolute_index, FALSE), previous_serial = tick_snapshot_pose_serial(absolute_index, TRUE);
+
+			previous_rotations = overlap_rotations_kept(record, absolute_index, previous_serial, previous, node_count, latest_serial);
+			latest_rotations = overlap_rotations_kept(record, absolute_index, latest_serial, latest, node_count, previous_serial);
 		}
+		if (!previous_rotations || !latest_rotations)
+		{
+			/* (none kept: found now, each time) */
+			for (node_index = 0; node_index < node_count; node_index++)
+			{
+				rotation_from_matrix(&previous[node_index], &previous_found[node_index]);
+				rotation_from_matrix(&latest[node_index], &latest_found[node_index]);
+			}
+			previous_rotations = previous_found;
+			latest_rotations = latest_found;
+			blend_stats.rotation_nodes += 2 * (unsigned long)node_count;
+		}
+		rotated = tick_overlap_now();
 		for (node_index = 0; node_index < node_count; node_index++)
 		{
 			matrix_blend_rotations(&previous[node_index], &latest[node_index], &previous_rotations[node_index], &latest_rotations[node_index],
@@ -633,8 +888,72 @@ static real_matrix4x3 *overlap_object_node_matrices(long object_index)
 		}
 	}
 	record->blended = TRUE;
-	tick_overlap_note_blend(tick_overlap_now() - started);
+	{
+		const unsigned long long finished = tick_overlap_now();
+
+		blend_stats.lookup += looked_up - entered;
+		blend_stats.snap += snap_tested - looked_up;
+		if (snap)
+			blend_stats.copy += finished - snap_tested;
+		else
+		{
+			blend_stats.rotations += rotated - snap_tested;
+			blend_stats.blend += finished - rotated;
+		}
+		blend_stats.blended++;
+		blend_stats.nodes += (unsigned long)node_count;
+		blend_stats.fixups += wiiu_crash_fixups_here() - fixups_before;
+		tick_overlap_note_blend(finished - started);
+	}
 	return blended;
+}
+
+static real_matrix4x3 *overlap_object_node_matrices(long object_index)
+{
+	unsigned long perf_before[4];
+	real_matrix4x3 *result;
+
+	tick_perf_begin(perf_before);
+	result = overlap_object_node_matrices_inner(object_index);
+	tick_perf_end(&blend_stats.perf, perf_before);
+	return result;
+}
+
+/* the blends' numbers, said with the overlap's log (the game thread's); frames is the frames of the window */
+void render_interpolation_blend_log(
+	double ticks_per_ms,
+	unsigned long frames)
+{
+	const double f = frames ? (double)frames : 1.0;
+	const unsigned long long total = blend_stats.lookup + blend_stats.snap + blend_stats.rotations + blend_stats.blend + blend_stats.copy;
+
+	tick_snapshot_say("tick snapshot, blends, ms a frame (%lu): %.3f = look-up of both poses %.3f, snap test %.3f, rotations %.3f, blending %.3f, copying snapped poses %.3f",
+		frames, (double)total / ticks_per_ms / f, (double)blend_stats.lookup / ticks_per_ms / f, (double)blend_stats.snap / ticks_per_ms / f,
+		(double)blend_stats.rotations / ticks_per_ms / f, (double)blend_stats.blend / ticks_per_ms / f, (double)blend_stats.copy / ticks_per_ms / f);
+	tick_snapshot_say("tick snapshot, blends, a frame: %.1f objects asked for, %.1f repeats in the frame, %.1f blended (%.1f snapped, %.1f without a pose before, %.1f not found), "
+		"%.1f nodes, %.1f rotations found, %.1f nodes' rotations kept from an earlier frame; misaligned accesses taken inside them %.2f a frame",
+		(double)blend_stats.asked / f, (double)blend_stats.repeated / f, (double)blend_stats.blended / f, (double)blend_stats.snapped / f,
+		(double)blend_stats.no_previous / f, (double)blend_stats.no_object / f, (double)blend_stats.nodes / f, (double)blend_stats.rotation_nodes / f,
+		(double)blend_stats.rotations_kept / f, (double)blend_stats.fixups / f);
+	if (blend_stats.perf.stretches)
+	{
+		unsigned long long const *v = blend_stats.perf.sum;
+
+		tick_snapshot_say("tick snapshot, blends, counters of core %u, a frame: %s %.3f M, %s %.3f M, %s %.2f K, %s %.2f K", wiiu_perfmon_core(), wiiu_perfmon_name(0), v[0] / f / 1e6,
+			wiiu_perfmon_name(1), v[1] / f / 1e6, wiiu_perfmon_name(2), v[2] / f / 1e3, wiiu_perfmon_name(3), v[3] / f / 1e3);
+	}
+	{
+		static unsigned long reads_before, fallbacks_before, applied_before;
+		unsigned long reads, fallbacks, applied;
+
+		tick_snapshot_reads_total(&reads, &fallbacks, &applied);
+		tick_snapshot_say("tick snapshot, the frame's reads of the copies, a frame: %.1f object lookups, %.2f objects' kept fields put in, %.2f lookups the copies did not answer",
+			(double)(reads - reads_before) / f, (double)(applied - applied_before) / f, (double)(fallbacks - fallbacks_before) / f);
+		reads_before = reads;
+		fallbacks_before = fallbacks;
+		applied_before = applied;
+	}
+	memset(&blend_stats, 0, sizeof(blend_stats));
 }
 
 /* a frame of the overlap is being drawn, from the ring's pair of which the latest is tick (or no more: the end of the frame) */
@@ -662,6 +981,10 @@ static void interpolation_rendering_set(boolean rendering)
 void render_interpolation_frame_begin(void)
 {
 	interpolation_rendering_set(halo_interpolation_enabled());
+#ifdef HALO_WIIU
+	interpolation_fast_blends = (wiiu_gpu_offload_bits() & WIIU_GPU_OFFLOAD_BLEND_BIT) != 0;
+	interpolation_check_blends = (wiiu_gpu_offload_bits() & WIIU_GPU_OFFLOAD_CHECK_BIT) != 0;
+#endif
 	interpolation_frame++;
 	interpolation_fraction = game_time_get_tick_fraction();
 }
@@ -669,6 +992,10 @@ void render_interpolation_frame_begin(void)
 void render_interpolation_frame_end(void)
 {
 	interpolation_rendering_set(FALSE);
+#ifdef HALO_WIIU
+	if (interpolation_check_blends && interpolation_fast_blends && !(interpolation_frame % 600))
+		interpolation_check_say();
+#endif
 }
 
 real render_interpolation_fraction(void)

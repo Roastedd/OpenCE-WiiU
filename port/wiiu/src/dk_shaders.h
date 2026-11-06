@@ -43,6 +43,15 @@ change to what it writes, so the other shaders keep their names) */
 #define DK_SHADER_STAGE_VERTEX 0
 #define DK_SHADER_STAGE_PIXEL 1
 
+/* how the Wii U's shader pack answered a key (gx2_shaders.c dk_shader_found): with the key's own shader; with the shader of its canonical key, which is
+the same (a pixel key the pack lacks); with its stand-in (a pixel key whose shader the pack has under no key); not at all, the key left out of the
+pack on purpose; not at all */
+#define DK_SHADER_FOUND_EXACT 0
+#define DK_SHADER_FOUND_EQUIVALENT 1
+#define DK_SHADER_FOUND_FALLBACK 2
+#define DK_SHADER_FOUND_LEFT_OUT 3
+#define DK_SHADER_FOUND_NONE 4
+
 /* the order the background compile takes its queue in: a key a draw needs
 goes first, then the map being played's, then everything else */
 #define DK_SHADER_PRIORITY_DRAW 0
@@ -86,6 +95,8 @@ the draw's priority and the key appended to console.dkk. key_data: a struct
 dk_vertex_key (DK_SHADER_STAGE_VERTEX) or an nv2a_pixel_shader_key
 (DK_SHADER_STAGE_PIXEL) */
 uint32_t dk_shader_for_draw(uint32_t stage, const void *key_data);
+/* the Wii U's: how dk_shader_for_draw found the shader of the last key of a stage it was asked for (DK_SHADER_FOUND_*) */
+uint32_t dk_shader_found(uint32_t stage);
 
 /* uniform block bindings, per stage */
 #define DK_BINDING_VERTEX_CONSTANTS 0

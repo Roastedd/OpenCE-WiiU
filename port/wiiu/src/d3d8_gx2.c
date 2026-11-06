@@ -17,6 +17,7 @@ and presenting go there; a draw and a visibility test do nothing yet.
 */
 
 #include "xgpu.h"
+#include "platform.h"
 #include "sdl_platform.h"
 #include "halo_ui_pointer.h"
 #include "halo_startup.h"
@@ -25,10 +26,12 @@ and presenting go there; a draw and a visibility test do nothing yet.
 #include "posix.h"
 #include "dk_commands.h"
 #include "wiiu_immediate.h"
+#include "wiiu_map_summary.h"
 #include "wiiu_inflight.h"
 #include "wiiu_indices.h"
 #include "wiiu_pending_reads.h"
 #include "wiiu_stream_queue.h"
+#include "wiiu_perf.h"
 #include "dk_shaders.h"
 #include "dk_derive.h"
 
@@ -285,10 +288,14 @@ int halo_model_detail_stock(void)
 	return 1;
 }
 
+/* port/linux/game/render_governor.c's (the Direct3D layer is built without the game's headers): dynamic quality's model level of detail, 1 with it off */
+float render_governor_lod_scale(void);
+void render_governor_frame(double work_ms, double tick_ms, double render_ms, double now_ms);
+
 float halo_model_detail_scale(int level)
 {
-	(void)level;
-	return 1.0f;
+	/* (level 1: the size the level of detail is chosen by; 0: the size under which a model is not drawn at all, left to the objects' own culling) */
+	return level ? render_governor_lod_scale() : 1.0f;
 }
 
 void d3d8_gl_set_height_fade(float inverse_softness, float height, float offset, float scale)
@@ -574,6 +581,11 @@ int host_gx2_visibility_enabled(void);
 Six: a stream is handed over every 40 draws, about twenty a frame, and with three the game thread could be only two ahead of the GX2 thread - it waited
 for a slot whenever that thread waited for the display's flip or had a frame's worth of work queued (6% of the game thread standing) */
 #define STREAM_SLOTS 6
+/* (halo/stream_slots.txt can ask for up to STREAM_SLOTS_MAX: the slots beyond STREAM_SLOTS are made when asked for, in the heap - not static memory: 2 MB more of it moved the host's heap and
+changed the game's pictures in the digest harness, whose default path must not change) */
+#define STREAM_SLOTS_MAX 8
+int host_gx2_stream_slots(void);
+static uint32_t *stream_extra[STREAM_SLOTS_MAX - STREAM_SLOTS];
 /* (on cache lines: the lines made in a slot, stream_lines_make, are whole lines of it) */
 static uint32_t stream_buffers[STREAM_SLOTS][STREAM_SIZE / 4] __attribute__((aligned(64)));
 static uint32_t *stream = stream_buffers[0];
@@ -611,7 +623,7 @@ struct stream_queue dk_stream_queue;
 
 uint32_t *dk_stream_buffer(unsigned slot)
 {
-	return stream_buffers[slot];
+	return slot < STREAM_SLOTS ? stream_buffers[slot] : stream_extra[slot - STREAM_SLOTS];
 }
 /* Each handing over of the stream is one submission, numbered from 1 as the
 host numbers them: this is the number of the one being written. */
@@ -645,7 +657,20 @@ static int async_on(void)
 	{
 		dk_async = host_gx2_async();
 		if (dk_async)
-			stream_queue_init(&dk_stream_queue, STREAM_SLOTS);
+		{
+			int slots = host_gx2_stream_slots(), made = STREAM_SLOTS;
+
+			for (; made < slots; made++)
+			{
+				/* (malloc'd and aligned by hand to a cache line pair: never freed) */
+				void *block = malloc(STREAM_SIZE + 64);
+
+				if (!block)
+					break;
+				stream_extra[made - STREAM_SLOTS] = (uint32_t *)(((uintptr_t)block + 63) & ~(uintptr_t)63);
+			}
+			stream_queue_init(&dk_stream_queue, made < slots ? made : slots);
+		}
 	}
 	return dk_async;
 }
@@ -654,25 +679,90 @@ static int async_on(void)
 /* the frame's parts (source/main/main.c): the game's ticks and its rendering, for the frame time note and the hitch notes */
 static double part_start, frame_tick_ms, frame_render_ms, sum_tick_ms, sum_render_ms, longest_tick_ms;
 static unsigned long frame_ticks, sum_ticks, frames_with_ticks;
+/* the game thread's waits for a stream slot, and its time in the card's files, over the frames of the note */
+static double sum_slot_ms, sum_file_ms;
 
 void wiiu_frame_part(int part, int ticks);
+
+/* The game thread's totals for the detailed overlay (wiiu_perf.h, halo/overlay.txt 2), in the time base's ticks and 32 bits: the frame's parts, and its waits for
+the GX2 thread's slots, for the 30 Hz throttle and for a refresh. They are the game thread's own to write; each frame's end publishes a copy under a sequence
+number that the GX2 thread reads (host_gx2_perf_game) without a lock, so that the fields it reads are of one frame. Counts only: nothing here is read back by the game. */
+static struct perf_totals perf_game;
+static struct perf_totals perf_game_published;
+static volatile uint32_t perf_game_sequence;
+static OSTime perf_part_started, perf_last_exit;
+/* (the slot waits the game thread had made when a part began: a part's time is counted without the waits for the GX2 thread made inside it, which are GPU WAIT's, so that DRAW and SIM are
+what the game thread did and never more than WORK) */
+static uint32_t perf_part_waited;
+
+void host_gx2_perf_game(struct perf_totals *out);
+
+void host_gx2_perf_game(struct perf_totals *out)
+{
+	unsigned attempt;
+
+	for (attempt = 0; attempt < 8; attempt++)
+	{
+		const uint32_t before = perf_game_sequence;
+
+		if (before & 1u)
+			continue;
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
+		*out = perf_game_published;
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
+		if (perf_game_sequence == before)
+			return;
+	}
+	/* (written all the time: what was read is a few frames' fields that do not all agree, once in a while; the panel's window takes it as it is) */
+}
+
+static void perf_game_publish(void)
+{
+	perf_game_sequence++;
+	__atomic_thread_fence(__ATOMIC_RELEASE);
+	perf_game_published = perf_game;
+	__atomic_thread_fence(__ATOMIC_RELEASE);
+	perf_game_sequence++;
+}
 
 void wiiu_frame_part(int part, int ticks)
 {
 	const double now = profile_now_ms();
+	const OSTime ticks_now = OSGetSystemTime();
 
+	/* (parts 4 and 5: the 30 Hz throttle, main_rasterizer_throttle, which the overlay's VSYNC counts) */
+	if (part == 4)
+	{
+		perf_part_started = ticks_now;
+		return;
+	}
+	/* (a part's span less the waits for the GX2 thread within it) */
+#define PERF_PART_SPAN() ((uint32_t)(ticks_now - perf_part_started) > perf_game.game_slot_wait - perf_part_waited ? \
+	(uint32_t)(ticks_now - perf_part_started) - (perf_game.game_slot_wait - perf_part_waited) : 0u)
+	if (part == 5)
+	{
+		perf_game.game_throttle += (uint32_t)(ticks_now - perf_part_started);
+		return;
+	}
 	if (part == 0 || part == 2)
 	{
 		part_start = now;
+		perf_part_started = ticks_now;
+		perf_part_waited = perf_game.game_slot_wait;
 		return;
 	}
 	if (part == 1)
 	{
 		frame_tick_ms += now - part_start;
 		frame_ticks += (unsigned long)(ticks > 0 ? ticks : 0);
+		perf_game.game_sim += PERF_PART_SPAN();
+		perf_game.game_ticks += (uint32_t)(ticks > 0 ? ticks : 0);
 	}
 	else
+	{
 		frame_render_ms += now - part_start;
+		perf_game.game_render += PERF_PART_SPAN();
+	}
 }
 
 static double waits_ms; /* the game thread's time in async_wait_retired and halo_switch_renderer_idle, for the hitch notes (D3DDevice_Present) */
@@ -686,9 +776,11 @@ static void async_wait_retired(uint32_t number)
 {
 	static int said;
 	const double start = profile_now_ms();
+	OSTime perf_started;
 
 	if (stream_queue_retired(&dk_stream_queue) >= number)
 		return;
+	perf_started = OSGetSystemTime();
 	while (stream_queue_retired(&dk_stream_queue) < number)
 	{
 		host_gx2_pause();
@@ -700,6 +792,7 @@ static void async_wait_retired(uint32_t number)
 		}
 	}
 	waits_ms += profile_now_ms() - start;
+	perf_game.game_slot_wait += (uint32_t)(OSGetSystemTime() - perf_started);
 }
 
 /* frees what the retired streams' commands named */
@@ -731,6 +824,11 @@ one of these ranges hands the stream over first, as the Xbox's runtime does for 
 static struct pending_reads pending_reads;
 
 static void stream_flush(void);
+/* the game thread's waits for a free stream slot (the GX2 thread has not retired the stream that used the slot the next stream goes in), in the time base's ticks and counted: [0] in the
+draws' hand-overs and the rest of the frame's work, [1] in the present's (where it is the frame's pacing: the GX2 thread waits for the display's flip). In the log with the draw statistics. */
+static OSTime slot_wait_ticks[2];
+static unsigned long slot_waits[2];
+static int in_present;
 /* why the stream was handed over, counted (in the log with the draw statistics): 0 a present, 1 the table of read ranges full, 2 a write into a range a draw reads, 3 the stream full, 4 too much
 waiting to be freed, 5 a resource in use asked for, 6 IsBusy, 7 KickPushBuffer */
 static unsigned long flush_reasons[9];
@@ -755,6 +853,18 @@ static void pending_read_note(const void *address, unsigned long size)
 /* called by the memory watch (memory_watch_wiiu.c) before the game's write is announced */
 void halo_stream_before_write(const void *address, unsigned long size);
 
+/* texture streaming (xbox_texture_cache.c; halo/stream.txt): the cache file thread reads a texture into its block while the game thread draws, and does not hand the draws over (the
+stream is the game thread's); a block it writes is not one a draw reads (a block is given out only when the draws that used its texture, or its tail, are over), so that it
+waits only for what has been handed over, and for what has not for a moment, then goes on */
+int halo_texture_stream_on; /* (set by xbox_texture_cache.c when halo/stream.txt says so) */
+static pthread_t draw_thread;
+static int draw_thread_known;
+
+static int stream_write_from_another_thread(void)
+{
+	return halo_texture_stream_on && draw_thread_known && !pthread_equal(pthread_self(), draw_thread);
+}
+
 void halo_stream_before_write(const void *address, unsigned long size)
 {
 	if (dk_async > 0)
@@ -764,7 +874,19 @@ void halo_stream_before_write(const void *address, unsigned long size)
 		if (hazard)
 		{
 			if (hazard >= (uint32_t)submission)
-				flush_because(2); /* (the stream still being written is handed over first) */
+			{
+				if (stream_write_from_another_thread())
+				{
+					unsigned waited;
+
+					for (waited = 0; waited < 250 && hazard >= (uint32_t)*(volatile unsigned long *)&submission; waited++)
+						usleep(200);
+					if (hazard >= (uint32_t)*(volatile unsigned long *)&submission)
+						return;
+				}
+				else
+					flush_because(2); /* (the stream still being written is handed over first) */
+			}
 			async_wait_retired(hazard);
 		}
 		return;
@@ -803,10 +925,18 @@ static void stream_flush(void)
 		stream_used = 0;
 		stream_lines_made = 0;
 		submission++;
-		stream = stream_buffers[stream_queue_slot(&dk_stream_queue)];
+		stream = dk_stream_buffer(stream_queue_slot(&dk_stream_queue));
 		/* (the slot to write next must be free: the stream that used it is retired) */
-		while (!stream_queue_slot_free(&dk_stream_queue))
-			host_gx2_pause();
+		if (!stream_queue_slot_free(&dk_stream_queue))
+		{
+			const OSTime waited_from = OSGetSystemTime();
+
+			while (!stream_queue_slot_free(&dk_stream_queue))
+				host_gx2_pause();
+			slot_wait_ticks[in_present] += OSGetSystemTime() - waited_from;
+			slot_waits[in_present]++;
+			perf_game.game_slot_wait += (uint32_t)(OSGetSystemTime() - waited_from);
+		}
 		async_frees(0);
 		pending_free_bytes = 0;
 		return;
@@ -829,12 +959,15 @@ void halo_switch_renderer_idle(void);
 void halo_switch_renderer_idle(void)
 {
 	const double start = profile_now_ms();
+	const OSTime perf_started = OSGetSystemTime();
+	const uint32_t perf_before = perf_game.game_slot_wait; /* (async_wait_retired adds its own wait: the whole of this one is added instead) */
 
 	stream_flush();
 	if (dk_async > 0)
 		async_wait_retired((uint32_t)(submission - 1));
 	host_gx2_idle();
 	idle_ms += profile_now_ms() - start;
+	perf_game.game_slot_wait = perf_before + (uint32_t)(OSGetSystemTime() - perf_started);
 	idle_calls++;
 }
 
@@ -1406,6 +1539,8 @@ HRESULT WINAPI Direct3D_CreateDevice(UINT adapter, D3DDEVTYPE device_type, void 
 	if (!device.created)
 	{
 		memset(&device, 0, sizeof(device));
+		draw_thread = pthread_self(); /* (the thread that makes the device draws with it) */
+		draw_thread_known = 1;
 		if (presentation_parameters)
 			device.presentation = *presentation_parameters;
 		width = device.presentation.BackBufferWidth ? device.presentation.BackBufferWidth : 640;
@@ -2586,6 +2721,17 @@ static double ticks_ms(OSTime ticks)
 	return (double)ticks * 1000.0 / (double)OSTimerClockSpeed;
 }
 
+/* the game thread's waits for a free stream slot, in the draws and in the present together, from the monotonic arrays (stream_flush): milliseconds and times */
+static double slot_wait_ms_total(void)
+{
+	return ticks_ms(slot_wait_ticks[0] + slot_wait_ticks[1]);
+}
+
+static unsigned long slot_waits_total(void)
+{
+	return slot_waits[0] + slot_waits[1];
+}
+
 /* a draw's time, to the frame's and to the log's (each draw counted in the note it is made before, as when they were milliseconds) */
 static inline void draw_ticks_add(OSTime spent)
 {
@@ -2865,6 +3011,7 @@ static BOOL stage_facts_make(int stage, const unsigned long serials[STAGE_SERIAL
 		made.mipmapped = description.levels > 1;
 		made.hires = description.hires != FALSE;
 		made.hires_coverage = description.hires_coverage != FALSE;
+		made.hires_point_threshold = description.hires_point_threshold != FALSE;
 		stage_memos[stage].lasting = !target && lasting;
 		stage_memos[stage].texture = texture;
 		stage_memos[stage].words[0] = texture->Data;
@@ -4155,6 +4302,44 @@ static void draw_statistics_log(void)
 		platform_log("frame parts: the game's ticks %.1f ms a frame (%lu ticks in %lu of %lu frames, %.1f ms a tick, longest frame's ticks %.1f ms), rendering %.1f ms a frame",
 			sum_tick_ms / (double)profile.frames, sum_ticks, frames_with_ticks, profile.frames, sum_ticks ? sum_tick_ms / (double)sum_ticks : 0.0, longest_tick_ms,
 			sum_render_ms / (double)profile.frames);
+		{
+			/* (one set of slot-wait counts: the monotonic arrays; this line and the frame notes each take their own differences) */
+			static OSTime slot_log_ticks[2];
+			static unsigned long slot_log_waits[2];
+
+			platform_log("stream slots: the game thread waited for a free one %.2f ms a frame in %.2f waits a frame in the draws and the frame's work, and %.2f ms in %.2f waits a frame in the present",
+				ticks_ms(slot_wait_ticks[0] - slot_log_ticks[0]) / (double)profile.frames, (double)(slot_waits[0] - slot_log_waits[0]) / (double)profile.frames,
+				ticks_ms(slot_wait_ticks[1] - slot_log_ticks[1]) / (double)profile.frames, (double)(slot_waits[1] - slot_log_waits[1]) / (double)profile.frames);
+			slot_log_ticks[0] = slot_wait_ticks[0];
+			slot_log_ticks[1] = slot_wait_ticks[1];
+			slot_log_waits[0] = slot_waits[0];
+			slot_log_waits[1] = slot_waits[1];
+		}
+		{
+			/* (the waits inside the rendering's time: for a stream slot, and in the card's files; the GX2 thread's own times are in its pacing notes) */
+			static unsigned long slot_waits_before;
+			static double waits_before_note, idle_before_note;
+			struct platform_file_io io;
+
+			platform_file_io_snapshot(&io);
+			platform_log("frame waits: a frame %.2f ms for a stream slot (%lu waits in %lu frames), %.2f for the GX2 thread's streams, %.2f for the renderer to be idle, %.2f in files (%lu reads, "
+				"%lu writes since the start, the longest %.0f ms)", sum_slot_ms / (double)profile.frames, slot_waits_total() - slot_waits_before, profile.frames,
+				(waits_ms - waits_before_note) / (double)profile.frames, (idle_ms - idle_before_note) / (double)profile.frames, sum_file_ms / (double)profile.frames, io.reads, io.writes,
+				io.longest_ms);
+			{
+				/* (the shares of the game thread's frame: the 5 s note's answer to "why was it slow" for a frame that was slow all through) */
+				const double work = profile.work_ms > 0.0 ? profile.work_ms : 1.0, frames = (double)profile.frames;
+
+				platform_log("frame shares of %.1f ms: ticks %.0f%%, rendering %.0f%% (stream slot wait %.0f%%, GX2 streams wait %.0f%%, idle wait %.0f%%), rest of the loop %.0f%%, "
+					"files (all threads) %.1f ms a frame", work / frames, 100.0 * sum_tick_ms / work, 100.0 * sum_render_ms / work,
+					100.0 * sum_slot_ms / work, 100.0 * (waits_ms - waits_before_note) / work, 100.0 * (idle_ms - idle_before_note) / work,
+					100.0 * (work - sum_tick_ms - sum_render_ms) / work, sum_file_ms / frames);
+			}
+			slot_waits_before = slot_waits_total();
+			waits_before_note = waits_ms;
+			idle_before_note = idle_ms;
+			sum_slot_ms = sum_file_ms = 0.0;
+		}
 		sum_tick_ms = sum_render_ms = longest_tick_ms = 0.0;
 		sum_ticks = frames_with_ticks = 0;
 		memset(&profile, 0, sizeof(profile));
@@ -4199,9 +4384,12 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 	void *unused, void *unused2)
 {
 	const double start = profile_now_ms();
+	const OSTime perf_started = OSGetSystemTime();
 	double work = profile.last_exit_ms ? start - profile.last_exit_ms : 0.0, present;
 
+	in_present = 1;
 	D3DDevice_Present_inner(source_rectangle, destination_rectangle, unused, unused2);
+	in_present = 0;
 	present = profile_now_ms() - start;
 	{
 		/* the start-up's timeline (startup_timeline.c): the first presents, and the report once the main menu is live and has been drawn a few times */
@@ -4214,21 +4402,41 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 		STARTUP_FRAME();
 	}
 	profile.last_exit_ms = profile_now_ms();
+	{
+		/* (the detailed overlay's: this frame's work, from the last present's end to this one's start, and its time in Present) */
+		const OSTime perf_ended = OSGetSystemTime();
+
+		if (perf_last_exit)
+			perf_game.game_work += (uint32_t)(perf_started - perf_last_exit);
+		perf_game.game_present += (uint32_t)(perf_ended - perf_started);
+		perf_last_exit = perf_ended;
+	}
 	profile.present_ms += present;
 	profile.work_ms += work;
-	/* a frame whose work took more than two refreshes: where it went (the draws, waiting for the GX2 thread, waiting for the renderer to be idle; the rest is the game's) */
+	/* the map summary (wiiu_map_summary.h): the time between this present and the one before */
+	if (work > 0.0)
+		wiiu_map_summary_frame(work + present);
+	/* a frame whose work took more than two refreshes: where it went (the draws, waiting for the GX2 thread, for a stream slot, for the renderer to be idle, the card's files;
+	the rest is the game's: the checkpoints' writes, a menu's changes). The note is kept under the log's 230 characters. */
 	{
-		static double waits_before, idle_before;
+		static double waits_before, idle_before, slot_before, file_before;
 		static unsigned long idle_calls_before;
+		struct platform_file_io io;
+		const double file_ms = (platform_file_io_snapshot(&io), io.read_ms + io.write_ms);
 
 		if (work > 34.0)
-			platform_log("hitch: frame %lu took %.1f ms of work: %.1f in the game's %lu ticks, %.1f rendering (%.1f of it in the Direct3D layer's draws), %.1f waiting for the GX2 thread's "
-				"streams, %.1f in %lu waits for the renderer to be idle; present %.1f", device.frame, work, frame_tick_ms, frame_ticks, frame_render_ms, ticks_ms(frame_draw_ticks),
-				waits_ms - waits_before, idle_ms - idle_before, idle_calls - idle_calls_before, present);
+			platform_log("hitch: frame %lu took %.1f ms of work: %.1f in the game's %lu ticks, %.1f rendering (%.1f draws, %.1f stream slot wait), %.1f other, %.1f file time, present %.1f, "
+				"%.1f GX2 streams wait, %.1f idle waits (%lu)", device.frame, work, frame_tick_ms, frame_ticks, frame_render_ms, ticks_ms(frame_draw_ticks),
+				slot_wait_ms_total() - slot_before, work - frame_tick_ms - frame_render_ms, file_ms - file_before, present, waits_ms - waits_before, idle_ms - idle_before,
+				idle_calls - idle_calls_before);
+		/* dynamic quality (render_governor.c): the frame's work, and how it divides */
+		render_governor_frame(work, frame_tick_ms, frame_render_ms, start);
 		sum_tick_ms += frame_tick_ms;
 		sum_render_ms += frame_render_ms;
 		sum_ticks += frame_ticks;
 		frames_with_ticks += frame_ticks ? 1 : 0;
+		sum_slot_ms += slot_wait_ms_total() - slot_before;
+		sum_file_ms += file_ms - file_before;
 		if (frame_tick_ms > longest_tick_ms)
 			longest_tick_ms = frame_tick_ms;
 		frame_tick_ms = frame_render_ms = 0.0;
@@ -4236,6 +4444,8 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 		frame_draw_ticks = 0;
 		waits_before = waits_ms;
 		idle_before = idle_ms;
+		slot_before = slot_wait_ms_total();
+		file_before = file_ms;
 		idle_calls_before = idle_calls;
 	}
 	if (work > profile.longest_work_ms)
@@ -4247,6 +4457,8 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 		profile.over_17++;
 	if (work + present > 34.0)
 		profile.over_34++;
+	perf_game.game_frames++;
+	perf_game_publish();
 }
 
 static void D3DDevice_Present_inner(CONST RECT *source_rectangle, CONST RECT *destination_rectangle, void *unused, void *unused2)
@@ -4324,8 +4536,14 @@ static void D3DDevice_Present_inner(CONST RECT *source_rectangle, CONST RECT *de
 	}
 	else
 	{
-		while (pending_flips >= 2)
-			pthread_cond_wait(&vertical_blank_condition, &vertical_blank_lock);
+		if (pending_flips >= 2)
+		{
+			const OSTime perf_started = OSGetSystemTime();
+
+			while (pending_flips >= 2)
+				pthread_cond_wait(&vertical_blank_condition, &vertical_blank_lock);
+			perf_game.game_vsync_hold += (uint32_t)(OSGetSystemTime() - perf_started);
+		}
 		pending_flips++;
 	}
 	pthread_mutex_unlock(&vertical_blank_lock);

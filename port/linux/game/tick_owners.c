@@ -65,6 +65,21 @@ long tick_owners_mode(
 	return tick_owners_mode_value;
 }
 
+/* The map's decision (smooth_defaults.c, tick_overlap_decide), at a map start: the mode is read again, as the overlap now is or is not requested for the map
+(mode 2 for the overlap, else the environment's). Requests still waiting from the old mode have no owner's point in the new one: they are let go, as a map's end
+lets go of them. */
+void tick_owners_decide(
+	void)
+{
+	const long before = tick_owners_mode_value;
+
+	if (before < 0)
+		return;
+	tick_owners_mode_value = -1;
+	if (tick_owners_mode() != before)
+		tick_owners_discard_all();
+}
+
 /* the shell's (port/wiiu/src/wiiu_shell.c) */
 void wiiu_tick_gate_register(int registered);
 void wiiu_tick_gate(void);

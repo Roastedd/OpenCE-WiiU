@@ -186,11 +186,22 @@ short cache_file_read(
 	void *buffer,
 	boolean *completion_flag_reference,
 	boolean blocking);
+#ifdef HALO_WIIU
+/* port: the same read, taken before the reads that are waiting (texture streaming) */
+short cache_file_read_first(
+	long tag_index,
+	long offset,
+	long size,
+	void *buffer,
+	boolean *completion_flag_reference);
+#endif
 
 unsigned long tag_get_group_tag(long tag_index);
 /* port: whether size bytes at address lie in the tag cache the loaded map's
 tags are in: this build's, or a Custom Edition map's own */
 boolean cache_file_tag_cache_contains(void const *address, long size);
+/* port: the tag cache's pool for the performance overlay: the KiB the loaded map's tags and bsp take of it, and its size */
+boolean cache_file_tag_usage(unsigned long *used_kib, unsigned long *capacity_kib);
 
 /* ---------- prototypes/XBOX_TEXTURE_CACHE.C */
 

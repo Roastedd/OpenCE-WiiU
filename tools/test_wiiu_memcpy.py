@@ -19,6 +19,7 @@ DRIVER = r'''
 #include <stdio.h>
 
 int wiiu_memcpy_selftest(void);
+extern volatile int wiiu_memcpy_touch;
 
 int main(void)
 {
@@ -31,6 +32,7 @@ int main(void)
 		printf("statics at %p, outside the range dcbz is used on\n", (void *)probe);
 		return 2;
 	}
+	wiiu_memcpy_touch = TOUCH; /* (halo/memcpy_touch.txt: the copy's dcbt on or left out; the copy's bytes are the same) */
 	wrong = wiiu_memcpy_selftest();
 	printf("memcpy/memset self-test: %d wrong\n", wrong);
 	return wrong ? 1 : 0;
@@ -47,7 +49,7 @@ FAULTS = {
 
 @unittest.skipUnless(os.environ.get("MEMCPY_TARGET"), "PowerPC only: MEMCPY_TARGET and MEMCPY_RUNNER (qemu-ppc)")
 class WiiUMemcpyTest(unittest.TestCase):
-    def run_selftest(self, fault=None):
+    def run_selftest(self, fault=None, touch=1):
         source = SOURCE.read_text()
         if fault:
             before, after = FAULTS[fault]
@@ -59,7 +61,7 @@ class WiiUMemcpyTest(unittest.TestCase):
             (folder / "driver.c").write_text(DRIVER)
             # (the copy under test named apart from the C library's, which the driver's printf uses)
             built = subprocess.run([os.environ.get("CC", "cc"), *shlex.split(os.environ["MEMCPY_TARGET"]), "-std=gnu11", "-O2",
-                                    "-ffreestanding", "-fno-builtin", "-Dmemcpy=wiiu_test_memcpy", "-Dmemset=wiiu_test_memset",
+                                    "-ffreestanding", "-fno-builtin", "-Dmemcpy=wiiu_test_memcpy", "-Dmemset=wiiu_test_memset", f"-DTOUCH={touch}",
                                     str(folder / "wiiu_memcpy.c"), str(folder / "driver.c"), "-o", str(folder / "check")],
                                    capture_output=True, text=True)
             self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
@@ -68,6 +70,11 @@ class WiiUMemcpyTest(unittest.TestCase):
 
     def test_selftest_passes(self):
         result = self.run_selftest()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("self-test: 0 wrong", result.stdout)
+
+    def test_selftest_passes_without_the_copys_dcbt(self):
+        result = self.run_selftest(touch=0)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("self-test: 0 wrong", result.stdout)
 

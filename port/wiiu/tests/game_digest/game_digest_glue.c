@@ -249,6 +249,80 @@ static struct
 	int finished;
 } sink;
 
+/* GAME_DIGEST_PASSES=1: the game's render passes (source/render/render.c's RENDER_PASS marks, named as port/wiiu/src/wiiu_render_passes.c names them) as
+markers in the command streams, and for each frame a line of passes.txt: its tick, and for each pass the draws, the indices (or vertices) they hold, the
+indexed draws, the decal draws, the state writes, the draw facts, the constant rows and the vertex formats the streams held between its mark and the next
+(replay_gx2_totals). The markers are lines of the frame, so a digest of a run with this on is not the digest of one without: the measurement of what a
+setting saves, not the parity check. */
+/* port/linux/game/render_governor.h's counters (the glue is built without the game's headers) */
+#define RENDER_GOVERNOR_COUNTS 8
+extern unsigned long render_governor_counts[RENDER_GOVERNOR_COUNTS];
+
+#define PASSES_MAX 14
+static const char *const pass_names[PASSES_MAX] = { "visibility", "begin", "sky", "objects", "lightmaps", "shadows", "decals", "specular", "transparent",
+	"effects", "detail", "hud", "end", "window_end" };
+static struct
+{
+	int on;
+	FILE *file;
+	int current; /* the pass the streams are in (PASSES_MAX: before the first mark of the frame) */
+	unsigned long at[REPLAY_TOTAL_COUNT];
+	unsigned long sum[PASSES_MAX + 1][REPLAY_TOTAL_COUNT];
+	unsigned long counts_at[RENDER_GOVERNOR_COUNTS];
+} passes = { .current = PASSES_MAX };
+
+static void passes_take(void)
+{
+	unsigned long now[REPLAY_TOTAL_COUNT];
+	int kind;
+
+	replay_gx2_totals(now);
+	for (kind = 0; kind < REPLAY_TOTAL_COUNT; kind++)
+	{
+		passes.sum[passes.current][kind] += now[kind] - passes.at[kind];
+		passes.at[kind] = now[kind];
+	}
+}
+
+static void passes_marker(const char *text, size_t length)
+{
+	const char *colon = memchr(text, ':', length);
+	char name[64];
+	int pass;
+
+	if (!colon || colon + 2 > text + length)
+		return;
+	snprintf(name, sizeof(name), "%.*s", (int)(text + length - (colon + 2)), colon + 2);
+	passes_take();
+	for (pass = 0; pass < PASSES_MAX; pass++)
+		if (!strcmp(name, pass_names[pass]))
+			passes.current = pass;
+}
+
+static void passes_present(long tick)
+{
+	int pass, kind;
+
+	passes_take();
+	passes.current = PASSES_MAX;
+	fprintf(passes.file, "tick %ld", tick);
+	for (pass = 0; pass <= PASSES_MAX; pass++)
+	{
+		fprintf(passes.file, " | %s", pass < PASSES_MAX ? pass_names[pass] : "other");
+		for (kind = 0; kind < REPLAY_TOTAL_COUNT; kind++)
+			fprintf(passes.file, " %lu", passes.sum[pass][kind]);
+	}
+	/* (and what the governor's counters in the game counted this frame: objects drawn and culled, shadows, decals and particles drawn and skipped) */
+	fprintf(passes.file, " | game");
+	for (kind = 0; kind < RENDER_GOVERNOR_COUNTS; kind++)
+	{
+		fprintf(passes.file, " %lu", render_governor_counts[kind] - passes.counts_at[kind]);
+		passes.counts_at[kind] = render_governor_counts[kind];
+	}
+	fprintf(passes.file, "\n");
+	memset(passes.sum, 0, sizeof(passes.sum));
+}
+
 static FILE *sink_open(const char *name)
 {
 	char path[640];
@@ -303,6 +377,8 @@ static void sink_summary(const char *how)
 		sink.lines, sink.draws, how);
 	fclose(summary);
 	fflush(sink.frames);
+	if (passes.file)
+		fflush(passes.file);
 	if (sink.trace)
 		fflush(sink.trace);
 	if (random_log.file)
@@ -378,6 +454,8 @@ static void sink_line(const char *text, size_t length)
 		sink.frame_draws++;
 		sink.draws++;
 	}
+	if (passes.on && length > 7 && !memcmp(text, "marker ", 7))
+		passes_marker(text, length);
 	if (sink.trace)
 	{
 		if (sink.frame_text_used + length + 1 > sink.frame_text_size)
@@ -402,6 +480,8 @@ static void sink_line(const char *text, size_t length)
 			sink.frame_count, tick, (unsigned long long)sink.frame_hash, (unsigned long long)sink.frame_multiset, sink.frame_lines, sink.frame_draws,
 			get_random_seed(), *__real_get_global_local_random_seed_address(), audio_done, clock_extra);
 		random_frame(sink.frame_count, tick);
+		if (passes.on)
+			passes_present(tick);
 		if (sink.trace)
 		{
 			if (sink.trace_first == -2 || (tick >= 0 && tick >= sink.trace_first && tick <= sink.trace_last))
@@ -473,6 +553,11 @@ __attribute__((constructor)) static void sink_start(void)
 	if (!sink.frame_limit && !sink.tick_limit)
 		sink.frame_limit = 100;
 	sink.frames = sink_open("frames.txt");
+	if (getenv("GAME_DIGEST_PASSES") && *getenv("GAME_DIGEST_PASSES") && strcmp(getenv("GAME_DIGEST_PASSES"), "0"))
+	{
+		passes.on = 1;
+		passes.file = sink_open("passes.txt");
+	}
 	if (trace && *trace && strcmp(trace, "0"))
 	{
 		char *end;
@@ -665,11 +750,16 @@ left as it is.) */
 
 short __real_cache_file_read(long tag_index, long offset, long size, void *buffer, unsigned char *completion, unsigned char blocking);
 
+static int stream_free(void);
+
 short __wrap_cache_file_read(long tag_index, long offset, long size, void *buffer, unsigned char *completion, unsigned char blocking)
 {
 	short request = __real_cache_file_read(tag_index, offset, size, buffer, completion, blocking);
 
 	unsigned long spins = 0;
+
+	if (stream_free())
+		return request;
 
 	/* (the read's thread sets the completion flag, TRUE or failed, when it ends: waited for here without the game's clock, yielding to it, and
 	sleeping only for a read that takes long, as a sleep under qemu is a millisecond or more) */
@@ -684,10 +774,36 @@ short __wrap_cache_file_read(long tag_index, long offset, long size, void *buffe
 }
 
 void *__real__texture_cache_bitmap_get_hardware_format(void *bitmap, unsigned char block, unsigned char load);
+void *__real_texture_cache_bitmap_get_hardware_format_streaming(void *bitmap);
+
+/* GAME_DIGEST_STREAM_FREE=1: the asks go through as the game makes them (a test of texture streaming's own path: with HALO_STREAM=1 and HALO_STREAM_DELAY=ms, bitmaps are
+drawn from their tails while the rest is read; what is drawn then follows the time, so no digest means anything) */
+static int stream_free(void)
+{
+	static int free_asks = -1;
+
+	if (free_asks < 0)
+	{
+		const char *value = getenv("GAME_DIGEST_STREAM_FREE");
+
+		free_asks = value && *value == '1';
+	}
+	return free_asks;
+}
+
+/* texture streaming (halo/stream.txt, HALO_STREAM here): the renderer's ask draws a bitmap from its tail while the rest is read, which is the time of the read; here the whole of
+it is waited for, as without streaming, so that what is drawn does not follow the time. The bitmap's read is still cut in two and its tail read first (that is in the cache, not
+in the ask), so the digests of a run with HALO_STREAM=1 and of one without are the proof that the two reads put the bytes the one read put */
+void *__wrap_texture_cache_bitmap_get_hardware_format_streaming(void *bitmap)
+{
+	if (stream_free())
+		return __real_texture_cache_bitmap_get_hardware_format_streaming(bitmap);
+	return __real__texture_cache_bitmap_get_hardware_format(bitmap, 1, 1);
+}
 
 void *__wrap__texture_cache_bitmap_get_hardware_format(void *bitmap, unsigned char block, unsigned char load)
 {
-	return __real__texture_cache_bitmap_get_hardware_format(bitmap, load ? 1 : block, load);
+	return stream_free() ? __real__texture_cache_bitmap_get_hardware_format(bitmap, block, load) : __real__texture_cache_bitmap_get_hardware_format(bitmap, load ? 1 : block, load);
 }
 
 unsigned char __real__sound_cache_sound_request(void *sound, unsigned char block, unsigned char load, unsigned char reference);
@@ -920,14 +1036,44 @@ int wiiu_tick_thread_create(void *(*entry)(void *), unsigned long stack_bytes)
 	return 0;
 }
 
+/* wiiu_gx2.c: the detailed overlay's field for the governor's step (render_governor.c calls it whenever the step changes); no overlay here */
+void wiiu_overlay_governor(int step, int max_step);
+
+void wiiu_overlay_governor(int step, int max_step)
+{
+	(void)step;
+	(void)max_step;
+}
+
+/* wiiu_gpu_offload.c: halo/gpu_offload.txt's bits; here HALO_GPU_OFFLOAD (a number) in the environment, 0 if none (GAME_DIGEST_ENV="HALO_GPU_OFFLOAD=1") */
+unsigned wiiu_gpu_offload_bits(void);
+
+unsigned wiiu_gpu_offload_bits(void)
+{
+	const char *value = getenv("HALO_GPU_OFFLOAD");
+	const long bits = value && *value ? strtol(value, NULL, 0) : 0;
+
+	return bits > 0 ? (unsigned)bits & 7u : 0;
+}
+
 /* wiiu_study.c: a study switch's number from a file on the card; here from the environment (tick_thread.txt: HALO_TICK_THREAD,
-tick_overlap.txt: HALO_TICK_OVERLAP, startup.txt: HALO_STARTUP), so that a run can have the ticks on a thread of their own, and overlapped */
+tick_overlap.txt: HALO_TICK_OVERLAP, startup.txt: HALO_STARTUP, stream.txt: HALO_STREAM, hotpaths.txt: HALO_HOTPATHS), so that a run can have the ticks on a thread of their own, and overlapped */
 long wiiu_study_number(const char *name, long fallback)
 {
 	const char *variable = !strcmp(name, "tick_thread.txt") ? "HALO_TICK_THREAD" : !strcmp(name, "tick_overlap.txt") ? "HALO_TICK_OVERLAP" :
-		!strcmp(name, "tick_overlap_stall.txt") ? "HALO_TICK_OVERLAP_STALL" : !strcmp(name, "startup.txt") ? "HALO_STARTUP" : NULL;
-	const char *value = variable ? getenv(variable) : NULL;
+		!strcmp(name, "tick_overlap_stall.txt") ? "HALO_TICK_OVERLAP_STALL" : !strcmp(name, "tick_overlap_serialize.txt") ? "HALO_TICK_OVERLAP_SERIALIZE" :
+		!strcmp(name, "tick_overlap_jitter.txt") ? "HALO_TICK_OVERLAP_JITTER" : !strcmp(name, "tick_overlap_frame_stall.txt") ? "HALO_TICK_OVERLAP_FRAME_STALL" : !strcmp(name, "tick_overlap_force_serial.txt") ? "HALO_TICK_OVERLAP_FORCE_SERIAL" :
+		!strcmp(name, "startup.txt") ? "HALO_STARTUP" :
+		!strcmp(name, "stream.txt") ? "HALO_STREAM" : !strcmp(name, "hotpaths.txt") ? "HALO_HOTPATHS" :
+		!strcmp(name, "stream_delay.txt") ? "HALO_STREAM_DELAY" :
+		!strcmp(name, "async_save.txt") ? "HALO_ASYNC_SAVE" : !strcmp(name, "async_save_verify.txt") ? "HALO_ASYNC_SAVE_VERIFY" :
+		!strcmp(name, "async_save_piece_kb.txt") ? "HALO_ASYNC_SAVE_PIECE_KB" : !strcmp(name, "async_save_fault.txt") ? "HALO_ASYNC_SAVE_FAULT" : NULL;
+	const char *value;
 
+	/* (the fall back to the serial loop when the tick thread is late is on by default on the console and off here, where qemu is slow: HALO_TICK_OVERLAP_LATE=1) */
+	if (!strcmp(name, "tick_overlap_late.txt"))
+		variable = "HALO_TICK_OVERLAP_LATE", fallback = 0;
+	value = variable ? getenv(variable) : NULL;
 	return value && *value ? strtol(value, NULL, 10) : fallback;
 }
 
@@ -975,6 +1121,58 @@ unsigned long wiiu_ticks_per_second(void)
 	return 1000000UL;
 }
 
+/* wiiu_perfmon.c, wiiu_shell.c: the performance counters (off here), and the cores */
+int wiiu_perfmon_set(void)
+{
+	return 0;
+}
+
+void wiiu_perfmon_start(void)
+{
+}
+
+void wiiu_perfmon_read(unsigned long values[4])
+{
+	values[0] = values[1] = values[2] = values[3] = 0;
+}
+
+const char *wiiu_perfmon_name(int counter)
+{
+	(void)counter;
+	return "";
+}
+
+unsigned wiiu_perfmon_core(void)
+{
+	return 0;
+}
+
+void wiiu_tick_thread_move(int to_the_calling_core)
+{
+	(void)to_the_calling_core;
+}
+
+unsigned wiiu_core_here(void)
+{
+	return 1;
+}
+
+unsigned wiiu_tick_thread_core_set(void)
+{
+	return 0;
+}
+
+long long wiiu_tick_begin(void)
+{
+	return 0;
+}
+
+/* wiiu_crash.c: the misaligned accesses the handler took on this core (the tick snapshot's timers) */
+uint32_t wiiu_crash_fixups_here(void)
+{
+	return 0;
+}
+
 /* gx2_shaders.c (the console's shader pack): none is read here */
 void dk_shader_pack_prefetch(void)
 {
@@ -1010,10 +1208,76 @@ void wiiu_tick_done(long long started)
 	(void)started;
 }
 
+/* The frame work the dynamic quality governor (port/linux/game/render_governor.c) is told: the host's clock is qemu's and says nothing about the console, so
+with GAME_DIGEST_FAKE_WORK="FIRST-LAST:MS,FIRST-LAST:MS" (game ticks; 12 ms outside them) each frame of the game is told that many milliseconds of work, 40% of it
+ticks, on a clock that advances by it (not under 16.7 ms: a refresh), and the governor decides the steps by them. Without it the governor is told what the layer measured. */
+void __real_render_governor_frame(double work_ms, double tick_ms, double render_ms, double now_ms);
+
+void __wrap_render_governor_frame(double work_ms, double tick_ms, double render_ms, double now_ms)
+{
+	static const char *schedule;
+	static int parsed;
+	static double clock_ms = 1000.0;
+	long tick = !main_menu_is_active() && game_time_initialized() ? game_time_get() : -1;
+
+	if (!parsed)
+	{
+		parsed = 1;
+		schedule = getenv("GAME_DIGEST_FAKE_WORK");
+		if (schedule && !*schedule)
+			schedule = NULL;
+	}
+	if (schedule)
+	{
+		const char *at = schedule;
+
+		work_ms = 12.0;
+		while (*at)
+		{
+			char *end;
+			long first = strtol(at, &end, 10), last = strtol(*end == '-' ? end + 1 : end, &end, 10);
+			double ms = *end == ':' ? strtod(end + 1, &end) : 12.0;
+
+			if (tick >= first && tick <= last)
+				work_ms = ms;
+			at = *end == ',' ? end + 1 : end;
+			if (end == at && *end)
+				break;
+		}
+		tick_ms = work_ms * 0.4;
+		render_ms = work_ms * 0.6;
+		clock_ms += work_ms > 16.7 ? work_ms : 16.7;
+		now_ms = clock_ms;
+	}
+	__real_render_governor_frame(work_ms, tick_ms, render_ms, now_ms);
+}
+
+/* wiiu_study.c's: halo/governor.txt, the dynamic quality's settings (port/linux/game/render_governor.c); here HALO_GOVERNOR's text, so that a run can hold
+a step ("step 3") or tune the ladder, and the governor's own decisions are tested on made-up frame times (they are not the host's: qemu's clock) */
+int render_governor_settings_text(char *text, unsigned long size)
+{
+	const char *value = getenv("HALO_GOVERNOR");
+
+	if (!value || !*value)
+		return 0;
+	snprintf(text, size, "%s", value);
+	return 1;
+}
+
+/* wiiu_render_passes.c's: the passes' milliseconds, which the host does not time */
+unsigned long render_governor_pass_milliseconds(double milliseconds[13])
+{
+	memset(milliseconds, 0, 13 * sizeof(double));
+	return 0;
+}
+
 /* wiiu_render_passes.c and d3d8_gx2.c's frame parts: the console's timing log */
+void halo_render_marker(char const *name);
+
 void wiiu_render_pass(int pass)
 {
-	(void)pass;
+	if (passes.on && pass >= 0 && pass < PASSES_MAX)
+		halo_render_marker(pass_names[pass]);
 }
 
 /* wiiu_shell.c: debug.txt's lines, written by a thread of their own there; here at once */

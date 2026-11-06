@@ -15,6 +15,11 @@ recognise them as memcpy and call it. dcbz is used only on addresses of the appl
 
 #define CACHE_LINE 32u
 
+/* whether the copy asks for the source's lines ahead with dcbt (halo/memcpy_touch.txt: 1 or more yes, 0, -1 and no file no: off by default since 2026-11-04, when alternating fight runs on the console were faster without it). The memory probe of 2026-11-04 found
+sequential loads with dcbt at the copy's own distance (96 bytes) at 0.6 of the speed of the same loads without it, so the console can time the copy both ways; dcbz is not affected. A host
+(qemu) cannot time it: dcbt does nothing there, and the copy's bytes are the same either way (wiiu_memcpy_selftest, run with the switch both ways by tools/test_wiiu_memcpy.py). */
+volatile int wiiu_memcpy_touch = 0;
+
 static int zeroable(const void *address)
 {
 	return (uintptr_t)address >= 0x10000000u && (uintptr_t)address < 0x50000000u;
@@ -35,6 +40,7 @@ void *memcpy(void *destination, const void *source, size_t size)
 {
 	volatile uint8_t *d = (volatile uint8_t *)destination;
 	const volatile uint8_t *s = (const volatile uint8_t *)source;
+	const int touch = wiiu_memcpy_touch;
 
 	if (size >= 96 && zeroable(destination) && !overlapping(destination, source, size))
 	{
@@ -47,7 +53,8 @@ void *memcpy(void *destination, const void *source, size_t size)
 		{
 			uint32_t a, b, c, e, f, g, h, i;
 
-			__asm__ volatile("dcbt 0,%0" : : "r"((const uint8_t *)s + 3 * CACHE_LINE));
+			if (touch)
+				__asm__ volatile("dcbt 0,%0" : : "r"((const uint8_t *)s + 3 * CACHE_LINE));
 			__asm__ volatile("dcbz 0,%0" : : "r"((uint8_t *)d) : "memory");
 			__asm__ volatile(
 				"lwz %0,0(%8)\n\tlwz %1,4(%8)\n\tlwz %2,8(%8)\n\tlwz %3,12(%8)\n\t"

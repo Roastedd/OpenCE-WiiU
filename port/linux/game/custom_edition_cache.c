@@ -1398,6 +1398,13 @@ boolean custom_edition_cache_tags_loaded(
 	return custom_edition_cache_globals.tags_loaded;
 }
 
+/* the bytes of the tag cache the loaded map's tags use (the performance overlay's TAGS pool); 0 when none is loaded */
+unsigned long custom_edition_cache_loaded_bytes(
+	void)
+{
+	return custom_edition_cache_globals.tags_loaded ? custom_edition_cache_globals.loaded_bytes : 0;
+}
+
 boolean custom_edition_cache_relies_on(
 	short behaviour)
 {

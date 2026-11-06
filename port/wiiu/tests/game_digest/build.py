@@ -56,7 +56,7 @@ WIIU_PLATFORM_UNITS = {"port/linux/src/hud_hires.c", "port/linux/src/menu_files.
 # the Wii U's Direct3D layer: the game-ABI units (and the native commands' game side) and the C library's side
 LAYER_UNITS = ["port/wiiu/src/d3d8_gx2.c", "port/wiiu/src/xbox_textures_gx2.c", "port/wiiu/src/memory_watch_wiiu.c", "port/wiiu/src/dk_derive.c"]
 HOST_UNITS = ["port/wiiu/src/wiiu_immediate.c", "port/wiiu/src/wiiu_indices.c", "port/wiiu/src/wiiu_inflight.c",
-              "port/wiiu/src/wiiu_pending_reads.c", "port/wiiu/src/wiiu_stream_queue.c"]
+              "port/wiiu/src/wiiu_pending_reads.c", "port/wiiu/src/wiiu_stream_queue.c", "port/wiiu/src/wiiu_map_summary.c"]
 # (the flags tools/test_wiiu_d3d8_replay.py builds the layer with, less the -Werror the game's headers would trip over in this mix)
 LAYER_FLAGS = ("-fms-extensions -fshort-wchar -fcommon -fno-pic -fno-strict-aliasing -fwrapv -fno-delete-null-pointer-checks -fno-omit-frame-pointer "
                "-ffp-contract=off -O2 -g -DHALO_WIIU -std=gnu11 -D_GNU_SOURCE -DHALO_LINUX_PLATFORM_LAYER -Wall -Wno-unused-function "
@@ -87,7 +87,7 @@ UNIT_RENAMES = {"source/interface/progress_bar.c": {"GetTickCount": "game_digest
 # stack cleared first)
 WRAPPED = ["host_gx2_submit", "cache_copy_get_status", "system_milliseconds", "cache_file_read", "_texture_cache_bitmap_get_hardware_format",
            "_sound_cache_sound_request", "get_global_local_random_seed_address", "network_game_get_random_player_name",
-           "game_initialize_for_new_map", "rasterizer_set_model_lighting"]
+           "game_initialize_for_new_map", "rasterizer_set_model_lighting", "render_governor_frame", "texture_cache_bitmap_get_hardware_format_streaming"]
 # (and with --poison, the frame's rendering, whose stack is filled first)
 POISON_WRAPPED = ["render_frame"]
 # the bytes the program's data is moved by with --poison
