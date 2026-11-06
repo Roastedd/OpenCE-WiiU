@@ -524,6 +524,88 @@ class DeadUnitsAndDoorsTest(unittest.TestCase):
         self.assertGreater(max(positions), 0.0, f"gravity_bay_door stayed shut (its positions at 150 s and after: {positions})")
 
 
+@unittest.skipUnless(os.environ.get("GAME_DIGEST_WEAPON"), "the first person weapon and the ticks' thread: GAME_DIGEST_WEAPON=1 (and Docker's opence-ppc-be image, data-be's maps; runs of 400 ticks)")
+class FirstPersonWeaponSwitchTest(unittest.TestCase):
+    """The first person weapon is changed by the ticks (first_person_weapons_update: a switch sets weapon_index to NONE, rebuilds the remapping tables and sets the new weapon)
+    while the overlap draws the frame on the game thread, which read the field again at each use: between its check that the weapon is not NONE and the call that is given it
+    the ticks could set NONE, and object_function_values_for_render(NONE) halted the console (the owner's a50 game, 2026-11-06, 1806 s: `object index #65535 (0xffffffff) is unused
+    or changed`, data.c 412, from first_person_weapon_draw). The two interleavings are made to happen, in a30 with the smooth defaults (the tick overlap on), by mutations of
+    this test's own:
+
+      draw: the draw sets weapon_index to NONE itself (every 4th draw) just before it asks for the unit's lighting, which is where the field was read again, as the ticks' thread
+            would have set it there. Deterministic.
+      flap: the tick thread, at the end of each first_person_weapons_update, sets weapon_index to NONE for 150 microseconds and back for 150, 100 times: the two threads at once, as
+            on the console, with a window as wide as many of the console's switches. (A race of two threads: the old sources halt in it in most runs, not in every one.)
+
+    The old sources (OLD_REV, the console's build of that day) halt in both; the fixed ones draw the frames, and say in the log that the weapon was changed under a frame
+    (`first person weapon: the weapon ... the frame chose was ...`) in the draw run, so that the test cannot pass for the interleaving not having happened."""
+
+    OLD_REV = os.environ.get("GAME_DIGEST_WEAPON_OLD", "652af041")
+    DRAW = ("source/interface/first_person_weapons.c", "\t\t\t\t\tstruct render_lighting *lighting= object_get_cached_render_lighting(unit_index, FLT_MAX);",
+            "\t\t\t\t\t{ static long test_draws; if (++test_draws % 4 == 0) first_person_weapon->weapon_index= NONE; }\n"
+            "\t\t\t\t\tstruct render_lighting *lighting= object_get_cached_render_lighting(unit_index, FLT_MAX);")
+    FLAP = ("source/interface/first_person_weapons.c", "\t\t\tfirst_person_weapon_update(local_player_index);\n",
+            "\t\t\tfirst_person_weapon_update(local_player_index);\n"
+            "\t\t\t{\n"
+            "\t\t\t\textern int usleep(unsigned int);\n"
+            "\t\t\t\tlong held= first_person_weapon->weapon_index;\n"
+            "\t\t\t\tint flaps;\n\n"
+            "\t\t\t\tfor (flaps= 0; held!=NONE && flaps<100; flaps++)\n"
+            "\t\t\t\t{\n"
+            "\t\t\t\t\tfirst_person_weapon->weapon_index= NONE;\n"
+            "\t\t\t\t\tusleep(150);\n"
+            "\t\t\t\t\tfirst_person_weapon->weapon_index= held;\n"
+            "\t\t\t\t\tusleep(150);\n"
+            "\t\t\t\t}\n"
+            "\t\t\t}\n")
+    # (a30: the player has a weapon in hand in the level's first frames, which are overlapped: LevelsTest's regression found the first person weapon there)
+    LEVEL = "a30"
+
+    def play(self, name, mutation, rev=None):
+        """a30 for GAME_DIGEST_WEAPON_TICKS ticks (400) with the smooth defaults and the mutation: (the run's end, its log); the end is the exception text of a halted run"""
+        ticks = int(os.environ.get("GAME_DIGEST_WEAPON_TICKS", "400"))
+        program = build(name, rev, mutations=[mutation])
+        process, out = start(program, name, ticks, level=self.LEVEL, init=("cheat_deathless_player 1", "cheat_infinite_ammo 1"))
+        try:
+            finish(process, out)
+            ended = None
+        except AssertionError as error:
+            ended = str(error)
+        return ended, (out / "stderr.txt").read_text(errors="replace")
+
+    def assertHalted(self, ended, log):
+        self.assertTrue(ended is not None or "EXCEPTION halt" in log, "the run did not halt")
+        self.assertRegex(ended or log, r"index #65535 \(0xffffffff\) is unused or changed")
+
+    def assertNotHalted(self, ended, log):
+        self.assertIsNone(ended, ended)
+        self.assertNotIn("EXCEPTION halt", log)
+        self.assertNotIn("is unused or changed", log)
+
+    def test_a_weapon_set_to_none_in_the_middle_of_a_frame_is_not_drawn(self):
+        ended, log = self.play("weapon-draw", self.DRAW)
+        self.assertIn("tick overlap: on for this map", log)
+        self.assertNotHalted(ended, log)
+        self.assertIn("first person weapon: the weapon", log, "the weapon was never changed under a frame: the draw mutation did not land")
+
+    def test_the_old_draw_halts_on_the_same_switch(self):
+        if not os.environ.get("GAME_DIGEST_WEAPON_OLD_RUN"):
+            self.skipTest("the control: GAME_DIGEST_WEAPON_OLD_RUN=1 (the sources of GAME_DIGEST_WEAPON_OLD, 652af041)")
+        ended, log = self.play("weapon-draw-old", self.DRAW, self.OLD_REV)
+        self.assertHalted(ended, log)
+
+    def test_a_weapon_that_the_tick_thread_switches_all_the_time_does_not_halt_the_frames(self):
+        ended, log = self.play("weapon-flap", self.FLAP)
+        self.assertIn("tick overlap: on for this map", log)
+        self.assertNotHalted(ended, log)
+
+    def test_the_old_draw_halts_when_the_tick_thread_switches_the_weapon(self):
+        if not os.environ.get("GAME_DIGEST_WEAPON_OLD_RUN"):
+            self.skipTest("the control: GAME_DIGEST_WEAPON_OLD_RUN=1 (the sources of GAME_DIGEST_WEAPON_OLD, 652af041)")
+        ended, log = self.play("weapon-flap-old", self.FLAP, self.OLD_REV)
+        self.assertHalted(ended, log)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter,
                                      epilog=__doc__.split("\n\n", 1)[1])
