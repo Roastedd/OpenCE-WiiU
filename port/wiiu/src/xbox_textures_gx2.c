@@ -748,6 +748,8 @@ static int png_chain_build(const void *png, unsigned long size, struct png_chain
 and size. A slot is working (the helper thread has it), ready, or free. The game thread that wants one that is being made waits for it; one that is not
 there it makes itself, as before. */
 #define PREPARED_LIMIT 128
+/* (the menus' art uses the first 48 slots, as it always did; the HUD's images all of them) */
+#define PREPARED_MENU_SLOTS 48
 #define PREPARED_BYTES_LIMIT (32ul << 20)
 enum { PREPARED_FREE, PREPARED_WORKING, PREPARED_READY };
 
@@ -784,14 +786,14 @@ static void prepared_init(void)
 /* (any thread) the image of a PNG made, to be had by png_image when it asks; the PNG's bytes stay where they are */
 void dk_texture_prewarm_png(const void *png, unsigned long size);
 /* the same with the most the made images may hold (the menus' art, 32 MB; the HUD's: wiiu_hud_prewarm); 1 if the image is made or was, 0 if not */
-static int prewarm_png(const void *png, unsigned long size, unsigned long bytes_limit);
+static int prewarm_png(const void *png, unsigned long size, unsigned long bytes_limit, int slot_limit);
 
 void dk_texture_prewarm_png(const void *png, unsigned long size)
 {
-	prewarm_png(png, size, PREPARED_BYTES_LIMIT);
+	prewarm_png(png, size, PREPARED_BYTES_LIMIT, PREPARED_MENU_SLOTS);
 }
 
-static int prewarm_png(const void *png, unsigned long size, unsigned long bytes_limit)
+static int prewarm_png(const void *png, unsigned long size, unsigned long bytes_limit, int slot_limit)
 {
 	int slot, free_slot = -1;
 	struct png_chain chain;
@@ -808,7 +810,7 @@ static int prewarm_png(const void *png, unsigned long size, unsigned long bytes_
 			pthread_mutex_unlock(&prepared_lock);
 			return 1;
 		}
-		if (prepared[slot].state == PREPARED_FREE && free_slot < 0)
+		if (prepared[slot].state == PREPARED_FREE && free_slot < 0 && slot < slot_limit)
 			free_slot = slot;
 	}
 	if (free_slot < 0 || prepared_bytes >= bytes_limit)
@@ -1052,6 +1054,8 @@ static volatile int hud_prewarm_running;
 static void *hud_prewarm_main(void *unused)
 {
 	long index, made = 0, skipped = 0, refused = 0;
+	/* (what the menus' art still holds is not the HUD's to use: the limit is over it, fixed here) */
+	const unsigned long limit = prepared_bytes + HUD_PREWARM_BYTES;
 	STARTUP_TIMER(started);
 
 	(void)unused;
@@ -1071,7 +1075,7 @@ static void *hud_prewarm_main(void *unused)
 			skipped++;
 			continue;
 		}
-		if (prewarm_png(embedded->png, embedded->png_size, prepared_bytes + HUD_PREWARM_BYTES))
+		if (prewarm_png(embedded->png, embedded->png_size, limit, PREPARED_LIMIT))
 			made++;
 		else
 			refused++;
