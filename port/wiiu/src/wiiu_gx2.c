@@ -160,6 +160,10 @@ static struct
 	struct dk_stage_texture stages[4];
 	GX2Sampler samplers[4];
 	GX2Texture white;
+	/* what a stage samples when the game's image for it is not usable (never made, or no memory for it): a transparent mid grey (missing_make) */
+	GX2Texture missing;
+	/* the draws made while a stage's image was not usable, and the first few images told by number (texture_unusable_note) */
+	unsigned unusable_draws, unusable_told;
 	/* halo/debug_standin.txt: the draws with a stand-in are magenta */
 	int tint_standin;
 	/* what the GPU's registers hold */
@@ -2072,6 +2076,22 @@ static const GX2Texture *stage_texture(const struct dk_stage_texture *stage, uns
 		*levels = images[stage->id].levels;
 		return &images[stage->id].texture;
 	}
+	if (stage->id && stage->id < DK_TEXTURE_LIMIT && images)
+	{
+		/* an image the game named that is not usable (its memory was refused, or it was not made): a transparent grey texel, not an opaque white one, which a vertex
+		color made a block of itself (the scope mask: alpha 1 everywhere, a black screen) */
+		gx.unusable_draws++;
+		if (gx.unusable_told < 12)
+		{
+			const struct image *image = &images[stage->id];
+
+			gx.unusable_told++;
+			wiiu_log("GX2: a draw samples image %u, which is not usable (%s; %ux%u kind %u, %u levels asked for): a transparent grey texel stands in", (unsigned)stage->id,
+				image->used ? "it has no memory or is not a kind GX2 takes here" : "it was never made, or was freed", (unsigned)image->width, (unsigned)image->height,
+				(unsigned)image->kind, (unsigned)image->requested_levels);
+		}
+		return &gx.missing;
+	}
 	if (!stage->id && stage->composite)
 	{
 		const GX2Texture *texture = composite_sampled(stage->target, stage->composite);
@@ -2151,6 +2171,42 @@ static int white_make(void)
 	gx.white.viewNumSlices = 1;
 	gx.white.compMap = GX2_COMP_MAP(GX2_SQ_SEL_R, GX2_SQ_SEL_G, GX2_SQ_SEL_B, GX2_SQ_SEL_A);
 	GX2InitTextureRegs(&gx.white);
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, surface->image, surface->imageSize);
+	return 1;
+}
+
+/* the texel an unusable image is sampled as: mid grey with no alpha, so that a mask or a sprite whose image is missing draws nothing, and a surface only grey */
+static int missing_make(void)
+{
+	GX2Surface *surface = &gx.missing.surface;
+
+	surface->dim = GX2_SURFACE_DIM_TEXTURE_2D;
+	surface->width = 1;
+	surface->height = 1;
+	surface->depth = 1;
+	surface->mipLevels = 1;
+	surface->format = GX2_SURFACE_FORMAT_UNORM_R8_G8_B8_A8;
+	surface->aa = GX2_AA_MODE1X;
+	surface->use = GX2_SURFACE_USE_TEXTURE;
+	surface->tileMode = GX2_TILE_MODE_LINEAR_ALIGNED;
+	GX2CalcSurfaceSizeAndAlignment(surface);
+	surface->image = gx_alloc_raw(surface->imageSize, surface->alignment ? surface->alignment : 256);
+	if (!surface->image)
+		return 0;
+	{
+		uint8_t *texels = (uint8_t *)surface->image;
+		uint32_t i;
+
+		for (i = 0; i + 3 < surface->imageSize; i += 4)
+		{
+			texels[i] = texels[i + 1] = texels[i + 2] = 0x80;
+			texels[i + 3] = 0x00;
+		}
+	}
+	gx.missing.viewNumMips = 1;
+	gx.missing.viewNumSlices = 1;
+	gx.missing.compMap = GX2_COMP_MAP(GX2_SQ_SEL_R, GX2_SQ_SEL_G, GX2_SQ_SEL_B, GX2_SQ_SEL_A);
+	GX2InitTextureRegs(&gx.missing);
 	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, surface->image, surface->imageSize);
 	return 1;
 }
@@ -2654,7 +2710,7 @@ static int initialize(void)
 		return 0;
 	}
 	images = calloc(DK_TEXTURE_LIMIT, sizeof(*images));
-	if (!images || !white_make())
+	if (!images || !white_make() || !missing_make())
 	{
 		wiiu_log("GX2: no memory for the texture table");
 		return 0;
@@ -4714,8 +4770,8 @@ static void present(const struct dk_command_present *command)
 			gx.drawn_fallback, gx.skipped_target, gx.skipped_state, gx.skipped_missing, gx.skipped_left_out, gx.skipped_shader, gx.skipped_ring,
 			gx.rectangle_clears, gx.textures_made, gx.textures_unsupported, gx.texture_short, gx.ring_overflows);
 		/* (the line above is cut at 199 characters: its texture counts are said here) */
-		wiiu_log("GX2:   textures: %u made, %u not usable, %u short, %u made smaller than the game's", gx.textures_made, gx.textures_unsupported, gx.texture_short,
-			gx.textures_reduced);
+		wiiu_log("GX2:   textures: %u made, %u not usable, %u short, %u made smaller than the game's; draws that sampled an image that was not usable: %u", gx.textures_made,
+			gx.textures_unsupported, gx.texture_short, gx.textures_reduced, gx.unusable_draws);
 		dk_shader_nonexact_report();
 		if (gx.gpu_window_frames)
 			wiiu_log("GX2:   the GPU's own time for a frame's draws (bottom-of-pipe samples, at most what it took): %.2f ms on average over %u frames, %.2f the longest",
@@ -4823,7 +4879,7 @@ static void present(const struct dk_command_present *command)
 		gx.draws_made = gx.skipped_target = gx.skipped_state = gx.skipped_missing = gx.skipped_shader = gx.skipped_ring = 0;
 		gx.skipped_left_out = gx.drawn_equivalent = gx.drawn_fallback = 0;
 		gx.rectangle_clears = 0;
-		gx.textures_made = gx.textures_unsupported = gx.textures_reduced = 0;
+		gx.textures_made = gx.textures_unsupported = gx.textures_reduced = gx.unusable_draws = 0;
 	}
 	ring_next();
 	deferred_flush(0);
