@@ -134,17 +134,17 @@ int config_boolean(const char *name);
 everyone: nothing seen through walls (wireframe, a drawing mode, the
 environment or its parts left out), past fog, or under grass and water;
 whether any was other */
-static boolean cheats_network_client_rasterizer_enforce(
+static long cheats_network_client_rasterizer_enforce(
 	void)
 {
-	boolean changed = FALSE;
+	long changed = 0;
 	boolean *environment_part;
 
 	if (rasterizer_debug_options.wireframe_enabled || rasterizer_debug_options.drawing_mode != 0 ||
 		!rasterizer_debug_options.draw_water || !rasterizer_debug_options.fog_atmospheric_enabled ||
 		!rasterizer_debug_options.fog_planar_enabled)
 	{
-		changed = TRUE;
+		changed |= 1;
 	}
 	/* (port: grass and lens flares are also what the player's own display settings, and the dynamic quality's
 	steps, leave out: config.toml's display.grass and display.lens_flares false are that, not a cheat, so they are
@@ -152,7 +152,7 @@ static boolean cheats_network_client_rasterizer_enforce(
 	if ((!rasterizer_debug_options.draw_detail_objects && config_boolean("display.grass")) ||
 		(!rasterizer_debug_options.draw_lens_flares && config_boolean("display.lens_flares")))
 	{
-		changed = TRUE;
+		changed |= 2;
 	}
 	rasterizer_debug_options.wireframe_enabled = FALSE;
 	rasterizer_debug_options.drawing_mode = 0;
@@ -167,12 +167,18 @@ static boolean cheats_network_client_rasterizer_enforce(
 		environment_part <= &rasterizer_debug_options.draw_environment_fog_screen;
 		environment_part++)
 	{
-		if (!*environment_part)
-			changed = TRUE;
+		/* (port: specular lights, reflections and their mirrors are what display.specular false leaves out) */
+		if (!*environment_part && (config_boolean("display.specular") ||
+			(environment_part != &rasterizer_debug_options.draw_environment_specular_lights &&
+				environment_part != &rasterizer_debug_options.draw_environment_reflections &&
+				environment_part != &rasterizer_debug_options.draw_environment_reflection_mirrors)))
+		{
+			changed |= 4;
+		}
 		*environment_part = TRUE;
 	}
 	if (rasterizer_debug_options.draw_environment != 2)
-		changed = TRUE;
+		changed |= 8;
 	rasterizer_debug_options.draw_environment = 2;
 
 	return changed;
@@ -186,22 +192,24 @@ void cheats_network_client_enforce(
 	void)
 {
 	static struct cheat_globals const none = { 0 };
-	boolean changed;
+	long changed;
 
 	if (!network_game_distributed_client())
 		return;
-	changed = csmemcmp(&cheat, &none, sizeof(cheat)) != 0 || !rider_ejection || !player_autoaim_flag ||
-		!player_magnetism_flag;
+	changed = (csmemcmp(&cheat, &none, sizeof(cheat)) != 0 || !rider_ejection || !player_autoaim_flag ||
+		!player_magnetism_flag) ? 16 : 0;
 	csmemset(&cheat, 0, sizeof(cheat));
 	rider_ejection = TRUE;
 	player_autoaim_flag = TRUE;
 	player_magnetism_flag = TRUE;
-	changed |= game_time_reset_speed();
+	changed |= game_time_reset_speed() ? 32 : 0;
 	changed |= cheats_network_client_rasterizer_enforce();
 	if (changed)
 	{
 		console_warning("playing in another's game: its host's rules (cheats, game speed and drawing put back)");
-		error(_error_log, "playing in another's game: cheats, game speed and drawing put back to the host's");
+		/* (which: 1 drawing mode, water or fog, 2 grass or flares, 4 an environment part, 8 the environment, 16 cheats or
+		aim, 32 game speed) */
+		error(_error_log, "playing in another's game: cheats, game speed and drawing put back to the host's (%ld)", changed);
 	}
 
 	return;
