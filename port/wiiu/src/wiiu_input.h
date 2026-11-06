@@ -81,6 +81,9 @@ void wiiu_input_set_gyro_space(int space);
 wiiu_input_poll arranged them). Returns 1 if there is such a pad, with its state; 0 if not. */
 int wiiu_input_read(unsigned int port, struct wiiu_pad *pad);
 
+/* A clock in milliseconds that counts from anywhere (the system's, as OSGetSystemTime has it), for the virtual controllers' script (wiiu_virtual_pads.h). */
+unsigned long wiiu_input_milliseconds(void);
+
 /* The GamePad's touch screen, in pixels of the GamePad's picture (854x480), as read by the latest wiiu_input_read of port 0 (or held by the debug server's tap).
 Returns 1 while a finger is on it. */
 int wiiu_input_touch(float *x, float *y);

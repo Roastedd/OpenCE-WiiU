@@ -46,10 +46,12 @@ while no menu has the screen.
 #include "wiiu_shell.h"
 #include "wiiu_input.h"
 #include "wiiu_pad_players.h"
+#include "wiiu_virtual_pads.h"
 #include "wiiu_update.h"
 #include "test_input_bot.h"
 
 #include <coreinit/time.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define PORT_COUNT WIIU_PAD_PORTS
@@ -154,6 +156,50 @@ static void pad_state(const struct wiiu_pad *pad, XINPUT_GAMEPAD *state)
 	state->sThumbLY = stick(pad->left_y);
 	state->sThumbRX = stick(pad->right_x);
 	state->sThumbRY = stick(pad->right_y);
+}
+
+/* debug.virtual_gamepads and debug.virtual_gamepad_script (wiiu_virtual_pads.h): the script's pads for the port, merged with what its controllers do. The script
+is updated each time a port is read, as xinput_sdl.c's is, so that a press is read 8 times (a frame or two) before it is let go of. */
+static void virtual_pad_apply(unsigned int port, XINPUT_GAMEPAD *state)
+{
+	static const struct
+	{
+		unsigned int source;
+		WORD mask;
+	} digital[] =
+	{
+		{ WIIU_VPAD_UP, XINPUT_GAMEPAD_DPAD_UP }, { WIIU_VPAD_DOWN, XINPUT_GAMEPAD_DPAD_DOWN }, { WIIU_VPAD_LEFT, XINPUT_GAMEPAD_DPAD_LEFT },
+		{ WIIU_VPAD_RIGHT, XINPUT_GAMEPAD_DPAD_RIGHT }, { WIIU_VPAD_START, XINPUT_GAMEPAD_START }, { WIIU_VPAD_BACK, XINPUT_GAMEPAD_BACK },
+	};
+	static const struct
+	{
+		unsigned int source;
+		int analog;
+	} analog[] =
+	{
+		{ WIIU_VPAD_A, XINPUT_GAMEPAD_A }, { WIIU_VPAD_B, XINPUT_GAMEPAD_B }, { WIIU_VPAD_X, XINPUT_GAMEPAD_X }, { WIIU_VPAD_Y, XINPUT_GAMEPAD_Y },
+		{ WIIU_VPAD_LB, XINPUT_GAMEPAD_WHITE }, { WIIU_VPAD_RB, XINPUT_GAMEPAD_BLACK }, { WIIU_VPAD_LT, XINPUT_GAMEPAD_LEFT_TRIGGER },
+		{ WIIU_VPAD_RT, XINPUT_GAMEPAD_RIGHT_TRIGGER },
+	};
+	struct wiiu_virtual_pad pad;
+	const long count = config_integer("debug.virtual_gamepads");
+	unsigned int i;
+
+	if (count <= 0)
+		return;
+	wiiu_virtual_pads_update((int)count, config_string("debug.virtual_gamepad_script"), wiiu_input_milliseconds());
+	wiiu_virtual_pads_get(port, &pad);
+	for (i = 0; i < sizeof(digital) / sizeof(digital[0]); i++)
+		if (pad.buttons & digital[i].source)
+			state->wButtons |= digital[i].mask;
+	for (i = 0; i < sizeof(analog) / sizeof(analog[0]); i++)
+		if (pad.buttons & analog[i].source)
+			state->bAnalogButtons[analog[i].analog] = 0xff;
+	/* (a stick only overrides the pad's when it is pushed further) */
+	if (abs(pad.left_x) > abs(state->sThumbLX)) state->sThumbLX = pad.left_x;
+	if (abs(pad.left_y) > abs(state->sThumbLY)) state->sThumbLY = pad.left_y;
+	if (abs(pad.right_x) > abs(state->sThumbRX)) state->sThumbRX = pad.right_x;
+	if (abs(pad.right_y) > abs(state->sThumbRY)) state->sThumbRY = pad.right_y;
 }
 
 /* (the game's: NONE, -1, while the first player is not zoomed in) */
@@ -412,6 +458,8 @@ static DWORD connected_gamepads(void)
 	for (port = 0; port < PORT_COUNT; port++)
 		if (wiiu_input_port_present(port))
 			mask |= 1UL << port;
+	/* (the script's pads are ports of their own, whatever controllers are connected: debug.virtual_gamepads) */
+	mask |= wiiu_virtual_pads_ports((int)config_integer("debug.virtual_gamepads"));
 	return mask | XDEVICE_PORT0_MASK;
 }
 
@@ -504,6 +552,7 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 		pad_state(&pad, &state->Gamepad);
 	if (port == 0)
 		test_input_gamepad(&state->Gamepad);
+	virtual_pad_apply((unsigned int)port, &state->Gamepad);
 	hold_to_skip((unsigned int)port, &state->Gamepad);
 	if (port == 0)
 	{

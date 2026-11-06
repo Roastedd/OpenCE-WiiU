@@ -201,7 +201,8 @@ static int keys_enabled(void)
 {
 	if (!keys.tried)
 	{
-		const char *path = getenv("GAME_DIGEST_KEYS");
+		/* (REPLAY_KEYS_FILE is the older name of the same file, from the split screen runs) */
+		const char *path = getenv("GAME_DIGEST_KEYS") && *getenv("GAME_DIGEST_KEYS") ? getenv("GAME_DIGEST_KEYS") : getenv("REPLAY_KEYS_FILE");
 
 		keys.tried = 1;
 		if (path && *path)

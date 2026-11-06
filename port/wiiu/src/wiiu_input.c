@@ -606,6 +606,11 @@ static uint32_t input_ms(void)
 	return (uint32_t)OSTicksToMilliseconds(OSGetSystemTime());
 }
 
+unsigned long wiiu_input_milliseconds(void)
+{
+	return (unsigned long)input_ms();
+}
+
 /* (from the game thread, which reads the GamePad: the TV menu taken while voice chat or the probe asks for the button, given back a second
 after the last asking, and never in the background, where the GamePad is the system's) */
 static void tv_update(void)

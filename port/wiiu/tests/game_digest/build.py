@@ -93,6 +93,17 @@ WRAPPED = ["host_gx2_submit", "cache_copy_get_status", "system_milliseconds", "c
            # code that sets each pixel shader (rasterizer_set_pixel_shader))
            "render_frame", "cheats_update", "rasterizer_set_pixel_shader"]
 POISON_WRAPPED = []
+# --wiiu-input: the Wii U's controller layer in place of SDL's (xinput_wiiu.c with wiiu_virtual_pads.c, over game_digest_input.c's stand-ins for what reads the
+# console's pads), so that split screen games are played by debug.virtual_gamepads' script as on the console (SDL's own virtual gamepads need a build of SDL
+# the big-endian image has not). xinput_sdl.c is still linked, for the keyboard and chat functions the game's other units call: what it shares with
+# xinput_wiiu.c is renamed in it, and its gamepads are not read
+SDL_INPUT_RENAMES = ["XDEVICE_TYPE_GAMEPAD_TABLE", "XDEVICE_TYPE_MEMORY_UNIT_TABLE", "XDEVICE_TYPE_DEBUG_KEYBOARD_TABLE", "halo_linux_mouse_look",
+                     "halo_linux_mouse_aiming", "XInitDevices", "XGetDeviceChanges", "halo_gamepad_count", "halo_gamepad_last_used", "XInputOpen",
+                     "XInputClose", "XInputGetState", "XInputSetState", "XInputDebugInitKeyboardQueue", "XInputDebugGetKeystroke",
+                     "halo_virtual_gamepads_start"]
+INPUT_LAYER_UNITS = ["port/wiiu/src/xinput_wiiu.c", str(HERE / "game_digest_input.c")]
+INPUT_HOST_UNITS = ["port/wiiu/src/wiiu_virtual_pads.c"]
+
 # the bytes the program's data is moved by with --poison
 POISON_PADDING = 40000
 
@@ -105,8 +116,9 @@ def layer_units():
 class DigestWriter(Writer):
     """tools/linux_build.py's big-endian graph, changed as it is written (the module's docstring has what changes)"""
 
-    def __init__(self, output, build_dir):
+    def __init__(self, output, build_dir, wiiu_input=False):
         super().__init__(output)
+        self.wiiu_input = wiiu_input
         self.build_dir = build_dir
         self.links = []
         self.dropped = set()
@@ -127,6 +139,9 @@ class DigestWriter(Writer):
                 if source == "source/main/main.c":
                     # (the game's flags, for the sweep's unit: it is compiled as a game unit is)
                     self.game_variables = dict(variables)
+            if self.wiiu_input and source == "port/linux/src/xinput_sdl.c":
+                variables = dict(variables or {})
+                variables["cflags"] = variables["cflags"] + "".join(f" -D{name}=sdl_{name}" for name in SDL_INPUT_RENAMES)
             if source in UNIT_RENAMES:
                 variables = dict(variables or {})
                 variables["cflags"] = variables["cflags"] + "".join(f" -D{name}={value}" for name, value in UNIT_RENAMES[source].items())
@@ -139,11 +154,11 @@ class DigestWriter(Writer):
                              implicit_outputs=implicit_outputs, pool=pool, dyndep=dyndep)
 
 
-def generate(build_dir: Path, poison: bool = False) -> str:
+def generate(build_dir: Path, poison: bool = False, wiiu_input: bool = False) -> str:
     sln = SimpleNamespace(build_dir=build_dir, linux_cc=None, linux_target="ppc", compiler_launcher=None, port_release=False,
                           port_profile=False, port_lto="off", port_portable=False, port_pgo="off", port_pgo_profile=None)
     text = StringIO()
-    n = DigestWriter(text, build_dir)
+    n = DigestWriter(text, build_dir, wiiu_input)
     n.variable("ninja_required_version", "1.3")
     n.variable("python", sys.executable)
     # (ninja's log and dependencies beside the digest's objects, not the checkout's build.ninja's)
@@ -175,14 +190,17 @@ def generate(build_dir: Path, poison: bool = False) -> str:
     n.build(decals, "digest_decals", implicit=[WIIU_SRC / "wiiu_gx2.c", HERE / "build.py"])
     n.rule("digest_cc", command="clang -MMD -MF $out.d $cflags -c $in -o $out", description="DIGEST CC $out", depfile="$out.d", deps="gcc")
     extra = []
-    for unit in layer_units():
+    for unit in layer_units() + (INPUT_LAYER_UNITS if wiiu_input else []):
         out = obj / Path(unit).with_suffix(".o")
         extra.append(out.as_posix())
-        n.build(out, "digest_cc", unit, implicit=[semantics], variables={"cflags": " ".join(target + LAYER_FLAGS + includes + renames)})
+        # (the input layer's own time functions: the stand-in coreinit/time.h)
+        stand_ins = [f"-I{HERE}/stand_in"] if wiiu_input and unit in INPUT_LAYER_UNITS else []
+        n.build(out, "digest_cc", unit, implicit=[semantics], variables={"cflags": " ".join(target + LAYER_FLAGS + stand_ins + includes + renames)})
     for unit in [REPLAY / "replay_gx2.c", HERE / "game_digest_glue.c"]:
         out = obj / Path(unit).with_suffix(".o")
         extra.append(out.as_posix())
         poisoned = [f"-DGAME_DIGEST_POISON={POISON_PADDING}"] if poison and unit.name == "game_digest_glue.c" else []
+        poisoned += ["-DGAME_DIGEST_WIIU_INPUT"] if wiiu_input and unit.name == "game_digest_glue.c" else []
         n.build(out, "digest_cc", str(unit), implicit=[semantics, decals],
                 variables={"cflags": " ".join(target + LAYER_FLAGS + includes + poisoned)})
     # the scene (game_digest_scene.c): a unit of the game's own flags and headers, which makes objects in front of a fixed camera when GAME_DIGEST_SCENE says so
@@ -195,7 +213,7 @@ def generate(build_dir: Path, poison: bool = False) -> str:
     extra.append(sweep.as_posix())
     n.build(sweep, "linux_cc", str(HERE / "game_digest_sweep.c"), implicit=[semantics, build_dir / "linux-ppc" / "halo_msvc_semantics.h"],
             variables=dict(n.game_variables))
-    for unit in HOST_UNITS:
+    for unit in HOST_UNITS + (INPUT_HOST_UNITS if wiiu_input else []):
         out = obj / Path(unit).with_suffix(".o")
         extra.append(out.as_posix())
         n.build(out, "digest_cc", unit, variables={"cflags": " ".join(target + HOST_FLAGS + [f"-I{WIIU_SRC}", "-Iport/linux/src"])})
@@ -230,6 +248,8 @@ def main() -> int:
     parser.add_argument("--build-dir", default="build/game-digest", type=Path)
     parser.add_argument("--jobs", type=int)
     parser.add_argument("--decals", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--wiiu-input", action="store_true",
+                        help="the Wii U's controller layer (xinput_wiiu.c) in place of SDL's, for split screen games played by debug.virtual_gamepads' script")
     parser.add_argument("--generate-only", action="store_true", help="write the ninja file and stop")
     parser.add_argument("--poison", action="store_true",
                         help="the stack filled with 0xa5 below each frame's rendering and the data laid out otherwise (game_digest_glue.c has why)")
@@ -239,7 +259,7 @@ def main() -> int:
         return 0
     args.build_dir.mkdir(parents=True, exist_ok=True)
     ninja_file = args.build_dir / "build.ninja"
-    text = generate(args.build_dir, args.poison)
+    text = generate(args.build_dir, args.poison, args.wiiu_input)
     if not ninja_file.is_file() or ninja_file.read_text() != text:
         ninja_file.write_text(text)
     if args.generate_only:
