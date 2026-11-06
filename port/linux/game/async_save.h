@@ -11,6 +11,8 @@ Switches (halo/<name> on the console, HALO_<NAME> in the environment of the host
   async_save_verify.txt  1: each checkpoint is checked: the copy against the game state it was taken from, the file against the copy once written, and
                          the copy's CRC is logged (the host tests compare the two paths with it); 0 or absent: not
   async_save_piece_kb.txt  the size of the pieces the write is made in (1024 by default): the card is not held by one 20 MiB request
+  async_save_revert_image.txt  0: a revert reads the 20 MiB back from the card, as it always did; 1 or absent: it takes the game state from the copy of the last checkpoint
+                         that is still in memory (the image), which holds the file's bytes (game_state_xbox.c), and does not read the card
 */
 
 #ifndef __ASYNC_SAVE_H
@@ -21,6 +23,7 @@ Switches (halo/<name> on the console, HALO_<NAME> in the environment of the host
 /* the switches, read once */
 int async_save_enabled(void);
 int async_save_verify(void);
+int async_save_revert_image(void);
 unsigned long async_save_piece_bytes(void);
 
 /* makes the thread now (while the heap is whole), so that the first checkpoint does not have to; 0 if it could not be made, and the switch is then off */

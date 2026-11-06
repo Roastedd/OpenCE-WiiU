@@ -33,6 +33,9 @@ static volatile uint32_t pass_totals[PASS_COUNT];
 static volatile uint32_t pass_windows_total;
 static OSTime pass_started, logged_at;
 static int current_pass = -1;
+/* the longest single stay in one part since the frame's note took it (the hitch note names where a frame's long rendering was: wiiu_render_pass_longest) */
+static OSTime longest_stay;
+static int longest_part = -1;
 static unsigned long windows;
 /* the same, since the dynamic quality's (render_governor.c) last line, which says them beside its step */
 static OSTime governor_ticks[PASS_COUNT];
@@ -59,6 +62,11 @@ void wiiu_render_pass(int pass)
 
 	if (current_pass >= 0)
 	{
+		if (now - pass_started > longest_stay)
+		{
+			longest_stay = now - pass_started;
+			longest_part = current_pass;
+		}
 		pass_ticks[current_pass] += now - pass_started;
 		governor_ticks[current_pass] += now - pass_started;
 		pass_totals[current_pass] += (uint32_t)(now - pass_started);
@@ -105,4 +113,18 @@ unsigned wiiu_render_pass_totals(uint32_t *out, unsigned count, uint32_t *window
 		out[i] = pass_totals[i];
 	*windows_made = pass_windows_total;
 	return (unsigned)PASS_COUNT;
+}
+
+/* d3d8_gx2.c's hitch note: the part of the rendering the game thread stayed longest in since this was last called (the milliseconds, and the part's name), and the
+count started again. NULL and 0 if none was marked. Called from the game thread, as the marks are. */
+const char *wiiu_render_pass_longest(double *milliseconds);
+
+const char *wiiu_render_pass_longest(double *milliseconds)
+{
+	const char *name = longest_part >= 0 ? pass_names[longest_part] : NULL;
+
+	*milliseconds = name ? (double)OSTicksToMicroseconds(longest_stay) / 1000.0 : 0.0;
+	longest_stay = 0;
+	longest_part = -1;
+	return name;
 }
