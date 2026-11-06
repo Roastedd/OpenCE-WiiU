@@ -8,10 +8,11 @@
 - splash-tv.png, 1280x720, shown on the TV while the app starts (--tv-image);
 - splash-drc.png, 854x480, shown on the GamePad meanwhile (--drc-image).
 
-The look is the Wii U's own shell: a clean white and pale-blue picture with soft round shapes, a glossy blue-and-teal ring (a ring world, drawn here from
-circles and gradients: it is not the game's logo or any picture of the game, which belong to Microsoft) with "CE" (Combat Evolved) in it, a bold title with a
-thick rounded outline, and a pill for the subtitle. The title is set in Overpass (port/assets/fonts, SIL Open Font License 1.1); the outline is drawn by
-Pillow's stroke, which has round joins. The splash screens say that the port is unofficial and needs the player's own copy.
+The look is the Wii U's own shell: a clean white and pale-blue picture with soft round shapes, a glossy blue ring (a ring world) with a green armoured helmet with a
+gold visor in front of it, a bold title with a thick rounded outline, and a pill for the subtitle. Everything is drawn here from shapes and gradients, as a simple
+cartoon of a soldier's helmet; none of the game's artwork, logo or models was used, and the helmet and the ring are not copies of any picture of the game (the game and
+its characters belong to Microsoft). The title is set in Overpass (port/assets/fonts, SIL Open Font License 1.1); the outline is drawn by Pillow's stroke, which has
+round joins. The splash screens say that the port is unofficial and needs the player's own copy.
 Needs Pillow only (no NumPy); every shape is drawn by Pillow's own rasteriser at four times the size and scaled down with LANCZOS, so another Pillow
 version may differ by a level or two at an edge (--check allows a mean difference of half a level).
 """
@@ -42,6 +43,12 @@ OUTLINE = (24, 128, 220)
 WHITE = (255, 255, 255)
 MUTED = (84, 118, 150)
 PILL = (230, 244, 252)
+ARMOR_LIGHT = (150, 196, 96)
+ARMOR_DARK = (52, 104, 52)
+ARMOR_EDGE = (30, 70, 40)
+VISOR_LIGHT = (255, 226, 120)
+VISOR_DARK = (226, 142, 28)
+VISOR_EDGE = (120, 70, 16)
 SCALE = 4
 
 
@@ -142,9 +149,75 @@ def ring(image, centre, radius, letters=True):
     draw.ellipse([mx - mr, my - mr, mx + mr, my + mr], fill=RING_DARK)
     draw.ellipse([mx - mr * 0.55, my - mr * 0.6, mx - mr * 0.05, my - mr * 0.1], fill=(170, 226, 250))
     if letters:
-        font = ImageFont.truetype(str(BLACK_FONT), round(radius * 0.62))
-        outlined_text(image, (cx, cy + radius * 0.22), "CE", font, WHITE, OUTLINE, max(2, round(radius * 0.05)),
-                      shadow=(0, radius * 0.03, radius * 0.02, 0.35), spacing=radius * 0.01, align="centre")
+        helmet(image, (cx, cy + radius * 0.03), radius * 1.30)
+
+
+def rounded(mask, radius):
+    """a mask with its corners rounded (blurred and cut again)"""
+    return blurred(mask, radius).point(lambda v: 255 if v > 127 else 0)
+
+
+def sticker(image, mask, fill, edge, width):
+    """the shape of mask, filled with the picture fill, with an outline of width pixels in the colour edge (the dilated mask under it)"""
+    grown = blurred(mask, width * 0.7).point(lambda v: 255 if v > 20 else 0)
+    image.paste(Image.new("RGB", image.size, edge), (0, 0), grown)
+    image.paste(fill, (0, 0), mask)
+
+
+def draw_helmet(image, centre, size):
+    """a green armoured helmet with a gold mirror visor, in the picture's round cartoon style: drawn from a few shapes, in front view (an original drawing of
+    a soldier's helmet; the game's artwork was not used)"""
+    cx, cy = centre
+    s = size
+    full = image.size
+    edge = max(3, round(s * 0.035))
+    # (the shell: a dome and a jaw, joined and rounded)
+    shell = Image.new("L", full, 0)
+    d = ImageDraw.Draw(shell)
+    d.ellipse([cx - 0.40 * s, cy - 0.50 * s, cx + 0.40 * s, cy + 0.30 * s], fill=255)
+    d.polygon([(cx - 0.40 * s, cy - 0.10 * s), (cx - 0.38 * s, cy + 0.28 * s), (cx - 0.20 * s, cy + 0.47 * s), (cx + 0.20 * s, cy + 0.47 * s),
+               (cx + 0.38 * s, cy + 0.28 * s), (cx + 0.40 * s, cy - 0.10 * s)], fill=255)
+    shell = rounded(shell, s * 0.03)
+    # (a shadow under it)
+    under = blurred(shell.transform(full, Image.AFFINE, (1, 0, 0, 0, 1, -s * 0.04)), s * 0.03).point(lambda v: v * 0.35)
+    image.paste(Image.new("RGB", full, (70, 120, 160)), (0, 0), under)
+    sticker(image, shell, diagonal(full, ARMOR_LIGHT, ARMOR_DARK), ARMOR_EDGE, edge)
+    draw = ImageDraw.Draw(image)
+    # (the ear pieces and the crest line)
+    for side in (-1, 1):
+        x = cx + side * 0.385 * s
+        draw.ellipse([x - 0.065 * s, cy - 0.04 * s, x + 0.065 * s, cy + 0.14 * s], fill=ARMOR_DARK, outline=ARMOR_EDGE, width=max(2, round(s * 0.012)))
+    draw.line([(cx, cy - 0.49 * s), (cx, cy - 0.30 * s)], fill=ARMOR_EDGE, width=max(3, round(s * 0.02)))
+    # (the visor: a rounded shield shape, gold)
+    visor = Image.new("L", full, 0)
+    ImageDraw.Draw(visor).polygon([(cx - 0.30 * s, cy - 0.20 * s), (cx + 0.30 * s, cy - 0.20 * s), (cx + 0.27 * s, cy + 0.10 * s), (cx + 0.10 * s, cy + 0.23 * s),
+                                   (cx - 0.10 * s, cy + 0.23 * s), (cx - 0.27 * s, cy + 0.10 * s)], fill=255)
+    visor = rounded(visor, s * 0.035)
+    sticker(image, visor, diagonal(full, VISOR_LIGHT, VISOR_DARK), VISOR_EDGE, edge)
+    # (the reflections on the visor: a sky band and a bright streak, cut to the visor's shape)
+    glass = Image.new("L", full, 0)
+    gd = ImageDraw.Draw(glass)
+    gd.polygon([(cx - 0.30 * s, cy - 0.20 * s), (cx + 0.30 * s, cy - 0.20 * s), (cx + 0.29 * s, cy - 0.10 * s), (cx - 0.29 * s, cy - 0.05 * s)], fill=150)
+    sky = ImageChops.multiply(glass, visor)
+    image.paste(Image.new("RGB", full, (255, 250, 220)), (0, 0), sky)
+    streak = Image.new("L", full, 0)
+    ImageDraw.Draw(streak).polygon([(cx - 0.20 * s, cy - 0.01 * s), (cx - 0.12 * s, cy - 0.01 * s), (cx - 0.20 * s, cy + 0.09 * s), (cx - 0.24 * s, cy + 0.09 * s)], fill=210)
+    image.paste(Image.new("RGB", full, WHITE), (0, 0), ImageChops.multiply(blurred(streak, s * 0.004), visor))
+    # (the dome's highlight, the chin vents)
+    shine = Image.new("L", full, 0)
+    ImageDraw.Draw(shine).arc([cx - 0.33 * s, cy - 0.43 * s, cx + 0.33 * s, cy + 0.17 * s], 200, 262, fill=200, width=max(3, round(s * 0.035)))
+    image.paste(Image.new("RGB", full, (230, 250, 205)), (0, 0), blurred(shine, s * 0.006))
+    for k in (-1, 0, 1):
+        draw.line([(cx + k * 0.07 * s, cy + 0.30 * s), (cx + k * 0.07 * s, cy + 0.40 * s)], fill=ARMOR_EDGE, width=max(2, round(s * 0.018)))
+
+
+def helmet(image, centre, size):
+    """draw_helmet on a crop of the picture that holds it (the filters work on that, not on the whole picture), put back"""
+    half = round(size * 0.75)
+    box = (round(centre[0]) - half, round(centre[1]) - half, round(centre[0]) + half, round(centre[1]) + half)
+    region = image.crop(box)
+    draw_helmet(region, (half, half), size)
+    image.paste(region, box[:2])
 
 
 def sparkle(image, centre, radius, alpha=230):
