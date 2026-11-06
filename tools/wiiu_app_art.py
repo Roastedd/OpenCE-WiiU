@@ -9,7 +9,7 @@
 - splash-drc.png, 854x480, shown on the GamePad meanwhile (--drc-image).
 
 The look is the Wii U's shell: a bright blue picture with a few soft bubbles, the project's helmet render (port/assets/icon/opence-icon-render.png, the artwork of
-OpenCE's own icon, the same one the earlier Wii U pictures showed) in a round medallion with a white rim and a ring of ticks around it, a bold title with a thick rounded
+OpenCE's own icon, the same one the earlier Wii U pictures showed) in a round medallion with a white rim and a plain blue band, a bold title with a thick rounded
 outline and a pill for the subtitle. The title is set in Overpass (port/assets/fonts, SIL Open Font License 1.1); the outline is drawn by Pillow's stroke, which has round
 joins. The splash screens say that the port is unofficial and needs the player's own copy (the game and its characters belong to Microsoft).
 Needs Pillow only (no NumPy); every shape is drawn by Pillow's own rasteriser at four times the size and scaled down with LANCZOS, so another Pillow
@@ -112,22 +112,15 @@ def disc(size, centre, radius):
 
 
 def medallion(image, centre, radius):
-    """the helmet render in a round medallion: a soft shadow, a white rim, a blue band with a ring of light ticks, and inside it the render on a navy gradient"""
+    """the helmet render in a round medallion: a soft shadow, a white rim, a plain blue band, and inside them the render on a navy gradient"""
     size = image.size
     cx, cy = centre
     shadow = disc(size, (cx, cy + radius * 0.05), radius)
     image.paste(Image.new("RGB", size, (6, 40, 110)), (0, 0), blurred(shadow, radius * 0.05).point(lambda v: v * 0.45))
     image.paste(Image.new("RGB", size, RIM), (0, 0), disc(size, centre, radius))
-    image.paste(Image.new("RGB", size, BAND), (0, 0), disc(size, centre, radius * 0.95))
-    # (the ticks, in the band)
+    image.paste(Image.new("RGB", size, BAND), (0, 0), disc(size, centre, radius * 0.965))
     draw = ImageDraw.Draw(image)
-    for i in range(48):
-        angle = math.radians(i * 7.5)
-        inner, outer = radius * 0.865, radius * 0.925
-        draw.line([(cx + inner * math.cos(angle), cy + inner * math.sin(angle)), (cx + outer * math.cos(angle), cy + outer * math.sin(angle))],
-                  fill=(120, 190, 250) if i % 6 else WHITE, width=max(2, round(radius * (0.014 if i % 6 else 0.026))))
-    inner = radius * 0.80
-    face = Image.new("RGB", size, NAVY_TOP)
+    inner = radius * 0.86
     face = gradient(size, NAVY_TOP, NAVY_BOTTOM)
     image.paste(face, (0, 0), disc(size, centre, inner))
     # (the render, its helmet in the middle of the medallion, cut to the disc)
@@ -138,7 +131,6 @@ def medallion(image, centre, radius):
     layer.paste(render, (round(cx - side * 0.47), round(cy - side * 0.45)))
     alpha = ImageChops.multiply(layer.getchannel("A"), disc(size, centre, inner))
     image.paste(layer.convert("RGB"), (0, 0), alpha)
-    draw.ellipse([cx - inner, cy - inner, cx + inner, cy + inner], outline=(120, 190, 250), width=max(2, round(radius * 0.012)))
 
 
 def background(size):
