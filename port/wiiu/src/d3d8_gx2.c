@@ -293,6 +293,8 @@ int halo_model_detail_stock(void)
 /* port/linux/game/render_governor.c's (the Direct3D layer is built without the game's headers): dynamic quality's model level of detail, 1 with it off */
 float render_governor_lod_scale(void);
 void render_governor_frame(double work_ms, double tick_ms, double render_ms, double now_ms);
+/* wiiu_render_passes.c's: the part of the rendering the game thread stayed longest in since the last call, and for how long (NULL if none) */
+const char *wiiu_render_pass_longest(double *milliseconds);
 
 float halo_model_detail_scale(int level)
 {
@@ -4441,6 +4443,15 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 				"%.1f GX2 streams wait, %.1f idle waits (%lu)", device.frame, work, frame_tick_ms, frame_ticks, frame_render_ms, ticks_ms(frame_draw_ticks),
 				slot_wait_ms_total() - slot_before, work - frame_tick_ms - frame_render_ms, file_ms - file_before, present, waits_ms - waits_before, idle_ms - idle_before,
 				idle_calls - idle_calls_before);
+		/* the part of the rendering a frame of 100 ms or more stayed longest in (wiiu_render_passes.c): the first-use hitches were "rendering, not in the draws, no card
+		file" with no word on what (2026-11-06: 784, 566, 457 ms in a50 with 0.6 to 3 ms of draws) */
+		{
+			double longest_ms;
+			const char *longest_name = wiiu_render_pass_longest(&longest_ms);
+
+			if (work > 100.0 && longest_name)
+				platform_log("hitch: frame %lu: its longest part of the rendering was %s, %.1f ms of the %.1f", device.frame, longest_name, longest_ms, frame_render_ms);
+		}
 		/* dynamic quality (render_governor.c): the frame's work, and how it divides */
 		render_governor_frame(work, frame_tick_ms, frame_render_ms, start);
 		sum_tick_ms += frame_tick_ms;

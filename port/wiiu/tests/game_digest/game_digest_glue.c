@@ -1325,6 +1325,15 @@ void wiiu_render_pass(int pass)
 		halo_render_marker(pass_names[pass]);
 }
 
+/* wiiu_render_passes.c's: the part of the rendering a frame stayed longest in, for the hitch note; the host does not time it */
+const char *wiiu_render_pass_longest(double *milliseconds);
+
+const char *wiiu_render_pass_longest(double *milliseconds)
+{
+	*milliseconds = 0.0;
+	return NULL;
+}
+
 /* wiiu_shell.c: debug.txt's lines, written by a thread of their own there; here at once */
 void wiiu_error_file_text(char const *text)
 {
