@@ -17,19 +17,14 @@ int wiiu_card_free_bytes(unsigned long long *bytes);
 static int fsa_started;
 static FSAClientHandle fsa_client = -1;
 
-/* 1 and the card's free bytes, or 0 if they cannot be read (no client, or the call failed) */
+/* 0: the card's free space is not asked for. FSAGetFreeSpaceSize read the card's allocation table with the file system
+service held, and on the owner's card a first download stalled every file read of the game for 29.7 seconds (a
+64 KB read of cache002.map took 29,689 ms, 2026-11-06), long enough to lose the connection. A download goes on
+without the room check (map_share.c: "could not be read: going on"), and a full card ends it with a write error. */
 int wiiu_card_free_bytes(unsigned long long *bytes)
 {
-	uint64_t free_bytes = 0;
-
-	if (!fsa_started)
-	{
-		fsa_started = 1;
-		FSAInit();
-		fsa_client = FSAAddClient(NULL);
-	}
-	if (fsa_client < 0 || FSAGetFreeSpaceSize(fsa_client, CARD_ROOT, &free_bytes) < 0)
-		return 0;
-	*bytes = free_bytes;
-	return 1;
+	(void)bytes;
+	(void)fsa_started;
+	(void)fsa_client;
+	return 0;
 }
