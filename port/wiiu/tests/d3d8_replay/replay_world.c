@@ -349,11 +349,11 @@ void touch_menu_read(struct touch_menu *menu, struct touch_menu_output *output)
 }
 
 /* the shader cache's guest half (gx2_shaders.c): the keys a draw needs are found by the GX2 thread, which the replay does not have; nothing here */
+void replay_keys_program(uint64_t program_hash, const uint32_t *words, unsigned long count);
+
 void dk_shader_program_note(uint64_t program_hash, const uint32_t *words, unsigned long count)
 {
-	(void)program_hash;
-	(void)words;
-	(void)count;
+	replay_keys_program(program_hash, words, count);
 }
 
 void dk_shader_map_loaded(uint32_t map_hash)

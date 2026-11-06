@@ -531,8 +531,11 @@ static ssize_t sink_write(void *cookie, const char *data, size_t size)
 	return (ssize_t)size;
 }
 
+void replay_keys_finish(void);
+
 static void sink_at_exit(void)
 {
+	replay_keys_finish();
 	sink_summary("the game ended before the limit");
 }
 
@@ -898,9 +901,10 @@ void __wrap_rasterizer_set_model_lighting(const void *lighting)
 	__real_rasterizer_set_model_lighting(lighting);
 }
 
-/* the scene (game_digest_scene.c) gives a frame its fixed camera before it is drawn, when GAME_DIGEST_SCENE says so; with --poison the frame's
-rendering has its stack filled first */
+/* the scene (game_digest_scene.c) and the sweep (game_digest_sweep.c) give a frame its fixed camera before it is drawn, when GAME_DIGEST_SCENE or
+GAME_DIGEST_SWEEP says so; with --poison the frame's rendering has its stack filled first */
 void game_digest_scene_render_frame(void *windows, short window_count);
+void game_digest_sweep_render_frame(void *windows, short window_count);
 
 void __real_render_frame(void *windows, short window_count, const void *screenshot_page_index, const void *screenshot_index, void *bitmap,
 	float time_delta_since_tick);
@@ -912,6 +916,7 @@ void __wrap_render_frame(void *windows, short window_count, const void *screensh
 	stack_fill(0xa5);
 #endif
 	game_digest_scene_render_frame(windows, window_count);
+	game_digest_sweep_render_frame(windows, window_count);
 	__real_render_frame(windows, window_count, screenshot_page_index, screenshot_index, bitmap, time_delta_since_tick);
 }
 
@@ -975,11 +980,12 @@ int wiiu_input_touch(float *x, float *y)
 }
 
 /* the shader cache's guest half (gx2_shaders.c): the keys a draw needs are the GX2 thread's to find */
+void replay_keys_program(uint64_t program_hash, const uint32_t *words, unsigned long count);
+
 void dk_shader_program_note(uint64_t program_hash, const uint32_t *words, unsigned long count)
 {
-	(void)program_hash;
-	(void)words;
-	(void)count;
+	/* (GAME_DIGEST_KEYS: replay_gx2.c keeps the program for the vertex keys' lines) */
+	replay_keys_program(program_hash, words, count);
 }
 
 void dk_shader_map_loaded(uint32_t map_hash)

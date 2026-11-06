@@ -56,6 +56,8 @@ extern struct data_array *light_data;
 extern struct data_array *effect_data;
 void game_digest_scene_render_frame(struct render_window *windows, short window_count);
 void __real_cheats_update(void);
+/* (game_digest_sweep.c's tick, called here after the scene's: __wrap_cheats_update is one function) */
+void game_digest_sweep_tick(void);
 
 #define SCENE_MAXIMUM 64
 
@@ -448,6 +450,7 @@ void __wrap_cheats_update(void)
 {
 	__real_cheats_update();
 	game_digest_scene_tick();
+	game_digest_sweep_tick();
 }
 
 void game_digest_scene_render_frame(struct render_window *windows, short window_count)

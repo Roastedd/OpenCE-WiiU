@@ -24,8 +24,6 @@ The decals' expansion is wiiu_gx2.c's own (decals_expand, taken from the source 
 
 #define COMPOSITE_LIMIT 32
 
-static void keys_note(const struct nv2a_pixel_shader_key *pixel);
-
 static struct
 {
 	int async, eager;
@@ -141,6 +139,212 @@ static void stage_text(char *out, size_t size, const struct dk_stage_texture *st
 		snprintf(out, size, "-");
 }
 
+
+/* ---------- the shader keys of the draws (GAME_DIGEST_KEYS=file)
+
+Every draw the layer derives has the keys the console's GX2 thread looks up in shaders.pack (dk_shader_for_draw: the same dk_derive_*_key). With the
+variable set, each key not yet written is appended to that file as the missing-shader capture writes it on the card (wiiu_missing_keys.c: "P" and the
+256-byte pixel key as hex, "V", the program's hash, its packed attribute mask, its instruction count and the words), so that tools/wiiu/key_diff.py can
+tell which keys a map's draws need that the pack lacks, before the map is played on a console. Nothing is written, and the lines of the digest do not
+change, when the variable is not set. */
+
+#define KEYS_SLOTS 65536u
+#define KEYS_PROGRAM_LIMIT 2048u
+
+static struct
+{
+	int tried;
+	FILE *file;
+	uint64_t *seen;
+	unsigned long pixel_keys, vertex_keys, unknown_programs;
+	struct
+	{
+		uint64_t hash;
+		uint32_t *words;
+		unsigned long count;
+	} programs[KEYS_PROGRAM_LIMIT];
+	unsigned program_count;
+	struct nv2a_pixel_shader_key last_pixel;
+	struct dk_vertex_key last_vertex;
+	int last_valid;
+} keys;
+
+static int keys_enabled(void)
+{
+	if (!keys.tried)
+	{
+		const char *path = getenv("GAME_DIGEST_KEYS");
+
+		keys.tried = 1;
+		if (path && *path)
+		{
+			keys.file = fopen(path, "w");
+			keys.seen = calloc(KEYS_SLOTS, sizeof(uint64_t));
+			if (!keys.file || !keys.seen)
+			{
+				if (keys.file)
+					fclose(keys.file);
+				keys.file = NULL;
+			}
+		}
+	}
+	return keys.file != NULL;
+}
+
+/* a program the game made (dk_shader_program_note's arguments): kept by hash so that a vertex key's line can have its words */
+void replay_keys_program(uint64_t program_hash, const uint32_t *words, unsigned long count);
+
+void replay_keys_program(uint64_t program_hash, const uint32_t *words, unsigned long count)
+{
+	unsigned index;
+
+	if (!keys_enabled() || !words || !count || count > 136)
+		return;
+	for (index = 0; index < keys.program_count; index++)
+		if (keys.programs[index].hash == program_hash)
+			return;
+	if (keys.program_count == KEYS_PROGRAM_LIMIT)
+		return;
+	keys.programs[keys.program_count].words = malloc(count * 4 * sizeof(uint32_t));
+	if (!keys.programs[keys.program_count].words)
+		return;
+	memcpy(keys.programs[keys.program_count].words, words, count * 4 * sizeof(uint32_t));
+	keys.programs[keys.program_count].hash = program_hash;
+	keys.programs[keys.program_count].count = count;
+	keys.program_count++;
+}
+
+/* whether this identity is new (and now remembered): an open-addressed set of 64-bit hashes, as the pack's own lookups tell keys apart */
+static int keys_new(uint64_t identity)
+{
+	unsigned slot;
+
+	if (!identity)
+		identity = 1;
+	for (slot = (unsigned)(identity % KEYS_SLOTS); keys.seen[slot]; slot = (slot + 1) % KEYS_SLOTS)
+		if (keys.seen[slot] == identity)
+			return 0;
+	keys.seen[slot] = identity;
+	return 1;
+}
+
+/* the frame the draws now belong to (the sweep, game_digest_sweep.c, logs its stops by it, so that a key is told by the stop that made it) */
+unsigned long replay_keys_frame(void);
+
+unsigned long replay_keys_frame(void)
+{
+	return gx.frame;
+}
+
+static unsigned long keys_frame_written = ~0ul;
+
+/* the digest harness's (game_digest_sweep.c): the code that last set a pixel shader; the D3D8 replay has none */
+extern unsigned long game_digest_last_pixel_site(void) __attribute__((weak));
+
+static void keys_frame_comment(void)
+{
+	/* (before every new key: the frame, and the code that set the shader the key is of) */
+	if (game_digest_last_pixel_site)
+		fprintf(keys.file, "# frame %lu site 0x%lx\n", gx.frame, game_digest_last_pixel_site());
+	else
+		fprintf(keys.file, "# frame %lu\n", gx.frame);
+	keys_frame_written = gx.frame;
+}
+
+static void keys_note(const struct dk_vertex_key *vertex, const struct nv2a_pixel_shader_key *pixel)
+{
+	if (!keys_enabled())
+		return;
+	if (!keys.last_valid || memcmp(pixel, &keys.last_pixel, sizeof(*pixel)))
+	{
+		unsigned char wire[SHADER_KEY_WIRE_BYTES];
+		unsigned index;
+
+		shader_key_write(pixel, wire);
+		if (keys_new(shader_key_hash(SHADER_KEY_HASH_INIT, wire, sizeof(wire)) ^ 0x5049585Full))
+		{
+			keys_frame_comment();
+			fputs("P ", keys.file);
+			for (index = 0; index < sizeof(wire); index++)
+				fprintf(keys.file, "%02x", wire[index]);
+			fputc('\n', keys.file);
+			keys.pixel_keys++;
+		}
+		keys.last_pixel = *pixel;
+	}
+	if (!keys.last_valid || memcmp(vertex, &keys.last_vertex, sizeof(*vertex)))
+	{
+		if (keys_new(shader_key_hash(SHADER_KEY_HASH_INIT, (const unsigned char *)&vertex->program_hash, sizeof(vertex->program_hash)) * 31u + vertex->packed_mask))
+		{
+			unsigned index, word;
+
+			for (index = 0; index < keys.program_count && keys.programs[index].hash != vertex->program_hash; index++)
+				;
+			keys_frame_comment();
+			if (index < keys.program_count)
+			{
+				fprintf(keys.file, "V %08lx%08lx %lu %lu", (unsigned long)(vertex->program_hash >> 32), (unsigned long)(vertex->program_hash & 0xffffffffu),
+					(unsigned long)vertex->packed_mask, keys.programs[index].count);
+				for (word = 0; word < keys.programs[index].count * 4; word++)
+					fprintf(keys.file, " %08lx", (unsigned long)keys.programs[index].words[word]);
+				fputc('\n', keys.file);
+				keys.vertex_keys++;
+			}
+			else
+			{
+				fprintf(keys.file, "# a vertex key whose program was never noted: %016llx mask %lu\n", (unsigned long long)vertex->program_hash,
+					(unsigned long)vertex->packed_mask);
+				keys.unknown_programs++;
+			}
+		}
+		keys.last_vertex = *vertex;
+	}
+	keys.last_valid = 1;
+	fflush(keys.file);
+}
+
+/* Every vertex key the game can ask for, at the end of a run (GAME_DIGEST_KEYS): the game makes all of its vertex programs when it starts (the 67 of
+rasterizer_xbox_vertex_shaders.c, and the loading screen's), each with the attributes its declaration packs, and a draw from immediate-mode vertices
+asks for a program with none packed. So the keys the console can meet are the programs' (hash, packed mask) and (hash, 0), whether or not a run drew
+with them. Written with "#" comments saying which: key_diff.py reads them like the others. */
+unsigned long d3d8_dk_vertex_shader_count(void);
+int d3d8_dk_vertex_program_by_id(unsigned long id, uint64_t *program_hash, const uint32_t **instructions, unsigned long *instruction_count);
+unsigned long d3d8_dk_vertex_program_packed_mask_by_id(unsigned long id);
+
+void replay_keys_finish(void)
+{
+	unsigned long id, count = d3d8_dk_vertex_shader_count(), written = 0;
+	unsigned variant;
+
+	if (!keys_enabled() || !getenv("GAME_DIGEST_KEYS_ALL_VERTEX"))
+		return;
+	for (id = 1; id < count; id++)
+	{
+		uint64_t program_hash;
+		const uint32_t *words;
+		unsigned long instruction_count, word, mask = d3d8_dk_vertex_program_packed_mask_by_id(id);
+
+		if (!d3d8_dk_vertex_program_by_id(id, &program_hash, &words, &instruction_count) || !instruction_count || instruction_count > 136)
+			continue;
+		for (variant = 0; variant < 2; variant++)
+		{
+			unsigned long use = variant ? 0 : mask;
+
+			if (variant && !mask)
+				continue;
+			if (!keys_new(shader_key_hash(SHADER_KEY_HASH_INIT, (const unsigned char *)&program_hash, sizeof(program_hash)) * 31u + use))
+				continue;
+			fprintf(keys.file, "V %08lx%08lx %lu %lu", (unsigned long)(program_hash >> 32), (unsigned long)(program_hash & 0xffffffffu), use, instruction_count);
+			for (word = 0; word < instruction_count * 4; word++)
+				fprintf(keys.file, " %08lx", (unsigned long)words[word]);
+			fputc('\n', keys.file);
+			written++;
+		}
+	}
+	fprintf(keys.file, "# vertex programs listed at the end: %lu of %lu ids, %lu keys\n", count ? count - 1 : 0, count, written);
+	fflush(keys.file);
+}
+
 /* wiiu_gx2.c's draw, as far as what the GPU reads goes */
 static void draw(const struct dk_command_draw *command)
 {
@@ -220,7 +424,7 @@ static void draw(const struct dk_command_draw *command)
 	surface_text(depth, sizeof(depth), &gx.depth);
 	for (stage = 0; stage < 4; stage++)
 		stage_text(stages[stage], sizeof(stages[stage]), &dk_derive_textures(derive)->stages[stage]);
-	keys_note((const struct nv2a_pixel_shader_key *)dk_derive_pixel_key(derive));
+	keys_note((const struct dk_vertex_key *)dk_derive_vertex_key(derive), (const struct nv2a_pixel_shader_key *)dk_derive_pixel_key(derive));
 	line("draw %lu.%lu: prim %u count %u offset %d indices %016llx%s; targets %s %s; state %016llx vertex key %016llx pixel key %016llx; textures %s %s %s %s; "
 		"vertex parameters %016llx pixel parameters %016llx constants %016llx format %016llx",
 		gx.frame, gx.draw, (unsigned)primitive, (unsigned)command->count, (int)vertex_offset, (unsigned long long)indices, streams, color, depth,
@@ -233,62 +437,6 @@ static void draw(const struct dk_command_draw *command)
 		(unsigned long long)hash_of(gx.constants, sizeof(gx.constants)), (unsigned long long)hash_of(&gx.format, sizeof(gx.format)));
 }
 
-
-/* ---------- the pixel shader keys of the draws (GAME_DIGEST_KEYS=file)
-
-Every draw the layer derives has the pixel key the console's GX2 thread looks up in shaders.pack (dk_shader_for_draw: the same dk_derive_pixel_key). With the
-variable set, each key not yet written is appended to that file as the missing-shader capture writes it on the card ("P" and the 256-byte key as hex), after a
-comment with the frame it first came in, so that a scene's keys can be compared with tools/wiiu/shader_keys.txt. Nothing is written, and the lines of the digest
-do not change, when the variable is not set. */
-
-#define KEYS_SLOTS 65536u
-
-static struct
-{
-	int tried;
-	FILE *file;
-	uint64_t *seen;
-	struct nv2a_pixel_shader_key last;
-	int last_valid;
-} keys;
-
-static void keys_note(const struct nv2a_pixel_shader_key *pixel)
-{
-	unsigned char wire[SHADER_KEY_WIRE_BYTES];
-	uint64_t identity;
-	unsigned slot, index;
-
-	if (!keys.tried)
-	{
-		const char *path = getenv("GAME_DIGEST_KEYS");
-
-		keys.tried = 1;
-		if (path && *path)
-		{
-			keys.file = fopen(path, "w");
-			keys.seen = calloc(KEYS_SLOTS, sizeof(uint64_t));
-			if (!keys.file || !keys.seen)
-				keys.file = NULL;
-		}
-	}
-	if (!keys.file || (keys.last_valid && !memcmp(pixel, &keys.last, sizeof(*pixel))))
-		return;
-	keys.last = *pixel;
-	keys.last_valid = 1;
-	shader_key_write(pixel, wire);
-	identity = shader_key_hash(SHADER_KEY_HASH_INIT, wire, sizeof(wire)) ^ 0x5049585Full;
-	if (!identity)
-		identity = 1;
-	for (slot = (unsigned)(identity % KEYS_SLOTS); keys.seen[slot]; slot = (slot + 1) % KEYS_SLOTS)
-		if (keys.seen[slot] == identity)
-			return;
-	keys.seen[slot] = identity;
-	fprintf(keys.file, "# frame %lu\nP ", gx.frame);
-	for (index = 0; index < sizeof(wire); index++)
-		fprintf(keys.file, "%02x", wire[index]);
-	fputc('\n', keys.file);
-	fflush(keys.file);
-}
 
 static void clear(const struct dk_command_clear *command)
 {

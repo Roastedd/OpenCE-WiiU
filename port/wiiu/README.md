@@ -776,6 +776,23 @@ A key in `tools/wiiu/shader_exclude.txt` is marked in the pack (stage 2 or 3, no
 pack lacks still skips the draw. The 5-second log counts the draws made with a canonical key's shader and with a stand-in, and the
 first 40 such keys are logged by name; each key is written down for the next pack as before.
 
+### Keeping the pack complete, on the Mac
+
+The keys a map needs are the game's own, so they can be met without the console: the digest harness (`tools/test_wiiu_game_digest.py`) plays the
+real game under qemu-ppc through the Wii U's Direct3D layer, and `--keys` writes the pixel and vertex keys the GX2 thread would look up (the lines
+the missing-shader capture writes, each after a `# frame N site ADDRESS` comment saying the frame and the code that set the pixel shader).
+`--level NAME --sweep bsp+lit+objects+effects+damage+weapons` (`game_digest_sweep.c`) tours what the map can draw instead of waiting for a player to
+meet it: every BSP structure's materials from a camera at a triangle of each, again with a dynamic light at each stop; every object tag (made where
+the player is not, looked at, taken away), with a unit made active-camouflaged, with a light beside it, and in a cluster with fog; every effect and
+damage effect tag; each weapon in the player's hands, zoomed; and with `scripts` and `GAME_DIGEST_SWEEP_SCRIPTS`, the level's cutscene scripts by name.
+`tools/wiiu/key_classes.py RUN/out/keys.txt --have tools/wiiu/shader_keys.txt` says what that is worth: the keys are grouped by canonical key, and
+only a key in a class the list has none of is a new shader (the others are drawn with their canonical key's shader). `GAME_DIGEST_KEYS_ALL_VERTEX`
+(set by `--keys`) lists, at the end of a run, every vertex key the game can ask for (its 67 vertex programs, each with the attributes its declaration
+packs and with none, for immediate-mode draws): they can all be known in advance, and have to be, since a vertex key the pack lacks has no fallback.
+What this cannot reach: the raw pixel keys of the console (a stage past the count holds what an earlier draw left, so the same shader has as many keys as
+there were draw orders, which the canonical key makes one), anything that needs more than one player, the network, the pause menu, and the settings
+that change the keys (`display.high_res_hud`: the meter keys; the Custom Edition maps' own shaders, `--custom-map`).
+
 ## Owned missing-shader capture
 
 `gx2_shaders.c` queues one attempt per `(stage, lookup hash)` from its single
