@@ -166,6 +166,8 @@ static struct
 	unsigned unusable_draws, unusable_told;
 	/* halo/debug_standin.txt: the draws with a stand-in are magenta */
 	int tint_standin;
+	/* halo/volume.txt 0: 3D textures are not made, as they were not until 2026-11-06 (the volume of the dynamic lights' falloff did not fit its surface); their draws sample white */
+	int volume_off;
 	/* what the GPU's registers hold */
 	const struct shader *regs_vs, *regs_ps, *cur_vs, *cur_ps;
 	const struct fetch *cur_fetch;
@@ -1493,7 +1495,7 @@ static int image_surface(struct image *image, uint32_t kind, uint32_t format, ui
 	image->requested_levels = levels;
 	image->compressed = format_of(format, &gx_format, &block_bytes);
 	image->block_bytes = block_bytes;
-	if (!width || !height || kind > DK_TEXTURE_CUBE || (kind != DK_TEXTURE_2D && (gx.features_off & 2)))
+	if (!width || !height || kind > DK_TEXTURE_CUBE || (kind != DK_TEXTURE_2D && (gx.features_off & 2)) || (kind == DK_TEXTURE_3D && gx.volume_off))
 		return 0;
 	if (gx.features_off & 1)
 		levels = 1;
@@ -2076,6 +2078,8 @@ static const GX2Texture *stage_texture(const struct dk_stage_texture *stage, uns
 		*levels = images[stage->id].levels;
 		return &images[stage->id].texture;
 	}
+	if (stage->id && stage->id < DK_TEXTURE_LIMIT && images && images[stage->id].used && images[stage->id].kind == DK_TEXTURE_3D && gx.volume_off)
+		return &gx.white;
 	if (stage->id && stage->id < DK_TEXTURE_LIMIT && images)
 	{
 		/* an image the game named that is not usable (its memory was refused, or it was not made): a transparent grey texel, not an opaque white one, which a vertex
@@ -2957,6 +2961,10 @@ static int initialize(void)
 		absent or 0: they draw as the stand-in does */
 		long wiiu_study_number(const char *name, long fallback);
 
+		/* halo/volume.txt: 0 leaves the 3D textures out (the dynamic lights' falloff volume is then a white texel, as it was in every log before 2026-11-06); absent or 1: made */
+		gx.volume_off = wiiu_study_number("volume.txt", 1) <= 0;
+		if (gx.volume_off)
+			wiiu_log("GX2: 3D textures are not made (halo/volume.txt is 0): the dynamic lights' falloff is a white texel");
 		gx.tint_standin = wiiu_study_number("debug_standin.txt", 0) > 0;
 		dk_shader_debug_standin(gx.tint_standin);
 		if (gx.tint_standin)
