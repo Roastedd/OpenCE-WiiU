@@ -467,6 +467,40 @@ class LevelsTest(unittest.TestCase):
                     self.assertIn("overlapped frames from here", log, f"{level} ({variant}): no frame was overlapped")
 
 
+@unittest.skipUnless(os.environ.get("GAME_DIGEST_DOORS"), "dead units and automatic doors: GAME_DIGEST_DOORS=1 (and Docker's opence-ppc-be image, data-be's maps; a run of about 7,400 ticks)")
+class DeadUnitsAndDoorsTest(unittest.TestCase):
+    """An automatic door is held open by the units near it, but not by dead ones (device_machines.c: the dead bit of the unit's damage flags, a word at 0xB6 of the
+    datum). On the big-endian builds the check read the byte at 0xB6, the word's high-order byte, so a body in a doorway held the door open for good. a50's gravity
+    room (the cruiser's first room) makes each wave of Covenant through one of four doors and only while that door is shut: with bodies in the four doorways no wave
+    came after the fourth, `gravity_wave` stayed true, and mission_gravity_room never got to open `gravity_bay_door` (the owner's console, 2026-11-05: the objective
+    says to find Captain Keyes and nothing opens). This plays the room from the console (bsp 1, the player put in it, the script woken), kills each wave where it
+    stands as the Covenant are placed, and asks for the bay door's position: it is open (above 0) a few seconds after the last wave is dead, and never is with the
+    old check. The console's lines are written to the log by a mutation of terminal.c (the test's own)."""
+
+    CONSOLE_LOG = ("source/interface/terminal.c", "\t\t\tserver_console_output(line->buffer);",
+                   "\t\t\t{ void platform_log(char const *format, ...); platform_log(\"console: %s\", line->buffer); }\n\t\t\tserver_console_output(line->buffer);")
+
+    def test_the_bay_door_of_the_gravity_room_opens_when_its_waves_are_dead(self):
+        ticks = int(os.environ.get("GAME_DIGEST_DOORS_TICKS", "7400"))
+        program = build("a50doors", mutations=[self.CONSOLE_LOG])
+        cues = ["1 unit_exit_vehicle (player0)", "2 switch_bsp 1", "3 object_teleport (player0) gravity_teleport0_flag", "4 wake mission_gravity_room"]
+        cues += [f"{second} ai_kill gravity_pad_covenant" for second in range(25, 196, 15)]
+        cues += [f"{second} inspect (device_get_position gravity_bay_door)" for second in (150, 180, 210, 240)]
+        process, out = start(program, "doors", ticks, level="a50", init=("cheat_deathless_player 1", "cheat_infinite_ammo 1"), cues="|".join(cues), extra=PLAIN)
+        finish(process, out)
+        lines = (out / "stderr.txt").read_text(errors="replace").splitlines()
+        # (a cue's answer is the next "console: " line, with the tick's own lines between now and then)
+        positions = []
+        for index, line in enumerate(lines):
+            if "cue at tick" in line and line.endswith("inspect (device_get_position gravity_bay_door)"):
+                answer = next((later for later in lines[index + 1:index + 12] if "console: " in later), None)
+                if answer:
+                    positions.append(float(answer.split("console: ")[1]))
+        # (the cues' clock starts when the player has a unit, which is later in some runs: the samples at 150 and 180 s are in all of them)
+        self.assertGreaterEqual(len(positions), 2, f"the samples of the bay door's position: {positions}")
+        self.assertGreater(max(positions), 0.0, f"gravity_bay_door stayed shut (its positions at 150 s and after: {positions})")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter,
                                      epilog=__doc__.split("\n\n", 1)[1])

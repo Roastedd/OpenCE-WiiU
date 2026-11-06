@@ -244,7 +244,11 @@ boolean machine_update(
 				struct unit_definition *unit_definition = unit_definition_get(unit->definition_index);
 				boolean can_open = TRUE;
 
-				if (TEST_FLAG(*((byte *)unit + 0xb6), _object_function2_active_bit) ||
+				/* port: the object's damage flags are a word at 0xB6 (the dead bit is bit 2 of it). Read as the byte at 0xB6 they were the word's
+				high-order byte on a big-endian host, so a dead unit (a body in a doorway) still opened the door and held it open: a50's gravity
+				room spawns its waves only through doors that are shut, and with its four doors held open by bodies it spawned no more, the wave
+				count never reached its end, and the bay door was never opened */
+				if (TEST_FLAG(unit->object.damage_flags, _object_dead_bit) ||
 					TEST_FLAG(*(unsigned long *)((byte *)unit_definition + 0x17c), _object_runtime_unit_cannot_open_doors_automatically_bit))
 				{
 					can_open = FALSE;
