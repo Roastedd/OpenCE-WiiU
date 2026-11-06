@@ -59,6 +59,24 @@ Range request on every hop when it is not 0). A 200 or 206 has its body read to 
 ends the GET with nothing read. 0 when a final response came (result->status says which), -1 if not (result->error). */
 int wiiu_http_get(wiiu_http *http, const char *url, uint64_t from, uint64_t most, const wiiu_http_hooks *hooks, wiiu_http_result *result);
 
+typedef struct wiiu_http_request_options
+{
+	/* extra request header lines, each ended by CR LF (printable text, at most 1024 bytes in all); NULL for none */
+	const char *headers;
+	/* the answer's header lines are written here as "Name: value" and a newline each (a line that does not fit is left out); NULL to keep none */
+	char *response_headers;
+	size_t response_headers_size;
+	/* the whole request, from asking for the TLS stack to the last byte, must end within this many milliseconds (0: only each wait's own limits) */
+	unsigned total_ms;
+} wiiu_http_request_options;
+
+/* One GET of the caller's, on a connection of its own and no redirect followed: the final response's status, headers (options) and body (to the
+body hook, at most `most` bytes) are the answer whatever the status is, as the desktop's update_https_request gives them (a 204 or a 304 has no body;
+the start hook gets the status, 0 and the length if the server says). Only one connection is open at a time, the updater's included. 0 when a
+response came (result->status), -1 if not (result->error). */
+int wiiu_http_request(wiiu_http *http, const char *url, uint64_t most, const wiiu_http_hooks *hooks, const wiiu_http_request_options *options,
+	wiiu_http_result *result);
+
 /* a small file whole into memory (the manifest, its signature): 0 on a 200 whose body fits */
 int wiiu_http_fetch(wiiu_http *http, const char *url, void *buffer, size_t capacity, size_t *size, int (*stop)(void *context),
 	void *context, wiiu_http_result *result);

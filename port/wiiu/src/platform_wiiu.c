@@ -4,9 +4,8 @@ PLATFORM_WIIU.C
 The platform layer's calls that the Wii U does not need yet, or has no use for, answered as a build with nothing to answer them with would: the
 high-resolution HUD, text and menu art (OpenGL drawing in the Linux builds; the Wii U has none of them), the keyboard, mouse and touch aiming,
 the clipboard, the display settings, the network test's input hooks, the text chat's on-screen keyboard (it reads the Linux
-builds' gamepads: the Wii U shows the chat, and has no way to type it yet), controller remapping, questions in a message box, a browser, and the
-self-updater's HTTPS (the master servers' lists are not fetched: the server browser lists the brokers' games and the LAN's). Each is what the
-Linux code does when its feature is off. What the Wii U does need (input, audio, voice chat, files, sockets) is in units of its own.
+builds' gamepads: the Wii U shows the chat, and has no way to type it yet), controller remapping, questions in a message box, and a browser. Each is what the
+Linux code does when its feature is off. What the Wii U does need (input, audio, voice chat, files, sockets, the master servers' HTTPS) is in units of its own.
 */
 
 #include "platform.h"
@@ -18,6 +17,7 @@ Linux code does when its feature is off. What the Wii U does need (input, audio,
 #include "halo_menus.h"
 #include "controller_remap.h"
 #include "update.h"
+#include "wiiu_https.h"
 #include "wiiu_input.h"
 #include "wiiu_virtual_pads.h"
 
@@ -218,21 +218,35 @@ void platform_binding_capture_cancel(void)
 {
 }
 
-/* ---------- the self-updater's HTTPS (posix_update.c, in WIIU_EXCLUDE: no TLS sockets or certificate authorities here) */
+/* ---------- the master servers' HTTPS (posix_update.c, in WIIU_EXCLUDE, is for Linux's sockets and certificate authorities: wiiu_https.c has Mbed TLS over
+nsysnet's, with the roots of the updater). GET only: the Wii U publishes nothing and has no dedicated server. */
 
 int update_https_request(const char *method, const char *url, const char *headers, const void *body,
 	unsigned long body_size, unsigned long maximum, struct update_response *response, char *error, int error_size)
 {
-	(void)method;
-	(void)url;
-	(void)headers;
-	(void)body;
-	(void)body_size;
-	(void)maximum;
+	char *answer = NULL;
+	unsigned long answer_size = 0;
+	int status = 0;
+
 	memset(response, 0, sizeof(*response));
-	if (error && error_size > 0)
-		snprintf(error, (size_t)error_size, "the Wii U makes no HTTPS requests");
-	return 0;
+	if (!error || error_size <= 0)
+		return 0;
+	if (!method || strcmp(method, "GET"))
+	{
+		snprintf(error, (size_t)error_size, "the Wii U makes only GET requests (not %.16s)", method ? method : "none");
+		return 0;
+	}
+	if (body || body_size)
+	{
+		snprintf(error, (size_t)error_size, "a GET request with a body is not made");
+		return 0;
+	}
+	if (!wiiu_https_get(url, headers, maximum, &status, response->headers, (int)sizeof(response->headers), &answer, &answer_size, error, error_size))
+		return 0;
+	response->status = status;
+	response->body = answer;
+	response->body_size = answer_size;
+	return 1;
 }
 
 /* ---------- the keyboard and the gamepads, as xinput_sdl.c has them: no keyboard, no on-screen keyboard's reading, no virtual

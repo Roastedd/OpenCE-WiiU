@@ -752,7 +752,7 @@ twice "never" (`update.auto = false`). `debug.update_answer` (`yes`, `no`, `neve
 **HTTPS** is the port's Mbed TLS 3.6.7 over nsysnet's sockets, with its own roots (`src/wiiu_update_roots.h`, from the CA bundle by
 `tools/wiiu/update_roots.py`: ISRG X1 and X2, USERTrust RSA and ECC, Sectigo R46 and E46, and DigiCert Global Root G2 as a spare); the
 console's NSSL is not used, as its roots do not reach GitHub's file host (Let's Encrypt, under ISRG X1) or github.com (Sectigo E46, by
-USERTrust ECC). The console's entropy is weak (`src/wiiu_mbedtls.c`), so TLS only carries the files: the signature and the SHA-256s vouch
+USERTrust ECC). The console's entropy is weak (`src/wiiu_entropy.c`, below), so TLS only carries the files: the signature and the SHA-256s vouch
 for them. Every wait is at most 100 ms, between which the worker's flags are read.
 
 **The files** go to `update/<name>.part`, hashed as they are written, in 64 KB pieces, only in the foreground, with the network allowed
@@ -780,6 +780,31 @@ at its main menu, where Y has the rejected build offered again. Rollback is auto
 ask. `tools/test_wiiu_update.py` cuts the power at every step of a swap and of a rollback, then at every step of the start after it,
 and checks that the folder always ends as one build or the other; the one state the console cannot leave by itself is a cut between
 `halo.wuhb`'s two renames, which leaves no `halo.wuhb` (PLAYING.md, "If an update went wrong", is the recovery by hand).
+
+### The master servers' list, and the random bytes
+
+**The server browser's list** (Join Game, Server Browser) is fetched over the same Mbed TLS: `update_https_request` (the platform layer's, `update.h`)
+is `src/platform_wiiu.c`'s wrapper of `wiiu_https_get` (`src/wiiu_https.c`, over `wiiu_http_request` in `wiiu_update_http.c`). Its contract is
+`posix_update.c`'s: GET only (the Wii U publishes nothing; any other method is refused before anything is sent); an https:// address only; no
+redirect followed; the status of any answer, its header lines as `Name: value` and a newline each in 4096 bytes (`Signature` and `Signature-Key`,
+which `master_list.c` checks the list with, among them), and the body, NUL terminated, up to the limit the caller gives (1 MB for the list). The
+roots are the updater's (`wiiu_update_roots.h`); nothing is sent before the certificate chains to one of them and names the host; the clock is read
+for that and is named in the log when a certificate is refused. It is used only while `wiiu_network_allowed()` says so, and that is also the
+stop hook (HOME or the close ends a request within a quarter of a second). A connect takes 15 s at most, the handshake 20 s, every wait for the
+answer 20 s, and the whole request 60 s (the name's lookup, the system's, apart). One connection is open at a time, the updater's included
+(Mbed TLS is built without its threading module); a request that cannot have the TLS stack in 30 s fails. The list thread
+(`master_list.c`) is made with a 256 KB stack on core 0 below the game thread's priority. The log has `server browser: https GET <url>: N bytes`
+for an answer, and `server browser: <url>: <why>` (Mbed TLS's words included) for a failure. `tools/test_wiiu_https.py` runs it on a desktop
+against local servers with a test CA (headers in any case, chunked, to the close, 204/304, a limit exact to the byte, refused certificates, a stall,
+a trickle, threads together) and, with `OPENCE_MASTER_TEST=1`, against the master itself with the console's roots only; its capture is checked by
+`tools/harness` with `master_list_verify` and the pinned key. **Not run on a console**: the handshake's time and stack, the clock, the memory.
+
+**The random bytes** (`src/wiiu_entropy.c`: Mbed TLS's entropy poll, `posix_random_bytes`, and so the identity key of `network.key` when it is first
+made) are not from a hardware source: the Espresso has none this port reaches. A pool of BLAKE2b (Monocypher) is mixed with 48 reads of the time
+base either side of a yield, the system clock, the thread, the addresses of a stack variable, a heap block and the pool, and the seed file
+`entropy.seed` (64 bytes) in the data folder, which is rewritten with a new value derived from the pool at the first use and after each Mbed TLS
+poll (only with the app in the foreground). Each output is a keyed hash of the pool, which is ratcheted after it. An existing `network.key` is
+read, never made again. The first start on a card has only the clocks' jitter, and the seed file is not secret from anyone who reads the card.
 
 ### Turning it on
 

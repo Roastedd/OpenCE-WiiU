@@ -107,8 +107,9 @@ WIIU_EXCLUDE: Dict[str, str] = {
 WIIU_NATIVE_PREFIX = "wiiu_"
 
 # The self-updater's units (port/wiiu/src/wiiu_update*.c): Mbed TLS's headers for the downloads, Monocypher's for the manifest's
-# signature, and the build's update defines (update_defines).
-WIIU_UPDATE_UNITS = ("wiiu_update.c", "wiiu_update_core.c", "wiiu_update_http.c")
+# signature, and the build's update defines (update_defines). wiiu_https.c (the master servers' HTTPS, over wiiu_update_http.c) takes the
+# same, and wiiu_entropy.c (the random bytes, BLAKE2b from Monocypher) the same include paths.
+WIIU_UPDATE_UNITS = ("wiiu_update.c", "wiiu_update_core.c", "wiiu_update_http.c", "wiiu_https.c", "wiiu_entropy.c")
 
 # what the link needs and the compile does not say: wut's specs and libraries (the environment has WUT_ROOT, as
 # the opence-wiiu container does)

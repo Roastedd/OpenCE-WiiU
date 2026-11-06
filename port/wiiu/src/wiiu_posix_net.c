@@ -13,6 +13,7 @@ to stop using the network (wiiu_shell.c), every call but close fails as Winsock'
 #include "posix.h"
 
 #include "port_config.h"
+#include "wiiu_entropy.h"
 #include "wiiu_shell.h"
 
 #include <arpa/inet.h>
@@ -31,8 +32,6 @@ to stop using the network (wiiu_shell.c), every call but close fails as Winsock'
 
 #include <coreinit/thread.h>
 #include <coreinit/time.h>
-
-int mbedtls_platform_entropy_poll(void *data, unsigned char *output, size_t length, size_t *output_length);
 
 /* Winsock error codes (winsockx.h) */
 #define WSAEINTR 10004
@@ -906,9 +905,8 @@ posix_ulong posix_resolve_ipv4(const char *host)
 
 void posix_random_bytes(void *buffer, posix_ulong size)
 {
-	size_t produced = 0;
-
-	mbedtls_platform_entropy_poll(NULL, (unsigned char *)buffer, size, &produced);
+	/* (wiiu_entropy.c: the clocks' jitter, addresses and the seed file on the card, mixed with BLAKE2b; the Espresso has no hardware source here) */
+	wiiu_entropy_bytes(buffer, size);
 }
 
 int posix_command_line_argument(int index, char *buffer, posix_ulong size)

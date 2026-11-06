@@ -1199,6 +1199,51 @@ int main(int argc, char **argv)
 	/* a list's entries: one that is not an entry is skipped, not the list;
 	the publisher's name and region kept to what the ticker shows; the
 	entry's word on a dedicated server passed on */
+	/* a list fetched from the official master (tools/test_wiiu_https.py with OPENCE_MASTER_TEST=1 and OPENCE_MASTER_CAPTURE=<folder> keeps its body,
+	its Signature and Signature-Key headers and the time it was fetched): checked against the key built in, and its entries taken. Nothing to do without it. */
+	CASE("captured-list")
+	{
+		const char *folder = getenv("OPENCE_MASTER_CAPTURE");
+		char urls[MASTER_LIST_MAXIMUM_MASTERS][MASTER_LIST_URL_SIZE];
+		unsigned char keys[MASTER_LIST_MAXIMUM_MASTERS][MASTER_LIST_KEY_SIZE], digest[P2P_SHA256_SIZE];
+		char path[512], signature[256] = "", key_header[64] = "", now_text[32] = "", why[128] = "";
+		static char body[1024 * 1024 + 1];
+		size_t body_size = 0;
+		FILE *file;
+		int taken;
+
+		if (!folder)
+		{
+			printf("no capture (OPENCE_MASTER_CAPTURE): nothing checked\n");
+			return 0;
+		}
+		snprintf(path, sizeof(path), "%s/body", folder);
+		file = fopen(path, "rb");
+		CHECK(file != NULL, "no %s", path);
+		body_size = fread(body, 1, sizeof(body) - 1, file);
+		fclose(file);
+		snprintf(path, sizeof(path), "%s/signature", folder);
+		file = fopen(path, "rb");
+		CHECK(file && fread(signature, 1, sizeof(signature) - 1, file) > 0, "no %s", path);
+		fclose(file);
+		snprintf(path, sizeof(path), "%s/key", folder);
+		file = fopen(path, "rb");
+		CHECK(file && fread(key_header, 1, sizeof(key_header) - 1, file) > 0, "no %s", path);
+		fclose(file);
+		snprintf(path, sizeof(path), "%s/now", folder);
+		file = fopen(path, "rb");
+		CHECK(file && fread(now_text, 1, sizeof(now_text) - 1, file) > 0, "no %s", path);
+		fclose(file);
+		CHECK(master_list_read("masters.txt", urls, keys, MASTER_LIST_MAXIMUM_MASTERS) >= 1, "no master built in");
+		CHECK(master_list_verify(body, (unsigned long)body_size, signature, key_header, keys[0], strtoul(now_text, NULL, 10), why,
+			sizeof(why)), "the official master's list was refused: %s (%s, key %s)", why, urls[0], key_header);
+		p2p_sha256(keys[0], MASTER_LIST_KEY_SIZE, digest);
+		entries_count = 0;
+		taken = take_list(body, (unsigned long)body_size, digest);
+		CHECK(taken > 0, "no entry of the list was taken");
+		printf("captured list of %lu bytes from %s: signature accepted, %d servers taken\n", (unsigned long)body_size, urls[0], taken);
+		return 0;
+	}
 	CASE("take-list")
 	{
 		char base64[400], body[8192];
