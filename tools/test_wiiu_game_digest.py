@@ -467,6 +467,29 @@ class LevelsTest(unittest.TestCase):
                     self.assertIn("overlapped frames from here", log, f"{level} ({variant}): no frame was overlapped")
 
 
+@unittest.skipUnless(os.environ.get("GAME_DIGEST_STALL"), "the script stall report: GAME_DIGEST_STALL=1 (and Docker's opence-ppc-be image, data-be's maps; a run of about 3,600 ticks)")
+class ScriptStallReportTest(unittest.TestCase):
+    """A script that waits in one sleep_until for minutes (a50's gravity room waits for a count of actors, or for a volume to clear of them, that never comes and the
+    level does nothing) is named in the log: hs_runtime.c's hs_runtime_report_stalls writes one line for a wait of 2 minutes of game time; the build here has 10 seconds
+    (a mutation of the constant). The room is played from the console as in DeadUnitsAndDoorsTest, the Covenant killed as they are placed until 115 s and the last one left
+    standing in the volume: mission_gravity_room then waits for the volume to clear (`(= (volume_test_objects gravity_trigger (ai_actors gravity_pad_covenant)) false)`)."""
+
+    def test_a_long_wait_in_a_sleep_until_is_in_the_log(self):
+        ticks = int(os.environ.get("GAME_DIGEST_STALL_TICKS", "3600"))
+        program = build("a50stall", mutations=[("source/hs/hs_runtime.c", "HS_STALL_REPORT_TICKS = 2*60*30,", "HS_STALL_REPORT_TICKS = 10*30,")])
+        cues = ["1 unit_exit_vehicle (player0)", "2 switch_bsp 1", "3 object_teleport (player0) gravity_teleport0_flag", "4 wake mission_gravity_room"]
+        cues += [f"{second} ai_kill gravity_pad_covenant" for second in range(25, 116, 15)]
+        process, out = start(program, "stall", ticks, level="a50", init=("cheat_deathless_player 1", "cheat_infinite_ammo 1"), cues="|".join(cues), extra=PLAIN)
+        finish(process, out)
+        log = (out / "stderr.txt").read_text(errors="replace")
+        reports = [line for line in log.splitlines() if "hs: the script mission_gravity_room has waited" in line]
+        self.assertGreaterEqual(len(reports), 2, f"mission_gravity_room waits more than once (the Marines' conversation, the wave and the room's clearing): {reports}")
+        for report in reports:
+            self.assertRegex(report, r"has waited \d+ s in the sleep_until at syntax node \d+ \(its condition is a call of [^)]+\)$")
+        # (the script's last wait of this run is the one that never ends: the Covenant left standing, or the waves)
+        self.assertEqual(len({report.split("syntax node ")[1].split(" ")[0] for report in reports}), len(reports), "a wait at one node is reported once")
+
+
 @unittest.skipUnless(os.environ.get("GAME_DIGEST_DOORS"), "dead units and automatic doors: GAME_DIGEST_DOORS=1 (and Docker's opence-ppc-be image, data-be's maps; a run of about 7,400 ticks)")
 class DeadUnitsAndDoorsTest(unittest.TestCase):
     """An automatic door is held open by the units near it, but not by dead ones (device_machines.c: the dead bit of the unit's damage flags, a word at 0xB6 of the
