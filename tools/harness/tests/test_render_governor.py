@@ -260,6 +260,16 @@ int main(int argc, char **argv)
 		run(60, 40, 0);
 		printf("RESULT step %d\n", render_governor_step());
 	}
+	else if (!strcmp(scenario, "performance_online"))
+	{
+		/* the Performance mode in another's game: it stops at the default step, never culling units */
+		config_on = 1;
+		performance_mode = 1;
+		render_governor_set_online(1);
+		render_governor_new_map();
+		run(60, 40, 0);
+		printf("RESULT step %d cull_unit %.0f\n", render_governor_step(), render_governor_values()->cull_unit_pixels);
+	}
 	else if (!strcmp(scenario, "new_map"))
 	{
 		/* a map starts: the cold start's slow frames for 20 s decide nothing */
@@ -511,6 +521,11 @@ def test_the_default_goes_to_step_3_and_no_deeper(tmp_path):
 def test_the_performance_mode_goes_to_all_7(tmp_path):
     _, results, _ = run_scenario(tmp_path, "performance")
     assert results["step"] == 7
+
+
+def test_the_performance_mode_in_another_game_stops_at_step_3_and_keeps_the_units(tmp_path):
+    _, results, _ = run_scenario(tmp_path, "performance_online")
+    assert results["step"] == 3 and results["cull_unit"] == 0
 
 
 def test_the_first_seconds_of_a_map_decide_nothing(tmp_path):

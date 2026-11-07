@@ -677,6 +677,7 @@ void game_initialize_for_new_map(
 	void)
 {
 	/* port: dynamic quality (render_governor.c): a map has started */
+	render_governor_set_online(game_connection() != _game_connection_local && game_connection() != _game_connection_film_playback);
 	render_governor_new_map();
 #ifdef HALO_WIIU
 	/* port: the smooth defaults (smooth_defaults.h) are decided again for the map: one local player and no network get the ticks beside the drawing and the dynamic

@@ -252,6 +252,8 @@ static void settings_parse(char *text)
 }
 
 static int governor_max_step(void);
+/* the map being played is a network game (set at the map's start by game.c) */
+static int online_map;
 static void governor_publish(void);
 
 static void settings_load(void)
@@ -484,7 +486,16 @@ static int governor_max_step(void)
 {
 	if (settings.max_step_set)
 		return settings.max_step;
+	/* in another's game the Performance mode stops at the default step too: steps 4 to 7 stop drawing the units under 8 to 32 pixels, and in a shooter those are the
+	other players (the owner's joined game reached step 5 and the far players were gone) */
+	if (online_map)
+		return settings.max_step < DEFAULT_MAX_STEP ? settings.max_step : DEFAULT_MAX_STEP;
 	return settings.performance_mode ? STEPS - 1 : settings.max_step;
+}
+
+void render_governor_set_online(int online)
+{
+	online_map = online != 0;
 }
 
 void render_governor_new_map(void)
@@ -742,6 +753,11 @@ int render_governor_cull_small(long absolute_index, float pixels, float cull_pix
 
 void render_governor_new_map(void)
 {
+}
+
+void render_governor_set_online(int online)
+{
+	(void)online;
 }
 
 void render_governor_step_frames(unsigned long frames[RENDER_GOVERNOR_STEPS])

@@ -71,6 +71,8 @@ enum { RENDER_GOVERNOR_BUDGET_DECALS, RENDER_GOVERNOR_BUDGET_PARTICLES };
 
 /* a map has started (game_initialize_for_new_map): the picture is the full one and the governor decides nothing for the first seconds (a cold start loads shaders and textures) */
 void render_governor_new_map(void);
+/* a network game (client or host) is what the next map is: the governor then stops at its default step (never culls units), also in the Performance mode. Call before render_governor_new_map */
+void render_governor_set_online(int online);
 /* the frames drawn at each step while the governor was on, since the start of the run (the map summary) */
 void render_governor_step_frames(unsigned long frames[RENDER_GOVERNOR_STEPS]);
 
