@@ -878,6 +878,12 @@ static const struct config_setting config_settings[] =
 		"Joining a game on a Custom Edition map this machine does not have: the\n"
 		"most megabytes a download may be (the map and the resource maps it\n"
 		"needs); a bigger one leaves the game, saying how big it is. 0: no limit." },
+	{ "network.catchup_ticks", _config_integer, "6", "HALO_NET_CATCHUP_TICKS", _environment_value, _platform_all,
+		"Playing in another's game: the most game ticks this machine runs in one\n"
+		"frame while it catches up after a stall (a freeze for a texture or a\n"
+		"file). The time it owes is kept, up to one second, and run over the next\n"
+		"frames, so a freeze is not followed by one more long frame. 1 to 30;\n"
+		"30 runs the catch-up in one frame, as before." },
 	{ "network.coop_public", _config_boolean, "false", "HALO_NET_COOP_PUBLIC", _environment_value, _platform_all,
 		"Whether an online co-op game (Create Game > Internet, a SINGLEPLAYER\n"
 		"map) starts as PUBLIC or, false, PRIVATE: Server Setup's LISTING in\n"

@@ -539,6 +539,35 @@ void game_time_start(
 	return;
 }
 
+long config_integer(const char *name);
+
+/* port: the ticks of the frames since the last net: line (network_distributed.c): the most in one frame, and how many frames ran more than 4 */
+static long game_time_peak_ticks;
+static long game_time_frames_over_four;
+
+void game_time_take_tick_peaks(
+	long *peak_ticks,
+	long *frames_over_four)
+{
+	*peak_ticks = game_time_peak_ticks;
+	*frames_over_four = game_time_frames_over_four;
+	game_time_peak_ticks = 0;
+	game_time_frames_over_four = 0;
+}
+
+/* port: network.catchup_ticks (1 to 30), read when a game starts to be played rather than every frame */
+static long game_time_catchup_cap(
+	void)
+{
+	long cap = config_integer("network.catchup_ticks");
+
+	if (cap < 1)
+		cap = 1;
+	if (cap > TICKS_PER_SECOND)
+		cap = TICKS_PER_SECOND;
+	return cap;
+}
+
 /* The clock's decision for a frame of time_delta_sec: how many ticks it runs, and the time left over after them. One function for the serial update and
 the overlap's (which makes the decision for a frame before the tick thread runs it: tick_overlap.h). Returns FALSE (no tick, the leftover as it
 was) when the clock is stopped or the speed is nothing. */
@@ -599,6 +628,24 @@ static boolean game_time_clock_step(
 		leftover_dt = game_time - ticks_elapsed_real/ticks_per_second;
 		if (leftover_dt < 0.f)
 			leftover_dt = 0.f;
+		/* port: a joined client catches up over several frames. After a stall (the HUD's first
+		use, a texture, a file) the frame that follows owed up to a second of ticks and ran them
+		all at about 7 ms each: a 540 ms frame after a 1.4 s one, and the inputs of those ticks
+		sent in a burst. Here no more than network.catchup_ticks run in a frame, and the time
+		not yet run is the leftover (the one second that was always the most owed), so the
+		clock still ends up where it was, a few frames later. */
+		if (game_connection() == _game_connection_network_client && ticks_elapsed > 1)
+		{
+			long cap = game_time_catchup_cap();
+
+			if (ticks_elapsed > cap)
+			{
+				real owed = ticks_elapsed/ticks_per_second;
+
+				ticks_elapsed = cap;
+				leftover_dt += owed - ticks_elapsed/ticks_per_second;
+			}
+		}
 		/* port: debug.fixed_step, a game of this machine alone: one tick a
 		frame that has time (main.c gives it a tick's; a 30th of a second in
 		a float is not one tick exactly), so that what runs once a frame
@@ -729,6 +776,10 @@ void game_time_update(
 		if (game_time_clock_step(time_delta_sec, game_time_globals->leftover_dt, game_time_globals->speed, &ticks_elapsed, &leftover_dt))
 		{
 			game_time_globals->leftover_dt = leftover_dt;
+			if (ticks_elapsed > game_time_peak_ticks)
+				game_time_peak_ticks = ticks_elapsed;
+			if (ticks_elapsed > 4)
+				game_time_frames_over_four++;
 			if (ticks_elapsed > 0)
 				game_time_run_ticks(ticks_elapsed, -1);
 		}
