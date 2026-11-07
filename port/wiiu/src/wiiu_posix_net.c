@@ -160,6 +160,8 @@ told of again for a short while after an accept that found none, a longer one ea
 static struct
 {
 	unsigned char listening;
+	/* a connect is under way on this socket (connect returned EINPROGRESS): its first writeable report carries the outcome in SO_ERROR */
+	unsigned char connecting;
 	unsigned short quiet_ms;
 	uint32_t quiet_until;
 } listeners[LISTENERS];
@@ -368,6 +370,8 @@ int posix_socket_connect(int socket, const void *address, int address_length)
 	trace("connect", socket, address, result);
 	if (result < 0 && (errno == EINPROGRESS || errno == EALREADY))
 	{
+		if (socket >= 0 && socket < LISTENERS)
+			listeners[socket].connecting = 1;
 		last_error = WSAEWOULDBLOCK;
 		return -1;
 	}
@@ -836,12 +840,20 @@ int posix_socket_select(int *read, int *read_count, int *write, int *write_count
 			}
 			/* Winsock reports a socket writeable once its connect has succeeded; one whose connect failed is in the error set, where POSIX reports
 			it writeable with the failure in SO_ERROR. The game takes writeable as connected (connect_endpoint). */
-			if (list == 1 && getsockopt(descriptor, SOL_SOCKET, SO_ERROR, &pending, &length) == 0 && pending)
+			/* Only the report of a connect is that: an open stream that nsysnet calls writeable with an error (6, after a partial send into a full buffer; 14,146 lines
+			in one download, each one taking the socket out of the writeable set for the poll, so a download moved one piece a frame) is writeable, and is left to
+			its next send to say. */
+			if (list == 1 && descriptor >= 0 && descriptor < LISTENERS && listeners[descriptor].connecting)
 			{
-				wiiu_log("Net: socket %d is writeable with the error %d", descriptor, pending);
-				errno = pending;
-				fail();
-				continue;
+				if (getsockopt(descriptor, SOL_SOCKET, SO_ERROR, &pending, &length) == 0 && pending)
+				{
+					wiiu_log("Net: socket %d is writeable with the error %d", descriptor, pending);
+					listeners[descriptor].connecting = 0;
+					errno = pending;
+					fail();
+					continue;
+				}
+				listeners[descriptor].connecting = 0;
 			}
 			lists[list][kept++] = descriptor;
 		}

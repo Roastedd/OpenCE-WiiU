@@ -1584,6 +1584,8 @@ static boolean network_connection_idle_server_reliable_endpoint(
 					{
 						struct transport_endpoint *accepted_endpoint = accept_endpoint(endpoint);
 						struct network_connection *client_connection = NULL;
+						/* port: whether a connection was there to take (the Wii U's poll calls a listening socket readable with nothing waiting) */
+						const boolean accept_found = accepted_endpoint != NULL;
 
 						if (accepted_endpoint &&
 							set_endpoint_blocking(accepted_endpoint, FALSE) != _transport_error_none)
@@ -1599,9 +1601,14 @@ static boolean network_connection_idle_server_reliable_endpoint(
 							*new_client_connection = client_connection;
 							connection->client_list[free_index] = client_connection;
 						}
+#ifdef HALO_WIIU
+						/* (nothing to accept is not an error: 109,661 lines of one hosting session) */
+						else if (accept_found)
+#else
 						else
+#endif
 						{
-							error(_error_silent, "accept_endpoint() returned NULL");
+							error(_error_silent, accept_found ? "a connection was accepted but could not be used" : "accept_endpoint() returned NULL");
 						}
 					}
 					else if (connection->connection.connection_rejection_procedure)
