@@ -125,6 +125,7 @@ unsigned long p2p_peer_endpoint_address(unsigned long virtual_address);
 boolean network_connection_last_read_was_unreliable(void);
 unsigned long system_milliseconds(void);
 void platform_log(char const *format, ...);
+void game_time_take_tick_peaks(long *peak_ticks, long *frames_over_four); /* game_time.c */
 /* port_config.c's, and the sockets' (posix.h: the net: lines) */
 int config_boolean(const char *name);
 int posix_socket_census(int *highest);
@@ -4124,6 +4125,29 @@ static void distributed_log_net_lines(
 			snprintf(line + length, sizeof(line) - (size_t)length, "round trip %ld ms", longest_round_trip);
 	}
 	platform_log("%s", line);
+	{
+		/* port: what tells a stall of this machine from a slow path (a lag investigation of 2026-11-06): the ticks the frames ran (a long frame is followed by a
+		burst of them, network.catchup_ticks spreads it), and every player's ping as the host measured it, sent to all: all of them up together is the host or the
+		path to it, ours alone is this console's */
+		long peak_ticks, frames_over_four;
+		long others = 0, others_longest = 0, others_sum = 0;
+
+		game_time_take_tick_peaks(&peak_ticks, &frames_over_four);
+		for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
+		{
+			long ping = distributed_shown_pings[player_index];
+
+			if (ping != NONE && ping >= 0 && distributed_player(player_index))
+			{
+				others++;
+				others_sum += ping;
+				if (ping > others_longest)
+					others_longest = ping;
+			}
+		}
+		platform_log("net: frames ran at most %ld ticks, %ld frames over 4 | pings of %ld players: mean %ld ms, longest %ld ms",
+			peak_ticks, frames_over_four, others, others ? others_sum/others : 0, others_longest);
+	}
 	/* (the host: each client machine's ticks without its input, on as many
 	lines as they take) */
 	if (connection == _game_connection_network_server)
