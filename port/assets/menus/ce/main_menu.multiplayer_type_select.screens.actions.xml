@@ -5,6 +5,7 @@
 		<on event="created" run="port screens actions open"/>
 		<on event="b" back="true"/>
 		<on event="back" back="true"/>
+		<on event="x" open="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/bot_settings_screen"/>
 		<child widget="main_menu/multiplayer_type_select/screens/actions_list"/>
 		<child widget="main_menu/multiplayer_type_select/screens/actions_title"/>
 		<child widget="main_menu/multiplayer_type_select/screens/actions_answer"/>

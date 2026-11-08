@@ -490,11 +490,13 @@ static void actions(void)
 	/* a bot, for the host */
 	provider->roster_actions(&rows[2], &summary, list);
 	CHECK(actions_of(list, SCREENS_ACTION_DROP_BOT) && actions_of(list, SCREENS_ACTION_BOT_SKILL_UP) && actions_of(list, SCREENS_ACTION_BOT_SKILL_DOWN) &&
-		actions_of(list, SCREENS_ACTION_CHANGE_TEAM) && actions_of(list, SCREENS_ACTION_CANCEL) && !actions_of(list, SCREENS_ACTION_KICK), "a bot's actions");
+		actions_of(list, SCREENS_ACTION_CHANGE_TEAM) && actions_of(list, SCREENS_ACTION_BOT_SETTINGS) && actions_of(list, SCREENS_ACTION_CANCEL) && !actions_of(list, SCREENS_ACTION_KICK),
+		"a bot's actions");
 	/* a bot, for a client: nothing but the way out */
 	summary.host = 0;
 	provider->roster_actions(&rows[2], &summary, list);
 	CHECK(list[0] == SCREENS_ACTION_CANCEL && list[1] == SCREENS_ACTION_NONE, "a client has no bot actions");
+	summary.host = 1;
 	/* a person, for the host and for a client */
 	summary.host = 1;
 	provider->roster_actions(&rows[5], &summary, list);
@@ -508,8 +510,13 @@ static void actions(void)
 	CHECK(actions_of(list, SCREENS_ACTION_UNMUTE) && !actions_of(list, SCREENS_ACTION_MUTE), "a muted player offers UNMUTE");
 	provider->roster_actions(&rows[1], &summary, list);
 	CHECK(!actions_of(list, SCREENS_ACTION_ADD_FRIEND) && !actions_of(list, SCREENS_ACTION_INVITE_PARTY), "a friend in the party offers neither");
+	summary.host = 1;
 	provider->roster_actions(&rows[0], &summary, list);
-	CHECK(actions_of(list, SCREENS_ACTION_CHANGE_TEAM) && !actions_of(list, SCREENS_ACTION_MUTE), "this machine's own row: only the team");
+	CHECK(actions_of(list, SCREENS_ACTION_CHANGE_TEAM) && actions_of(list, SCREENS_ACTION_BOT_SETTINGS) && !actions_of(list, SCREENS_ACTION_MUTE), "this machine's own row: the team and the bot settings");
+	summary.host = 0;
+	provider->roster_actions(&rows[0], &summary, list);
+	CHECK(actions_of(list, SCREENS_ACTION_CHANGE_TEAM) && !actions_of(list, SCREENS_ACTION_BOT_SETTINGS), "the bot settings are the host's");
+	summary.host = 1;
 	for (index = 0; index < 12; index++)
 	{
 		int count = 0;

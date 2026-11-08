@@ -299,7 +299,7 @@ static void scr_game_roster_actions(struct screens_roster_row const *row, struct
 	screens_default_roster_actions(row, summary, all);
 	for (index = 0; all[index] != SCREENS_ACTION_NONE; index++)
 	{
-		if (all[index] == SCREENS_ACTION_MUTE || all[index] == SCREENS_ACTION_UNMUTE || all[index] == SCREENS_ACTION_CANCEL ||
+		if (all[index] == SCREENS_ACTION_MUTE || all[index] == SCREENS_ACTION_UNMUTE || all[index] == SCREENS_ACTION_CANCEL || all[index] == SCREENS_ACTION_BOT_SETTINGS ||
 			(all[index] == SCREENS_ACTION_DROP_BOT && summary->host))
 		{
 			actions[count++] = all[index];
@@ -523,6 +523,12 @@ static boolean scr_action_run(struct widget_instance *row, boolean *widget_delet
 	{
 		ui_widget_port_go_back(row);
 		*widget_deleted = TRUE;
+		return TRUE;
+	}
+	if (action == SCREENS_ACTION_BOT_SETTINGS)
+	{
+		/* (the bot settings screen is opened by the actions screen's X, as the lobby's map vote is: a press posted) */
+		ui_widget_port_post_button(0, BUTTON_X);
 		return TRUE;
 	}
 	if (scr.actions_kind == 0 && provider->roster_action)

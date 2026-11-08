@@ -164,7 +164,7 @@ char const *screens_action_word(int action)
 	{
 		"", "MUTE", "UNMUTE", "START A VOTE TO KICK", "KICK", "BAN", "MUTE FOR EVERYONE", "ADD FRIEND", "INVITE TO PARTY", "DROP BOT", "RAISE SKILL", "LOWER SKILL",
 		"CHANGE TEAM", "JOIN GAME", "INVITE TO GAME", "VIEW CODE", "REMOVE FRIEND", "BLOCK", "UNBLOCK", "ACCEPT", "DECLINE", "MAKE LEADER", "REMOVE FROM PARTY",
-		"LEAVE PARTY", "DISBAND PARTY", "FOLLOW LEADER: ON", "FOLLOW LEADER: OFF", "CANCEL",
+		"LEAVE PARTY", "DISBAND PARTY", "FOLLOW LEADER: ON", "FOLLOW LEADER: OFF", "BOT SETTINGS", "CANCEL",
 	};
 
 	return action > 0 && action < SCREENS_ACTIONS ? words[action] : "";
@@ -642,6 +642,7 @@ void screens_default_roster_actions(struct screens_roster_row const *row, struct
 				actions[count++] = SCREENS_ACTION_BOT_SKILL_DOWN;
 			if (summary->teams)
 				actions[count++] = SCREENS_ACTION_CHANGE_TEAM;
+			actions[count++] = SCREENS_ACTION_BOT_SETTINGS;
 		}
 	}
 	else if (!(row->flags & SCREENS_ROW_ME))
@@ -658,9 +659,12 @@ void screens_default_roster_actions(struct screens_roster_row const *row, struct
 			actions[count++] = SCREENS_ACTION_BAN;
 		}
 	}
-	else if (summary->teams)
+	else
 	{
-		actions[count++] = SCREENS_ACTION_CHANGE_TEAM;
+		if (summary->teams)
+			actions[count++] = SCREENS_ACTION_CHANGE_TEAM;
+		if (summary->host)
+			actions[count++] = SCREENS_ACTION_BOT_SETTINGS;
 	}
 	actions[count++] = SCREENS_ACTION_CANCEL;
 	actions[count] = SCREENS_ACTION_NONE;

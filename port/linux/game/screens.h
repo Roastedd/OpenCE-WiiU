@@ -160,6 +160,8 @@ enum
 	SCREENS_ACTION_DISBAND_PARTY,
 	SCREENS_ACTION_FOLLOW_ON,
 	SCREENS_ACTION_FOLLOW_OFF,
+	/* the host's: the bot settings screen (the actions screen opens it) */
+	SCREENS_ACTION_BOT_SETTINGS,
 	SCREENS_ACTION_CANCEL,
 	SCREENS_ACTIONS
 };

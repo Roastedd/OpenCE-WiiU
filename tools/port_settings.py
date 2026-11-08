@@ -2700,7 +2700,8 @@ def _social_actions() -> list:
     provider says which; A runs one, B goes back. A line under them says what the provider answered, in plain words"""
     base = SOCIAL
     lines = _social_screen(f"{base}/actions_screen",
-                           ['<on event="created" run="port screens actions open"/>', '<on event="b" back="true"/>', '<on event="back" back="true"/>'],
+                           ['<on event="created" run="port screens actions open"/>', '<on event="b" back="true"/>', '<on event="back" back="true"/>',
+                            f'<on event="x" open="{PE}/bot_settings/bot_settings_screen"/>'],
                            [f'<child widget="{base}/actions_list"/>', f'<child widget="{base}/actions_title"/>', f'<child widget="{base}/actions_answer"/>'])
     lines += _social_text(f"{base}/actions_title", 35, 14, 560, 30, color=SOCIAL_TITLE_COLOR, text_y=3)
     lines += _social_text(f"{base}/actions_answer", SOCIAL_ROWS_LEFT, SOCIAL_ROWS_TOP + SOCIAL_ACTION_ROWS * SOCIAL_ROW_PITCH + 6, SOCIAL_ROW_WIDTH, 26,

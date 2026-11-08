@@ -407,6 +407,13 @@ static char const *const port_function_names[] =
 	/* (a dedicated server's map vote: menu_functions.c) */
 	"port map vote open", "port map vote choose",
 	"port controller clear", "port controller cancel",
+	/* (the social screens': menu_screens.inl, tools/port_settings.py's social_files; last, so that the others keep their places) */
+	"port players open", "port players row", "port players add bot", "port players drop bot",
+	"port screens actions open", "port screens action run",
+	"port friends open", "port friends tab 0", "port friends tab 1", "port friends tab 2", "port friends tab 3", "port friends tab previous", "port friends tab next",
+	"port friends row", "port friends join", "port friends invite",
+	"port friend add init", "port friend add edit", "port friend add send", "port friend add back",
+	"port lobby row", "port lobby bot add", "port lobby bot drop",
 };
 
 /* the PC version's game data functions that the Xbox's have not, from
@@ -439,6 +446,8 @@ static char const *const port_game_data_input_names[] =
 	"port map vote update",
 	/* (HDR Calibration's patterns, drawn by the renderer) */
 	"port hdr calibration",
+	/* (the social screens': menu_screens.inl) */
+	"port screens menu update", "port players update", "port screens actions update", "port friends update", "port friend add update",
 };
 
 static struct

@@ -409,6 +409,32 @@ def render_all(out_dir, only=None):
     for index, toast in enumerate(toasts):
         third = "D-pad Right  JOIN   Left  LATER" if toast["kind"] == 4 else None
         emit(f"toast-{index + 1}", lambda size, toast=toast, third=third: toast_canvas(menus, size, toast, colors[toast["kind"]], third))
+    results += social_view(out_dir, only)
+    return results
+
+
+def social_view(out_dir, only):
+    """the GamePad's social view: the real layout code and the real glyphs (tools/screens_preview/social_view_render.c), drawn as the Wii U's quads would be"""
+    binary = Path("/tmp/social_view_render_preview")
+    sources = [ROOT / "tools/screens_preview/social_view_render.c", ROOT / "port/wiiu/src/wiiu_social_view.c", ROOT / "port/wiiu/src/wiiu_keyboard.c",
+               ROOT / "port/linux/game/screens.c", ROOT / "port/linux/game/screens_mock.c", ROOT / "port/linux/game/screens_view.c", ROOT / "port/linux/game/text_safe.c"]
+    if not binary.exists() or binary.stat().st_mtime < max(source.stat().st_mtime for source in sources):
+        subprocess.run(["cc", "-std=gnu99", "-O1", "-Wno-unused-parameter", "-I", str(ROOT / "port/linux/game"), "-I", str(ROOT / "port/third_party/stb"), "-I", str(ROOT / "port/wiiu/src"),
+                        "-iquote", str(ROOT / "port/linux/include"), "-o", str(binary), *map(str, sources), "-lm"], check=True)
+    results = []
+    for scenario in ("friends", "party", "bots", "bots-client", "empty", "toast", "toast-confirm"):
+        name = f"social-{scenario}"
+        if only and name not in only:
+            continue
+        ppm = Path("/tmp") / f"{name}.ppm"
+        done = subprocess.run([str(binary), str(ppm), scenario], capture_output=True, text=True, env={"SCREENS_ROOT": str(ROOT)})
+        if done.returncode:
+            raise SystemExit(f"{scenario}: {done.stderr}")
+        path = out_dir / f"{name}-gamepad.png"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.open(ppm).save(path, optimize=True)
+        results.append(path)
+        print(done.stderr.strip())
     return results
 
 

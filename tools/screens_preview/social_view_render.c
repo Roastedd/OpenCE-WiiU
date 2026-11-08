@@ -218,6 +218,28 @@ int main(int argc, char **argv)
 		for (x = 0; x < WSV_WIDTH; x++)
 			picture[y][x][0] = picture[y][x][1] = picture[y][x][2] = 0.0f;
 	count = wiiu_social_view_build(&view, &atlas, quads, WSV_MAXIMUM_QUADS);
+	/* the texts stay in their places, with the real glyphs: nothing of the chat past its pane, nothing of a row past the pane's edge or into its button */
+	{
+		int overflow = 0;
+
+		for (index = 0; index < count; index++)
+		{
+			const struct wk_quad *q = &quads[index];
+
+			if (q->u0 == atlas.solid_u && q->v0 == atlas.solid_v)
+				continue;
+			if (q->y0 >= WSV_PANE_TOP + 2 && q->y1 <= WSV_PANE_TOP + HALO_SOCIAL_CHAT_LINES * WSV_CHAT_PITCH && q->x0 < 450.0f && q->x1 > WSV_CHAT_LEFT + WSV_CHAT_WIDTH)
+				overflow++, fprintf(stderr, "chat quad %d x %.0f-%.0f\n", index, q->x0, q->x1);
+			if (q->y0 >= WSV_ROWS_TOP && q->y1 <= WSV_ROWS_TOP + HALO_SOCIAL_ROWS * WSV_ROW_PITCH && q->x0 >= 470.0f && q->x0 < WSV_ROW_BUTTON_LEFT && q->x1 > WSV_ROW_BUTTON_LEFT &&
+				view.tab == HALO_SOCIAL_TAB_FRIENDS && view.row_count > 0)
+				overflow++, fprintf(stderr, "row quad %d x %.0f-%.0f y %.0f\n", index, q->x0, q->x1, q->y0);
+			if (q->x0 < 0 || q->x1 > WSV_WIDTH || q->y1 > WSV_HEIGHT)
+				overflow++;
+		}
+		fprintf(stderr, "%s: text overflow: %s\n", scenario, overflow ? "YES" : "none");
+		if (overflow)
+			return 2;
+	}
 	draw(count);
 	out = fopen(argv[1], "wb");
 	fprintf(out, "P6\n%d %d\n255\n", WSV_WIDTH, WSV_HEIGHT);

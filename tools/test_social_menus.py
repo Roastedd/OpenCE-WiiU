@@ -282,3 +282,30 @@ def test_the_pause_box_has_a_frame_for_five_buttons():
     assert port_settings.pause_box_height(5) == 264 and port_settings.pause_box_canvas(264) == 512 and port_settings.pause_box_canvas(229) == 256
     tags = (ROOT / "port/linux/game/menu_tags.c").read_text()
     assert "#define PAUSE_BOX_FIVE_FRAME 4" in tags
+
+
+def test_every_function_the_menus_run_is_in_menu_tags_tables():
+    """the engine resolves a run= by a fixed table (menu_tags.c's port_function_names, port_game_data_input_names): a name that is not in it makes the loader refuse the file and the game
+    use the Xbox's menus (found by the game digest's menu run: "there is no event handler function ...")"""
+    tags = (ROOT / "port/linux/game/menu_tags.c").read_text()
+    functions = set(re.findall(r'"([^"]+)"', tags[tags.index("port_function_names[] ="):tags.index("port_game_data_input_names[] =")]))
+    inputs = set(re.findall(r'"([^"]+)"', tags[tags.index("port_game_data_input_names[] ="):tags.index("static struct", tags.index("port_game_data_input_names[] ="))]))
+    ran, fed = set(), set()
+    paths = [CE / name for name in social_names()] + [CE / "main_menu.multiplayer_type_select.lobby.xml", CE / "main_menu.multiplayer_type_select.xml",
+                                                       CE / "main_menu.settings_select.player_setup.player_profile_edit.bot_settings.xml"]
+    for path in paths:
+        for element in ElementTree.parse(path).getroot().iter():
+            if element.get("run") and element.get("run").startswith("port "):
+                ran.add(element.get("run"))
+            if element.tag == "data" and element.get("input", "").startswith("port "):
+                fed.add(element.get("input"))
+    assert ran and fed
+    for name in ran:
+        assert name in functions or name in {"port setting load", "port setting save", "port settings save", "port settings defaults", "port settings help"} or name in functions, f"{name} is not in port_function_names"
+    for name in fed:
+        assert name in inputs or name == "port settings help", f"{name} is not in port_game_data_input_names"
+    # (and what the handlers dispatch on is in the tables: no handler that nothing can reach)
+    for name in re.findall(r'"(port (?:players|screens|friends|friend add|lobby row|lobby bot)[a-z0-9 ]*?)"', INL):
+        if name.endswith("tab "):
+            continue
+        assert name in functions or name in inputs, f"{name} has a handler and is not in the tables"
