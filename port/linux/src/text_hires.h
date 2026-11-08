@@ -67,6 +67,13 @@ placeholder's; NULL otherwise (text_hires.c; xbox_textures_gx2.c sends them to t
 const unsigned char *text_hires_atlas_rows(unsigned long data, long *size, int first, long *top, long *bottom);
 #endif
 
+/* A glyph of the font that stands for a font tag, rasterized for a layer of the platform's own (the Wii U's GamePad keyboard) at `pixels` pixels to the em, outside the
+game's atlas. Its coverage is written from the buffer's top left, stride bytes a row, at most max_width x max_height; *left and *top say where its box lies from the pen on
+the baseline (pixels, y down, so *top is negative above it), *width and *height its size (0 for a space), *advance the pen's step. Returns 0 if the font or the glyph is
+missing or too big. A code of 0 asks for the font's measures instead: *left is its ascent and *top its descent (pixels, positive), no bitmap. One thread at a time. */
+int text_hires_raster(char const *tag_name, float pixels, unsigned long code, unsigned char *buffer, int stride, int max_width, int max_height, int *left, int *top,
+	int *width, int *height, float *advance);
+
 /* a function called before the atlas is emptied, which draws what has been
 batched from it (rasterizer_xbox_text.c's rasterizer_text_flush) */
 void text_hires_set_reset_hook(void (*hook)(void));

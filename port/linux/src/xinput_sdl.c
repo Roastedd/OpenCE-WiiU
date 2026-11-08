@@ -244,6 +244,16 @@ int halo_chat_taps(float *x, float *y)
 	return touch_input_chat_taps(x, y);
 }
 
+/* the keyboard is drawn by the game here (network_chat.c): nothing to give the platform */
+void halo_chat_keyboard_publish(const struct halo_chat_keyboard_view *view)
+{
+	(void)view;
+}
+
+void halo_chat_keyboard_prewarm(void)
+{
+}
+
 int halo_chat_wheel_steps(void)
 {
 	int steps;

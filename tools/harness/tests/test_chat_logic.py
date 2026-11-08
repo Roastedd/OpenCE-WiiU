@@ -16,14 +16,14 @@ CASES = ["text-printable", "text-control-characters", "text-pipe", "text-bounds"
          "rate-refill", "rate-wrap", "hears", "hears-vehicle", "flags", "alpha", "command-mute", "command-unmute",
          "command-not", "command-usage", "name-match", "name-bounds", "mute-time", "mute-wrap", "mute-again",
          "mute-full", "link-found", "link-written-out", "link-spaced", "link-word-domains", "link-not", "refused", "listing", "filter", "keyboard-character",
-         "keyboard-move", "keyboard-tap"]
+         "keyboard-move", "keyboard-tap", "keyboard-view", "keyboard-platform-tap"]
 FUNCTIONS = ("chat_text_clean", "chat_text_append", "chat_rate_take", "chat_hears", "chat_channel_from_flags",
              "chat_channel_flags", "chat_line_alpha", "chat_lower", "chat_command_word", "chat_command_parse",
              "chat_name_match", "chat_names_equal", "chat_mute_minutes_left", "chat_mute_find", "chat_mute_set", "chat_minutes_plural",
              "chat_alphanumeric", "chat_link_domain", "chat_text_has_link", "chat_refused", "chat_listing_allows",
              "chat_filter_mode", "chat_filter_level", "chat_filter_star",
              "chat_keyboard_character",
-             "chat_keyboard_move", "chat_keyboard_key_at")
+             "chat_keyboard_move", "chat_keyboard_key_at", "chat_keyboard_view_fill", "chat_keyboard_tap_key")
 
 # a fault in network_chat.c, the function it is in, and the case that must catch it
 NEGATIVE_CONTROLS = {
@@ -110,6 +110,16 @@ NEGATIVE_CONTROLS = {
                          "keyboard-move"),
     "tap-outside-taken": (("if (x < 0.0f || x >= 1.0f || y < 0.0f || y >= 1.0f)", "if (0)"),
                           "chat_keyboard_key_at", "keyboard-tap"),
+    "view-capitals-lost": (("view->keys[key_row][key_column] = chat_keyboard_character(rows, key_row, key_column, shift);",
+                            "view->keys[key_row][key_column] = chat_keyboard_character(rows, key_row, key_column, FALSE);"),
+                           "chat_keyboard_view_fill", "keyboard-view"),
+    "view-open-when-closed": (("if (!open)\n\t\treturn;", ""), "chat_keyboard_view_fill", "keyboard-view"),
+    "view-line-unbounded": (("csstrncpy(view->text, text, HALO_CHAT_KEYBOARD_TEXT - 1);", "csstrncpy(view->text, text, HALO_CHAT_KEYBOARD_TEXT);"),
+                            "chat_keyboard_view_fill", "keyboard-view"),
+    "platform-tap-wide-not-snapped": (("*column = (short)(*column - *column % CHAT_KEYBOARD_WIDE_COLUMNS);", ";"),
+                                      "chat_keyboard_tap_key", "keyboard-platform-tap"),
+    "platform-tap-past-the-end": (("*row >= CHAT_KEYBOARD_ROWS ||", "*row > CHAT_KEYBOARD_ROWS ||"), "chat_keyboard_tap_key",
+                                  "keyboard-platform-tap"),
     "tap-wide-not-snapped": (("*column = (short)(*column - *column % CHAT_KEYBOARD_WIDE_COLUMNS);", ";"),
                              "chat_keyboard_key_at", "keyboard-tap"),
 }
@@ -138,7 +148,7 @@ def generated(fault=None, faulty_function=None):
         if fault and name == faulty_function:
             code = mutated(code, *fault)
         text += code + "\n"
-    return (("config.inc", config), ("under_test.inc", text))
+    return (("config.inc", config), ("halo_keyboard.h", read("port/linux/include/halo_keyboard.h")), ("under_test.inc", text))
 
 
 @pytest.mark.parametrize("case", CASES)

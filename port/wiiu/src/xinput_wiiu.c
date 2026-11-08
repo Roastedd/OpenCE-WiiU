@@ -58,6 +58,7 @@ GamePad's gyro, which it replaces while the first player has such a Remote), as 
 #include "wiiu_shell.h"
 #include "wiiu_input.h"
 #include "wiiu_chat_input.h"
+#include "wiiu_keyboard.h"
 #include "wiiu_pad_players.h"
 #include "wiiu_virtual_pads.h"
 #include "wiiu_update.h"
@@ -596,9 +597,39 @@ unsigned long halo_chat_pad_buttons(void)
 	return chat_pad[port >= 0 && port < PORT_COUNT ? port : 0];
 }
 
+/* (network_chat.c's: the keys, the chips and CLOSE of the GamePad's keyboard) */
+void network_chat_keyboard_press(short row, short column);
+void network_chat_keyboard_channel(short channel);
+void network_chat_keyboard_close(void);
+
+/* A tap while the GamePad shows the keyboard (wiiu_keyboard.h) is on its own keys, chips and CLOSE: it presses what it hit, and the chat is told of no tap (its own keyboard
+is hit-tested in the game's picture, which the GamePad's keyboard covers); a tap on none of them does nothing. Without the GamePad's keyboard (the setting off, the glyphs
+not made), the tap is the chat's, as a share of the picture. */
 int halo_chat_taps(float *x, float *y)
 {
-	return wiiu_chat_tap_take(&chat_tap, x, y);
+	float pixel_x, pixel_y;
+	struct wk_hit hit;
+
+	if (!wiiu_keyboard_shown())
+		return wiiu_chat_tap_take(&chat_tap, x, y);
+	if (wiiu_chat_tap_take_pixels(&chat_tap, &pixel_x, &pixel_y))
+	{
+		switch (wiiu_keyboard_hit(pixel_x, pixel_y, &hit))
+		{
+		case WK_HIT_KEY:
+			network_chat_keyboard_press((short)hit.row, (short)hit.column);
+			break;
+		case WK_HIT_CHANNEL:
+			network_chat_keyboard_channel((short)hit.channel);
+			break;
+		case WK_HIT_CLOSE:
+			network_chat_keyboard_close();
+			break;
+		default:
+			break;
+		}
+	}
+	return 0;
 }
 
 /* The players of the other ports (split screen) open their own keyboards with their D-pad Up, as the desktop's remapped chat button does (controller_remap_pressed(port,

@@ -375,3 +375,81 @@ unsigned int text_hires_atlas_texture(unsigned long data)
 	return atlas_texture;
 }
 #endif
+
+/* ---------- glyphs for the platform's own layers (the Wii U's GamePad keyboard, wiiu_keyboard_font.c) */
+
+enum { MAXIMUM_RASTER_FONTS = 4 };
+
+static struct
+{
+	char tag[64];
+	stbtt_fontinfo info;
+	int ready;
+} raster_fonts[MAXIMUM_RASTER_FONTS];
+
+/* the font standing for a tag, opened once; NULL if there is none */
+static stbtt_fontinfo *raster_font(char const *tag_name)
+{
+	unsigned int index;
+	int slot;
+
+	for (slot = 0; slot < MAXIMUM_RASTER_FONTS && raster_fonts[slot].ready; slot++)
+	{
+		if (!names_differ(raster_fonts[slot].tag, tag_name))
+			return &raster_fonts[slot].info;
+	}
+	if (slot == MAXIMUM_RASTER_FONTS)
+		return NULL;
+	for (index = 0; index < text_hires_embedded_count; index++)
+	{
+		const struct text_hires_embedded *embedded = &text_hires_embedded[index];
+		const unsigned char *data = (const unsigned char *)embedded->data;
+
+		if (!embedded->tag || names_differ(embedded->tag, tag_name))
+			continue;
+		if (!stbtt_InitFont(&raster_fonts[slot].info, data, stbtt_GetFontOffsetForIndex(data, 0)))
+			return NULL;
+		snprintf(raster_fonts[slot].tag, sizeof(raster_fonts[slot].tag), "%s", tag_name);
+		raster_fonts[slot].ready = 1;
+		return &raster_fonts[slot].info;
+	}
+	return NULL;
+}
+
+int text_hires_raster(char const *tag_name, float pixels, unsigned long code, unsigned char *buffer, int stride, int max_width, int max_height, int *left, int *top,
+	int *width, int *height, float *advance)
+{
+	stbtt_fontinfo *info = tag_name && pixels > 0.0f ? raster_font(tag_name) : NULL;
+	float scale;
+	int glyph, x0, y0, x1, y1, advance_units = 0, bearing = 0;
+
+	if (!info)
+		return 0;
+	scale = stbtt_ScaleForMappingEmToPixels(info, pixels);
+	if (!code)
+	{
+		int ascent, descent, gap;
+
+		stbtt_GetFontVMetrics(info, &ascent, &descent, &gap);
+		*left = (int)(ascent * scale + 0.5f);
+		*top = (int)(-descent * scale + 0.5f);
+		*width = *height = 0;
+		*advance = 0.0f;
+		return 1;
+	}
+	glyph = stbtt_FindGlyphIndex(info, (int)code);
+	if (!glyph)
+		return 0;
+	stbtt_GetGlyphHMetrics(info, glyph, &advance_units, &bearing);
+	*advance = advance_units * scale;
+	stbtt_GetGlyphBitmapBox(info, glyph, scale, scale, &x0, &y0, &x1, &y1);
+	*left = x0;
+	*top = y0;
+	*width = x1 - x0;
+	*height = y1 - y0;
+	if (*width < 0 || *height < 0 || *width > max_width || *height > max_height)
+		return 0;
+	if (*width > 0 && *height > 0)
+		stbtt_MakeGlyphBitmap(info, buffer, *width, *height, stride, scale, scale, glyph);
+	return 1;
+}

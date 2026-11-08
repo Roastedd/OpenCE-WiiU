@@ -19,6 +19,8 @@ code (under_test.inc).
 #define csstrlen strlen
 #define csstrcmp strcmp
 #define csstrncpy strncpy
+#define csmemset memset
+#include "halo_keyboard.h"
 
 #include "config.inc"
 #include "under_test.inc"
@@ -532,6 +534,64 @@ int main(int argc, char **argv)
 			"the space key: %d %d", row, column);
 		CHECK(!chat_keyboard_key_at(-0.01f, 0.5f, &row, &column) && !chat_keyboard_key_at(0.5f, 1.0f, &row, &column),
 			"a tap outside taken");
+	}
+
+	/* the keyboard given to the platform that draws it: nothing but "closed" while it is not up, else the line, the channel, the capitals and the key picked, and the
+	characters of its keys as the page and the capitals have them */
+	CASE("keyboard-view")
+	{
+		static char const *const letters[CHAT_KEYBOARD_ROWS - 1] = { "1234567890", "qwertyuiop", "asdfghjkl'", "zxcvbnm,.?" };
+		static char const *const symbols[CHAT_KEYBOARD_ROWS - 1] = { "1234567890", "!@#$%^&*()", "-_=+[]{};:", "\"'<>/\\?~,." };
+		struct halo_chat_keyboard_view view;
+
+		memset(&view, 0x55, sizeof(view));
+		chat_keyboard_view_fill(&view, FALSE, 2, TRUE, TRUE, 3, 4, "ignored", letters);
+		CHECK(!view.open && view.length == 0 && view.text[0] == 0 && view.channel == 0 && !view.shift && view.keys[0][0] == 0, "closed is all zero");
+		chat_keyboard_view_fill(&view, TRUE, 1, FALSE, FALSE, 2, 3, "need help", letters);
+		CHECK(view.open && view.channel == 1 && !view.shift && !view.symbols && view.row == 2 && view.column == 3, "the state");
+		CHECK(view.length == 9 && !strcmp(view.text, "need help"), "the line: '%s'", view.text);
+		CHECK(!memcmp(view.keys[0], "1234567890", 10) && !memcmp(view.keys[1], "qwertyuiop", 10) && !memcmp(view.keys[3], "zxcvbnm,.?", 10), "the letters");
+		chat_keyboard_view_fill(&view, TRUE, 0, TRUE, FALSE, 0, 0, "", letters);
+		CHECK(view.shift && !memcmp(view.keys[1], "QWERTYUIOP", 10) && !memcmp(view.keys[0], "1234567890", 10) && !memcmp(view.keys[3], "ZXCVBNM,.?", 10), "capitals");
+		chat_keyboard_view_fill(&view, TRUE, 0, FALSE, TRUE, 0, 0, "", symbols);
+		CHECK(view.symbols && !memcmp(view.keys[1], "!@#$%^&*()", 10) && view.keys[3][0] == '"', "the symbols' page");
+		/* a longest line fits, ended */
+		{
+			char line[CHAT_TEXT_SIZE + 8];
+
+			memset(line, 'x', sizeof(line));
+			line[sizeof(line) - 1] = 0;
+			chat_keyboard_view_fill(&view, TRUE, 0, FALSE, FALSE, 0, 0, line, letters);
+			CHECK(view.length == HALO_CHAT_KEYBOARD_TEXT - 1 && view.text[HALO_CHAT_KEYBOARD_TEXT - 1] == 0, "a long line is cut: %d", view.length);
+		}
+	}
+
+	/* a tap of the platform's keyboard: the key it is (a wide key of the last row by its first column); none off the keyboard */
+	CASE("keyboard-platform-tap")
+	{
+		short row, column;
+
+		row = 0;
+		column = 9;
+		CHECK(chat_keyboard_tap_key(&row, &column) && row == 0 && column == 9, "a letter");
+		row = CHAT_KEYBOARD_ROWS - 1;
+		column = 5;
+		CHECK(chat_keyboard_tap_key(&row, &column) && row == CHAT_KEYBOARD_ROWS - 1 && column == 4, "the second half of a wide key: %d", column);
+		row = CHAT_KEYBOARD_ROWS - 1;
+		column = CHAT_KEYBOARD_COLUMNS - 1;
+		CHECK(chat_keyboard_tap_key(&row, &column) && column == CHAT_KEYBOARD_COLUMNS - 2, "the last key's second half");
+		row = CHAT_KEYBOARD_ROWS;
+		column = 0;
+		CHECK(!chat_keyboard_tap_key(&row, &column), "a row past the keyboard");
+		row = 0;
+		column = CHAT_KEYBOARD_COLUMNS;
+		CHECK(!chat_keyboard_tap_key(&row, &column), "a column past it");
+		row = -1;
+		column = 0;
+		CHECK(!chat_keyboard_tap_key(&row, &column), "before it");
+		row = 0;
+		column = -1;
+		CHECK(!chat_keyboard_tap_key(&row, &column), "before it");
 	}
 
 	return 0;

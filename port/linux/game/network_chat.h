@@ -44,6 +44,12 @@ void network_chat_say_unchecked(short channel, char const *text);
 /* whether a line is being typed: the keyboard types into it, and drives no
 player (xinput_sdl.c), as with the console */
 boolean network_chat_typing(void);
+/* (the Wii U's GamePad keyboard, wiiu_keyboard.h: network_chat_update gives it the keyboard as halo_keyboard.h's view, and a finger on its keys calls these) a key tapped
+(row 0 to 4, column 0 to 9: a wide key of the last row by its first column) is the key picked and pressed; a channel chip is the line's channel (_chat_channel_*); CLOSE
+closes the keyboard. Each does nothing unless the keyboard is up for the first player's controller. */
+void network_chat_keyboard_press(short row, short column);
+void network_chat_keyboard_channel(short channel);
+void network_chat_keyboard_close(void);
 /* Physical controller owning the on-screen keyboard, or NONE. */
 short network_chat_controller(void);
 /* (hud_unit.c) where the local player's motion sensor was drawn: its left

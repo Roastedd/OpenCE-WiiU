@@ -386,6 +386,9 @@ static struct
 /* whether this machine is in a network game (the lines of the last are let
 go as the next starts) */
 static boolean chat_in_game;
+/* a game has started: the keyboard's glyphs are to be drawn once, unseen, in the next view's HUD (the hi-res text rasterizes a glyph the first time it is drawn, and 70
+of them at once would be a hitch at the first keystroke) */
+static boolean chat_glyphs_warm;
 
 /* (system_milliseconds) when "Text chat is off in this game" was last said
 (once a while, however often D-pad Up is pressed) */
@@ -1995,7 +1998,7 @@ static unsigned long chat_keyboard_buttons(unsigned long buttons)
 	return buttons & ~chat_keyboard.opening_buttons;
 }
 
-void network_chat_update(
+static void chat_update(
 	void)
 {
 	unsigned long held;
@@ -2038,6 +2041,9 @@ void network_chat_update(
 			csmemset(chat_motion_sensors, 0, sizeof(chat_motion_sensors));
 			chat_off_noticed = FALSE;
 			csmemset(chat_rates, 0, sizeof(chat_rates));
+			/* (the keyboard's glyphs made ahead of the first keystroke, off this thread where the platform draws it itself; and the HUD's drawn once unseen) */
+			halo_chat_keyboard_prewarm();
+			chat_glyphs_warm = TRUE;
 		}
 		if (chat_host())
 		{
@@ -2175,6 +2181,98 @@ void network_chat_update(
 	if (chat_input.active)
 		chat_scroll = (short)(chat_scroll + halo_chat_wheel_steps());
 	chat_scroll = (short)PIN(chat_scroll, 0, MAX(chat_line_count - 1, 0));
+}
+
+/* the keyboard as the platform that draws it itself needs it (halo_keyboard.h): closed (nothing else set) or open for the first player's controller, with the line, the
+channel, the capitals and the key picked, and the keys' characters as the page (rows: the letters' or the symbols') and the capitals have them (pure: tools/harness/tests/
+chat_logic.c) */
+static void chat_keyboard_view_fill(
+	struct halo_chat_keyboard_view *view,
+	boolean open,
+	short channel,
+	boolean shift,
+	boolean symbols,
+	short row,
+	short column,
+	char const *text,
+	char const *const *rows)
+{
+	short key_row;
+	short key_column;
+
+	csmemset(view, 0, sizeof(*view));
+	if (!open)
+		return;
+	view->open = TRUE;
+	view->channel = channel;
+	view->shift = shift;
+	view->symbols = symbols;
+	view->row = row;
+	view->column = column;
+	csstrncpy(view->text, text, HALO_CHAT_KEYBOARD_TEXT - 1);
+	view->length = (int)csstrlen(view->text);
+	for (key_row = 0; key_row < HALO_CHAT_KEYBOARD_ROWS; key_row++)
+	{
+		for (key_column = 0; key_column < HALO_CHAT_KEYBOARD_COLUMNS; key_column++)
+			view->keys[key_row][key_column] = chat_keyboard_character(rows, key_row, key_column, shift);
+	}
+}
+
+/* a key the platform's own keyboard was tapped on (row 0 to 4, column 0 to 9): the key it is, a wide key of the last row by its first column; FALSE off the keyboard (pure) */
+static boolean chat_keyboard_tap_key(
+	short *row,
+	short *column)
+{
+	if (*row < 0 || *row >= CHAT_KEYBOARD_ROWS || *column < 0 || *column >= CHAT_KEYBOARD_COLUMNS)
+		return FALSE;
+	if (*row == CHAT_KEYBOARD_ROWS - 1)
+		*column = (short)(*column - *column % CHAT_KEYBOARD_WIDE_COLUMNS);
+	return TRUE;
+}
+
+/* every frame (main.c), after the keys and pads: the lines and the keyboard, and the keyboard given to the platform to draw (halo_chat_keyboard_publish) */
+void network_chat_update(
+	void)
+{
+	struct halo_chat_keyboard_view view;
+
+	chat_update();
+	chat_keyboard_view_fill(&view, chat_input.active && chat_keyboard.open && chat_input.controller == 0, chat_input.channel, chat_keyboard.shift, chat_keyboard.symbols,
+		chat_keyboard.row, chat_keyboard.column, chat_input.text, chat_keyboard.symbols ? chat_keyboard_symbols : chat_keyboard_letters);
+	halo_chat_keyboard_publish(&view);
+}
+
+/* the platform's own keyboard, for the first player's controller: a key tapped is the key picked and pressed; a chip is the channel; CLOSE closes it. Nothing unless the
+keyboard is up for that controller. */
+static boolean chat_keyboard_platform_open(
+	void)
+{
+	return chat_input.active && chat_keyboard.open && chat_input.controller == 0;
+}
+
+void network_chat_keyboard_press(
+	short row,
+	short column)
+{
+	if (!chat_keyboard_platform_open() || !chat_keyboard_tap_key(&row, &column))
+		return;
+	chat_keyboard.row = row;
+	chat_keyboard.column = column;
+	chat_keyboard_press();
+}
+
+void network_chat_keyboard_channel(
+	short channel)
+{
+	if (chat_keyboard_platform_open() && channel >= 0 && channel < NUMBER_OF_CHAT_CHANNELS)
+		chat_input.channel = channel;
+}
+
+void network_chat_keyboard_close(
+	void)
+{
+	if (chat_keyboard_platform_open())
+		chat_input_end();
 }
 
 short network_chat_controller(void)
@@ -2643,6 +2741,46 @@ static void chat_keyboard_draw(
 	}
 }
 
+/* the printable ASCII characters drawn once, all but invisible (a black at 1/255 of opacity), at the sizes the keyboard and the lines have, so that the hi-res text has
+rasterized each glyph before the first keystroke, not in the frame it is typed in: the 95 characters in four strings, at the top left of the window */
+static void chat_glyphs_draw(
+	long font_index,
+	rectangle2d const *window,
+	short line_height)
+{
+	static real const scales[2] = { 1.0f, CHAT_TEXT_SCALE };
+	real_argb_color color;
+	short scale_index;
+	short part;
+
+	color.alpha = 1.0f / 255.0f;
+	color.red = color.green = color.blue = 0.0f;
+	for (scale_index = 0; scale_index < 2; scale_index++)
+	{
+		rasterizer_text_set_scale(scales[scale_index], (real)window->x0, (real)window->y0);
+		for (part = 0; part < 4; part++)
+		{
+			wchar_t string[26];
+			rectangle2d bounds;
+			short count = 0;
+			short code;
+
+			for (code = ' ' + part * 24; code < ' ' + part * 24 + 24 && code <= '~'; code++)
+				string[count++] = (wchar_t)code;
+			string[count] = 0;
+			bounds.x0 = window->x0;
+			bounds.x1 = (short)(window->x1);
+			bounds.y0 = (short)(window->y0 + part * line_height);
+			bounds.y1 = (short)(bounds.y0 + line_height);
+			draw_string_set_draw_mode(font_index, NONE, 0 /* left */, 0, &color);
+			text_filter_suspend();
+			rasterizer_draw_unicode_string(&bounds, NULL, NULL, 0, string);
+			text_filter_resume();
+		}
+	}
+	rasterizer_text_set_scale(1.0f, 0.0f, 0.0f);
+}
+
 void network_chat_draw(
 	short local_player_index)
 {
@@ -2669,6 +2807,17 @@ void network_chat_draw(
 	/* the point the lines are scaled about */
 	short anchor;
 
+	if (chat_glyphs_warm && local_player_index == 0 && font_index != NONE && chat_network_game() && chat_shown() && !chat_hidden())
+	{
+		struct font_header *warm_font = font_definition_get(font_index);
+		short warm_height = (short)(warm_font->ascending_height + warm_font->descending_height + warm_font->leading_height);
+		rectangle2d warm_window = render.camera.window_bounds;
+
+		chat_glyphs_warm = FALSE;
+		offset_rectangle2d(&warm_window, -render.camera.viewport_bounds.x0, -render.camera.viewport_bounds.y0);
+		if (warm_height > 0)
+			chat_glyphs_draw(font_index, &warm_window, warm_height);
+	}
 	if (!chat_network_game() || !chat_shown() || chat_hidden() || font_index == NONE || local_player_index < 0 ||
 		local_player_index >= MAXIMUM_LOCAL_PLAYERS || (!chat_line_count && !typing))
 	{
