@@ -1665,6 +1665,8 @@ static struct object_header_datum *tick_snapshot_fill(long object_index, struct 
 	if (s.overlap_requested || live->identifier != header->identifier || !live->datum)
 	{
 		s.fallbacks++;
+		/* (a network game's overlap frame: the game state's own object is read, so the tick thread is waited for first: tick_overlap.h) */
+		TICK_OVERLAP_NET_FALLBACK();
 		return live;
 	}
 	s.misses++;
@@ -1708,6 +1710,7 @@ struct object_header_datum *tick_snapshot_object_header_get(long object_index)
 		/* (an object the snapshot has not: made since it, and the view's start would have caught it) */
 		s.fallbacks++;
 		s.fallbacks_total++;
+		TICK_OVERLAP_NET_FALLBACK();
 		return (struct object_header_datum *)datum_get(object_header_data, object_index);
 	}
 	if (s.overlap_requested && header->datum)
@@ -1743,6 +1746,7 @@ struct object_header_datum *tick_snapshot_object_header_try_and_get(long object_
 				platform_log("tick snapshot: an object (%08lx) that the frame's pair of the ring does not hold was asked for by name; it does not exist for this frame (said once)", (unsigned long)object_index);
 			return NULL;
 		}
+		TICK_OVERLAP_NET_FALLBACK();
 		live = (struct object_header_datum *)datum_try_and_get(object_header_data, object_index);
 		if (live)
 		{

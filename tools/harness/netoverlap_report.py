@@ -22,9 +22,12 @@ STOPPED = re.compile(r"unused or changed|EXCEPTION|Assertion|assertion|display_a
 NOT_STOPPED = re.compile(r"no assertion|assertions? kept|release|ASSERT_VALID|the game host went down|network_game_abort|halted time|time is halted", re.I)
 
 
+COMPARE_OPTIONS: list = []
+
+
 def judge(folder: Path) -> dict:
     host, client = folder / "host.log", folder / "client.log"
-    result = subprocess.run([sys.executable, str(ROOT / "tools/net_compare.py"), "--compare", str(host), str(client)], capture_output=True, text=True)
+    result = subprocess.run([sys.executable, str(ROOT / "tools/net_compare.py"), *COMPARE_OPTIONS, "--compare", str(host), str(client)], capture_output=True, text=True)
     text = result.stdout + result.stderr
     out = {"folder": folder.name, "judgement": (text.split(":", 1)[0] or "?").strip(), "exit": result.returncode}
     found = re.search(r"(\d+) seconds compared, tick offsets \[([^\]]*)\]; positions apart mean ([\d.]+) largest ([\d.]+), aim largest (\d+) degrees; mismatched seconds (.*)", text)
@@ -105,7 +108,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("folders", nargs="+")
     parser.add_argument("--json")
+    parser.add_argument("--seconds", type=int, default=400, help="net_compare's --seconds (seconds of play compared)")
+    parser.add_argument("--pair-ticks", type=int, default=2, help="net_compare's pair_ticks tolerance")
     args = parser.parse_args()
+    COMPARE_OPTIONS.extend(["--seconds", str(args.seconds), "--tolerance", f"pair_ticks={args.pair_ticks}"])
     rows, bad = [], False
     for name in args.folders:
         folder = Path(name)

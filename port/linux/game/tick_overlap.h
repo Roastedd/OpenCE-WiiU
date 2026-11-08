@@ -183,6 +183,9 @@ engine's and the netcode's state (tick_overlap.c has why). Cheap when no such fr
 extern volatile int tick_overlap_net_pending;
 void tick_overlap_net_barrier(void);
 #define TICK_OVERLAP_NET_BARRIER() do { if (tick_overlap_net_pending) tick_overlap_net_barrier(); } while (0)
+/* ... and the snapshot's reads of the game state's own object, when the ring has none to give (tick_snapshot.c): the same wait, counted apart */
+void tick_overlap_net_fallback(void);
+#define TICK_OVERLAP_NET_FALLBACK() do { if (tick_overlap_net_pending) tick_overlap_net_fallback(); } while (0)
 
 /* the clock */
 boolean game_time_overlap_step(real time_delta_sec, long *time_now, long *ticks_elapsed, real *leftover_after, real *speed);

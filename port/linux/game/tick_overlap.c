@@ -134,7 +134,7 @@ static struct
 	/* a network game (halo/net_overlap.txt): the frame being drawn is the overlap's, and the game is a joined or a hosted one; the drawing waits for the job before it reads what the
 	snapshot does not copy (tick_overlap_net_barrier). The numbers: frames, barriers reached, waits at them, and their milliseconds */
 	boolean net_frame;
-	unsigned long net_frames, net_barriers, net_barrier_waits;
+	unsigned long net_frames, net_barriers, net_barrier_waits, net_fallback_waits;
 	unsigned long long net_barrier_ticks, net_barrier_max_ticks;
 	/* how far behind the clock the picture of a network game's overlap frame is, in thousandths of a tick: the clock's place after the frame's ticks (the tick and the fraction of the next
 	the leftover brings) less the place of the pose drawn (the pair's earlier tick and the fraction blended). The serial loop's frame is one tick behind by the way it blends; this is the
@@ -433,6 +433,18 @@ void tick_overlap_net_barrier(
 			o.net_barrier_max_ticks = took;
 	}
 	tick_overlap_net_pending = 0;
+}
+
+/* the snapshot has no object to give for an index and gives the game state's: the tick thread is waited for first (at the first, as the drawing is in the middle of a frame whose job is
+in flight; later ones find it over) */
+void tick_overlap_net_fallback(
+	void)
+{
+	if (tick_overlap_net_pending && tick_overlap_thread_is_render())
+	{
+		o.net_fallback_waits++;
+		tick_overlap_net_barrier();
+	}
 }
 
 static void tick_overlap_post(
@@ -1238,8 +1250,8 @@ void tick_overlap_log(
 		(double)(o.sync_ticks - o.sync_wait_ticks) / per_ms / active);
 	if (o.net_frames)
 	{
-		platform_log("tick overlap, network game: %lu overlapped frames, the drawing reached the barrier in %lu and waited for the tick thread in %lu (%.2f ms in all, most %.2f ms)",
-			o.net_frames, o.net_barriers, o.net_barrier_waits, (double)o.net_barrier_ticks / per_ms, (double)o.net_barrier_max_ticks / per_ms);
+		platform_log("tick overlap, network game: %lu overlapped frames, the drawing reached the barrier in %lu and waited for the tick thread in %lu (%.2f ms in all, most %.2f ms; %lu by an object read)",
+			o.net_frames, o.net_barriers, o.net_barrier_waits, (double)o.net_barrier_ticks / per_ms, (double)o.net_barrier_max_ticks / per_ms, o.net_fallback_waits);
 	}
 	if (o.net_age_frames)
 	{
@@ -1269,7 +1281,7 @@ void tick_overlap_log(
 	o.wait_ticks = o.wait_max_ticks = o.frame_ticks = o.frame_max_ticks = o.sync_ticks = o.sync_wait_ticks = o.post_ticks = o.draw_ticks = o.draw_max_ticks = 0;
 	o.serial_wait_ticks = 0;
 	o.waits_long = o.serial_waits = o.active_frames = 0;
-	o.net_frames = o.net_barriers = o.net_barrier_waits = 0;
+	o.net_frames = o.net_barriers = o.net_barrier_waits = o.net_fallback_waits = 0;
 	o.net_barrier_ticks = o.net_barrier_max_ticks = 0;
 	o.net_age_sum = o.net_age_clean_sum = 0;
 	o.net_age_frames = o.net_age_max = o.net_age_clean_frames = 0;
