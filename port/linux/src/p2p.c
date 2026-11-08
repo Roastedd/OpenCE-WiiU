@@ -3766,6 +3766,20 @@ int p2p_join_progress(int *stage, char *reason, int size)
 	return *stage;
 }
 
+void p2p_join_cancel(void)
+{
+	pthread_mutex_lock(&p2p_lock);
+	if (p2p.joining || p2p.join_requested)
+	{
+		if (p2p.joining)
+			p2p_signal_stop_joining();
+		p2p.joining = p2p.join_requested = 0;
+		/* (nothing is under way: the progress says none, not that it failed) */
+		p2p.join_started = 0;
+	}
+	pthread_mutex_unlock(&p2p_lock);
+}
+
 void p2p_join_refused(int rejection_code)
 {
 	pthread_mutex_lock(&p2p_lock);

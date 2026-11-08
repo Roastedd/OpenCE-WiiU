@@ -1322,6 +1322,9 @@ static const struct config_setting config_settings[] =
 		"How much friends see of what you are doing: \"none\" (only that you are online),\n"
 		"\"basic\" (the menus, a lobby or a game; the game's map, type and players too when\n"
 		"it can be joined) or \"full\" (map, type and players of any multiplayer game)." },
+	{ "social.friends_can_join", _config_boolean, "true", "HALO_SOCIAL_FRIENDS_CAN_JOIN", _environment_value, _platform_all,
+		"A game you host for the internet shows your friends a JOIN button while it takes\n"
+		"players. false: no button (you can still invite a friend by hand)." },
 	{ "social.requests", _config_boolean, "true", "HALO_SOCIAL_REQUESTS", _environment_value, _platform_all,
 		"Friend requests from people who typed your code are taken. false: none are (those\n"
 		"you sent still get their answers)." },

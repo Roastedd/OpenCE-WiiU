@@ -11,6 +11,7 @@ The p2p thread is the engine's thread. A thread of its own reads the files at th
 */
 
 #include "../game/social_front.h"
+#include "../game/social_join.h"
 
 typedef char social_topic_count_assert[SOCIAL_MAX_TOPICS == P2P_SOCIAL_MAXIMUM_TOPICS ? 1 : -1];
 typedef char social_topic_size_assert[SOCIAL_TOPIC_SIZE == P2P_SOCIAL_TOPIC_SIZE ? 1 : -1];
@@ -109,6 +110,108 @@ static int social_platform_code(void)
 #endif
 }
 
+/* ---------- joining (social_join.h): what the join machine asks of internet play, on the game's thread */
+
+static unsigned int social_join_now(void *user)
+{
+	(void)user;
+	return (unsigned int)p2p_now();
+}
+
+static int social_join_version(void *user)
+{
+	(void)user;
+	return HALO_PORT_NETWORK_VERSION;
+}
+
+static int social_join_busy(void *user)
+{
+	int busy;
+
+	(void)user;
+	pthread_mutex_lock(&p2p_lock);
+	busy = p2p.hosting || joined_host() != NULL;
+	pthread_mutex_unlock(&p2p_lock);
+	return busy || social_join_hook_busy();
+}
+
+static int social_join_in_game_of(void *user, const unsigned char *host_hash)
+{
+	int together;
+
+	(void)user;
+	pthread_mutex_lock(&p2p_lock);
+	together = joined_host() != NULL && !memcmp(p2p.join_host_hash, host_hash, SOCIAL_HASH_SIZE);
+	pthread_mutex_unlock(&p2p_lock);
+	return together;
+}
+
+static int social_join_map_state(void *user, const char *map)
+{
+	(void)user;
+	return social_join_hook_map_state(map);
+}
+
+/* the friend as the snapshot last had it (the game thread's own copy) */
+static int social_join_friend_now(void *user, unsigned int friend_id, int *online, struct social_join_target *target)
+{
+	static struct social_snapshot snapshot;
+	int index;
+
+	(void)user;
+	*online = 0;
+	social_snapshot_get(&snapshot);
+	for (index = 0; index < snapshot.friend_count; index++)
+	{
+		if (snapshot.friends[index].id == friend_id)
+		{
+			*online = snapshot.friends[index].online;
+			if (snapshot.friends[index].online && snapshot.friends[index].joinable)
+			{
+				*target = snapshot.friends[index].join;
+				return 1;
+			}
+			return 0;
+		}
+	}
+	return 0;
+}
+
+static int social_join_begin(void *user, const unsigned char *host_hash, const unsigned char *token)
+{
+	char link[P2P_LINK_SIZE];
+
+	(void)user;
+	memcpy(link, "halo://join/", 12);
+	social_hex(host_hash, SOCIAL_HASH_SIZE, link + 12);
+	social_hex(token, SOCIAL_TOKEN_SIZE, link + 12 + 2 * SOCIAL_HASH_SIZE);
+	return p2p_join_invite(link);
+}
+
+static int social_join_progress(void *user, int *stage, char *reason, int size)
+{
+	(void)user;
+	return p2p_join_progress(stage, reason, size);
+}
+
+static int social_join_game_ready(void *user, const unsigned char *host_hash)
+{
+	(void)user;
+	return social_join_hook_game_ready(host_hash);
+}
+
+static void social_join_cancel_backend(void *user)
+{
+	(void)user;
+	p2p_join_cancel();
+}
+
+static int social_join_strict_nat(void *user)
+{
+	(void)user;
+	return p2p_nat_strict();
+}
+
 /* ---------- starting */
 
 /* whether it is on: the card file social.txt in the config's folder says (1 or 0), else the config key */
@@ -197,6 +300,23 @@ static void *social_loader(void *argument)
 	social_set_enabled(social_front_engine(front), 1);
 	social_engine_set_share(social_front_engine(front), config_boolean("social.share_status"), social_details_from_text(config_string("social.share_details")),
 		config_boolean("social.requests"));
+	{
+		struct social_join_backend backend;
+
+		memset(&backend, 0, sizeof(backend));
+		backend.now = social_join_now;
+		backend.version = social_join_version;
+		backend.busy = social_join_busy;
+		backend.in_game_of = social_join_in_game_of;
+		backend.map_state = social_join_map_state;
+		backend.friend_now = social_join_friend_now;
+		backend.begin = social_join_begin;
+		backend.progress = social_join_progress;
+		backend.game_ready = social_join_game_ready;
+		backend.cancel = social_join_cancel_backend;
+		backend.strict_nat = social_join_strict_nat;
+		social_join_set_backend(&backend);
+	}
 	social.front = front;
 	if (!social.quit_registered)
 	{
@@ -235,15 +355,40 @@ void social_p2p_heard(const char *topic, const unsigned char *payload, int size)
 		social_front_heard(social.front, topic, payload, size);
 }
 
+/* what the machine is doing and could be joined at: the game's word (social_set_activity), and what internet play knows of the game hosted. Under p2p_lock */
+static void social_place_make(struct social_place *place)
+{
+	memset(place, 0, sizeof(*place));
+	place->activity = (unsigned char)(social.activity ? social.activity : SOCIAL_MENUS);
+	if (p2p.hosting && p2p.has_token && place->activity != SOCIAL_SOLO)
+	{
+		int count, maximum, engine_type, open, in_progress, has_password;
+
+		hosted_player_counts(&count, &maximum);
+		p2p_lobby_game_details(place->map, sizeof(place->map), place->gametype, sizeof(place->gametype), &engine_type, &open, &in_progress, &has_password);
+		place->hosting = 1;
+		/* (a game being set up is a lobby, one going is a game) */
+		if (place->activity == SOCIAL_MENUS || place->activity == SOCIAL_LOBBY || place->activity == SOCIAL_BUSY)
+			place->activity = in_progress ? SOCIAL_GAME : SOCIAL_LOBBY;
+		place->players = (unsigned char)(count < 0 ? 0 : count > 255 ? 255 : count);
+		place->maximum_players = (unsigned char)(maximum < 0 ? 0 : maximum > 255 ? 255 : maximum);
+		place->engine_type = (unsigned char)engine_type;
+		place->private_game = (unsigned char)has_password;
+		place->has_invite = 1;
+		p2p_key_hash(p2p_public_key(), place->invite_hash);
+		memcpy(place->invite_token, p2p.token, SOCIAL_TOKEN_SIZE);
+		/* (friends can join an internet game that takes players, unless the player turned that off) */
+		place->joinable = (unsigned char)(open && config_boolean("social.friends_can_join"));
+	}
+}
+
 void social_p2p_tick(void)
 {
 	struct social_place place;
 
 	if (social.state != _social_running)
 		return;
-	/* what the machine is doing: the game's word (social_set_activity) */
-	memset(&place, 0, sizeof(place));
-	place.activity = (unsigned char)(social.activity ? social.activity : SOCIAL_MENUS);
+	social_place_make(&place);
 	social_engine_set_place(social_front_engine(social.front), &place);
 	/* (the brokers are asked for; the pass of the engine) */
 	p2p_signal_start();

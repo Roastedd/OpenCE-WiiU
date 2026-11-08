@@ -1030,6 +1030,16 @@ void p2p_set_hosting_public(int public)
 		server_master_changed();
 }
 
+void p2p_lobby_game_details(char *map, int map_size, char *gametype, int gametype_size, int *engine_type, int *open, int *in_progress, int *has_password)
+{
+	snprintf(map, (size_t)map_size, "%s", lobby.map);
+	snprintf(gametype, (size_t)gametype_size, "%s", lobby.gametype);
+	*engine_type = lobby.engine_type;
+	*open = (lobby.flags & _listing_open) != 0;
+	*in_progress = (lobby.flags & _listing_in_progress) != 0;
+	*has_password = lobby.has_password;
+}
+
 int p2p_hosting_listed(void)
 {
 	int listed;
