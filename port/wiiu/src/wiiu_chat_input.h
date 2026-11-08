@@ -7,7 +7,7 @@ chat with them.
 
 The buttons are the Wii U's letters, not their places: the chat's keyboard is a menu, where the Wii U's A (the right-hand button) types, B (the bottom one) closes, X deletes
 and Y gives capitals, as in every menu of the console (input.wiiu_face_buttons does not move them). A Wii Remote's Xbox face buttons count as the letters of the same name, as
-the updater's panel takes them. The left stick counts as a direction past WIIU_CHAT_STICK_PUSH of its range.
+the updater's panel takes them. The left stick counts as a direction past WIIU_CHAT_STICK_PUSH of its range. L and R are the quick chat's page buttons.
 
 A touch of the GamePad is a tap at the moment the finger comes down (the key is pressed as it is touched, as a keyboard's are), at the place it came down, and only a tap of
 the last frames: one that came while no keyboard was asking is gone before one opens, so a finger resting on the screen as it opens presses nothing.
@@ -29,7 +29,7 @@ the last frames: one that came while no keyboard was asking is gone before one o
 /* a tap is asked for within this many polls of the frame it came in (the frame it came in, and the next) */
 #define WIIU_CHAT_TAP_POLLS 2
 
-/* a pad's buttons as the halo_chat_pad_button bits (1 << HALO_CHAT_PAD_*) */
+/* a pad's buttons as the halo_chat_pad_button bits (1 << HALO_CHAT_PAD_*): L and R turn the quick chat's pages */
 static inline unsigned long wiiu_chat_buttons(const struct wiiu_pad *pad)
 {
 	unsigned long buttons = 0;
@@ -61,6 +61,10 @@ static inline unsigned long wiiu_chat_buttons(const struct wiiu_pad *pad)
 		buttons |= 1UL << HALO_CHAT_PAD_Y;
 	if (held & WIIU_PAD_PLUS)
 		buttons |= 1UL << HALO_CHAT_PAD_START;
+	if (held & WIIU_PAD_L)
+		buttons |= 1UL << HALO_CHAT_PAD_PAGE_PREVIOUS;
+	if (held & WIIU_PAD_R)
+		buttons |= 1UL << HALO_CHAT_PAD_PAGE_NEXT;
 	if (pad->left_y > WIIU_CHAT_STICK_PUSH)
 		buttons |= 1UL << HALO_CHAT_PAD_STICK_UP;
 	if (pad->left_y < -WIIU_CHAT_STICK_PUSH)

@@ -77,6 +77,9 @@ enum halo_chat_pad_button
 	HALO_CHAT_PAD_STICK_DOWN,
 	HALO_CHAT_PAD_STICK_LEFT,
 	HALO_CHAT_PAD_STICK_RIGHT,
+	/* the shoulder buttons (the Xbox's white and black; the Wii U's L and R): the quick chat's pages turn with them */
+	HALO_CHAT_PAD_PAGE_PREVIOUS,
+	HALO_CHAT_PAD_PAGE_NEXT,
 	NUMBER_OF_HALO_CHAT_PAD_BUTTONS
 };
 

@@ -16,14 +16,16 @@ CASES = ["text-printable", "text-control-characters", "text-pipe", "text-bounds"
          "rate-refill", "rate-wrap", "hears", "hears-vehicle", "flags", "alpha", "command-mute", "command-unmute",
          "command-not", "command-usage", "name-match", "name-bounds", "mute-time", "mute-wrap", "mute-again",
          "mute-full", "link-found", "link-written-out", "link-spaced", "link-word-domains", "link-not", "refused", "listing", "filter", "keyboard-character",
-         "keyboard-move", "keyboard-tap", "keyboard-view", "keyboard-platform-tap"]
+         "keyboard-move", "keyboard-tap", "keyboard-view", "keyboard-platform-tap",
+         "quick-table", "quick-slot", "quick-page", "quick-expired", "quick-limit", "quick-limit-burst", "quick-limit-wrap"]
 FUNCTIONS = ("chat_text_clean", "chat_text_append", "chat_rate_take", "chat_hears", "chat_channel_from_flags",
              "chat_channel_flags", "chat_line_alpha", "chat_lower", "chat_command_word", "chat_command_parse",
              "chat_name_match", "chat_names_equal", "chat_mute_minutes_left", "chat_mute_find", "chat_mute_set", "chat_minutes_plural",
              "chat_alphanumeric", "chat_link_domain", "chat_text_has_link", "chat_refused", "chat_listing_allows",
              "chat_filter_mode", "chat_filter_level", "chat_filter_star",
              "chat_keyboard_character",
-             "chat_keyboard_move", "chat_keyboard_key_at", "chat_keyboard_view_fill", "chat_keyboard_tap_key")
+             "chat_keyboard_move", "chat_keyboard_key_at", "chat_keyboard_view_fill", "chat_keyboard_tap_key", "chat_quick_slot", "chat_quick_page_turn",
+             "chat_quick_channel", "chat_quick_expired", "chat_quick_take")
 
 # a fault in network_chat.c, the function it is in, and the case that must catch it
 NEGATIVE_CONTROLS = {
@@ -120,6 +122,20 @@ NEGATIVE_CONTROLS = {
                                       "chat_keyboard_tap_key", "keyboard-platform-tap"),
     "platform-tap-past-the-end": (("*row >= CHAT_KEYBOARD_ROWS ||", "*row > CHAT_KEYBOARD_ROWS ||"), "chat_keyboard_tap_key",
                                   "keyboard-platform-tap"),
+    "quick-up-is-down": (("if (TEST_FLAG(pressed, HALO_CHAT_PAD_UP))\n\t\treturn 0;", "if (TEST_FLAG(pressed, HALO_CHAT_PAD_UP))\n\t\treturn 3;"), "chat_quick_slot",
+                         "quick-slot"),
+    "quick-page-no-wrap": (("return (short)((page + direction % CHAT_QUICK_PAGES + CHAT_QUICK_PAGES) % CHAT_QUICK_PAGES);", "return (short)(page + direction);"),
+                           "chat_quick_page_turn", "quick-page"),
+    "quick-plan-to-everyone": (("return page < 2 && has_teams", "return page < 1 && has_teams"), "chat_quick_channel", "quick-page"),
+    "quick-teams-ignored": (("return page < 2 && has_teams", "return page < 2"), "chat_quick_channel", "quick-page"),
+    "quick-never-expires": (("return now - last_input >= CHAT_QUICK_IDLE_MILLISECONDS;", "return FALSE;"), "chat_quick_expired", "quick-expired"),
+    "quick-no-spacing": (("if (limit->sent && now - limit->sent_at < CHAT_QUICK_SPACING_MILLISECONDS)\n\t\treturn _chat_quick_spacing;", ""), "chat_quick_take",
+                         "quick-limit"),
+    "quick-repeat-sent": (("if (limit->last_line == line && limit->sent && now - limit->last_line_at < CHAT_QUICK_REPEAT_MILLISECONDS)\n\t\treturn _chat_quick_repeat;", ""),
+                          "chat_quick_take", "quick-limit"),
+    "quick-no-burst": (("if (limit->rate.tokens <= 0)\n\t\treturn _chat_quick_burst;", ""), "chat_quick_take", "quick-limit-burst"),
+    "quick-burst-unbounded": (("limit->rate.tokens = (short)MIN((unsigned long)CHAT_QUICK_BURST, limit->rate.tokens + gained);", "limit->rate.tokens = (short)(limit->rate.tokens + gained);"),
+                              "chat_quick_take", "quick-limit-burst"),
     "tap-wide-not-snapped": (("*column = (short)(*column - *column % CHAT_KEYBOARD_WIDE_COLUMNS);", ";"),
                              "chat_keyboard_key_at", "keyboard-tap"),
 }
@@ -131,11 +147,18 @@ def generated(fault=None, faulty_function=None):
     for name in ("CHAT_TEXT_SIZE", "CHAT_BURST", "CHAT_REFILL_MILLISECONDS", "CHAT_LINE_MILLISECONDS",
                  "CHAT_FADE_MILLISECONDS", "CHAT_NAME_SIZE", "CHAT_MUTE_DEFAULT_MINUTES", "CHAT_MUTE_MAXIMUM_MINUTES",
                  "CHAT_MILLISECONDS_PER_MINUTE", "CHAT_KEYBOARD_COLUMNS", "CHAT_KEYBOARD_ROWS",
-                 "CHAT_KEYBOARD_WIDE_COLUMNS"):
+                 "CHAT_KEYBOARD_WIDE_COLUMNS", "CHAT_QUICK_PAGES", "CHAT_QUICK_LINES", "CHAT_QUICK_IDLE_MILLISECONDS",
+                 "CHAT_QUICK_SPACING_MILLISECONDS", "CHAT_QUICK_BURST", "CHAT_QUICK_REFILL_MILLISECONDS",
+                 "CHAT_QUICK_REPEAT_MILLISECONDS"):
         config += f"#define {name} {constant(source, name)}\n"
     config += f"#define CHAT_NAME_AMBIGUOUS ({re.search(r'CHAT_NAME_AMBIGUOUS = (-?[0-9]+)', source).group(1)})\n"
     config += structure(source, "chat_rate") + "\n"
     config += structure(source, "chat_mute") + "\n"
+    config += structure(source, "chat_quick_limit") + "\n"
+    config += enum_with(source, "_chat_quick_sent,") + "\n"
+    # (the quick chat's lines, and their pages' names: tables of the file)
+    config += re.search(r"static char const \*const chat_quick_lines\[.*?\n\};\n", source, re.S).group(0) + "\n"
+    config += re.search(r"static char const \*const chat_quick_page_names\[.*?;\n", source, re.S).group(0) + "\n"
     config += enum_with(source, "_chat_line_team_bit,") + "\n"
     config += enum_with(source, "_chat_command_none,") + "\n"
     config += enum_with(source, "_chat_config_allowed_bit,") + "\n"

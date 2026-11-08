@@ -220,6 +220,8 @@ static void chat_pad_record(short port, const XINPUT_GAMEPAD *pad)
 	if (pad->bAnalogButtons[XINPUT_GAMEPAD_B] >= PRESSED) buttons |= 1UL << HALO_CHAT_PAD_B;
 	if (pad->bAnalogButtons[XINPUT_GAMEPAD_X] >= PRESSED) buttons |= 1UL << HALO_CHAT_PAD_X;
 	if (pad->bAnalogButtons[XINPUT_GAMEPAD_Y] >= PRESSED) buttons |= 1UL << HALO_CHAT_PAD_Y;
+	if (pad->bAnalogButtons[XINPUT_GAMEPAD_WHITE] >= PRESSED) buttons |= 1UL << HALO_CHAT_PAD_PAGE_PREVIOUS;
+	if (pad->bAnalogButtons[XINPUT_GAMEPAD_BLACK] >= PRESSED) buttons |= 1UL << HALO_CHAT_PAD_PAGE_NEXT;
 	if (pad->sThumbLY > PUSHED) buttons |= 1UL << HALO_CHAT_PAD_STICK_UP;
 	if (pad->sThumbLY < -PUSHED) buttons |= 1UL << HALO_CHAT_PAD_STICK_DOWN;
 	if (pad->sThumbLX < -PUSHED) buttons |= 1UL << HALO_CHAT_PAD_STICK_LEFT;

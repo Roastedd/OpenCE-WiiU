@@ -28,7 +28,7 @@ int main(int argc, char **argv)
 		static const struct { unsigned int source; int chat; } table[] = {
 			{ WIIU_PAD_UP, HALO_CHAT_PAD_UP }, { WIIU_PAD_DOWN, HALO_CHAT_PAD_DOWN }, { WIIU_PAD_LEFT, HALO_CHAT_PAD_LEFT }, { WIIU_PAD_RIGHT, HALO_CHAT_PAD_RIGHT },
 			{ WIIU_PAD_A, HALO_CHAT_PAD_A }, { WIIU_PAD_B, HALO_CHAT_PAD_B }, { WIIU_PAD_X, HALO_CHAT_PAD_X }, { WIIU_PAD_Y, HALO_CHAT_PAD_Y },
-			{ WIIU_PAD_PLUS, HALO_CHAT_PAD_START },
+			{ WIIU_PAD_PLUS, HALO_CHAT_PAD_START }, { WIIU_PAD_L, HALO_CHAT_PAD_PAGE_PREVIOUS }, { WIIU_PAD_R, HALO_CHAT_PAD_PAGE_NEXT },
 		};
 		unsigned long all = 0;
 		unsigned i;
@@ -38,21 +38,21 @@ int main(int argc, char **argv)
 			CHECK(map(table[i].source, 0, 0.0f, 0.0f) == BIT(table[i].chat), "button %u gives %lx", table[i].source, map(table[i].source, 0, 0.0f, 0.0f));
 			all |= BIT(table[i].chat);
 		}
-		CHECK(all == 0x1FFUL, "nine buttons");
-		/* the other four bits are the left stick's, and 13 in all */
-		CHECK(NUMBER_OF_HALO_CHAT_PAD_BUTTONS == 13, "thirteen bits");
+		CHECK(all == (0x1FFUL | BIT(HALO_CHAT_PAD_PAGE_PREVIOUS) | BIT(HALO_CHAT_PAD_PAGE_NEXT)), "eleven buttons");
+		/* four more are the left stick's, and 15 in all */
+		CHECK(NUMBER_OF_HALO_CHAT_PAD_BUTTONS == 15, "fifteen bits");
 		CHECK(map(0, 0, 0.0f, 1.0f) == BIT(HALO_CHAT_PAD_STICK_UP) && map(0, 0, 0.0f, -1.0f) == BIT(HALO_CHAT_PAD_STICK_DOWN) &&
 			map(0, 0, -1.0f, 0.0f) == BIT(HALO_CHAT_PAD_STICK_LEFT) && map(0, 0, 1.0f, 0.0f) == BIT(HALO_CHAT_PAD_STICK_RIGHT), "stick directions");
 		/* all together */
-		CHECK(map(WIIU_PAD_UP | WIIU_PAD_DOWN | WIIU_PAD_LEFT | WIIU_PAD_RIGHT | WIIU_PAD_A | WIIU_PAD_B | WIIU_PAD_X | WIIU_PAD_Y | WIIU_PAD_PLUS, 0, 1.0f, 1.0f) == (0x1FFUL | BIT(HALO_CHAT_PAD_STICK_UP) | BIT(HALO_CHAT_PAD_STICK_RIGHT)),
-			"all %lx", map(WIIU_PAD_UP | WIIU_PAD_DOWN | WIIU_PAD_LEFT | WIIU_PAD_RIGHT | WIIU_PAD_A | WIIU_PAD_B | WIIU_PAD_X | WIIU_PAD_Y | WIIU_PAD_PLUS, 0, 1.0f, 1.0f));
+		CHECK(map(WIIU_PAD_UP | WIIU_PAD_DOWN | WIIU_PAD_LEFT | WIIU_PAD_RIGHT | WIIU_PAD_A | WIIU_PAD_B | WIIU_PAD_X | WIIU_PAD_Y | WIIU_PAD_PLUS | WIIU_PAD_L | WIIU_PAD_R, 0, 1.0f, 1.0f) == (0x1FFUL | BIT(HALO_CHAT_PAD_PAGE_PREVIOUS) | BIT(HALO_CHAT_PAD_PAGE_NEXT) | BIT(HALO_CHAT_PAD_STICK_UP) | BIT(HALO_CHAT_PAD_STICK_RIGHT)),
+			"all %lx", map(WIIU_PAD_UP | WIIU_PAD_DOWN | WIIU_PAD_LEFT | WIIU_PAD_RIGHT | WIIU_PAD_A | WIIU_PAD_B | WIIU_PAD_X | WIIU_PAD_Y | WIIU_PAD_PLUS | WIIU_PAD_L | WIIU_PAD_R, 0, 1.0f, 1.0f));
 		CHECK(map(0, 0, 0.0f, 0.0f) == 0, "nothing");
 	}
 
-	/* the buttons the keyboard does not read give nothing: the shoulders, the triggers, -, the stick clicks and the TV button */
+	/* the buttons the chat does not read give nothing: the triggers, -, the stick clicks and the TV button (L and R turn the quick chat's pages) */
 	CASE("others")
 	{
-		CHECK(map(WIIU_PAD_L | WIIU_PAD_R | WIIU_PAD_ZL | WIIU_PAD_ZR | WIIU_PAD_MINUS | WIIU_PAD_STICK_L | WIIU_PAD_STICK_R | WIIU_PAD_TV, 0, 0.0f, 0.0f) == 0, "others");
+		CHECK(map(WIIU_PAD_ZL | WIIU_PAD_ZR | WIIU_PAD_MINUS | WIIU_PAD_STICK_L | WIIU_PAD_STICK_R | WIIU_PAD_TV, 0, 0.0f, 0.0f) == 0, "others");
 	}
 
 	/* the Wii U's letters, not the places: A is HALO_CHAT_PAD_A whatever input.wiiu_face_buttons says (the mapping takes no setting), and a Wii Remote's Xbox letters
