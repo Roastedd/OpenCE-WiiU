@@ -15,7 +15,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / 'port/wiiu/tests/test_tick_overlap.c'
-CASES = ['frames', 'small', 'decisions']
+CASES = ['frames', 'small', 'decisions', 'network', 'network-small']
 
 
 class TickOverlapTests(unittest.TestCase):
@@ -77,6 +77,24 @@ class TickOverlapTests(unittest.TestCase):
         after = ('if (!ring->ready[index])\n\t\t\treturn index;\n'
                  '\t\tif (best < 0 || ring->tick[index] > ring->tick[best])\n')
         result = self.fixture('frames', fault=('tick_ring.h', before, after))
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_a_barrier_that_does_not_wait_for_the_job_is_detected(self):
+        # a network game's drawing reads what the snapshot does not copy only after the job is over: a barrier that returns at once leaves the tick thread running beside the reads
+        result = self.fixture('network', fault=('tick_overlap.c', '\t\ttick_overlap_wait();\n\t\ttook = tick_overlap_now() - started;', '\t\ttook = tick_overlap_now() - started;'))
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_a_network_frame_that_leaves_out_the_network_end_of_the_frame_is_detected(self):
+        result = self.fixture('network', fault=('tick_overlap.c', '\t\to.net_frames++;\n\t\tmain_overlap_net_end_frame();', '\t\to.net_frames++;'))
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_a_network_end_of_the_frame_made_with_the_job_running_is_detected(self):
+        # the hook moved to after the post: it would read the actions the tick thread is writing, and send beside its sends
+        before = '\ttick_overlap_net_pending = o.net_frame;\n\t\ttick_overlap_post(tick_overlap_job_work, job);'
+        source = (ROOT / 'port/linux/game/tick_overlap.c').read_text()
+        self.assertEqual(source.count('\t\ttick_overlap_net_pending = o.net_frame;\n\t\ttick_overlap_post(tick_overlap_job_work, job);'), 1)
+        result = self.fixture('network', fault=('tick_overlap.c', '\t\ttick_overlap_net_pending = o.net_frame;\n\t\ttick_overlap_post(tick_overlap_job_work, job);',
+                                                '\t\ttick_overlap_net_pending = o.net_frame;\n\t\ttick_overlap_post(tick_overlap_job_work, job);\n\t\tif (o.net_frame) main_overlap_net_end_frame();'))
         self.assertNotEqual(result.returncode, 0)
 
 

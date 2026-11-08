@@ -35,6 +35,9 @@ problem), or a game the host plays alone.
 */
 
 #include "cseries.h"
+#ifdef HALO_WIIU
+#include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
+#endif
 #include "cutscene/cinematics.h"
 #include "game/game.h"
 #include "game/game_engine.h"
@@ -169,6 +172,9 @@ long latency_meter_player_ping(
 void latency_meter_draw(
 	void)
 {
+#ifdef HALO_WIIU
+	TICK_OVERLAP_NET_BARRIER();
+#endif
 	long font_index;
 	struct font_header *font;
 	short line_height;

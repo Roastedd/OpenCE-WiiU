@@ -178,6 +178,12 @@ boolean tick_overlap_game_thread_do(void (*function)(void *), void *argument);
 /* the lights that fade (object_lights.c), once after the ticks of each job */
 void lights_fade_update(void);
 
+/* A network game's overlap frame (halo/net_overlap.txt, smooth_defaults.h): the drawing waits for the tick thread's job before it reads what the snapshot does not copy of the game
+engine's and the netcode's state (tick_overlap.c has why). Cheap when no such frame is being drawn: a load and a compare. */
+extern volatile int tick_overlap_net_pending;
+void tick_overlap_net_barrier(void);
+#define TICK_OVERLAP_NET_BARRIER() do { if (tick_overlap_net_pending) tick_overlap_net_barrier(); } while (0)
+
 /* the clock */
 boolean game_time_overlap_step(real time_delta_sec, long *time_now, long *ticks_elapsed, real *leftover_after, real *speed);
 long game_time_overlap_run(long ticks_elapsed, real leftover_after);

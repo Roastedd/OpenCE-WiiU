@@ -21,6 +21,7 @@ long render_governor_card(void);                        /* render_governor.c: ha
 void tick_overlap_decide(int mid_map);                  /* tick_overlap.c: the overlap, the snapshot and (not in the middle of a map) the owners' queues made again for the map */
 void render_governor_decide(int map_ok, int on);        /* render_governor.c */
 char const *main_smooth_defaults_reason(void);          /* main.c: NULL for a map the smooth settings are for, else why not */
+int main_smooth_defaults_net_game(void);                /* main.c: the game is a joined one or a hosted one (the log says so) */
 
 static struct
 {
@@ -84,17 +85,29 @@ void smooth_defaults_resolve(struct smooth_defaults *out, long const card[NUMBER
 
 char const *smooth_defaults_reason(struct smooth_defaults_map const *map)
 {
+	/* (halo/net_overlap.txt: a game joined as a client, and with 2 the host of one with remote machines, may use the overlap; never network co-op, nor a split screen's server) */
+	const int network_allowed = !map->coop && ((map->connection == SMOOTH_CONNECTION_CLIENT && map->net_overlap >= 1) ||
+		(map->connection == SMOOTH_CONNECTION_SERVER && !map->local_server && map->net_overlap >= 2));
+
 	if (map->main_menu)
 		return "the main menu's scene";
 	if (map->connection == SMOOTH_CONNECTION_FILM)
 		return "a saved film";
 	if (map->connection == SMOOTH_CONNECTION_SERVER)
-		return map->local_server ? "split screen (a game server of this machine's players)" : "a hosted network game";
-	if (map->connection == SMOOTH_CONNECTION_CLIENT)
-		return "a joined network game";
-	if (map->connection != SMOOTH_CONNECTION_LOCAL)
+	{
+		if (map->local_server)
+			return "split screen (a game server of this machine's players)";
+		if (!network_allowed)
+			return map->coop && map->net_overlap >= 2 ? "a hosted network co-op game" : "a hosted network game";
+	}
+	else if (map->connection == SMOOTH_CONNECTION_CLIENT)
+	{
+		if (!network_allowed)
+			return map->coop && map->net_overlap >= 1 ? "a joined network co-op game" : "a joined network game";
+	}
+	else if (map->connection != SMOOTH_CONNECTION_LOCAL)
 		return "a network game";
-	if (map->network_session)
+	if (map->network_session && !network_allowed)
 		return "a network session is open (system link or internet)";
 	if (map->dedicated_server)
 		return "a dedicated server";
@@ -110,6 +123,21 @@ char const *smooth_defaults_reason(struct smooth_defaults_map const *map)
 }
 
 /* ---------- the cards */
+
+long smooth_defaults_net_overlap(void)
+{
+	static long value = -1;
+
+	if (value < 0)
+	{
+		const long card = wiiu_study_number("net_overlap.txt", 0);
+
+		value = card < 0 ? 0 : card > 2 ? 2 : card;
+		if (value > 0)
+			platform_log("net overlap: halo/net_overlap.txt is %ld: %s may run their ticks beside the drawing", card, value >= 2 ? "a joined game and a hosted one" : "a joined game");
+	}
+	return value;
+}
 
 void smooth_defaults_read_cards(long card[NUMBER_OF_SMOOTH_SWITCHES])
 {
@@ -172,7 +200,8 @@ static void decide(int mid_map)
 	if (reason)
 		platform_log("smooth defaults: OFF for this map: %s", reason);
 	else
-		platform_log("smooth defaults: ON for this map (one local player, no network)");
+		platform_log(main_smooth_defaults_net_game() ? "smooth defaults: ON for this map (one local player, a network game: halo/net_overlap.txt)" :
+			"smooth defaults: ON for this map (one local player, no network)");
 	for (which = 0; which < NUMBER_OF_SMOOTH_SWITCHES; which++)
 	{
 		/* (a switch that is as it always was says nothing more than a line of all four, below; this says each, and what card file or default made it) */

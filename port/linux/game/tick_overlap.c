@@ -47,6 +47,10 @@ int halo_interpolation_enabled(void);
 
 /* the main loop's (main.c) */
 boolean main_overlap_eligible(void);
+void main_overlap_net_end_frame(void);
+/* the game's (game.c): 0 is a game of this machine alone, 1 a joined game, 2 a hosted one, 3 a saved film */
+short game_connection(void);
+#define TICK_OVERLAP_CONNECTION_LOCAL 0
 
 /* ---------- constants */
 
@@ -83,6 +87,8 @@ struct tick_overlap_job
 
 volatile int tick_overlap_markers_split = 0;
 volatile int tick_overlap_listeners_frozen = 0;
+/* the frame being drawn is a network game's overlap frame and its job may still be running: the drawing's readers of what the snapshot does not copy wait first (tick_overlap_net_barrier) */
+volatile int tick_overlap_net_pending = 0;
 
 /* (data.c's lock: a thread that waits long for it gives the core up) */
 void sched_yield_for_data(
@@ -125,6 +131,11 @@ static struct
 	long view_tick;
 	real view_fraction;
 	boolean job_collected; /* a job has finished since the last sync point */
+	/* a network game (halo/net_overlap.txt): the frame being drawn is the overlap's, and the game is a joined or a hosted one; the drawing waits for the job before it reads what the
+	snapshot does not copy (tick_overlap_net_barrier). The numbers: frames, barriers reached, waits at them, and their milliseconds */
+	boolean net_frame;
+	unsigned long net_frames, net_barriers, net_barrier_waits;
+	unsigned long long net_barrier_ticks, net_barrier_max_ticks;
 	/* the numbers (the game thread's, but for the tick thread's, which it adds under the lock at a job's end) */
 	unsigned long long log_started_ticks;
 	unsigned long frames, overlap_frames, serial_frames, primed_frames, held_frames, no_pair_frames;
@@ -393,6 +404,32 @@ static void tick_overlap_wait(void)
 	}
 }
 
+/* The drawing of a network game's overlap frame reads, besides the objects the snapshot copies, what the game engine and the netcode keep: the scores, the flags' and the hill's
+places, the names, the chat, the latency meter. Those are not copied, and the tick the job runs changes them (a player's score, a flag taken). The first reader on the way to them
+(the game engine's post-raster draws, the HUD, the meter) waits here for the job, which has run beside everything drawn so far: when the tick thread is quicker than the drawing
+up to there - most frames - it has nothing to wait for, and when it is not the frame is the serial loop's from that point. Only the drawing thread waits (a call from any other is
+nothing), and only for a frame whose job is in flight. What the barrier counts is in the overlap's log line for the network game. */
+void tick_overlap_net_barrier(
+	void)
+{
+	if (!tick_overlap_net_pending || !tick_overlap_thread_is_render())
+		return;
+	o.net_barriers++;
+	if (__atomic_load_n(&o.pending, __ATOMIC_ACQUIRE))
+	{
+		const unsigned long long started = tick_overlap_now();
+		unsigned long long took;
+
+		tick_overlap_wait();
+		took = tick_overlap_now() - started;
+		o.net_barrier_waits++;
+		o.net_barrier_ticks += took;
+		if (took > o.net_barrier_max_ticks)
+			o.net_barrier_max_ticks = took;
+	}
+	tick_overlap_net_pending = 0;
+}
+
 static void tick_overlap_post(
 	tick_overlap_work work,
 	void *argument)
@@ -473,9 +510,11 @@ static void tick_overlap_late_judge(
 		return; /* (the window goes on) */
 	late = o.late_frames >= fewest && rate < 25.0 && (busy > 0.95 || ahead > 1.5 || test);
 
-	if (late && o.slow && (rate < 20.0 || test))
+	/* (a network game's clock is its place in the host's: holding it to one tick a frame would put this machine behind the host and have the netcode jump it ahead again, so
+	the answer to a late tick thread there is the serial loop at once) */
+	if (late && ((o.slow && (rate < 20.0 || test)) || game_connection() != TICK_OVERLAP_CONNECTION_LOCAL))
 	{
-		/* (the clock held and the game still under 20 ticks a second: the serial loop) */
+		/* (the clock held and the game still under 20 ticks a second, or a network game: the serial loop) */
 		o.late_backoff_seconds = o.late_backoff_seconds ? (o.late_backoff_seconds * 2 > 60 ? 60 : o.late_backoff_seconds * 2) : 10;
 		o.late = TRUE;
 		o.slow = FALSE;
@@ -843,6 +882,13 @@ boolean tick_overlap_post_frame(
 		ticks = 1;
 	published = tick_snapshot_published_tick();
 	tick_input_capture();
+	/* (a network game: the serial loop's network end of the frame, which the job does not run: before the job is posted, with the tick thread idle) */
+	o.net_frame = game_connection() != TICK_OVERLAP_CONNECTION_LOCAL;
+	if (o.net_frame)
+	{
+		o.net_frames++;
+		main_overlap_net_end_frame();
+	}
 	memset(job, 0, sizeof(*job));
 	job->dt = dt;
 	job->ticks_elapsed = ticks;
@@ -881,6 +927,7 @@ boolean tick_overlap_post_frame(
 		o.overlap_frames++;
 		o.ov_overlapped++;
 		o.ahead_sum += (unsigned long long)((time_now + ticks - tick) * 1000);
+		tick_overlap_net_pending = o.net_frame;
 		tick_overlap_post(tick_overlap_job_work, job);
 		/* (a test aid: halo/tick_overlap_frame_stall.txt, in milliseconds, holds the game thread back that long after it has given the job, in each of the first 5 frames after a serial one:
 		the tick thread then runs ahead of the picture as it does on the console when the drawing is slower than the ticks. HALO_TICK_OVERLAP_FRAME_STALL on the host.) */
@@ -968,6 +1015,7 @@ void tick_overlap_frame_end(
 	tick_snapshot_unpin();
 	o.pair_active = FALSE;
 	o.frame_active = FALSE;
+	tick_overlap_net_pending = 0;
 	now = tick_overlap_now();
 	o.active_frames++;
 	o.frame_ticks += now - o.frame_started_ticks;
@@ -986,6 +1034,7 @@ void tick_overlap_map_reset(
 		return;
 	tick_overlap_wait();
 	tick_overlap_collect();
+	tick_overlap_net_pending = 0;
 	o.frame_active = FALSE;
 	o.pair_active = FALSE;
 	game_time_set_view(FALSE, 0, 0, 1.0f);
@@ -1166,6 +1215,11 @@ void tick_overlap_log(
 		o.active_frames, (double)o.frame_ticks / per_ms / active, (double)o.frame_max_ticks / per_ms, (double)o.draw_ticks / per_ms / active,
 		(double)o.draw_max_ticks / per_ms, (double)o.wait_ticks / per_ms / active, (double)o.wait_max_ticks / per_ms, o.waits_long,
 		(double)(o.sync_ticks - o.sync_wait_ticks) / per_ms / active);
+	if (o.net_frames)
+	{
+		platform_log("tick overlap, network game: %lu overlapped frames, the drawing reached the barrier in %lu and waited for the tick thread in %lu (%.2f ms in all, most %.2f ms)",
+			o.net_frames, o.net_barriers, o.net_barrier_waits, (double)o.net_barrier_ticks / per_ms, (double)o.net_barrier_max_ticks / per_ms);
+	}
 	if (o.serial_waits)
 	{
 		platform_log("tick overlap, serial frames: the game thread waited %.2f ms a frame for the tick thread (%lu frames)",
@@ -1188,6 +1242,8 @@ void tick_overlap_log(
 	o.wait_ticks = o.wait_max_ticks = o.frame_ticks = o.frame_max_ticks = o.sync_ticks = o.sync_wait_ticks = o.post_ticks = o.draw_ticks = o.draw_max_ticks = 0;
 	o.serial_wait_ticks = 0;
 	o.waits_long = o.serial_waits = o.active_frames = 0;
+	o.net_frames = o.net_barriers = o.net_barrier_waits = 0;
+	o.net_barrier_ticks = o.net_barrier_max_ticks = 0;
 	o.jobs = o.ticks = 0;
 	o.job_ticks = o.job_max_ticks = o.tick_work_ticks = 0;
 	o.ahead_sum = 0;

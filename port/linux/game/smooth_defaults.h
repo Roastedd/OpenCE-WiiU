@@ -58,6 +58,8 @@ struct smooth_defaults_map
 	int interpolation;      /* display.interpolation is on */
 	int spawn_players;      /* the menu's player_spawn_count: the local players the game starts with (1, or 2 or more for split screen) */
 	int local_players;      /* local_player_count, once the map has run a few ticks (0 until then: at a map start it still holds the last map's) */
+	int net_overlap;        /* halo/net_overlap.txt: 0 no network game (the default), 1 a game joined as a client, 2 a client or the host of a game with remote machines (smooth_defaults_net_overlap) */
+	int coop;               /* the game is network co-op (the campaign's scripts and cinematics run in it) */
 };
 
 enum
@@ -69,7 +71,12 @@ enum
 	SMOOTH_CONNECTION_OTHER
 };
 
-/* NULL for a map the smooth settings are for (exactly one local player, no network of any kind, no film, no split screen), else why not, in words for the log */
+/* halo/net_overlap.txt (HALO_NET_OVERLAP on the host), read once: 0 or absent, the default, keeps every network game the serial loop's; 1 lets a game joined as a client use the
+tick overlap; 2 lets the host of a game with remote machines (not its split screen, not a dedicated server) use it too. Never for network co-op. A study switch: the build with the
+file absent plays a network game as the build without it did. */
+long smooth_defaults_net_overlap(void);
+
+/* NULL for a map the smooth settings are for (exactly one local player, no film, no split screen, and no network of any kind unless halo/net_overlap.txt lets this one in), else why not, in words for the log */
 char const *smooth_defaults_reason(struct smooth_defaults_map const *map);
 
 struct smooth_defaults

@@ -43,6 +43,7 @@ long wiiu_study_number(const char *name, long fallback)
 long tick_snapshot_card(void) { return snapshot_card; }
 long render_governor_card(void) { return governor_card; }
 char const *main_smooth_defaults_reason(void) { return reason_now; }
+int main_smooth_defaults_net_game(void) { return 0; }
 void tick_overlap_decide(int mid_map) { calls[0]++; calls[2] += mid_map; }
 void render_governor_decide(int map_ok, int on) { calls[1]++; last_governor_map_ok = map_ok; last_governor_on = on; }
 
@@ -185,6 +186,64 @@ static void test_maps(void)
 	CHECK(strstr(smooth_defaults_reason(&map), "hosted"));
 }
 
+/* halo/net_overlap.txt: 0 (the default) leaves every network game the serial loop's; 1 lets a joined game in, 2 a hosted one too; never co-op, a split screen's server, a film */
+static void test_network_maps(void)
+{
+	struct smooth_defaults_map map = one_player();
+	long net;
+
+	for (net = 0; net <= 2; net++)
+	{
+		map = one_player();
+		map.net_overlap = (int)net;
+		map.connection = SMOOTH_CONNECTION_CLIENT;
+		map.network_session = 1;
+		CHECK((smooth_defaults_reason(&map) == NULL) == (net >= 1));
+		if (net == 0)
+			CHECK(strstr(smooth_defaults_reason(&map), "joined"));
+		map.coop = 1;
+		CHECK(smooth_defaults_reason(&map) && strstr(smooth_defaults_reason(&map), "joined"));
+		map = one_player();
+		map.net_overlap = (int)net;
+		map.connection = SMOOTH_CONNECTION_SERVER;
+		map.network_session = 1;
+		CHECK((smooth_defaults_reason(&map) == NULL) == (net >= 2));
+		CHECK(net >= 2 || strstr(smooth_defaults_reason(&map), "hosted"));
+		map.coop = 1;
+		CHECK(smooth_defaults_reason(&map) && strstr(smooth_defaults_reason(&map), "hosted"));
+		map.coop = 0;
+		map.local_server = 1;
+		CHECK(smooth_defaults_reason(&map) && strstr(smooth_defaults_reason(&map), "split screen"));
+		map = one_player();
+		map.net_overlap = (int)net;
+		map.connection = SMOOTH_CONNECTION_FILM;
+		CHECK(smooth_defaults_reason(&map) && strstr(smooth_defaults_reason(&map), "film"));
+		map.connection = SMOOTH_CONNECTION_OTHER;
+		CHECK(smooth_defaults_reason(&map) && strstr(smooth_defaults_reason(&map), "network"));
+		/* a local game with a session open (a lobby) is still not one */
+		map = one_player();
+		map.net_overlap = (int)net;
+		map.network_session = 1;
+		CHECK(smooth_defaults_reason(&map) && strstr(smooth_defaults_reason(&map), "session"));
+		/* and the rest of the rule still holds for a game let in: split screen, a dedicated server, the main menu's scene, no interpolation */
+		map = one_player();
+		map.net_overlap = 2;
+		map.connection = SMOOTH_CONNECTION_CLIENT;
+		map.network_session = 1;
+		map.spawn_players = 2;
+		CHECK(smooth_defaults_reason(&map) && strstr(smooth_defaults_reason(&map), "split screen"));
+		map.spawn_players = 1;
+		map.dedicated_server = 1;
+		CHECK(smooth_defaults_reason(&map));
+		map.dedicated_server = 0;
+		map.main_menu = 1;
+		CHECK(smooth_defaults_reason(&map) && strstr(smooth_defaults_reason(&map), "main menu"));
+		map.main_menu = 0;
+		map.interpolation = 0;
+		CHECK(smooth_defaults_reason(&map) && strstr(smooth_defaults_reason(&map), "interpolation"));
+	}
+}
+
 /* ---------- the decision at each map start */
 
 static void reset_log(void)
@@ -302,6 +361,7 @@ int main(int argc, char **argv)
 	{
 		test_cards();
 		test_maps();
+		test_network_maps();
 		test_decisions();
 	}
 	printf(failures ? "FAILED %d\n" : "smooth defaults: all checks passed\n", failures);

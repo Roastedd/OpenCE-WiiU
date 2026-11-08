@@ -61,6 +61,30 @@ class SmoothDefaultsTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
 
 
+    def test_a_rule_that_lets_a_network_game_in_without_its_card_file_is_detected(self):
+        fixture, sources, flags = SMOOTH
+        with tempfile.TemporaryDirectory(prefix='halo-smooth-fault-') as directory:
+            source = (ROOT / 'port/linux/game/smooth_defaults.c').read_text()
+            before = '(map->connection == SMOOTH_CONNECTION_CLIENT && map->net_overlap >= 1)'
+            self.assertEqual(source.count(before), 1)
+            mutated = Path(directory) / 'smooth_defaults.c'
+            mutated.write_text(source.replace(before, '(map->connection == SMOOTH_CONNECTION_CLIENT)', 1))
+            result = build_and_run((fixture, [mutated], flags))
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_a_rule_that_lets_co_op_or_a_host_in_on_a_client_setting_is_detected(self):
+        fixture, sources, flags = SMOOTH
+        for before, after in (('const int network_allowed = !map->coop && (', 'const int network_allowed = ('),
+                              ('map->connection == SMOOTH_CONNECTION_SERVER && !map->local_server && map->net_overlap >= 2', 'map->connection == SMOOTH_CONNECTION_SERVER && map->net_overlap >= 1')):
+            with self.subTest(before=before[:50]), tempfile.TemporaryDirectory(prefix='halo-smooth-fault-') as directory:
+                source = (ROOT / 'port/linux/game/smooth_defaults.c').read_text()
+                self.assertEqual(source.count(before), 1)
+                mutated = Path(directory) / 'smooth_defaults.c'
+                mutated.write_text(source.replace(before, after, 1))
+                result = build_and_run((fixture, [mutated], flags))
+                self.assertNotEqual(result.returncode, 0)
+
+
 class MapSummaryTests(unittest.TestCase):
     def test_the_figures_and_the_lines(self):
         result = build_and_run(SUMMARY)

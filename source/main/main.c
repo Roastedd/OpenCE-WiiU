@@ -3780,6 +3780,8 @@ static char const *main_smooth_defaults_reason_for(
 	map.interpolation = halo_interpolation_enabled() != 0;
 	map.spawn_players = player_spawn_count;
 	map.local_players = !at_map_start && game_time_get() >= 3 ? local_player_count() : 0;
+	map.net_overlap = (int)smooth_defaults_net_overlap();
+	map.coop = network_coop_active() != 0;
 	return smooth_defaults_reason(&map);
 }
 
@@ -3787,6 +3789,13 @@ char const *main_smooth_defaults_reason(
 	void)
 {
 	return main_smooth_defaults_reason_for(TRUE);
+}
+
+/* port: a game joined as a client or hosted with remote machines (halo/net_overlap.txt is what lets one use the overlap) */
+int main_smooth_defaults_net_game(
+	void)
+{
+	return main_globals.connection == _game_connection_network_client || main_globals.connection == _game_connection_network_server;
 }
 
 /* port: each frame, at the sync point: a map the smooth defaults were switched on for that stops being one (a second local player counted after the map began, a network
@@ -3836,8 +3845,15 @@ boolean main_overlap_eligible(
 	static char const *last_reason = NULL;
 	char const *reason = NULL;
 
-	if (main_globals.connection != _game_connection_local)
-		reason = "a network game or a saved film";
+	/* (halo/net_overlap.txt: a game joined as a client, and with 2 a hosted one with a single local player, play their ticks beside the drawing too: their netcode is
+	part of the tick, which the tick thread runs; what the netcode reads of the world on the game thread - the datagrams taken at the top of the frame, the clock set - is done
+	with the tick thread idle, as the serial loop does it, and the drawing waits for the tick thread before it reads what the snapshot does not copy: tick_overlap_net_barrier) */
+	const boolean network_game = main_globals.connection == _game_connection_network_client || main_globals.connection == _game_connection_network_server;
+	const boolean network_allowed = network_game && !network_coop_active() &&
+		(main_globals.connection == _game_connection_network_client ? smooth_defaults_net_overlap() >= 1 : smooth_defaults_net_overlap() >= 2);
+
+	if (main_globals.connection != _game_connection_local && !network_allowed)
+		reason = network_game && network_coop_active() ? "a network co-op game" : "a network game or a saved film";
 	else if (main_globals.main_menu_scenario_loaded)
 		reason = "the main menu's scene";
 	else if (main_globals.movie)
@@ -3856,8 +3872,10 @@ boolean main_overlap_eligible(
 		reason = local_player_count() ? "split screen" : "no local player yet";
 	else if (cinematic_in_progress())
 		reason = "a cinematic";
-	else if (game_engine_running())
+	else if (game_engine_running() && !network_game)
 		reason = "a game engine running";
+	else if (network_game && game_time_held())
+		reason = "the client's clock waits for the host";
 	else if (game_time_menu_scene())
 		reason = "the main menu's clock";
 	else if (game_time_ui_get_paused() || game_time_get_paused())
@@ -3890,6 +3908,27 @@ boolean main_overlap_eligible(
 	}
 
 	return reason == NULL;
+}
+
+/* port: the network side of the serial loop's frame that the overlap's job does not run: network_game_client_end_frame, which says to the host that this machine is there (its
+message of the local players' actions goes out ten times a second; the host takes the actions from the netcode's own message, each tick) and tells the menus when the connection has
+failed. The serial loop makes it between player_control_update and the ticks; the overlap's frame makes it as the job is posted, on the game thread, with the tick thread idle (it reads
+the actions the last job left), so that a failed connection ends the game as it did (network_game_abort is the game thread's). */
+void main_overlap_net_end_frame(
+	void)
+{
+	long connection = main_globals.connection;
+
+	if (connection > _game_connection_local && connection <= _game_connection_network_server)
+	{
+		network_distributed_time_begin();
+		if (!network_game_client_end_frame())
+		{
+			display_error_when_main_menu_loaded(1);
+			network_game_abort();
+		}
+		network_distributed_time_end();
+	}
 }
 
 /* port: the tick thread's part of a frame (tick_overlap.h): the steps the serial loop's tick side takes above, in the same order, on the input copy

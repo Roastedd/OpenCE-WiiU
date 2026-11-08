@@ -814,8 +814,10 @@ boolean game_time_overlap_step(
 	real *leftover_after,
 	real *speed)
 {
+	/* (a game of this machine alone, or a network game main_overlap_eligible has let in: halo/net_overlap.txt. A saved film is the serial loop's, and so is a client whose clock
+	waits for the host's first update: no tick runs then, the clock has nothing to decide) */
 	if (!game_time_globals || !game_time_globals->initialized || !game_time_globals->active || game_time_globals->paused ||
-		game_connection() != _game_connection_local)
+		game_connection() == _game_connection_film_playback || game_time_held())
 	{
 		return FALSE;
 	}

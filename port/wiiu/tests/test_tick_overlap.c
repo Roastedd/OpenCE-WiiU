@@ -96,6 +96,22 @@ int halo_interpolation_enabled(void)
 }
 
 
+/* a network game's frames (halo/net_overlap.txt): game_connection says a joined game, the main loop's network end of the frame is called once for each frame that posts a job, with the tick thread idle */
+static int network_run;
+static long net_hook_calls, net_hook_busy;
+
+short game_connection(void)
+{
+	return network_run ? 1 : 0;
+}
+
+void main_overlap_net_end_frame(void)
+{
+	net_hook_calls++;
+	if (__atomic_load_n(&o.pending, __ATOMIC_ACQUIRE) || __atomic_load_n(&o.in_overlap_job, __ATOMIC_ACQUIRE))
+		net_hook_busy++;
+}
+
 /* the calling thread's stack: the game thread's, when it asks (tick_stack.h) */
 void wiiu_thread_stack_range(unsigned long *low, unsigned long *size)
 {
@@ -325,6 +341,21 @@ long main_overlap_tick_side(real dt, long ticks_elapsed, real leftover_after, lo
 	return ticks_elapsed;
 }
 
+/* the drawing's barrier: when it returns the job is over, every word it writes in place (the captures, the pushes), not only the commit */
+static void barrier_and_check(long *done)
+{
+	const long job_posted = (long)o.posted_jobs;
+
+	CHECK(tick_overlap_net_pending);
+	TICK_OVERLAP_NET_BARRIER();
+	CHECK(!tick_overlap_net_pending);
+	CHECK(!__atomic_load_n(&o.pending, __ATOMIC_ACQUIRE));
+	CHECK(__atomic_load_n(&writes_done, __ATOMIC_ACQUIRE) == job_posted);
+	(*done)++;
+	/* (a second one in the same frame is nothing) */
+	TICK_OVERLAP_NET_BARRIER();
+}
+
 /* ---------- the game thread's frames */
 
 static void test_frames(long frames)
@@ -332,6 +363,7 @@ static void test_frames(long frames)
 	long frame;
 	long drawn = 0, primed = 0, serial = 0, held = 0, mid_frame_applied = 0;
 	long applied_at_sync = 0;
+	long barriers_done = 0, posted_frames = 0;
 
 	game_thread = pthread_self();
 	tick_overlap_note_render_thread();
@@ -363,6 +395,9 @@ static void test_frames(long frames)
 		request.expected_job = (long)o.posted_jobs;
 		tick_queue_push(&to_tick_queue, &request);
 		posted = tick_overlap_post_frame(0.033f);
+		posted_frames += posted;
+		/* (a network game: the barrier is armed for a frame whose job is in flight, and for no other) */
+		CHECK(!tick_overlap_net_pending || (network_run && posted && tick_overlap_job_in_flight()));
 		/* a request after the post: the job after takes it, not the one running beside it */
 		request.kind = 1;
 		request.expected_job = (long)o.posted_jobs;
@@ -397,6 +432,9 @@ static void test_frames(long frames)
 					CHECK(view_fraction == 1.0f);
 				}
 			}
+			/* (a network game's drawing reaches its barrier in some frames before the job has written anything, in the others after it is over) */
+			if (network_run && tick_overlap_job_in_flight() && frame % 2 == 0)
+				barrier_and_check(&barriers_done);
 			/* (the reads go on until the tick thread's job has written what it will: a frame that is read from only before that proves nothing) */
 			{
 				const long expected_job = (long)o.posted_jobs - 1;
@@ -435,6 +473,8 @@ static void test_frames(long frames)
 				}
 				sched_yield();
 			}
+			if (network_run && tick_overlap_job_in_flight() && frame % 2 == 1)
+				barrier_and_check(&barriers_done);
 			drawn++;
 		}
 		else
@@ -450,6 +490,18 @@ static void test_frames(long frames)
 		"applied %ld (%ld by the game thread in a frame); the game thread's pushes taken by the tick thread %ld\n",
 		frames, drawn, primed, serial, held, job_count, world_time, game_applied_count, mid_frame_applied, tick_requests_applied);
 	CHECK(drawn > frames / 2);
+	if (network_run)
+	{
+		/* the network end of the frame once for each frame that posted a job, never with the tick thread running, and a barrier in every frame whose job was in flight */
+		CHECK(net_hook_calls == posted_frames);
+		CHECK(net_hook_busy == 0);
+		CHECK(barriers_done > frames / 2);
+		printf("network: %ld end-of-frame calls, %ld barriers, %ld waited, none with the tick thread busy\n", net_hook_calls, barriers_done, (long)o.net_barrier_waits);
+	}
+	else
+	{
+		CHECK(net_hook_calls == 0 && barriers_done == 0);
+	}
 	CHECK(serial > 0);
 	CHECK(held > 0);
 	/* the tick thread's pushes, in the order made, none lost (the last job's are applied by the last sync point) */
@@ -533,6 +585,17 @@ int main(int count, char **arguments)
 		test_frames(3000);
 	else if (!strcmp(which, "decisions"))
 		test_decisions();
+	else if (!strcmp(which, "network"))
+	{
+		network_run = 1;
+		test_frames(3000);
+	}
+	else if (!strcmp(which, "network-small"))
+	{
+		network_run = 1;
+		small_queues = 1;
+		test_frames(1500);
+	}
 	else if (!strcmp(which, "small"))
 	{
 		small_queues = 1;

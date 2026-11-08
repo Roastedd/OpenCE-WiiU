@@ -537,6 +537,9 @@ symbols in this file:
 /* ---------- headers */
 
 #include "cseries.h"
+#ifdef HALO_WIIU
+#include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
+#endif
 #include "game_modes.h" /* port: port/linux/game/game_modes.c */
 #include "infection.h" /* port: port/linux/game/infection.c */
 #include "cseries_windows.h"
@@ -4416,6 +4419,10 @@ void game_engine_handle_server_message(
 void game_engine_post_rasterize_objects(
 	void)
 {
+#ifdef HALO_WIIU
+	/* port: the drawing of a network game's overlap frame reads the game engine's state, which a tick running beside it changes (tick_overlap.h) */
+	TICK_OVERLAP_NET_BARRIER();
+#endif
 	if (game_engine && game_engine->post_rasterize_objects)
 		game_engine->post_rasterize_objects();
 
@@ -4425,6 +4432,9 @@ void game_engine_post_rasterize_objects(
 void game_engine_post_rasterize(
 	void)
 {
+#ifdef HALO_WIIU
+	TICK_OVERLAP_NET_BARRIER();
+#endif
 	if (game_engine)
 	{
 		switch (game_engine_globals.postgame_state)
@@ -4458,6 +4468,9 @@ void game_engine_post_rasterize(
 void game_engine_nonplayer_post_rasterize(
 	void)
 {
+#ifdef HALO_WIIU
+	TICK_OVERLAP_NET_BARRIER();
+#endif
 	if (game_engine)
 	{
 		switch (game_engine_globals.postgame_state)

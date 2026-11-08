@@ -76,6 +76,9 @@ symbols in this file:
 /* ---------- headers */
 
 #include "cseries/cseries.h"
+#ifdef HALO_WIIU
+#include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
+#endif
 #include "bitmaps/bitmap_group.h"
 #include "camera/director.h"
 #include "cache/texture_cache.h"
@@ -1462,6 +1465,10 @@ static void hud_draw_match_timer(
 void hud_draw_screen(
 	void)
 {
+#ifdef HALO_WIIU
+	/* port: the HUD reads the game engine's and the netcode's state, which a tick running beside the drawing of a network game changes (tick_overlap.h) */
+	TICK_OVERLAP_NET_BARRIER();
+#endif
 	long player_index = local_player_get_player_index(render.local_player_index);
 	director_perspective perspective = director_get_perspective(render.local_player_index);
 
