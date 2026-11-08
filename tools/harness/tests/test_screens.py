@@ -11,7 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import ROOT, build, mutated, read, run
 
-CASES = ["words", "fit-names", "fit-columns", "fit-cut", "player-cells", "friend-cells", "party-cells", "tabs", "sorting", "actions", "model", "mock-actions", "mock-text",
+CASES = ["words", "fit-names", "fit-columns", "fit-cut", "player-cells", "friend-cells", "party-cells", "empty-text", "tabs", "sorting", "actions", "model", "mock-actions", "mock-text",
          "nav-players", "nav-friends", "nav-tap", "toast-queue", "toast-time", "disabled", "level-1", "level-2", "level-clamped"]
 
 
@@ -57,7 +57,7 @@ def test_metrics_are_current():
     # the friends' name column narrower than the widest name
     (None, None, ("SCREENS_FRIEND_NAME_WIDTH = 190,", "SCREENS_FRIEND_NAME_WIDTH = 120,"), "fit-names"),
     # the status column narrower than its words
-    (None, None, ("SCREENS_FRIEND_STATUS_WIDTH = 330,", "SCREENS_FRIEND_STATUS_WIDTH = 200,"), "fit-columns"),
+    (None, None, ("SCREENS_FRIEND_STATUS_WIDTH = 282,", "SCREENS_FRIEND_STATUS_WIDTH = 160,"), "fit-columns"),
     # the join word cut with the map
     (("snprintf(suffix + strlen(suffix), sizeof(suffix) - strlen(suffix), \" %s\", join);", ""), None, None, "fit-columns"),
     # a bot with no tag
@@ -76,6 +76,8 @@ def test_metrics_are_current():
     (("\treturn 5;\n}\n\nstatic int name_compare", "\treturn 0;\n}\n\nstatic int name_compare"), None, None, "sorting"),
     # a party member's progress dropped
     (("snprintf(text, sizeof(text), \"%s %d%%\", screens_member_word(member->state)", "snprintf(text, sizeof(text), \"%s %d\", screens_member_word(member->state)"), None, None, "party-cells"),
+    # a service that is off said to be on
+    (("else if (summary && summary->service == SCREENS_SERVICE_OFF && tab == SCREENS_TAB_FRIENDS)", "else if (0)"), None, None, "empty-text"),
     # the chosen tab not marked
     (("if (chosen)\n\t\tsnprintf(text, (size_t)size, \"[%s]\", line);", "if (0)\n\t\tsnprintf(text, (size_t)size, \"[%s]\", line);"), None, None, "tabs"),
     # up from the first row does not reach the tabs
@@ -96,7 +98,9 @@ def test_metrics_are_current():
     # a tap in the gap between two tabs counts
     (("x < SCREENS_TAB_LEFT + tab * SCREENS_TAB_PITCH + SCREENS_TAB_WIDTH)", "1)"), None, None, "nav-tap"),
     # the buttons' places moved
-    (("return 510 - (count - 1 - index) * 130;", "return 510 - (count - 1 - index) * 128;"), None, None, "nav-tap"),
+    (("510 - (count - 1 - index) * 130;", "510 - (count - 1 - index) * 128;"), None, None, "nav-tap"),
+    # the five buttons narrower than they are
+    (("return count >= 5 ? 120 : 128;", "return 128;"), None, None, "nav-tap"),
     # an invitation does not jump the queue
     (("if (toast_is_invite(toast))\n\t{\n\t\t/* (an invitation jumps", "if (0)\n\t{\n\t\t/* (an invitation jumps"), None, None, "toast-queue"),
     # the same toast not dropped
@@ -127,7 +131,7 @@ def test_metrics_are_current():
     # the mock's code not checked
     (None, ("if (length != TEXT_SAFE_CODE_LENGTH)\n\t{", "if (0)\n\t{"), None, "mock-actions"),
     # a client offered the host's actions
-    (None, ("\t\tif (summary->host)\n\t\t{\n\t\t\tactions[count++] = SCREENS_ACTION_KICK;", "\t\t{\n\t\t\tactions[count++] = SCREENS_ACTION_KICK;"), None, "actions"),
+    (("\t\tif (summary->host)\n\t\t{\n\t\t\tactions[count++] = SCREENS_ACTION_KICK;", "\t\t{\n\t\t\tactions[count++] = SCREENS_ACTION_KICK;"), None, None, "actions"),
 ])
 def test_negative_control(code_fault, mock_fault, header_fault, case):
     status, output = run(build("screens_core", generated(code_fault, mock_fault, header_fault)), case)

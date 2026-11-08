@@ -223,6 +223,7 @@ static int mock_party(struct screens_party_member *members, int maximum, struct 
 		summary->maximum = SCREENS_PARTY_MAXIMUM;
 		summary->follow = (unsigned char)mock.follow;
 		summary->room = 1;
+		summary->i_lead = 1;
 		snprintf(summary->leader_game, sizeof(summary->leader_game), "bloodgulch, 6 of 16");
 	}
 	return count;
@@ -547,107 +548,10 @@ static int mock_friend_add(char const *code, char *answer, int size)
 	return 1;
 }
 
-/* what A on a row offers, by who the row is (the screens' own rule, which a backend may replace) */
-static void mock_roster_actions(struct screens_roster_row const *row, struct screens_roster_summary const *summary, int *actions)
-{
-	int count = 0;
-
-	if (row->flags & SCREENS_ROW_BOT)
-	{
-		if (summary->host)
-		{
-			actions[count++] = SCREENS_ACTION_DROP_BOT;
-			if (row->skill < SCREENS_SKILLS - 1)
-				actions[count++] = SCREENS_ACTION_BOT_SKILL_UP;
-			if (row->skill > 0)
-				actions[count++] = SCREENS_ACTION_BOT_SKILL_DOWN;
-			if (summary->teams)
-				actions[count++] = SCREENS_ACTION_CHANGE_TEAM;
-		}
-	}
-	else if (!(row->flags & SCREENS_ROW_ME))
-	{
-		actions[count++] = (row->flags & SCREENS_ROW_MUTED) ? SCREENS_ACTION_UNMUTE : SCREENS_ACTION_MUTE;
-		actions[count++] = SCREENS_ACTION_VOTE_KICK;
-		if (!(row->flags & SCREENS_ROW_FRIEND))
-			actions[count++] = SCREENS_ACTION_ADD_FRIEND;
-		if (!(row->flags & SCREENS_ROW_PARTY))
-			actions[count++] = SCREENS_ACTION_INVITE_PARTY;
-		if (summary->host)
-		{
-			actions[count++] = SCREENS_ACTION_KICK;
-			actions[count++] = SCREENS_ACTION_BAN;
-		}
-	}
-	else if (summary->teams)
-	{
-		actions[count++] = SCREENS_ACTION_CHANGE_TEAM;
-	}
-	actions[count++] = SCREENS_ACTION_CANCEL;
-	actions[count] = SCREENS_ACTION_NONE;
-}
-
-static void mock_friend_actions(int tab, struct screens_friend_row const *row, int *actions)
-{
-	int count = 0;
-
-	if (tab == SCREENS_TAB_REQUESTS && row->presence == SCREENS_PRESENCE_REQUEST_GOT)
-	{
-		actions[count++] = SCREENS_ACTION_ACCEPT;
-		actions[count++] = SCREENS_ACTION_DECLINE;
-		actions[count++] = SCREENS_ACTION_BLOCK;
-	}
-	else if (tab == SCREENS_TAB_REQUESTS)
-	{
-		actions[count++] = SCREENS_ACTION_DECLINE;
-	}
-	else if (tab == SCREENS_TAB_BLOCKED)
-	{
-		actions[count++] = SCREENS_ACTION_UNBLOCK;
-	}
-	else
-	{
-		if ((row->presence == SCREENS_PRESENCE_PLAYING || row->presence == SCREENS_PRESENCE_LOBBY) &&
-			(row->join == SCREENS_JOIN_OPEN || row->join == SCREENS_JOIN_DOWNLOAD))
-		{
-			actions[count++] = SCREENS_ACTION_JOIN_GAME;
-		}
-		if (row->presence != SCREENS_PRESENCE_OFFLINE)
-			actions[count++] = row->party ? SCREENS_ACTION_INVITE_GAME : SCREENS_ACTION_INVITE_PARTY;
-		actions[count++] = SCREENS_ACTION_VIEW_CODE;
-		actions[count++] = SCREENS_ACTION_REMOVE_FRIEND;
-		actions[count++] = SCREENS_ACTION_BLOCK;
-	}
-	actions[count++] = SCREENS_ACTION_CANCEL;
-	actions[count] = SCREENS_ACTION_NONE;
-}
-
-static void mock_party_actions(struct screens_party_member const *member, struct screens_party_summary const *summary, int *actions)
-{
-	int count = 0;
-	int leader_me = 0, index;
-
-	ensure();
-	for (index = 0; index < mock.party_count; index++)
-		leader_me |= mock.party[index].me && mock.party[index].leader;
-	if (member->me)
-	{
-		actions[count++] = summary->follow ? SCREENS_ACTION_FOLLOW_OFF : SCREENS_ACTION_FOLLOW_ON;
-		actions[count++] = leader_me ? SCREENS_ACTION_DISBAND_PARTY : SCREENS_ACTION_LEAVE_PARTY;
-	}
-	else if (leader_me)
-	{
-		actions[count++] = SCREENS_ACTION_MAKE_LEADER;
-		actions[count++] = SCREENS_ACTION_REMOVE_FROM_PARTY;
-	}
-	actions[count++] = SCREENS_ACTION_CANCEL;
-	actions[count] = SCREENS_ACTION_NONE;
-}
-
 static struct screens_provider const mock_table =
 {
 	"mock", mock_generation, mock_roster, mock_friends, mock_party, mock_toast_pop, mock_invite_answer, mock_roster_action, mock_bot_add, mock_bot_drop, mock_friend_action,
-	mock_party_action, mock_friend_add, mock_roster_actions, mock_friend_actions, mock_party_actions,
+	mock_party_action, mock_friend_add, screens_default_roster_actions, screens_default_friend_actions, screens_default_party_actions,
 };
 
 struct screens_provider const *screens_mock_provider(void)

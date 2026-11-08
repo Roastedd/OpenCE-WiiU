@@ -121,8 +121,7 @@ static void fit_names(void)
 
 static float cell_limit(int kind, int index)
 {
-	static const float player[SCREENS_PLAYER_CELLS] = { SCREENS_PLAYER_NAME_WIDTH, SCREENS_PLAYER_TAG_WIDTH, SCREENS_PLAYER_TEAM_WIDTH, SCREENS_PLAYER_PING_WIDTH,
-		SCREENS_PLAYER_SCORE_WIDTH };
+	static const float player[SCREENS_PLAYER_CELLS] = { SCREENS_PLAYER_NAME_WIDTH, SCREENS_PLAYER_TAG_WIDTH, SCREENS_PLAYER_TEAM_WIDTH, SCREENS_PLAYER_PING_WIDTH };
 	static const float lobby[SCREENS_LOBBY_CELLS] = { SCREENS_LOBBY_NAME_WIDTH, SCREENS_LOBBY_TAG_WIDTH };
 	static const float friend_limit[SCREENS_FRIEND_CELLS] = { 24, SCREENS_FRIEND_NAME_WIDTH, SCREENS_FRIEND_STATUS_WIDTH };
 	static const float party[SCREENS_MEMBER_CELLS] = { 24, SCREENS_FRIEND_NAME_WIDTH, SCREENS_MEMBER_STATE_WIDTH };
@@ -264,7 +263,6 @@ static void player_cells(void)
 		"this machine's own row: %s / %s", cells[0].text, cells[1].text);
 	CHECK(!strcmp(cells[SCREENS_PLAYER_TEAM].text, "RED") && cells[SCREENS_PLAYER_TEAM].color == SCREENS_COLOR_RED_TEAM, "red team in the team's colour");
 	CHECK(!strcmp(cells[SCREENS_PLAYER_PING].text, "--") && cells[SCREENS_PLAYER_PING].color == SCREENS_COLOR_GREY, "this machine's players have no ping");
-	CHECK(!strcmp(cells[SCREENS_PLAYER_SCORE].text, "12"), "the score");
 	screens_player_cells(&rows[2], &summary, cells);
 	CHECK(!strcmp(cells[SCREENS_PLAYER_TAG].text, "BOT HEROIC") && cells[SCREENS_PLAYER_TAG].color == SCREENS_COLOR_AMBER, "a bot is tagged BOT with its skill, in amber: '%s'",
 		cells[SCREENS_PLAYER_TAG].text);
@@ -700,6 +698,42 @@ static void mock_text(void)
 	}
 }
 
+static void empty_text(void)
+{
+	char text[SCREENS_LINE_SIZE];
+	struct screens_friends_summary summary;
+	int tab, service, provider;
+
+	memset(&summary, 0, sizeof(summary));
+	for (service = 0; service < 4; service++)
+	{
+		for (provider = 0; provider < 2; provider++)
+		{
+			for (tab = 0; tab < SCREENS_TABS; tab++)
+			{
+				summary.service = (unsigned char)service;
+				screens_empty_text(1, tab, &summary, provider, text, (int)sizeof(text));
+				CHECK(text[0] && ascii_clean(text) && screens_text_width(SCREENS_FONT_LARGE, text) <= 520.0f, "empty %d %d %d: '%s'", service, provider, tab, text);
+			}
+		}
+	}
+	summary.service = SCREENS_SERVICE_CONNECTED;
+	screens_empty_text(1, SCREENS_TAB_FRIENDS, &summary, 1, text, (int)sizeof(text));
+	CHECK(strstr(text, "NO FRIENDS YET") && strstr(text, "Y: ADD"), "'%s'", text);
+	screens_empty_text(1, SCREENS_TAB_FRIENDS, &summary, 0, text, (int)sizeof(text));
+	CHECK(strstr(text, "NO FRIEND SERVICE"), "a build with no friends service says so: '%s'", text);
+	summary.service = SCREENS_SERVICE_OFF;
+	screens_empty_text(1, SCREENS_TAB_FRIENDS, &summary, 1, text, (int)sizeof(text));
+	CHECK(strstr(text, "OFFLINE") && strstr(text, "KEPT"), "an offline service: '%s'", text);
+	summary.service = SCREENS_SERVICE_DISABLED;
+	screens_empty_text(1, SCREENS_TAB_BLOCKED, &summary, 1, text, (int)sizeof(text));
+	CHECK(strstr(text, "FRIENDS ARE OFF"), "'%s'", text);
+	screens_empty_text(0, 0, NULL, 1, text, (int)sizeof(text));
+	CHECK(!strcmp(text, "NO PLAYERS YET."), "'%s'", text);
+	screens_empty_text(0, 0, NULL, 0, text, (int)sizeof(text));
+	CHECK(strstr(text, "NO PLAYER LIST"), "'%s'", text);
+}
+
 /* nav: the Players page: ten rows, no tabs, four buttons */
 static void nav_players(void)
 {
@@ -840,8 +874,8 @@ static void nav_tap(void)
 	CHECK(nav.result == SCREENS_NAV_NOTHING, "below the last row shown");
 	screens_nav_tap(&nav, (float)(SCREENS_ROWS_LEFT - 1), (float)(SCREENS_ROWS_TOP + 4));
 	CHECK(nav.result == SCREENS_NAV_NOTHING, "left of the rows");
-	screens_nav_tap(&nav, (float)(SCREENS_ROWS_LEFT + 10), (float)(SCREENS_ROWS_TOP + SCREENS_ROW_HEIGHT + 1));
-	CHECK(nav.result == SCREENS_NAV_NOTHING, "between two rows");
+	screens_nav_tap(&nav, (float)(SCREENS_ROWS_LEFT + 10), (float)(SCREENS_ROWS_TOP + SCREENS_ROW_PITCH));
+	CHECK(nav.result == SCREENS_NAV_OPEN_ACTIONS && nav.row == 1, "the pixel under a row's last is the next row's first");
 	screens_nav_begin(&nav, 1, SCREENS_FRIEND_ROWS, SCREENS_TABS, 4);
 	screens_nav_rows(&nav, 2);
 	screens_nav_tap(&nav, (float)(SCREENS_ROWS_LEFT + 10), (float)(SCREENS_ROWS_TOP + 4 * SCREENS_ROW_PITCH + 4));
@@ -855,6 +889,17 @@ static void nav_tap(void)
 	}
 	screens_nav_tap(&nav, 120 + 128 + 1, (float)(SCREENS_BUTTONS_TOP + 3));
 	CHECK(nav.result == SCREENS_NAV_NOTHING, "between two buttons");
+	/* five buttons of 120 at 8, 130, 252, 374, 496 (the lobby's bar with a fifth) */
+	nav.button_count = 5;
+	for (index = 0; index < 5; index++)
+	{
+		CHECK(screens_button_left(index, 5) == 8 + 122 * index && screens_button_width(5) == 120, "five: button %d", index);
+		screens_nav_tap(&nav, (float)(8 + 122 * index + 119), (float)(SCREENS_BUTTONS_TOP + 3));
+		CHECK(nav.result == SCREENS_NAV_BUTTON && nav.button == index, "five: button %d's far edge", index);
+		screens_nav_tap(&nav, (float)(8 + 122 * index + 121), (float)(SCREENS_BUTTONS_TOP + 3));
+		CHECK(nav.result == SCREENS_NAV_NOTHING, "five: the gap after button %d", index);
+	}
+	nav.button_count = 4;
 	screens_nav_tap(&nav, 130, (float)(SCREENS_BUTTONS_TOP + SCREENS_BUTTON_HEIGHT));
 	CHECK(nav.result == SCREENS_NAV_NOTHING, "below the buttons");
 	CHECK(screens_button_left(0, 2) == 380 && screens_button_left(1, 2) == 510 && screens_button_left(0, 1) == 510, "the bar's places");
@@ -1064,6 +1109,8 @@ int main(int argc, char **argv)
 		mock_actions();
 	else if (!strcmp(name, "mock-text"))
 		mock_text();
+	else if (!strcmp(name, "empty-text"))
+		empty_text();
 	else if (!strcmp(name, "nav-players"))
 		nav_players();
 	else if (!strcmp(name, "nav-friends"))

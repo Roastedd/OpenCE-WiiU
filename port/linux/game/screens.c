@@ -36,13 +36,26 @@ struct screens_provider const *screens_provider(void)
 {
 	if (provider_in_use)
 		return provider_in_use;
-	/* (1: the mock; 2 with no backend set: only what the game's roster has, which screens_game.c puts in by screens_provider_set) */
+	/* (1: the mock; 2: the game's roster with the backend's rest, which menu_screens.inl makes and sets; none before that) */
 	return screens_enabled() == 1 ? screens_mock_provider() : NULL;
 }
 
 void screens_provider_set(struct screens_provider const *provider)
 {
 	provider_in_use = provider;
+}
+
+/* the friends service's table (the social stream's), if a build has one: screens.enable 2's provider takes its friends, party, toasts and actions from it */
+static struct screens_provider const *backend_table;
+
+struct screens_provider const *screens_backend(void)
+{
+	return backend_table;
+}
+
+void screens_backend_set(struct screens_provider const *backend)
+{
+	backend_table = backend;
 }
 
 /* ---------- colours and words */
@@ -287,15 +300,6 @@ void screens_player_cells(struct screens_roster_row const *row, struct screens_r
 	else
 	{
 		cell_set(&cells[SCREENS_PLAYER_PING], SCREENS_FONT_SMALL, (float)SCREENS_PLAYER_PING_WIDTH, SCREENS_COLOR_GREY, "--");
-	}
-	if (row->score >= 0)
-	{
-		snprintf(text, sizeof(text), "%d", row->score > 9999 ? 9999 : row->score);
-		cell_set(&cells[SCREENS_PLAYER_SCORE], SCREENS_FONT_SMALL, (float)SCREENS_PLAYER_SCORE_WIDTH, SCREENS_COLOR_WHITE, text);
-	}
-	else
-	{
-		cell_set(&cells[SCREENS_PLAYER_SCORE], SCREENS_FONT_SMALL, (float)SCREENS_PLAYER_SCORE_WIDTH, SCREENS_COLOR_GREY, "--");
 	}
 }
 
@@ -622,11 +626,134 @@ int screens_friends_sort(struct screens_friend_row *rows, int count)
 	return count;
 }
 
+/* ---------- what A on a row offers, by who the row is (the screens' own rule, which a backend may replace; a provider's own list replaces it) */
+void screens_default_roster_actions(struct screens_roster_row const *row, struct screens_roster_summary const *summary, int *actions)
+{
+	int count = 0;
+
+	if (row->flags & SCREENS_ROW_BOT)
+	{
+		if (summary->host)
+		{
+			actions[count++] = SCREENS_ACTION_DROP_BOT;
+			if (row->skill < SCREENS_SKILLS - 1)
+				actions[count++] = SCREENS_ACTION_BOT_SKILL_UP;
+			if (row->skill > 0)
+				actions[count++] = SCREENS_ACTION_BOT_SKILL_DOWN;
+			if (summary->teams)
+				actions[count++] = SCREENS_ACTION_CHANGE_TEAM;
+		}
+	}
+	else if (!(row->flags & SCREENS_ROW_ME))
+	{
+		actions[count++] = (row->flags & SCREENS_ROW_MUTED) ? SCREENS_ACTION_UNMUTE : SCREENS_ACTION_MUTE;
+		actions[count++] = SCREENS_ACTION_VOTE_KICK;
+		if (!(row->flags & SCREENS_ROW_FRIEND))
+			actions[count++] = SCREENS_ACTION_ADD_FRIEND;
+		if (!(row->flags & SCREENS_ROW_PARTY))
+			actions[count++] = SCREENS_ACTION_INVITE_PARTY;
+		if (summary->host)
+		{
+			actions[count++] = SCREENS_ACTION_KICK;
+			actions[count++] = SCREENS_ACTION_BAN;
+		}
+	}
+	else if (summary->teams)
+	{
+		actions[count++] = SCREENS_ACTION_CHANGE_TEAM;
+	}
+	actions[count++] = SCREENS_ACTION_CANCEL;
+	actions[count] = SCREENS_ACTION_NONE;
+}
+
+void screens_default_friend_actions(int tab, struct screens_friend_row const *row, int *actions)
+{
+	int count = 0;
+
+	if (tab == SCREENS_TAB_REQUESTS && row->presence == SCREENS_PRESENCE_REQUEST_GOT)
+	{
+		actions[count++] = SCREENS_ACTION_ACCEPT;
+		actions[count++] = SCREENS_ACTION_DECLINE;
+		actions[count++] = SCREENS_ACTION_BLOCK;
+	}
+	else if (tab == SCREENS_TAB_REQUESTS)
+	{
+		actions[count++] = SCREENS_ACTION_DECLINE;
+	}
+	else if (tab == SCREENS_TAB_BLOCKED)
+	{
+		actions[count++] = SCREENS_ACTION_UNBLOCK;
+	}
+	else
+	{
+		if ((row->presence == SCREENS_PRESENCE_PLAYING || row->presence == SCREENS_PRESENCE_LOBBY) &&
+			(row->join == SCREENS_JOIN_OPEN || row->join == SCREENS_JOIN_DOWNLOAD))
+		{
+			actions[count++] = SCREENS_ACTION_JOIN_GAME;
+		}
+		if (row->presence != SCREENS_PRESENCE_OFFLINE)
+			actions[count++] = row->party ? SCREENS_ACTION_INVITE_GAME : SCREENS_ACTION_INVITE_PARTY;
+		actions[count++] = SCREENS_ACTION_VIEW_CODE;
+		actions[count++] = SCREENS_ACTION_REMOVE_FRIEND;
+		actions[count++] = SCREENS_ACTION_BLOCK;
+	}
+	actions[count++] = SCREENS_ACTION_CANCEL;
+	actions[count] = SCREENS_ACTION_NONE;
+}
+
+void screens_default_party_actions(struct screens_party_member const *member, struct screens_party_summary const *summary, int *actions)
+{
+	int count = 0;
+	int leader_me = summary->i_lead;
+
+	if (member->me)
+	{
+		actions[count++] = summary->follow ? SCREENS_ACTION_FOLLOW_OFF : SCREENS_ACTION_FOLLOW_ON;
+		actions[count++] = leader_me ? SCREENS_ACTION_DISBAND_PARTY : SCREENS_ACTION_LEAVE_PARTY;
+	}
+	else if (leader_me)
+	{
+		actions[count++] = SCREENS_ACTION_MAKE_LEADER;
+		actions[count++] = SCREENS_ACTION_REMOVE_FROM_PARTY;
+	}
+	actions[count++] = SCREENS_ACTION_CANCEL;
+	actions[count] = SCREENS_ACTION_NONE;
+}
+
+
+void screens_empty_text(int screen, int tab, struct screens_friends_summary const *summary, int have_provider, char *text, int size)
+{
+	char line[SCREENS_LINE_SIZE];
+
+	if (!have_provider)
+		snprintf(line, sizeof(line), screen == 0 ? "THERE IS NO PLAYER LIST HERE." : "THERE IS NO FRIEND SERVICE IN THIS BUILD.");
+	else if (screen == 0)
+		snprintf(line, sizeof(line), "NO PLAYERS YET.");
+	else if (summary && summary->service == SCREENS_SERVICE_DISABLED)
+		snprintf(line, sizeof(line), "FRIENDS ARE OFF. TURN THEM ON IN NETWORK SETUP.");
+	else if (summary && summary->service == SCREENS_SERVICE_OFF && tab == SCREENS_TAB_FRIENDS)
+		snprintf(line, sizeof(line), "FRIENDS ARE OFFLINE. YOUR LIST IS KEPT.");
+	else if (tab == SCREENS_TAB_FRIENDS)
+		snprintf(line, sizeof(line), "NO FRIENDS YET. Y: ADD A FRIEND BY CODE.");
+	else if (tab == SCREENS_TAB_REQUESTS)
+		snprintf(line, sizeof(line), "NO REQUESTS.");
+	else if (tab == SCREENS_TAB_PARTY)
+		snprintf(line, sizeof(line), "NO PARTY. INVITE A FRIEND TO START ONE.");
+	else
+		snprintf(line, sizeof(line), "NO ONE IS BLOCKED.");
+	screens_fit(SCREENS_FONT_LARGE, 520.0f, line, text, size);
+}
+
 /* ---------- navigation */
 
 int screens_button_left(int index, int count)
 {
-	return 510 - (count - 1 - index) * 130;
+	return count >= 5 ? 8 + index * 122 : 510 - (count - 1 - index) * 130;
+}
+
+int screens_button_width(int count)
+{
+	return count >= 5 ? 120 : 128;
 }
 
 void screens_nav_begin(struct screens_nav *nav, int screen, int rows_visible, int tab_count, int button_count)
@@ -804,7 +931,7 @@ void screens_nav_tap(struct screens_nav *nav, float x, float y)
 		{
 			int left = screens_button_left(button, nav->button_count);
 
-			if (x >= left && x < left + SCREENS_BUTTON_WIDTH)
+			if (x >= left && x < left + screens_button_width(nav->button_count))
 			{
 				nav->area = SCREENS_AREA_BUTTONS;
 				nav->button = button;

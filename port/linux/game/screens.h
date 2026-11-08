@@ -281,6 +281,8 @@ struct screens_party_summary
 	/* the room the leader's game holds for the party: 0 not known, 1 held, 2 not guaranteed */
 	unsigned char room;
 	char leader_game[SCREENS_LINE_SIZE];
+	/* nonzero: this machine leads the party (it may make another leader, remove a member, disband) */
+	unsigned char i_lead;
 };
 
 /* ---------- toasts */
@@ -342,9 +344,19 @@ struct screens_provider
 
 /* screens.enable (0 off, 1 mock, 2 the game's roster and the provider set), read once */
 int screens_enabled(void);
+/* what A on a row offers when the provider has no list of its own (screens.c: by who the row is; the last is CANCEL, then SCREENS_ACTION_NONE) */
+void screens_default_roster_actions(struct screens_roster_row const *row, struct screens_roster_summary const *summary, int *actions);
+void screens_default_friend_actions(int tab, struct screens_friend_row const *row, int *actions);
+void screens_default_party_actions(struct screens_party_member const *member, struct screens_party_summary const *summary, int *actions);
+/* the line a screen shows in place of rows it has none of, in plain words (screen 0 the Players page, 1 the Friends screen): why the list is empty */
+void screens_empty_text(int screen, int tab, struct screens_friends_summary const *summary, int have_provider, char *text, int size);
 /* the provider in use: NULL if none is set (a screen with none shows itself empty, with a word for why) */
 struct screens_provider const *screens_provider(void);
 void screens_provider_set(struct screens_provider const *provider);
+/* the social stream's table (friends, party, toasts, invites, actions on people): a build that has a friends service sets it once at start; the screens with screens.enable 2 take what it has
+(a NULL function is a feature the screens leave out), and the game's own players for the roster. NULL: no friends service (the Friends screen says so). */
+struct screens_provider const *screens_backend(void);
+void screens_backend_set(struct screens_provider const *backend);
 /* the mock's table (screens_mock.c): made-up players with bots, friends in every state, a party of five, toasts, and actions that change the made-up data */
 struct screens_provider const *screens_mock_provider(void);
 /* back to the mock's starting data (tests, and a screen opened afresh) */
@@ -391,7 +403,6 @@ enum
 	SCREENS_PLAYER_TAG,
 	SCREENS_PLAYER_TEAM,
 	SCREENS_PLAYER_PING,
-	SCREENS_PLAYER_SCORE,
 	SCREENS_PLAYER_CELLS,
 	/* a lobby row: the name, and one cell of tag and team */
 	SCREENS_LOBBY_NAME = 0,
@@ -416,12 +427,11 @@ enum
 	SCREENS_PLAYER_TAG_WIDTH = 150,
 	SCREENS_PLAYER_TEAM_WIDTH = 56,
 	SCREENS_PLAYER_PING_WIDTH = 58,
-	SCREENS_PLAYER_SCORE_WIDTH = 52,
 	SCREENS_LOBBY_NAME_WIDTH = 190,
 	SCREENS_LOBBY_TAG_WIDTH = 164,
 	SCREENS_FRIEND_NAME_WIDTH = 190,
-	SCREENS_FRIEND_STATUS_WIDTH = 330,
-	SCREENS_MEMBER_STATE_WIDTH = 330,
+	SCREENS_FRIEND_STATUS_WIDTH = 282,
+	SCREENS_MEMBER_STATE_WIDTH = 282,
 };
 
 void screens_player_cells(struct screens_roster_row const *row, struct screens_roster_summary const *summary, struct screens_cell *cells);
@@ -504,28 +514,29 @@ void screens_nav_key(struct screens_nav *nav, int key);
 /* a tap at a place in a screen's own units: the row, the tab, the button under it (nothing: result SCREENS_NAV_NOTHING) */
 void screens_nav_tap(struct screens_nav *nav, float x, float y);
 
-/* the screens' places, in units (the XML's numbers: a test reads both) */
+/* the screens' places, in units of the 640 x 480 menu screen (tools/port_settings.py's numbers; a test reads both): the rows are the settings screens' own grid, 512 wide at x 54 */
 enum
 {
-	SCREENS_ROWS_LEFT = 28,
-	SCREENS_ROWS_TOP = 96,
+	SCREENS_ROWS_LEFT = 54,
+	SCREENS_ROWS_TOP = 76,
 	SCREENS_ROW_PITCH = 28,
-	SCREENS_ROW_WIDTH = 584,
-	SCREENS_ROW_HEIGHT = 26,
-	SCREENS_TAB_TOP = 62,
+	SCREENS_ROW_WIDTH = 512,
+	SCREENS_ROW_HEIGHT = 28,
+	SCREENS_TAB_TOP = 44,
 	SCREENS_TAB_HEIGHT = 26,
-	SCREENS_TAB_WIDTH = 146,
-	SCREENS_TAB_PITCH = 148,
-	SCREENS_TAB_LEFT = 24,
+	SCREENS_TAB_LEFT = 54,
+	SCREENS_TAB_PITCH = 128,
+	SCREENS_TAB_WIDTH = 124,
 	SCREENS_BUTTONS_TOP = 414,
 	SCREENS_BUTTON_HEIGHT = 24,
-	SCREENS_BUTTON_WIDTH = 128,
 	SCREENS_PLAYER_ROWS = 10,
 	SCREENS_FRIEND_ROWS = 9,
 };
 
-/* the x of the button n of count on the buttons' line: the right-most at 510, going left by 130 (the Xbox's bar: DEFAULTS at the left, OK 380, CANCEL 510) */
+/* the x and the width of the button n of count on the buttons' line: up to four 128 wide, the right-most at 510, going left by 130 (the Xbox's bar: DEFAULTS at the left, OK 380, CANCEL
+510); five 120 wide at 8, 130, 252, 374 and 496 (the lobby's bar with a fifth button) */
 int screens_button_left(int index, int count);
+int screens_button_width(int count);
 
 /* ---------- toasts: the queue and its timing (a pure model; the drawing is screens_toast.c's) */
 
