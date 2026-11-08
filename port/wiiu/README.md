@@ -507,6 +507,13 @@ tools/wiiu/build_game.sh`), keep the card's `config.toml` and put it back at the
 It passes when 15 peers play a Wii U-hosted game for five minutes with the sockets as with none, no datagram lost in the process, and the joiners'
 views agreeing with the host's as `net_compare.py` judges two machines.
 
+## Friends, invites and parties (`wiiu-social`, off until the console has tried it)
+
+The same code as every other build (`port/linux/game/social_*.c`, `port/linux/src/social_p2p.inc`; `port/linux/README.md`, "Friends, invites and parties"), so friends work
+across the Wii U and the PC builds that have it. It is **off**: `social.enabled` is false, and `halo/social.txt` on the card (a 1) turns it on for a run; nothing was run on a
+console. On, it keeps the signalling brokers' sockets open for the whole run (up to four of the 27), reads `friends.key` and `friends.txt` on a thread of its own, writes
+`friends.txt` only while the app has the screen (`wiiu_in_foreground`), and logs `social:` lines. The console test plan is in `reports/research/2026-11-08/social-result.md`.
+
 ## Owned game-audio packet storage
 
 The host-qualified audio branch reuses compressed packet copies and decoded

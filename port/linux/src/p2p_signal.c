@@ -234,6 +234,9 @@ struct broker
 	int lobby_clear_pending;
 	/* a query to send once subscribed to the slots */
 	int query_pending;
+	/* the friends layer's topics it has been asked for (social_core.h), and the subscriptions it refused (a SUBACK's failure) */
+	char social[P2P_SOCIAL_MAXIMUM_TOPICS][TOPIC_SIZE];
+	int refusals;
 	/* publishes at least once, awaiting PUBACK */
 	struct
 	{
@@ -377,6 +380,10 @@ static struct
 
 	/* the server browser's probes (p2p_signal_probe) */
 	struct probe probes[P2P_MAXIMUM_PROBES];
+
+	/* the friends layer's topics (social_core.c): the set it wants, which every ready broker is brought to a few filters a pass */
+	char social_topics[P2P_SOCIAL_MAXIMUM_TOPICS][TOPIC_SIZE];
+	int social_topic_count;
 } signalling;
 
 static int elapsed(unsigned long since, unsigned long time)
@@ -464,6 +471,7 @@ static void broker_close(struct broker *broker, int failed)
 	broker->input_size = 0;
 	broker->output_size = 0;
 	memset(broker->topics, 0, sizeof(broker->topics));
+	memset(broker->social, 0, sizeof(broker->social));
 	memset(broker->in_flight, 0, sizeof(broker->in_flight));
 	/* (the will cleared the slot: the listing again once connected) */
 	broker->lobby_version = 0;
@@ -785,6 +793,56 @@ static void broker_update_lobby(struct broker *broker)
 		posix_random_bytes(nonce, sizeof(nonce));
 		broker_publish(broker, P2P_LOBBY_QUERY_TOPIC, nonce, sizeof(nonce));
 		broker->query_pending = 0;
+	}
+}
+
+/* the friends layer's filters brought to the wanted set on a ready broker, a few a pass (each is a packet, and fifty at once would fill the output buffer) */
+static void broker_sync_social(struct broker *broker)
+{
+	int budget = 8;
+	int index, other;
+
+	if (broker->state != _broker_ready)
+		return;
+	for (index = 0; index < P2P_SOCIAL_MAXIMUM_TOPICS && budget > 0; index++)
+	{
+		int wanted = 0;
+
+		if (!broker->social[index][0])
+			continue;
+		for (other = 0; other < signalling.social_topic_count && !wanted; other++)
+			wanted = !strcmp(broker->social[index], signalling.social_topics[other]);
+		if (wanted)
+			continue;
+		broker_topic(broker, broker->social[index], 0, 0);
+		broker->social[index][0] = 0;
+		budget--;
+		if (broker->state != _broker_ready)
+			return;
+	}
+	for (index = 0; index < signalling.social_topic_count && budget > 0; index++)
+	{
+		int held = 0;
+		int free_slot = -1;
+
+		for (other = 0; other < P2P_SOCIAL_MAXIMUM_TOPICS; other++)
+		{
+			if (!broker->social[other][0])
+			{
+				if (free_slot < 0)
+					free_slot = other;
+			}
+			else if (!strcmp(broker->social[other], signalling.social_topics[index]))
+				held = 1;
+		}
+		if (held || free_slot < 0)
+			continue;
+		broker_topic(broker, signalling.social_topics[index], 1, 0);
+		/* (a send that failed closed the broker, which forgot its topics: all of them again once it is ready again) */
+		if (broker->state != _broker_ready)
+			return;
+		strcpy(broker->social[free_slot], signalling.social_topics[index]);
+		budget--;
 	}
 }
 
@@ -1474,6 +1532,12 @@ static void publish_received(struct broker *broker, const char *topic, const uns
 
 	if (size > MAXIMUM_MESSAGE_SIZE + P2P_SEAL_OVERHEAD)
 		return;
+	/* the friends layer's (social_p2p.c), sealed in its own way */
+	if (!strncmp(topic, P2P_SOCIAL_TOPIC_PREFIX, sizeof(P2P_SOCIAL_TOPIC_PREFIX) - 1))
+	{
+		social_p2p_heard(topic, payload, size);
+		return;
+	}
 	if (!strncmp(topic, P2P_LOBBY_SLOT_PREFIX, sizeof(P2P_LOBBY_SLOT_PREFIX) - 1))
 	{
 		p2p_lobby_slot_heard(topic + sizeof(P2P_LOBBY_SLOT_PREFIX) - 1, payload, size, retained);
@@ -1713,6 +1777,26 @@ static void broker_parse(struct broker *broker)
 					broker->in_flight[index].used = refused;
 					broker->in_flight[index].refused = refused;
 				}
+			}
+		}
+		else if ((type & 0xF0) == 0x90 && remaining >= 3)
+		{
+			/* SUBACK: a code of 0x80 or more is a refusal (a quota of subscriptions, a topic not allowed), which was ignored until the friends layer asked for fifty
+			topics; counted, and said once a connection */
+			const unsigned char *body = broker->input + header_size;
+			int offset = 2;
+			int properties = 0;
+			int refused = 0;
+
+			if (broker->protocol == 5 && get_variable(body, remaining, &offset, &properties))
+				offset += properties;
+			for (; offset < remaining; offset++)
+				refused += body[offset] >= 0x80;
+			if (refused)
+			{
+				if (!broker->refusals)
+					platform_log("Internet play: the signalling broker %s refused %d subscription(s)", broker->host, refused);
+				broker->refusals += refused;
 			}
 		}
 		else if ((type & 0xF0) == 0xE0)
@@ -1958,6 +2042,7 @@ void p2p_signal_update(const int *read, int read_count, const int *write, int wr
 			broker_send(broker, 0xC0, NULL, 0);
 		}
 		broker_update_lobby(broker);
+		broker_sync_social(broker);
 	}
 	for (index = 0; index < MAXIMUM_JOINS + P2P_MAXIMUM_PROBES; index++)
 	{
@@ -2197,4 +2282,56 @@ void p2p_signal_lobby_quit(void)
 		broker_send(broker, 0xE0, disconnect, broker->protocol == 5 ? 2 : 0);
 		broker_flush(broker);
 	}
+}
+
+/* ---------- the friends layer (social_p2p.c) */
+
+void p2p_signal_social_topics(const char (*topics)[P2P_SOCIAL_TOPIC_SIZE], int count)
+{
+	int index, kept = 0;
+
+	for (index = 0; index < count && kept < P2P_SOCIAL_MAXIMUM_TOPICS; index++)
+	{
+		if (topics[index][0] && strlen(topics[index]) < TOPIC_SIZE)
+			strcpy(signalling.social_topics[kept++], topics[index]);
+	}
+	signalling.social_topic_count = kept;
+}
+
+int p2p_signal_social_publish(const char *topic, const unsigned char *payload, int size)
+{
+	int index, published = 0;
+
+	if (size < 0 || size > MAXIMUM_MESSAGE_SIZE + P2P_SEAL_OVERHEAD || strlen(topic) >= TOPIC_SIZE)
+		return 0;
+	for (index = 0; index < signalling.broker_count; index++)
+	{
+		struct broker *broker = &signalling.brokers[index];
+
+		/* (what joining and the browser need stays in the bucket) */
+		if (broker->state == _broker_ready && broker_may_publish(broker, UNPROVEN_RESERVE))
+		{
+			broker_publish(broker, topic, payload, size);
+			published++;
+		}
+	}
+	return published;
+}
+
+int p2p_signal_ready_count(void)
+{
+	int index, count = 0;
+
+	for (index = 0; index < signalling.broker_count; index++)
+		count += signalling.brokers[index].state == _broker_ready;
+	return count;
+}
+
+int p2p_signal_social_refusals(void)
+{
+	int index, count = 0;
+
+	for (index = 0; index < signalling.broker_count; index++)
+		count += signalling.brokers[index].refusals;
+	return count;
 }

@@ -191,6 +191,10 @@ in everyone's server browser: Create Game's PUBLIC; a private game is
 reached only by its invite. Going private makes a new invite, if the old one
 was listed */
 void p2p_set_hosting_public(int public);
+/* the game hosted as last told (p2p_set_game_listing), for the friends layer: its map and type (printable ASCII), its engine, whether it takes players
+(open) and is under way, and whether it has a password. Under p2p_lock, on the p2p thread */
+void p2p_lobby_game_details(char *map, int map_size, char *gametype, int gametype_size, int *engine_type, int *open, int *in_progress, int *has_password);
+
 /* whether the game this machine hosts is listed in everyone's server
 browser (PUBLIC, and network.public_lobby): the text chat is off in one a
 player hosts (a dedicated server's follows network.text_chat) */
@@ -397,6 +401,8 @@ enum
 	P2P_JOIN_FAILED,
 };
 int p2p_join_progress(int *stage, char *reason, int size);
+/* gives up the join under way (an invite's host being asked, or its tunnel being made); nothing is under way after it */
+void p2p_join_cancel(void);
 /* the host of the game joined refused it (the game's rejection code:
 network_game_protocol.h's _rejection_code_*), the game's client says */
 void p2p_join_refused(int rejection_code);

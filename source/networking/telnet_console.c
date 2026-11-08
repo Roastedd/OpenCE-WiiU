@@ -49,6 +49,9 @@ symbols in this file:
 #include "hs/hs.h"
 #include "networking/telnet_console.h"
 
+/* port: port/linux/game/social_command.c */
+int social_command(const char *line, char *reply, int size);
+
 /* ---------- constants */
 
 enum
@@ -411,6 +414,16 @@ static boolean process_telnet_client_buffer(
 						telnet_client_disconnect(client);
 						error(2, "dropped a telnet client that sent an HTTP request");
 						return TRUE;
+					}
+					/* port: the friends layer's commands (port/linux/game/social_command.h): "social list" and the rest, answered here */
+					if (!csstrncmp(expression, "social", 6) && (expression[6] == ' ' || !expression[6]))
+					{
+						char reply[1536];
+
+						social_command(expression + 6, reply, sizeof(reply));
+						telnet_client_write(client, reply, csstrlen(reply));
+						telnet_client_write(client, "\r\n", 2);
+						continue;
 					}
 #ifdef HALO_WIIU
 					/* port: the hs runtime is the tick thread's (tick_owners.h) */

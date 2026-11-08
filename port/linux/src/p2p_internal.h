@@ -195,6 +195,33 @@ and the slot cleared on every ready broker now, whatever their buckets, and
 the connections closed cleanly */
 void p2p_signal_lobby_quit(void);
 
+/* ---------- the friends layer (social_core.h; social_p2p.c is the glue) */
+
+enum
+{
+	/* the topics the friends layer may ask the brokers for: its inbox, fifty friends' presence, a party, and a spare */
+	P2P_SOCIAL_MAXIMUM_TOPICS = 54,
+	P2P_SOCIAL_TOPIC_SIZE = 64,
+};
+
+/* the prefix of its topics ("hceu/3/f/"; the lobby's are "hceu/3/lobby/") */
+#define P2P_SOCIAL_TOPIC_PREFIX "hceu/3/f/"
+
+/* the topics wanted now (the whole set; each ready broker is brought to it a few filters a pass), a message published on a topic to every ready broker that has room
+for it (returns how many took it), the brokers ready, and the subscriptions they refused. The p2p thread's */
+void p2p_signal_social_topics(const char (*topics)[P2P_SOCIAL_TOPIC_SIZE], int count);
+int p2p_signal_social_publish(const char *topic, const unsigned char *payload, int size);
+int p2p_signal_ready_count(void);
+int p2p_signal_social_refusals(void);
+
+/* social_p2p.c: a message the brokers delivered; the p2p thread's pass (the engine's); whether the brokers are to be kept open for it */
+void social_p2p_heard(const char *topic, const unsigned char *payload, int size);
+void social_p2p_initialize(void);
+void social_p2p_tick(void);
+int social_p2p_wanted(void);
+/* the game is quitting: offline said at once (under p2p_lock) */
+void social_p2p_quit(void);
+
 /* ---------- p2p_crypto.c */
 
 enum

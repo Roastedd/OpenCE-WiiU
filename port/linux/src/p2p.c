@@ -3766,6 +3766,20 @@ int p2p_join_progress(int *stage, char *reason, int size)
 	return *stage;
 }
 
+void p2p_join_cancel(void)
+{
+	pthread_mutex_lock(&p2p_lock);
+	if (p2p.joining || p2p.join_requested)
+	{
+		if (p2p.joining)
+			p2p_signal_stop_joining();
+		p2p.joining = p2p.join_requested = 0;
+		/* (nothing is under way: the progress says none, not that it failed) */
+		p2p.join_started = 0;
+	}
+	pthread_mutex_unlock(&p2p_lock);
+}
+
 void p2p_join_refused(int rejection_code)
 {
 	pthread_mutex_lock(&p2p_lock);
@@ -4681,6 +4695,8 @@ static void *p2p_thread(void *unused)
 		update_reaching();
 		update_upnp();
 		p2p_discord_update();
+		/* the friends layer (social_p2p.c): off unless the player turned it on, and then its pass and its brokers */
+		social_p2p_tick();
 #ifdef HALO_ANDROID
 		poll_invite_file();
 #endif
@@ -4747,6 +4763,8 @@ void p2p_initialize(unsigned long local_address)
 	}
 	pthread_detach(thread);
 	p2p.running = 1;
+	/* (the friends layer, if it is on: its files are read on a thread of its own) */
+	social_p2p_initialize();
 	if (p2p.in_process)
 		platform_log("Internet play: the peers' datagrams and connections are handed to the game in the process "
 			"(network.tunnel_in_process), with no stand-in sockets");
@@ -4755,3 +4773,7 @@ void p2p_initialize(unsigned long local_address)
 	if (command_line_invite(invite, sizeof(invite)))
 		p2p_join_invite(invite);
 }
+
+/* ---------- the friends layer (social_core.h): its glue to this file, included so that it is no unit of its own */
+
+#include "social_p2p.inc"
