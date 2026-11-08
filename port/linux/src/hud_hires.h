@@ -92,8 +92,10 @@ unsigned char *hud_hires_png_pixels(const void *png, unsigned long size, unsigne
 /* the HUD's textures for a map's bitmaps (port/linux/game/hud_hires_tags.c),
 decoded from their PNGs as it loads, on a thread of their own, so that they
 are only uploaded when first drawn; and, as it is unloaded, that stopped and
-what was decoded and not drawn let go. The desktop builds' alone: Android,
-the web and the Wii U decode each when it is first drawn */
+what was decoded and not drawn let go. The desktop builds' alone: Android
+and the web decode each when it is first drawn. The Wii U's texture cache asks a
+thread of its own for the big sheets as the map loads and lets its sheets go as
+it is unloaded (xbox_textures_gx2.c, halo/hud_sheets.txt) */
 void hud_hires_map_loaded(const long *assets, long count);
 void hud_hires_map_unloaded(void);
 /* whether its green is its coverage (d3d8_gl.c, nv2a_psh.c: coverage_alpha) */

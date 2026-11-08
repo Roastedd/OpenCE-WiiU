@@ -1295,3 +1295,21 @@ Xbox's, their constants are the 192 uniform registers of one shader mode, and a 
 The log says the bits at the first draw (`gpu offload (halo/gpu_offload.txt found): ...`), the census every five seconds (`gpu offload: the GX2 thread per frame ...`,
 `gpu offload: of N draws a frame ...`) and the check (`gpu offload check: ...`). The blends' time is the objects pass's and the `blends` figure of the overlap's log lines.
 `tools/test_wiiu_gpu_offload.py` checks the arithmetic against the original's over 400,000 random bases, natively and big-endian under qemu.
+
+## The high-res HUD's big sheets (`halo/hud_sheets.txt`, default on)
+
+The high-res HUD's largest sheets (the meters', the damage arrows', the three scope masks) are 2048 x 2048 PNGs: 22 MB each with their mip levels, and 0.8 to 0.95 s of the
+game thread the first time the HUD drew one (the decoding, the levels, the copies; the GX2 thread's part is about 30 ms). Three changes, the first two in every Wii U build:
+
+- **Smaller copies** (`port/assets/wiiu`, made by `tools/wiiu_hud_sheets.py build`, embedded by `tools/embed_assets.py --wiiu`, which stops if a sheet has changed since its
+  copy was made). The meters' and arrows' sheets are cut after the last row any sprite of the layout or any texel with red, green or alpha reaches, plus one empty row, to a
+  multiple of 64 (2048 x 768, 768, 576 and for the Custom Edition's two 704 and 1088); the scope masks are their first mip level (1024 x 1024). The game's v coordinate is
+  multiplied by the sheet's height over the copy's rows (`wiiu_hud_sheet.h`; the stage's texture scale), the level 0 rows kept are the sheet's byte for byte. The six
+  sheets go from 134 MB with levels to about 40 MB.
+- **A thread of its own** (`hudsheets`, core 0, below the game thread): a sheet of a million pixels or more is decoded and its levels made there (the menus' prepared images)
+  and the game's own bitmap is drawn until it is ready; the lookup that finds it sends it (the copies, a few tens of milliseconds). The map's HUD list asks for the meters
+  first as the map loads. `halo/hud_sheets.txt` `0` puts back the game thread's making of them when first drawn (the copies stay).
+- **Sheets are let go when the map goes** (`hud_hires_map_unloaded`): their images are freed at the next frame and the next map asks for its own.
+
+The log: `hud sheets: ...` (the switch, the builder's core, what the map asked for, what the map's end freed) and for every sheet `high-res hud: image N made for ... in X ms on
+the game thread: decode, levels, send; K held, M KB`, and when it was made ahead `was made ahead on the builder thread in X ms ..., Y ms after it was asked for`.

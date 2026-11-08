@@ -761,6 +761,8 @@ there it makes itself, as before. */
 #define PREPARED_MENU_SLOTS 48
 #define PREPARED_BYTES_LIMIT (32ul << 20)
 enum { PREPARED_FREE, PREPARED_WORKING, PREPARED_READY };
+_Static_assert(PREPARED_FREE == WIIU_HUD_AHEAD_NONE && PREPARED_WORKING == WIIU_HUD_AHEAD_WORKING && PREPARED_READY == WIIU_HUD_AHEAD_READY,
+	"wiiu_hud_sheet_next is told the state of a made-ahead image as the prepared slots have it");
 
 static struct
 {
@@ -879,6 +881,59 @@ static int prepared_take(const void *png, unsigned long size, struct png_chain *
 	}
 	pthread_mutex_unlock(&prepared_lock);
 	return found;
+}
+
+/* whether the image of a PNG is made ahead (PREPARED_READY), being made (PREPARED_WORKING) or not there (PREPARED_FREE), without waiting for it */
+static int prepared_state(const void *png, unsigned long size)
+{
+	int slot, state = PREPARED_FREE;
+
+	if (prepared_ready_to_use != 2)
+		return PREPARED_FREE;
+	pthread_mutex_lock(&prepared_lock);
+	for (slot = 0; slot < PREPARED_LIMIT; slot++)
+	{
+		if (prepared[slot].state != PREPARED_FREE && prepared[slot].png == png && prepared[slot].size == size)
+		{
+			state = prepared[slot].state;
+			break;
+		}
+	}
+	pthread_mutex_unlock(&prepared_lock);
+	return state;
+}
+
+/* the images made ahead of the HUD's sheets (a slot whose PNG is one of hud_hires_embedded's; a slot being made is left) let go; how many, and the bytes they held */
+static unsigned prepared_drop_hud(unsigned long *bytes)
+{
+	int slot;
+	unsigned dropped = 0;
+
+	*bytes = 0;
+	if (prepared_ready_to_use != 2)
+		return 0;
+	pthread_mutex_lock(&prepared_lock);
+	for (slot = 0; slot < PREPARED_LIMIT; slot++)
+	{
+		unsigned long asset;
+
+		if (prepared[slot].state != PREPARED_READY)
+			continue;
+		for (asset = 0; asset < hud_hires_embedded_count; asset++)
+		{
+			if (hud_hires_embedded[asset].png == prepared[slot].png)
+				break;
+		}
+		if (asset == hud_hires_embedded_count)
+			continue;
+		*bytes += prepared[slot].chain.bytes;
+		prepared_bytes -= prepared[slot].chain.bytes;
+		png_chain_free(&prepared[slot].chain);
+		memset(&prepared[slot], 0, sizeof(prepared[slot]));
+		dropped++;
+	}
+	pthread_mutex_unlock(&prepared_lock);
+	return dropped;
 }
 
 /* what the last image png_image made took, for the HUD's log line (the game thread's alone): the milliseconds of the decoding and of the levels (a chain made ahead
@@ -1022,7 +1077,7 @@ static uint32_t menu_image(unsigned long data, unsigned long *levels)
 	return menu_images[menu_image_count++].id;
 }
 
-/* a high-res HUD bitmap (hud_hires.h): made on first use, and kept */
+/* a high-res HUD bitmap (hud_hires.h): made on first use, and kept until the map goes (wiiu_hud_map_unloaded) */
 static struct
 {
 	uint32_t id;
@@ -1030,22 +1085,162 @@ static struct
 	/* the multiplier of v the image is drawn with: 1, or the sheet's height over the rows of the copy the Wii U embeds in its place (wiiu_hud_sheet.h) */
 	float v_scale;
 	BOOL tried;
+	/* the sheets that are not made on the game thread (hud_sheets.txt): handed to the builder thread, the lookup that found it not yet made, the builder's
+	end of it (1 made ahead, 2 not: the game thread makes it itself), when it was asked for and the milliseconds the builder took */
+	unsigned char asked, pending;
+	volatile unsigned char built;
+	unsigned long asked_at, builder_ms;
 } *hud_images;
+
+/* the HUD's sheets of the map that has gone (wiiu_hud_map_unloaded): their images freed at the next frame (xgpu_texture_cache_begin_frame; the GX2 thread frees the
+memory a few frames on, with the draws that used them done), and every texture looked up again */
+static uint32_t *hud_to_free;
+static unsigned hud_to_free_count;
 
 /* the sheets made (the log line of every HUD sheet says how many are held, and their bytes with their levels) */
 static unsigned hud_held_count;
 static unsigned long hud_held_bytes;
 
-static uint32_t hud_image(long asset, unsigned long *levels, float *v_scale)
+long wiiu_study_number(const char *name, long fallback);
+unsigned wiiu_thread_core_id(void);
+void wiiu_thread_background(const char *name);
+
+/* ---------- the HUD's sheets without the game thread's waiting (halo/hud_sheets.txt)
+
+A sheet of a million pixels or more cost the game thread 0.2 to 0.95 s the first time the HUD drew it (the decoding, the levels, the copies: the 700 to 1,600 ms
+hitches of 2026-11-06). With this on (the default; halo/hud_sheets.txt 0 puts back the game thread's making of them), the draw that first needs such a sheet asks a
+thread of its own (below the game thread's priority, on core 0: wiiu_thread_background) to decode it and make its levels with the menus' prepared images
+(prewarm_png), and meanwhile draws the game's own bitmap, as it does with display.high_res_hud off. The builder says when it has made one (hud_built_count); the next
+frame's begin (xgpu_texture_cache_begin_frame) makes every texture be looked up again, and the lookup that finds the image ready sends it (the copies of the levels
+into pieces, the part of the cost left to the game thread) and draws the sheet from then on. The map's HUD list (hud_hires_map_loaded) asks for the meters, then the
+other sheets that are not scope masks, up to HUD_PREFETCH_BYTES, so they are mostly ready before the HUD's first frame. A sheet the builder could not make (no
+memory for its levels) is made by the game thread, as before. When the map goes, the sheets are let go (wiiu_hud_map_unloaded). */
+#define HUD_ASYNC_MIN_PIXELS 1000000ul
+#define HUD_QUEUE 64
+/* the builder makes an image while the images made ahead hold less than they do at that moment plus this (an image of the larger sheets is 8.4 MB with levels) */
+#define HUD_ASYNC_HOLD (12ul << 20)
+/* the most the map's HUD list asks for at its load (the sheets' bytes with their levels, from the PNGs' sizes) */
+#define HUD_PREFETCH_BYTES (24ul << 20)
+
+static pthread_mutex_t hud_queue_lock;
+static pthread_cond_t hud_queue_wake;
+static long hud_queue[HUD_QUEUE];
+static unsigned hud_queue_head, hud_queue_count;
+/* (the game thread's) 0 not started, 1 the builder runs, -1 it could not be made */
+static int hud_queue_state;
+static volatile unsigned long hud_built_count;
+static unsigned long hud_built_seen;
+
+static int hud_async_on(void)
 {
-	if (asset < 0 || asset >= (long)hud_hires_embedded_count)
-		return 0;
+	static int on = -1;
+
+	if (on < 0)
+	{
+		on = wiiu_study_number("hud_sheets.txt", 1) > 0;
+		platform_log("hud sheets: the big sheets are made %s (halo/hud_sheets.txt)", on ? "on a thread of their own, the game's own bitmap drawn until one is ready" : "by the game thread when first drawn");
+	}
+	return on;
+}
+
+static int hud_sheet_is_big(const struct hud_hires_embedded *embedded)
+{
+	return !embedded->title && (unsigned long)embedded->width * embedded->height >= HUD_ASYNC_MIN_PIXELS;
+}
+
+static void *hud_builder_main(void *unused)
+{
+	(void)unused;
+	wiiu_thread_background("hudsheets");
+	platform_log("hud sheets: the builder thread runs on core %u", wiiu_thread_core_id());
+	for (;;)
+	{
+		const struct hud_hires_embedded *embedded;
+		unsigned long started;
+		long asset;
+		int made;
+
+		pthread_mutex_lock(&hud_queue_lock);
+		while (!hud_queue_count)
+			pthread_cond_wait(&hud_queue_wake, &hud_queue_lock);
+		asset = hud_queue[hud_queue_head];
+		hud_queue_head = (hud_queue_head + 1) % HUD_QUEUE;
+		hud_queue_count--;
+		pthread_mutex_unlock(&hud_queue_lock);
+		embedded = &hud_hires_embedded[asset];
+		started = system_milliseconds();
+		made = prewarm_png(embedded->png, embedded->png_size, prepared_bytes + HUD_ASYNC_HOLD, PREPARED_LIMIT);
+		hud_images[asset].builder_ms = system_milliseconds() - started;
+		__sync_synchronize();
+		hud_images[asset].built = made ? 1 : 2;
+		__sync_fetch_and_add(&hud_built_count, 1);
+	}
+	return NULL;
+}
+
+/* (the game thread) the sheet handed to the builder; FALSE if it could not be (the game thread then makes it) */
+static BOOL hud_request(long asset)
+{
+	if (hud_queue_state == 0)
+	{
+		pthread_t thread;
+		pthread_attr_t attributes;
+
+		prepared_init();
+		pthread_mutex_init(&hud_queue_lock, NULL);
+		pthread_cond_init(&hud_queue_wake, NULL);
+		pthread_attr_init(&attributes);
+		pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
+		pthread_attr_setstacksize(&attributes, 64 * 1024);
+		hud_queue_state = pthread_create(&thread, &attributes, hud_builder_main, NULL) == 0 ? 1 : -1;
+		pthread_attr_destroy(&attributes);
+	}
+	if (hud_queue_state < 0)
+		return FALSE;
+	pthread_mutex_lock(&hud_queue_lock);
+	if (hud_queue_count == HUD_QUEUE)
+	{
+		pthread_mutex_unlock(&hud_queue_lock);
+		return FALSE;
+	}
+	hud_queue[(hud_queue_head + hud_queue_count++) % HUD_QUEUE] = asset;
+	pthread_cond_signal(&hud_queue_wake);
+	pthread_mutex_unlock(&hud_queue_lock);
+	hud_images[asset].asked = 1;
+	hud_images[asset].built = 0;
+	hud_images[asset].asked_at = system_milliseconds();
+	return TRUE;
+}
+
+static BOOL hud_images_ensure(void)
+{
 	if (!hud_images)
 	{
 		hud_images = calloc(hud_hires_embedded_count, sizeof(*hud_images));
-		if (!hud_images)
-			return 0;
+		hud_to_free = calloc(hud_hires_embedded_count, sizeof(*hud_to_free));
+		if (!hud_images || !hud_to_free)
+		{
+			/* (no table, no sheets: every lookup answers 0, and the game's own bitmaps are drawn) */
+			free(hud_images);
+			free(hud_to_free);
+			hud_images = NULL;
+			hud_to_free = NULL;
+			return FALSE;
+		}
 	}
+	return TRUE;
+}
+
+/* whether the last lookup of the sheet found it being made (its draw uses the game's own bitmap, which the texture entry has uploaded) */
+static BOOL hud_sheet_pending(long asset)
+{
+	return hud_images && asset >= 0 && asset < (long)hud_hires_embedded_count && hud_images[asset].pending;
+}
+
+static uint32_t hud_image(long asset, unsigned long *levels, float *v_scale)
+{
+	if (asset < 0 || asset >= (long)hud_hires_embedded_count || !hud_images_ensure())
+		return 0;
 	if (!hud_images[asset].tried)
 	{
 		const struct hud_hires_embedded *embedded = &hud_hires_embedded[asset];
@@ -1054,7 +1249,31 @@ static uint32_t hud_image(long asset, unsigned long *levels, float *v_scale)
 		static unsigned told;
 		const unsigned long started = system_milliseconds();
 		unsigned long width = 0, height = 0;
+		unsigned long asked_for = 0;
+		int ahead = 0;
 
+		hud_images[asset].pending = 0;
+		switch (wiiu_hud_sheet_next(hud_async_on(), hud_sheet_is_big(embedded), prepared_state(embedded->png, embedded->png_size), hud_images[asset].asked,
+			hud_images[asset].built != 0))
+		{
+		case WIIU_HUD_SHEET_TAKE_AHEAD:
+			ahead = 1;
+			asked_for = hud_images[asset].asked ? started - hud_images[asset].asked_at : 0;
+			break;
+		case WIIU_HUD_SHEET_ASK:
+			if (!hud_request(asset))
+				break;
+			/* fall through */
+		case WIIU_HUD_SHEET_WAIT:
+			hud_images[asset].pending = 1;
+			*levels = 1;
+			if (v_scale)
+				*v_scale = 1.0f;
+			return 0;
+		default:
+			break;
+		}
+		/* (made here: not a big sheet, or the builder is off, could not be started or could not make it) */
 		hud_images[asset].tried = TRUE;
 		hud_images[asset].v_scale = 1.0f;
 		hud_images[asset].id = png_image(embedded->png, embedded->png_size, &hud_images[asset].levels, &width, &height);
@@ -1071,12 +1290,16 @@ static uint32_t hud_image(long asset, unsigned long *levels, float *v_scale)
 					embedded->bitmap, width, height, embedded->width, embedded->height);
 			hud_held_count++;
 			hud_held_bytes += png_last.bytes;
-			if (told < 80)
+			if (told < 160)
 			{
 				told++;
-				platform_log("high-res hud: image %u made for %s bitmap %d (the game's bitmap is %ux%u; the image is %lux%lu with %lu levels, v scale %g) in %lu ms: decode %lu, levels %lu, send %lu; %u held, %lu KB",
+				platform_log("high-res hud: image %u made for %s bitmap %d (the game's bitmap is %ux%u; the image is %lux%lu with %lu levels, v scale %g) in %lu ms on the game thread: decode %lu, levels %lu, send %lu%s; %u held, %lu KB",
 					(unsigned)hud_images[asset].id, embedded->tag, embedded->bitmap, embedded->width, embedded->height, width, height, hud_images[asset].levels,
-					(double)hud_images[asset].v_scale, system_milliseconds() - started, png_last.decode_ms, png_last.mips_ms, png_last.send_ms, hud_held_count, hud_held_bytes >> 10);
+					(double)hud_images[asset].v_scale, system_milliseconds() - started, ahead ? 0ul : png_last.decode_ms, ahead ? 0ul : png_last.mips_ms, png_last.send_ms,
+					ahead ? "" : " (all here: not made ahead)", hud_held_count, hud_held_bytes >> 10);
+				if (ahead)
+					platform_log("high-res hud: image %u was made ahead on the builder thread in %lu ms (decode %lu, levels %lu), %lu ms after it was asked for",
+						(unsigned)hud_images[asset].id, hud_images[asset].builder_ms, png_last.decode_ms, png_last.mips_ms, asked_for);
 			}
 		}
 	}
@@ -1100,7 +1323,6 @@ HUD_PREWARM_BYTES between them (and what the menus' art still holds) and wait in
 #define HUD_PREWARM_BYTES (16ul << 20)
 #define HUD_PREWARM_ASSETS 256
 
-long wiiu_study_number(const char *name, long fallback);
 void wiiu_thread_off_game_core(void);
 
 static long hud_prewarm_list[HUD_PREWARM_ASSETS];
@@ -1146,12 +1368,89 @@ static void *hud_prewarm_main(void *unused)
 /* (the game thread, a map has loaded: hud_hires_tags.c) the assets the map's HUD may draw; their images are made on a thread of its own */
 void wiiu_hud_prewarm(const long *assets, long count);
 
+/* the sheets of the map's HUD asked of the builder thread (hud_sheets.txt), the meters first and then the others that are not scope masks (a zoom is not at every
+map's start), while their images with levels stay within HUD_PREFETCH_BYTES; the PNGs' sizes are in their headers */
+static void hud_prefetch(const long *assets, long count)
+{
+	unsigned long bytes = 0;
+	long index, asked = 0;
+	int pass;
+
+	if (!hud_images_ensure())
+		return;
+	for (pass = 0; pass < 2; pass++)
+	{
+		for (index = 0; index < count; index++)
+		{
+			const long asset = assets[index];
+			const struct hud_hires_embedded *embedded;
+			const unsigned char *png;
+			unsigned long width, height, image_bytes;
+
+			if (asset < 0 || asset >= (long)hud_hires_embedded_count)
+				continue;
+			embedded = &hud_hires_embedded[asset];
+			png = (const unsigned char *)embedded->png;
+			if (!hud_sheet_is_big(embedded) || hud_images[asset].tried || hud_images[asset].asked || embedded->png_size < 24 ||
+				(pass == 0) != (embedded->coverage != 0) || (pass == 1 && strstr(embedded->tag, "scope")))
+				continue;
+			width = ((unsigned long)png[16] << 24) | ((unsigned long)png[17] << 16) | ((unsigned long)png[18] << 8) | png[19];
+			height = ((unsigned long)png[20] << 24) | ((unsigned long)png[21] << 16) | ((unsigned long)png[22] << 8) | png[23];
+			image_bytes = width * height * 4 + width * height * 4 / 3;
+			if (bytes + image_bytes > HUD_PREFETCH_BYTES || !hud_request(asset))
+				continue;
+			bytes += image_bytes;
+			asked++;
+		}
+	}
+	platform_log("hud sheets: %ld of the map's %ld HUD bitmaps asked of the builder thread ahead of the HUD's first frame (%lu KB with levels)", asked, count, bytes >> 10);
+}
+
+/* (the game thread, a map has gone: hud_hires_map_unloaded) the sheets' images let go, the ones made ahead and not drawn too: the next map asks for its own, and the
+heap does not keep the blocks of a map that has gone (the sheets are the 22 MB blocks of the console's "no memory for a 2048x2048 texture") */
+void wiiu_hud_map_unloaded(void);
+
+void wiiu_hud_map_unloaded(void)
+{
+	unsigned long asset, dropped_bytes;
+	unsigned freed = 0, dropped;
+
+	if (!hud_images)
+		return;
+	for (asset = 0; asset < hud_hires_embedded_count; asset++)
+	{
+		if (hud_images[asset].id)
+		{
+			hud_to_free[hud_to_free_count++] = hud_images[asset].id;
+			freed++;
+		}
+		hud_images[asset].id = 0;
+		hud_images[asset].levels = 0;
+		hud_images[asset].v_scale = 1.0f;
+		hud_images[asset].tried = FALSE;
+		hud_images[asset].pending = 0;
+		hud_images[asset].asked = 0;
+	}
+	dropped = prepared_drop_hud(&dropped_bytes);
+	if (freed || dropped)
+		platform_log("hud sheets: the map has gone: %u sheets freed (%lu KB held with levels), %u made ahead and not drawn let go (%lu KB)", freed, hud_held_bytes >> 10, dropped,
+			dropped_bytes >> 10);
+	hud_held_count = 0;
+	hud_held_bytes = 0;
+}
+
 void wiiu_hud_prewarm(const long *assets, long count)
 {
 	pthread_t thread;
 	pthread_attr_t attributes;
-	long largest = wiiu_study_number("hud_prewarm.txt", 0);
+	long largest;
 
+	if (hud_async_on())
+	{
+		hud_prefetch(assets, count);
+		return;
+	}
+	largest = wiiu_study_number("hud_prewarm.txt", 0);
 	if (largest <= 0 || count <= 0 || hud_prewarm_running)
 		return;
 	prepared_init();
@@ -1343,10 +1642,11 @@ static uint32_t dk_texture_get_inner(const DWORD *resource, const D3DCOLOR *pale
 			entry->override = hud_hires_override_find(entry->address, entry->description.width,
 				entry->description.height, entry->description.levels > 1 ?
 				xgpu_texture_level_offset(&entry->description, 1) : xgpu_texture_face_size(&entry->description));
-			if (entry->override >= 0 && !hud_image(entry->override, &levels, NULL))
+			/* (a sheet being made on the builder thread: the game's own bitmap is uploaded now and drawn until it is ready) */
+			if (entry->override >= 0 && !hud_image(entry->override, &levels, NULL) && !hud_sheet_pending(entry->override))
 				entry->override = -1;
 		}
-		if (entry->override < 0 && platform_is_contiguous((void *)entry->address) &&
+		if ((entry->override < 0 || hud_sheet_pending(entry->override)) && platform_is_contiguous((void *)entry->address) &&
 			platform_is_contiguous((void *)(entry->address + entry->size - 1)))
 		{
 			if (config_boolean("debug.texture_log"))
@@ -1377,6 +1677,26 @@ void xgpu_texture_cache_begin_frame(void)
 	unsigned long index;
 
 	texture_frame++;
+	/* (a sheet the builder has made since the last frame: the textures are looked up again, and the lookup that finds it sends it) */
+	if (hud_built_seen != hud_built_count)
+	{
+		hud_built_seen = hud_built_count;
+		texture_drop_serial++;
+	}
+	if (hud_to_free_count)
+	{
+		unsigned freed;
+
+		for (freed = 0; freed < hud_to_free_count; freed++)
+		{
+			struct dk_command_texture_free *command = dk_stream_command(DK_COMMAND_TEXTURE_FREE, sizeof(*command));
+
+			command->id = hud_to_free[freed];
+			id_free[id_free_count++] = hud_to_free[freed];
+		}
+		hud_to_free_count = 0;
+		texture_drop_serial++;
+	}
 	if (texture_frame % 600)
 		return;
 	/* drop textures that have not been used for a while */

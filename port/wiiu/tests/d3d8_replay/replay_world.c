@@ -417,6 +417,16 @@ long wiiu_study_number(const char *name, long fallback)
 	return fallback;
 }
 
+unsigned wiiu_thread_core_id(void)
+{
+	return 0;
+}
+
+void wiiu_thread_background(const char *name)
+{
+	(void)name;
+}
+
 const char *wiiu_render_pass_longest(double *milliseconds)
 {
 	*milliseconds = 0.0;

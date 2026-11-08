@@ -110,6 +110,52 @@ int main(void)
 	CHECK(!wiiu_hud_sheet_fits(2048, 2048, 1000, 1000));  /* not a whole divisor of the width */
 	CHECK(!wiiu_hud_sheet_fits(2048, 2048, 0, 100));
 
+	/* when a sheet is made, and by whom: every combination of what the cache knows */
+	{
+		int async_on, big, ahead, asked, done;
+
+		for (async_on = 0; async_on < 2; async_on++)
+			for (big = 0; big < 2; big++)
+				for (ahead = WIIU_HUD_AHEAD_NONE; ahead <= WIIU_HUD_AHEAD_READY; ahead++)
+					for (asked = 0; asked < 2; asked++)
+						for (done = 0; done < 2; done++)
+						{
+							const int got = wiiu_hud_sheet_next(async_on, big, ahead, asked, done);
+
+							if (!async_on || !big)
+								CHECK(got == WIIU_HUD_SHEET_MAKE_HERE); /* a small sheet, or the builder off: as it always was */
+							else if (ahead == WIIU_HUD_AHEAD_READY)
+								CHECK(got == WIIU_HUD_SHEET_TAKE_AHEAD); /* (whether or not it was asked for: the menus' or a hud_prewarm.txt's too) */
+							else if (ahead == WIIU_HUD_AHEAD_WORKING)
+								CHECK(got == WIIU_HUD_SHEET_WAIT);
+							else if (!asked)
+								CHECK(got == WIIU_HUD_SHEET_ASK);
+							else
+								CHECK(got == (done ? WIIU_HUD_SHEET_MAKE_HERE : WIIU_HUD_SHEET_WAIT));
+						}
+	}
+	/* a life: asked at the first lookup, drawn from the game's bitmap while the builder has it, taken when ready; and a builder that is refused */
+	{
+		int asked = 0, done = 0, ahead = WIIU_HUD_AHEAD_NONE, drawn_from_game_bitmap = 0, step;
+
+		CHECK(wiiu_hud_sheet_next(1, 1, ahead, asked, done) == WIIU_HUD_SHEET_ASK);
+		asked = 1; /* queued */
+		for (step = 0; step < 3; step++)
+		{
+			CHECK(wiiu_hud_sheet_next(1, 1, ahead, asked, done) == WIIU_HUD_SHEET_WAIT);
+			drawn_from_game_bitmap++;
+		}
+		ahead = WIIU_HUD_AHEAD_WORKING; /* the builder has it */
+		CHECK(wiiu_hud_sheet_next(1, 1, ahead, asked, done) == WIIU_HUD_SHEET_WAIT);
+		ahead = WIIU_HUD_AHEAD_READY;
+		done = 1;
+		CHECK(wiiu_hud_sheet_next(1, 1, ahead, asked, done) == WIIU_HUD_SHEET_TAKE_AHEAD);
+		CHECK(drawn_from_game_bitmap == 3);
+		/* refused (no memory for its levels): the builder is done and holds nothing, the game thread makes it, once */
+		ahead = WIIU_HUD_AHEAD_NONE;
+		CHECK(wiiu_hud_sheet_next(1, 1, ahead, 1, 1) == WIIU_HUD_SHEET_MAKE_HERE);
+	}
+
 	printf("%d failures\n", failures);
 	return failures ? 1 : 0;
 }

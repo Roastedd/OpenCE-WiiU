@@ -31,6 +31,12 @@ long wiiu_study_number(const char *name, long fallback)
 	return number < 0 ? fallback : number;
 }
 
+/* the core the calling thread is on now (a background thread says it in the log, to show that wiiu_thread_background kept it on core 0) */
+unsigned wiiu_thread_core_id(void)
+{
+	return (unsigned)OSGetCoreId();
+}
+
 /* halo/governor.txt (the dynamic quality's settings, port/linux/game/render_governor.c): its text in text (size bytes with the end), 0 if there is no such file */
 int render_governor_settings_text(char *text, unsigned long size)
 {

@@ -780,6 +780,12 @@ static void *decode_thread_main(void *unused)
 
 void hud_hires_map_unloaded(void)
 {
+#ifdef HALO_WIIU
+	/* (the texture cache's images of the sheets, let go with the map: xbox_textures_gx2.c) */
+	void wiiu_hud_map_unloaded(void);
+
+	wiiu_hud_map_unloaded();
+#endif
 #ifdef HUD_HIRES_DECODE_AHEAD
 	long asset;
 

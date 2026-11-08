@@ -65,6 +65,23 @@ class ScaleTest(unittest.TestCase):
         self.assertNotEqual(broken, HEADER.read_text())
         self.assertNotEqual(self.run_test(broken).returncode, 0)
 
+    def test_a_sheet_that_waits_for_nobody_is_found(self):
+        # (a sheet asked for and the builder not done: waiting, not made on the game thread)
+        broken = HEADER.read_text().replace("return builder_done ? WIIU_HUD_SHEET_MAKE_HERE : WIIU_HUD_SHEET_WAIT;", "return WIIU_HUD_SHEET_MAKE_HERE;", 1)
+        self.assertNotEqual(broken, HEADER.read_text())
+        self.assertNotEqual(self.run_test(broken).returncode, 0)
+
+    def test_a_builder_that_is_never_given_up_on_is_found(self):
+        # (a sheet the builder was done with and holds nothing of would wait for ever, and the game would never draw it)
+        broken = HEADER.read_text().replace("return builder_done ? WIIU_HUD_SHEET_MAKE_HERE : WIIU_HUD_SHEET_WAIT;", "return WIIU_HUD_SHEET_WAIT;", 1)
+        self.assertNotEqual(broken, HEADER.read_text())
+        self.assertNotEqual(self.run_test(broken).returncode, 0)
+
+    def test_a_ready_sheet_that_is_not_taken_is_found(self):
+        broken = HEADER.read_text().replace("\tif (ahead == WIIU_HUD_AHEAD_READY)\n\t\treturn WIIU_HUD_SHEET_TAKE_AHEAD;\n", "", 1)
+        self.assertNotEqual(broken, HEADER.read_text())
+        self.assertNotEqual(self.run_test(broken).returncode, 0)
+
     def test_a_copy_taller_than_its_sheet_is_found(self):
         broken = HEADER.read_text().replace("return height * divisor <= sheet_height;", "return height * divisor <= sheet_height * 2;", 1)
         self.assertNotEqual(broken, HEADER.read_text())
