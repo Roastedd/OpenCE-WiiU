@@ -113,6 +113,11 @@ int main(void)
 	CHECK(wiiu_pacing_parse(&policy, "2 2") && policy.mode == 2 && policy.depth == 2);
 	CHECK(wiiu_pacing_parse(&policy, "1 9") && policy.mode == 1 && policy.depth == 1); /* (a depth out of 1 to 2 is ignored) */
 	CHECK(wiiu_pacing_parse(&policy, "1 3") && policy.mode == 1 && policy.depth == 1);
+	/* a deeper queue (3): two swaps may wait unless the card says one; it never tears and never holds a frame back */
+	CHECK(wiiu_pacing_parse(&policy, "3") && policy.mode == 3 && policy.depth == 2);
+	CHECK(wiiu_pacing_parse(&policy, "3 1") && policy.mode == 3 && policy.depth == 1);
+	CHECK(wiiu_pacing_interval(&policy, 500.0f, 0) == 1 && wiiu_pacing_interval(&policy, 0.0f, 2) == 1 && wiiu_pacing_hold_ms(&policy, 0.0f) == 0.0f);
+	CHECK(!wiiu_pacing_parse(&policy, "4") && policy.mode == 0 && policy.depth == 1);
 	CHECK(wiiu_pacing_parse(&policy, "0") && policy.mode == 0);
 	CHECK(!wiiu_pacing_parse(&policy, "7") && policy.mode == 0);
 	CHECK(!wiiu_pacing_parse(&policy, "-1") && policy.mode == 0);
