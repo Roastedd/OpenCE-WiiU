@@ -5,9 +5,9 @@ The engine of the friends layer (social_core.h): identity, the sealed messages' 
 Friends' requests and answers are social_friends.c, joining and inviting social_invite.c, parties social_party.c, and the file social_store.c.
 */
 
-#include "p2p_internal.h"
+#include "../src/p2p_internal.h"
 #include "social_core.h"
-#include "../game/text_safe.h"
+#include "text_safe.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -68,7 +68,7 @@ static void derive_circle(struct social_engine *engine)
 	social_circle_for(engine->circle_key, engine->circle_topic, engine->circle_seal);
 }
 
-void social_set_name(struct social_engine *engine, const char *name)
+void social_engine_set_name(struct social_engine *engine, const char *name)
 {
 	char clean[SOCIAL_NAME_SIZE + 1];
 
@@ -85,7 +85,7 @@ void social_set_identity(struct social_engine *engine, const unsigned char *seed
 	social_identity_make(&engine->identity, seed);
 	engine->has_identity = 1;
 	engine->stored_generation = stored_generation;
-	social_set_name(engine, name);
+	social_engine_set_name(engine, name);
 	social_inbox_for(engine->identity.code_bytes, engine->inbox_topic, engine->inbox_seal);
 	random_bytes(engine, engine->circle_key, SOCIAL_KEY_SIZE);
 	engine->circle_generation = 1;
@@ -116,7 +116,7 @@ void social_set_enabled(struct social_engine *engine, int enabled)
 	social_log(engine, "%s", enabled ? "on" : "off");
 }
 
-void social_set_share(struct social_engine *engine, int share_status, int details, int accept_requests)
+void social_engine_set_share(struct social_engine *engine, int share_status, int details, int accept_requests)
 {
 	if (details < SOCIAL_DETAILS_NONE || details > SOCIAL_DETAILS_FULL)
 		details = SOCIAL_DETAILS_BASIC;
@@ -128,7 +128,7 @@ void social_set_share(struct social_engine *engine, int share_status, int detail
 	engine->version++;
 }
 
-void social_set_place(struct social_engine *engine, const struct social_place *place)
+void social_engine_set_place(struct social_engine *engine, const struct social_place *place)
 {
 	struct social_place clean = *place;
 
@@ -136,11 +136,18 @@ void social_set_place(struct social_engine *engine, const struct social_place *p
 		clean.activity = SOCIAL_MENUS;
 	text_safe_text(clean.map, (short)sizeof(clean.map), place->map, (short)sizeof(place->map), SOCIAL_MAP_SIZE);
 	text_safe_text(clean.gametype, (short)sizeof(clean.gametype), place->gametype, (short)sizeof(place->gametype), SOCIAL_GAMETYPE_SIZE);
-	/* a solo game cannot be joined, and nor can one that is not a game at all */
+	/* a solo game cannot be joined, and nor can one that is not a game at all; nor one with no invite */
 	if (clean.activity != SOCIAL_LOBBY && clean.activity != SOCIAL_GAME)
+	{
 		clean.joinable = 0;
-	if (!clean.joinable)
+		clean.has_invite = 0;
+	}
+	if (!clean.has_invite)
+	{
+		clean.joinable = 0;
+		memset(clean.invite_hash, 0, sizeof(clean.invite_hash));
 		memset(clean.invite_token, 0, sizeof(clean.invite_token));
+	}
 	if (memcmp(&clean, &engine->place, sizeof(clean)))
 	{
 		engine->place = clean;
@@ -271,6 +278,7 @@ struct social_friend *social_friend_add(struct social_engine *engine, const unsi
 		while (!id || (social_friend_by_id(engine, id) && social_friend_by_id(engine, id) != friend))
 			id++;
 		friend->id = id;
+		friend->hello_next = social_now(engine);
 		social_code_of_key(key, friend->code_bytes, friend->code);
 	}
 	if (circle_key && circle_generation >= 1 && circle_generation <= 255 && (!friend->has_circle || circle_generation != friend->circle_generation ||
@@ -552,6 +560,7 @@ static void presence_apply(struct social_engine *engine, struct social_friend *f
 		engine->statistics.dropped_malformed++;
 		return;
 	}
+	engine->statistics.verifications++;
 	if (!social_presence_verify(friend->key, plain, signed_size, signature))
 	{
 		engine->statistics.dropped_signature++;
@@ -730,6 +739,7 @@ void social_heard(struct social_engine *engine, const char *topic, const unsigne
 	int kind, plain_size;
 	int on_inbox = 0;
 	int on_party = 0;
+	unsigned int accepted_before;
 
 	if (!engine->enabled || !engine->has_identity)
 		return;
@@ -810,6 +820,7 @@ void social_heard(struct social_engine *engine, const char *topic, const unsigne
 		engine->statistics.dropped_window++;
 		return;
 	}
+	accepted_before = engine->statistics.accepted;
 	if (kind == SOCIAL_KIND_PRESENCE && friend && inner.type == SOCIAL_TYPE_PRESENCE)
 		presence_heard(engine, friend, plain, plain_size, &inner);
 	else if (kind == SOCIAL_KIND_REQUEST && on_inbox)
@@ -820,6 +831,12 @@ void social_heard(struct social_engine *engine, const char *topic, const unsigne
 		social_party_heard(engine, topic, plain, plain_size, &inner);
 	else
 		engine->statistics.dropped_unknown++;
+	/* (a window moved: saved with the next save, or in five minutes) */
+	if (engine->statistics.accepted != accepted_before && !engine->store_soft)
+	{
+		engine->store_soft = 1;
+		engine->store_soft_time = social_now(engine);
+	}
 }
 
 /* ---------- the passes */
@@ -928,6 +945,7 @@ void social_update(struct social_engine *engine)
 	pending_update(engine);
 	friends_update(engine);
 	social_friends_update(engine);
+	social_invites_update(engine);
 	social_party_update(engine);
 	presence_update(engine);
 	flush(engine);

@@ -21,7 +21,10 @@ structures. */
 #include "social_codec.c"
 #include "social_core.c"
 #include "social_friends.c"
+#include "social_invite.c"
 #include "social_party.c"
+#include "social_store.c"
+#include "social_front.c"
 #include "social_fake.h"
 
 static unsigned long long test_state = 88172645463325252ULL;
@@ -43,20 +46,20 @@ static void fill(unsigned char *bytes, int size)
 /* two machines that are friends already: each holds the other's circle key and has acknowledged */
 static void link_friends(struct fake_node *a, struct fake_node *b)
 {
-	CHECK(social_friend_add(&a->engine, b->engine.identity.key, b->engine.circle_generation, b->engine.circle_key, 1), "link a->b");
-	CHECK(social_friend_add(&b->engine, a->engine.identity.key, a->engine.circle_generation, a->engine.circle_key, 1), "link b->a");
+	CHECK(social_friend_add(a->engine, b->engine->identity.key, b->engine->circle_generation, b->engine->circle_key, 1), "link a->b");
+	CHECK(social_friend_add(b->engine, a->engine->identity.key, a->engine->circle_generation, a->engine->circle_key, 1), "link b->a");
 }
 
 static struct social_friend *friend_of(struct fake_node *node, struct fake_node *other)
 {
-	return social_friend_by_key(&node->engine, other->engine.identity.key);
+	return social_friend_by_key(node->engine, other->engine->identity.key);
 }
 
 static int online_to(struct fake_node *node, struct fake_node *other)
 {
 	struct social_friend *friend = friend_of(node, other);
 
-	return friend && social_friend_online(&node->engine, friend);
+	return friend && social_friend_online(node->engine, friend);
 }
 
 static void to_hex(const unsigned char *bytes, int size, char *text)
@@ -603,9 +606,9 @@ static void case_presence_basic(void)
 	link_friends(a, b);
 	/* neither's clock is anchored: the generation waits SOCIAL_ANCHOR_WAIT, and nothing is sent until it is chosen */
 	fake_run(&net, 5000);
-	CHECK(!a->engine.generation_ready && !b->engine.generation_ready && a->published == 0, "nothing is sent before the generation");
+	CHECK(!a->engine->generation_ready && !b->engine->generation_ready && a->published == 0, "nothing is sent before the generation");
 	fake_run(&net, 11000);
-	CHECK(a->engine.generation_ready && b->engine.generation_ready, "generation chosen after the wait");
+	CHECK(a->engine->generation_ready && b->engine->generation_ready, "generation chosen after the wait");
 	fake_run(&net, 3000);
 	CHECK(online_to(a, b) && online_to(b, a), "both online to each other");
 	friend = friend_of(a, b);
@@ -616,21 +619,22 @@ static void case_presence_basic(void)
 	place.activity = SOCIAL_GAME;
 	place.hosting = 1;
 	place.joinable = 1;
+	place.has_invite = 1;
 	strcpy(place.map, "bloodgulch");
 	strcpy(place.gametype, "Slayer");
 	place.players = 3;
 	place.maximum_players = 16;
 	memset(place.invite_hash, 0x11, 16);
 	memset(place.invite_token, 0x22, 16);
-	social_set_place(&a->engine, &place);
+	social_engine_set_place(a->engine, &place);
 	fake_run(&net, 4000);
 	friend = friend_of(b, a);
 	CHECK(friend->presence.activity == SOCIAL_GAME && (friend->presence.flags & SOCIAL_PRESENCE_JOINABLE) && !strcmp(friend->presence.map, "bloodgulch") &&
 		!strcmp(friend->presence.gametype, "Slayer") && friend->presence.players == 3 && friend->presence.maximum_players == 16 &&
 		friend->presence.invite_hash[0] == 0x11 && friend->presence.invite_token[0] == 0x22, "joinable game seen");
 	/* each message came through four brokers: one was used, three were seen before */
-	CHECK(b->engine.statistics.dropped_seen >= 3 * 2, "duplicates through the brokers dropped: %u", b->engine.statistics.dropped_seen);
-	CHECK(b->engine.statistics.dropped_open == 0 && b->engine.statistics.dropped_signature == 0 && b->engine.statistics.dropped_window == 0, "no loss to errors");
+	CHECK(b->engine->statistics.dropped_seen >= 3 * 2, "duplicates through the brokers dropped: %u", b->engine->statistics.dropped_seen);
+	CHECK(b->engine->statistics.dropped_open == 0 && b->engine->statistics.dropped_signature == 0 && b->engine->statistics.dropped_window == 0, "no loss to errors");
 }
 
 /* the same scenario with every wall clock hours off, anchored or not */
@@ -653,9 +657,9 @@ static void case_clock_offsets(void)
 		fake_run(&net, 30000);
 		CHECK(online_to(a, b) && online_to(b, a) && online_to(b, c) && online_to(c, b) && online_to(a, c) && online_to(c, a), "round %d online", round);
 		/* an anchored node's generation counts minutes from 2026, an unanchored one's is one more than stored */
-		CHECK(a->engine.generation == (round & 1 ? (unsigned)((FAKE_UTC_BASE + (net.time - 30000) / 1000 - 1767225600ULL) / 60) : 1) ||
-			a->engine.generation > 1, "generation %u", a->engine.generation);
-		CHECK(c->engine.generation > 100000, "an anchored clock's generation is minutes since 2026: %u", c->engine.generation);
+		CHECK(a->engine->generation == (round & 1 ? (unsigned)((FAKE_UTC_BASE + (net.time - 30000) / 1000 - 1767225600ULL) / 60) : 1) ||
+			a->engine->generation > 1, "generation %u", a->engine->generation);
+		CHECK(c->engine->generation > 100000, "an anchored clock's generation is minutes since 2026: %u", c->engine->generation);
 	}
 }
 
@@ -663,7 +667,7 @@ static void case_offline_and_timeout(void)
 {
 	static struct fake_net net;
 	struct fake_node *a, *b;
-	struct social_event event;
+	struct social_api_event event;
 	int online_events = 0, offline_events = 0;
 
 	fake_start(&net, 3);
@@ -673,8 +677,8 @@ static void case_offline_and_timeout(void)
 	link_friends(a, b);
 	fake_run(&net, 6000);
 	CHECK(online_to(b, a), "online");
-	while (social_event_take(&b->engine, &event))
-		online_events += event.type == SOCIAL_EVENT_ONLINE;
+	while (social_front_event(b->front, &event))
+		online_events += event.type == SOCIAL_API_EVENT_ONLINE;
 	CHECK(online_events == 1, "one online event, %d", online_events);
 	/* a stops: b calls it offline after 150 seconds, not before */
 	a->alive = 0;
@@ -682,28 +686,28 @@ static void case_offline_and_timeout(void)
 	CHECK(online_to(b, a), "still online at 100 s");
 	fake_run(&net, 60000);
 	CHECK(!online_to(b, a), "offline after 160 s");
-	while (social_event_take(&b->engine, &event))
-		offline_events += event.type == SOCIAL_EVENT_OFFLINE;
+	while (social_front_event(b->front, &event))
+		offline_events += event.type == SOCIAL_API_EVENT_OFFLINE;
 	CHECK(offline_events == 1, "one offline event, %d", offline_events);
 	/* a returns: online again within a few seconds (b's FIRST answer is not needed: a says FIRST) */
 	a->alive = 1;
-	a->engine.ready_before = 0;
+	a->engine->ready_before = 0;
 	fake_run(&net, 6000);
 	CHECK(online_to(b, a), "back");
 	/* a quits cleanly: offline at once */
-	social_shutdown(&a->engine);
+	social_shutdown(a->engine);
 	fake_run(&net, 1000);
 	CHECK(!online_to(b, a), "offline after a clean quit");
 	fake_run(&net, 5000);
 	CHECK(!online_to(b, a), "and nothing more is sent");
-	social_set_enabled(&a->engine, 0);
-	social_set_enabled(&a->engine, 1);
-	a->engine.presence_sent = 0;
-	a->engine.presence_offline_sent = 0;
+	social_set_enabled(a->engine, 0);
+	social_set_enabled(a->engine, 1);
+	a->engine->presence_sent = 0;
+	a->engine->presence_offline_sent = 0;
 	/* appear offline: one OFFLINE message, then silence, but a still hears b */
-	social_set_share(&a->engine, 0, SOCIAL_DETAILS_BASIC, 1);
-	a->engine.presence_offline_sent = 0;
-	a->engine.presence_sent = 1;
+	social_engine_set_share(a->engine, 0, SOCIAL_DETAILS_BASIC, 1);
+	a->engine->presence_offline_sent = 0;
+	a->engine->presence_sent = 1;
 	fake_run(&net, 2000);
 	CHECK(!online_to(b, a), "hidden");
 	{
@@ -713,7 +717,7 @@ static void case_offline_and_timeout(void)
 		CHECK(a->published == before, "a hidden machine publishes nothing: %d", a->published - before);
 		CHECK(online_to(a, b), "a hidden machine still hears its friends");
 	}
-	social_set_share(&a->engine, 1, SOCIAL_DETAILS_BASIC, 1);
+	social_engine_set_share(a->engine, 1, SOCIAL_DETAILS_BASIC, 1);
 	fake_run(&net, 6000);
 	CHECK(online_to(b, a), "shown again");
 }
@@ -736,23 +740,24 @@ static void case_details(void)
 	strcpy(place.map, "secret");
 	strcpy(place.gametype, "Slayer");
 	place.players = 4;
-	social_set_place(&a->engine, &place);
+	social_engine_set_place(a->engine, &place);
 	/* basic: activity only unless joinable */
-	social_set_share(&a->engine, 1, SOCIAL_DETAILS_BASIC, 1);
+	social_engine_set_share(a->engine, 1, SOCIAL_DETAILS_BASIC, 1);
 	fake_run(&net, 6000);
 	friend = friend_of(b, a);
 	CHECK(friend->presence.activity == SOCIAL_GAME && friend->presence.map[0] == 0 && friend->presence.players == 0, "basic keeps the map to itself");
-	social_set_share(&a->engine, 1, SOCIAL_DETAILS_FULL, 1);
+	social_engine_set_share(a->engine, 1, SOCIAL_DETAILS_FULL, 1);
 	fake_run(&net, 20000);
 	CHECK(!strcmp(friend->presence.map, "secret") && friend->presence.players == 4, "full shows the map");
-	social_set_share(&a->engine, 1, SOCIAL_DETAILS_NONE, 1);
+	social_engine_set_share(a->engine, 1, SOCIAL_DETAILS_NONE, 1);
 	fake_run(&net, 20000);
 	CHECK(friend->presence.activity == SOCIAL_BUSY && friend->presence.map[0] == 0, "none shows only that it is online");
 	/* a solo game is never joinable whatever the place says */
 	place.activity = SOCIAL_SOLO;
 	place.joinable = 1;
-	social_set_place(&a->engine, &place);
-	CHECK(!a->engine.place.joinable, "solo is not joinable");
+	place.has_invite = 1;
+	social_engine_set_place(a->engine, &place);
+	CHECK(!a->engine->place.joinable, "solo is not joinable");
 }
 
 /* the message to a topic a stranger holds the key of cannot be forged, and its replay is dropped */
@@ -777,16 +782,16 @@ static void case_forgery_and_replay(void)
 	CHECK(online_to(b, a), "online");
 	/* c holds a's circle key (a's friend): it seals a presence that claims to be a's, signed with its own key */
 	sample_presence(&presence, SOCIAL_PRESENCE_DETAILS | SOCIAL_PRESENCE_JOINABLE);
-	presence.circle_generation = a->engine.circle_generation;
+	presence.circle_generation = a->engine->circle_generation;
 	strcpy(presence.name, "Node0");
 	memset(presence.invite_hash, 0xEE, 16);
-	size = social_presence_encode(&c->engine.identity, a->engine.generation, 9999, &presence, plain, sizeof(plain));
+	size = social_presence_encode(&c->engine->identity, a->engine->generation, 9999, &presence, plain, sizeof(plain));
 	fill(nonce, 12);
-	wire_size = social_seal(a->engine.circle_seal, SOCIAL_KIND_PRESENCE, NULL, a->engine.circle_topic, plain, size, nonce, wire, sizeof(wire));
-	forged_before = b->engine.statistics.dropped_signature;
+	wire_size = social_seal(a->engine->circle_seal, SOCIAL_KIND_PRESENCE, NULL, a->engine->circle_topic, plain, size, nonce, wire, sizeof(wire));
+	forged_before = b->engine->statistics.dropped_signature;
 	window_before = friend->window.sequence;
-	social_heard(&b->engine, a->engine.circle_topic, wire, wire_size);
-	CHECK(b->engine.statistics.dropped_signature == forged_before + 1, "forgery refused");
+	social_heard(b->engine, a->engine->circle_topic, wire, wire_size);
+	CHECK(b->engine->statistics.dropped_signature == forged_before + 1, "forgery refused");
 	CHECK(friend->presence.invite_hash[0] != 0xEE && friend->window.sequence == window_before, "the forgery did not poison the window");
 	/* a real presence of a's still gets through (sequence 9999 not marked) */
 	{
@@ -794,7 +799,7 @@ static void case_forgery_and_replay(void)
 
 		memset(&place, 0, sizeof(place));
 		place.activity = SOCIAL_LOBBY;
-		social_set_place(&a->engine, &place);
+		social_engine_set_place(a->engine, &place);
 		fake_run(&net, 5000);
 		CHECK(friend->presence.activity == SOCIAL_LOBBY, "the real message after the forgery");
 	}
@@ -803,19 +808,19 @@ static void case_forgery_and_replay(void)
 		struct social_presence real = friend->presence;
 		unsigned char old_plain[SOCIAL_MAX_PLAIN];
 		int old_size;
-		unsigned int sequence = a->engine.sequence;
+		unsigned int sequence = a->engine->sequence;
 		int index;
 
 		(void)real;
 		/* the sequence just sent, again, with a fresh nonce (so it is not a duplicate in the ring) */
-		old_size = social_presence_encode(&a->engine.identity, a->engine.generation, sequence, &a->engine.sent_presence, old_plain, sizeof(old_plain));
+		old_size = social_presence_encode(&a->engine->identity, a->engine->generation, sequence, &a->engine->sent_presence, old_plain, sizeof(old_plain));
 		fill(nonce, 12);
-		wire_size = social_seal(a->engine.circle_seal, SOCIAL_KIND_PRESENCE, NULL, a->engine.circle_topic, old_plain, old_size, nonce, wire, sizeof(wire));
-		forged_before = b->engine.statistics.dropped_window;
+		wire_size = social_seal(a->engine->circle_seal, SOCIAL_KIND_PRESENCE, NULL, a->engine->circle_topic, old_plain, old_size, nonce, wire, sizeof(wire));
+		forged_before = b->engine->statistics.dropped_window;
 		for (index = 0; index < 2; index++)
-			social_heard(&b->engine, a->engine.circle_topic, wire, wire_size);
-		CHECK(b->engine.statistics.dropped_window + b->engine.statistics.dropped_seen >= forged_before + 2, "replay refused");
-		CHECK(b->engine.statistics.dropped_window >= forged_before + 1, "by the window");
+			social_heard(b->engine, a->engine->circle_topic, wire, wire_size);
+		CHECK(b->engine->statistics.dropped_window + b->engine->statistics.dropped_seen >= forged_before + 2, "replay refused");
+		CHECK(b->engine->statistics.dropped_window >= forged_before + 1, "by the window");
 	}
 	(void)b;
 }
@@ -842,14 +847,14 @@ static void case_abuse(void)
 	/* noise on every kind of topic: sizes from 0 to 700, topics of any length, none crashes and none is accepted */
 	{
 		char long_topic[200];
-		unsigned int accepted = b->engine.statistics.accepted;
+		unsigned int accepted = b->engine->statistics.accepted;
 
 		memset(long_topic, 'x', sizeof(long_topic) - 1);
 		long_topic[sizeof(long_topic) - 1] = 0;
 		for (round = 0; round < 5000; round++)
 		{
 			int size = (int)random_below(700);
-			const char *topic = random_below(3) == 0 ? b->engine.inbox_topic : random_below(2) ? friend->topic : "hceu/3/f/p/unknown";
+			const char *topic = random_below(3) == 0 ? b->engine->inbox_topic : random_below(2) ? friend->topic : "hceu/3/f/p/unknown";
 
 			fill(junk, size);
 			if (size > 2 && random_below(2))
@@ -860,11 +865,11 @@ static void case_abuse(void)
 			if (random_below(50) == 0)
 				topic = long_topic;
 			net.time += 30;
-			social_heard(&b->engine, topic, junk, size);
+			social_heard(b->engine, topic, junk, size);
 		}
-		social_heard(&b->engine, NULL, junk, 10);
-		social_heard(&b->engine, friend->topic, NULL, 10);
-		CHECK(b->engine.statistics.accepted == accepted, "noise accepted");
+		social_heard(b->engine, NULL, junk, 10);
+		social_heard(b->engine, friend->topic, NULL, 10);
+		CHECK(b->engine->statistics.accepted == accepted, "noise accepted");
 	}
 	/* a flood of sealed presences that fail the signature, from thirty friends who hold the key of their own circles (an attacker with thirty names): what is opened a
 	second is bounded (200), and what is checked for a signature a second (8 and 20) */
@@ -880,14 +885,14 @@ static void case_abuse(void)
 			fill(seed, 32);
 			fill(circles[round], 32);
 			social_identity_make(&attackers[round], seed);
-			added[round] = social_friend_add(&b->engine, attackers[round].key, 1, circles[round], 1);
+			added[round] = social_friend_add(b->engine, attackers[round].key, 1, circles[round], 1);
 		}
 		fill(seed, 32);
 		social_identity_make(&stranger, seed);
 		sample_presence(&presence, 0);
 		fake_run(&net, 1000);
-		attempts_before = b->engine.statistics.attempted;
-		signatures_before = b->engine.statistics.dropped_signature;
+		attempts_before = b->engine->statistics.attempted;
+		signatures_before = b->engine->statistics.dropped_signature;
 		/* 3000 messages in three seconds of the machine's time, a thousand a second, spread over the thirty */
 		for (second = 0; second < 3; second++)
 		{
@@ -905,15 +910,15 @@ static void case_abuse(void)
 				size = social_presence_encode(&stranger, 5, 1 + (unsigned)(second * 1000 + round), &presence, plain, sizeof(plain));
 				fill(nonce, 12);
 				wire_size = social_seal(seal, SOCIAL_KIND_PRESENCE, NULL, topic, plain, size, nonce, wire, sizeof(wire));
-				social_heard(&b->engine, topic, wire, wire_size);
+				social_heard(b->engine, topic, wire, wire_size);
 			}
-			social_update(&b->engine);
+			social_update(b->engine);
 		}
-		CHECK(b->engine.statistics.dropped_rate > 0, "the rates were limited");
-		CHECK(b->engine.statistics.attempted - attempts_before <= SOCIAL_OPEN_RATE * 4, "messages opened: %u", b->engine.statistics.attempted - attempts_before);
-		CHECK(b->engine.statistics.dropped_signature - signatures_before <= 3 * 1000 / SOCIAL_VERIFY_INTERVAL + SOCIAL_VERIFY_BURST + 2, "signature checks: %u",
-			b->engine.statistics.dropped_signature - signatures_before);
-		CHECK(b->engine.pending_count <= SOCIAL_MAX_PENDING, "the queue of waiting presences is bounded");
+		CHECK(b->engine->statistics.dropped_rate > 0, "the rates were limited");
+		CHECK(b->engine->statistics.attempted - attempts_before <= SOCIAL_OPEN_RATE * 4, "messages opened: %u", b->engine->statistics.attempted - attempts_before);
+		CHECK(b->engine->statistics.dropped_signature - signatures_before <= 3 * 1000 / SOCIAL_VERIFY_INTERVAL + SOCIAL_VERIFY_BURST + 2, "signature checks: %u",
+			b->engine->statistics.dropped_signature - signatures_before);
+		CHECK(b->engine->pending_count <= SOCIAL_MAX_PENDING, "the queue of waiting presences is bounded");
 	}
 	/* one friend sending valid presences a hundred times a second gets twenty a second */
 	{
@@ -922,7 +927,7 @@ static void case_abuse(void)
 		int index;
 
 		fake_run(&net, 5000);
-		accepted_before = b->engine.statistics.accepted;
+		accepted_before = b->engine->statistics.accepted;
 		for (index = 0; index < 300; index++)
 		{
 			int size, wire_size;
@@ -930,18 +935,18 @@ static void case_abuse(void)
 			net.time += 10;
 			memset(&place, 0, sizeof(place));
 			sample_presence(&presence, 0);
-			presence.circle_generation = a->engine.circle_generation;
+			presence.circle_generation = a->engine->circle_generation;
 			strcpy(presence.name, "Node0");
-			size = social_presence_encode(&a->engine.identity, a->engine.generation, 100000 + (unsigned)index, &presence, plain, sizeof(plain));
+			size = social_presence_encode(&a->engine->identity, a->engine->generation, 100000 + (unsigned)index, &presence, plain, sizeof(plain));
 			fill(nonce, 12);
-			wire_size = social_seal(a->engine.circle_seal, SOCIAL_KIND_PRESENCE, NULL, a->engine.circle_topic, plain, size, nonce, wire, sizeof(wire));
-			social_heard(&b->engine, a->engine.circle_topic, wire, wire_size);
+			wire_size = social_seal(a->engine->circle_seal, SOCIAL_KIND_PRESENCE, NULL, a->engine->circle_topic, plain, size, nonce, wire, sizeof(wire));
+			social_heard(b->engine, a->engine->circle_topic, wire, wire_size);
 			if (index % 5 == 4)
-				social_update(&b->engine);
+				social_update(b->engine);
 		}
 		fake_run(&net, 1000);
-		CHECK(b->engine.statistics.accepted - accepted_before <= 3 * SOCIAL_FRIEND_RATE + 4, "one friend's messages taken: %u", b->engine.statistics.accepted - accepted_before);
-		CHECK(b->engine.statistics.accepted - accepted_before >= 2 * SOCIAL_FRIEND_RATE, "and a fair number: %u", b->engine.statistics.accepted - accepted_before);
+		CHECK(b->engine->statistics.accepted - accepted_before <= 3 * SOCIAL_FRIEND_RATE + 4, "one friend's messages taken: %u", b->engine->statistics.accepted - accepted_before);
+		CHECK(b->engine->statistics.accepted - accepted_before >= 2 * SOCIAL_FRIEND_RATE, "and a fair number: %u", b->engine->statistics.accepted - accepted_before);
 	}
 	/* the friend's real messages recover once the flood stops */
 	{
@@ -950,8 +955,8 @@ static void case_abuse(void)
 		memset(&place, 0, sizeof(place));
 		place.activity = SOCIAL_LOBBY;
 		/* (the numbers the test used for a's messages are past a's own: it carries on from them) */
-		a->engine.sequence = 100400;
-		social_set_place(&a->engine, &place);
+		a->engine->sequence = 100400;
+		social_engine_set_place(a->engine, &place);
 		fake_run(&net, 20000);
 		CHECK(friend->presence.activity == SOCIAL_LOBBY, "recovered after the flood");
 	}
@@ -976,17 +981,17 @@ static void case_queue_and_bucket(void)
 	memset(plain, 1, sizeof(plain));
 	/* a hundred messages at once: eight wait, the rest are refused, and what goes out goes at 6 + 2.5 a second */
 	for (index = 0; index < 100; index++)
-		accepted += social_send(&a->engine, a->engine.circle_topic, SOCIAL_KIND_PRESENCE, a->engine.circle_seal, NULL, plain, sizeof(plain));
+		accepted += social_send(a->engine, a->engine->circle_topic, SOCIAL_KIND_PRESENCE, a->engine->circle_seal, NULL, plain, sizeof(plain));
 	CHECK(accepted == SOCIAL_MAX_QUEUE, "the queue holds %d", accepted);
 	{
-		unsigned int sent = a->engine.statistics.sent;
+		unsigned int sent = a->engine->statistics.sent;
 
 		fake_run(&net, 20);
-		CHECK(a->engine.statistics.sent - sent <= SOCIAL_SEND_BURST, "a burst of %u", a->engine.statistics.sent - sent);
+		CHECK(a->engine->statistics.sent - sent <= SOCIAL_SEND_BURST, "a burst of %u", a->engine->statistics.sent - sent);
 	}
-	CHECK(a->engine.statistics.send_dropped >= 92, "the rest refused");
+	CHECK(a->engine->statistics.send_dropped >= 92, "the rest refused");
 	fake_run(&net, 10000);
-	CHECK(a->engine.queue_count == 0 && a->engine.statistics.sent >= 8, "the queue drains");
+	CHECK(a->engine->queue_count == 0 && a->engine->statistics.sent >= 8, "the queue drains");
 	/* with no broker ready, what waits more than two seconds is stale when a broker comes back */
 	{
 		int broker;
@@ -994,12 +999,12 @@ static void case_queue_and_bucket(void)
 		for (broker = 0; broker < FAKE_BROKERS; broker++)
 			a->broker_ready[broker] = 0;
 		for (index = 0; index < 5; index++)
-			social_send(&a->engine, a->engine.circle_topic, SOCIAL_KIND_PRESENCE, a->engine.circle_seal, NULL, plain, sizeof(plain));
+			social_send(a->engine, a->engine->circle_topic, SOCIAL_KIND_PRESENCE, a->engine->circle_seal, NULL, plain, sizeof(plain));
 		fake_run(&net, 5000);
 		for (broker = 0; broker < FAKE_BROKERS; broker++)
 			a->broker_ready[broker] = 1;
 		fake_run(&net, 1000);
-		CHECK(a->engine.statistics.send_expired == 5, "messages that wait more than two seconds expire: %u", a->engine.statistics.send_expired);
+		CHECK(a->engine->statistics.send_expired == 5, "messages that wait more than two seconds expire: %u", a->engine->statistics.send_expired);
 	}
 	/* no broker ever saw more than its limit from this machine */
 	CHECK(net.limited == 0, "the brokers' limit was hit %u times", net.limited);
@@ -1014,7 +1019,7 @@ static void case_queue_and_bucket(void)
 		{
 			memset(&place, 0, sizeof(place));
 			place.activity = (step & 1) ? SOCIAL_LOBBY : SOCIAL_MENUS;
-			social_set_place(&a->engine, &place);
+			social_engine_set_place(a->engine, &place);
 			fake_run(&net, 1000);
 		}
 		CHECK(a->published - before <= 60 * 3 * FAKE_BROKERS, "published %d in a minute", a->published - before);
@@ -1033,17 +1038,17 @@ static void case_subscriptions(void)
 	b = fake_add(&net, 0, 1);
 	c = fake_add(&net, 0, 1);
 	fake_run(&net, 100);
-	CHECK(a->subscribed_count == 1 && !strcmp(a->subscribed[0], a->engine.inbox_topic), "only the inbox without friends");
+	CHECK(a->subscribed_count == 1 && !strcmp(a->subscribed[0], a->engine->inbox_topic), "only the inbox without friends");
 	link_friends(a, b);
 	fake_run(&net, 100);
-	CHECK(a->subscribed_count == 2 && !strcmp(a->subscribed[1], b->engine.circle_topic), "a friend's topic added");
+	CHECK(a->subscribed_count == 2 && !strcmp(a->subscribed[1], b->engine->circle_topic), "a friend's topic added");
 	link_friends(a, c);
 	fake_run(&net, 100);
 	CHECK(a->subscribed_count == 3, "three");
-	social_set_share(&a->engine, 1, SOCIAL_DETAILS_BASIC, 0);
+	social_engine_set_share(a->engine, 1, SOCIAL_DETAILS_BASIC, 0);
 	fake_run(&net, 100);
-	CHECK(a->subscribed_count == 2 && strcmp(a->subscribed[0], a->engine.inbox_topic), "requests off: no inbox");
-	social_set_enabled(&a->engine, 0);
+	CHECK(a->subscribed_count == 2 && strcmp(a->subscribed[0], a->engine->inbox_topic), "requests off: no inbox");
+	social_set_enabled(a->engine, 0);
 	fake_run(&net, 100);
 	CHECK(a->subscribed_count == 0, "off: nothing");
 	/* the topics are hashes: none shows a key or a code */
@@ -1075,7 +1080,7 @@ static void case_fifty_friends(void)
 		social_identity_make(&fake_identity, seed);
 		if (index == 39)
 			break;
-		added = social_friend_add(&hub->engine, fake_identity.key, 1, circle, 1);
+		added = social_friend_add(hub->engine, fake_identity.key, 1, circle, 1);
 		CHECK(added, "filler %d", index);
 	}
 	for (index = 1; index < 12; index++)
@@ -1087,9 +1092,9 @@ static void case_fifty_friends(void)
 		fill(seed, 32);
 		fill(circle, 32);
 		social_identity_make(&extra, seed);
-		CHECK(social_friend_count(&hub->engine) == SOCIAL_MAX_FRIENDS, "50 friends: %d", social_friend_count(&hub->engine));
-		CHECK(social_friend_add(&hub->engine, extra.key, 1, circle, 1) == NULL, "a fifty-first refused");
-		CHECK(social_friend_count(&hub->engine) == SOCIAL_MAX_FRIENDS, "still 50");
+		CHECK(social_friend_count(hub->engine) == SOCIAL_MAX_FRIENDS, "50 friends: %d", social_friend_count(hub->engine));
+		CHECK(social_friend_add(hub->engine, extra.key, 1, circle, 1) == NULL, "a fifty-first refused");
+		CHECK(social_friend_count(hub->engine) == SOCIAL_MAX_FRIENDS, "still 50");
 	}
 	fake_run(&net, 100);
 	CHECK(hub->subscribed_count == 1 + SOCIAL_MAX_FRIENDS, "inbox and fifty topics: %d", hub->subscribed_count);
@@ -1104,14 +1109,14 @@ static void case_fifty_friends(void)
 		if (online != 11)
 		{
 			for (index = 1; index < 12; index++)
-				fprintf(stderr, "node %d online %d published %d; hub stats received %u accepted %u seen %u rate %u verify %u sig %u deferred %u window %u\n", index, online_to(hub, &net.nodes[index]), net.nodes[index].published, hub->engine.statistics.received, hub->engine.statistics.accepted, hub->engine.statistics.dropped_seen, hub->engine.statistics.dropped_rate, hub->engine.statistics.dropped_verify_budget, hub->engine.statistics.dropped_signature, hub->engine.statistics.deferred, hub->engine.statistics.dropped_window);
+				fprintf(stderr, "node %d online %d published %d; hub stats received %u accepted %u seen %u rate %u verify %u sig %u deferred %u window %u\n", index, online_to(hub, &net.nodes[index]), net.nodes[index].published, hub->engine->statistics.received, hub->engine->statistics.accepted, hub->engine->statistics.dropped_seen, hub->engine->statistics.dropped_rate, hub->engine->statistics.dropped_verify_budget, hub->engine->statistics.dropped_signature, hub->engine->statistics.deferred, hub->engine->statistics.dropped_window);
 		}
 		CHECK(online == 11, "all the real friends online through the two brokers with no cap: %d", online);
 	}
 	net.broker_up[2] = 0;
 	net.broker_up[3] = 0;
 	for (index = 1; index < 12; index++)
-		net.nodes[index].engine.presence_time -= 100000;
+		net.nodes[index].engine->presence_time -= 100000;
 	fake_run(&net, 200000);
 	{
 		int online = 0;

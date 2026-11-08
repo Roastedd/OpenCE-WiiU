@@ -37,6 +37,10 @@ enum
 	SOCIAL_MAX_TOPICS = SOCIAL_MAX_FRIENDS + 4,
 	/* invites waiting for an answer, per friend */
 	SOCIAL_MAX_INVITES = 3,
+	/* invites waiting, in all */
+	SOCIAL_MAX_INVITES_TOTAL = 12,
+	/* what is kept of a key to refuse it: the first bytes of its SHA-256 */
+	SOCIAL_BLOCK_SIZE = 8,
 	/* presences waiting for their signature check */
 	SOCIAL_MAX_PENDING = 64,
 };
@@ -65,6 +69,21 @@ enum
 	SOCIAL_FRIEND_RATE = 20,
 	SOCIAL_REQUEST_NOTICE = 600000,
 	SOCIAL_PENDING_LIFE = 10000,
+	/* a request sent again; hello sent again; an add to a new code; the least between two sent to one */
+	SOCIAL_INVITE_LIFE = 60000,
+	SOCIAL_INVITE_SPACING = 10000,
+	SOCIAL_REQUEST_REPEAT = 300000,
+	SOCIAL_HELLO_FIRST = 20000,
+	SOCIAL_HELLO_LATER = 300000,
+	SOCIAL_HELLO_TRIES = 10,
+	SOCIAL_HELLO_SPACING = 1000,
+	SOCIAL_ADD_WINDOW = 60000,
+	SOCIAL_ADD_PER_WINDOW = 4,
+	SOCIAL_REPLY_SPACING = 5000,
+	SOCIAL_ROTATION_LIFE = 120000,
+	SOCIAL_STORE_DEBOUNCE = 2000,
+	SOCIAL_STORE_INTERVAL = 30000,
+	SOCIAL_STORE_SOFT_INTERVAL = 300000,
 };
 
 /* where a person is, as presence says (and as the game tells social_set_place) */
@@ -110,7 +129,8 @@ struct social_place
 	char map[SOCIAL_MAP_SIZE + 1];
 	char gametype[SOCIAL_GAMETYPE_SIZE + 1];
 	unsigned char players, maximum_players, engine_type;
-	/* the invite's two halves (halo://join/<host key hash><token>), when joinable */
+	/* the invite's two halves (halo://join/<host key hash><token>), when the game has one: it is shown to friends if joinable, and sent to one by an invite */
+	unsigned char has_invite;
 	unsigned char invite_hash[SOCIAL_HASH_SIZE];
 	unsigned char invite_token[SOCIAL_TOKEN_SIZE];
 };
@@ -140,7 +160,7 @@ struct social_env
 /* what the engine counts, for the log and the tests */
 struct social_statistics
 {
-	unsigned int received, accepted, opened, attempted;
+	unsigned int received, accepted, opened, attempted, verifications;
 	unsigned int dropped_size, dropped_kind, dropped_topic, dropped_rate, dropped_seen, dropped_open, dropped_header, dropped_window, dropped_signature,
 		dropped_verify_budget, dropped_unknown, dropped_blocked, dropped_malformed;
 	unsigned int sent, queued, send_dropped, send_expired, deferred;
@@ -250,6 +270,43 @@ struct social_queued
 	unsigned char payload[SOCIAL_MAX_WIRE];
 };
 
+/* a request this machine sent, waiting for the other to answer */
+struct social_sent
+{
+	int used;
+	unsigned int id;
+	unsigned char code_bytes[SOCIAL_CODE_BYTES];
+	char code[SOCIAL_CODE_TEXT_SIZE];
+	unsigned int sent_time;
+	int sent_valid;
+	unsigned long long added;
+};
+
+/* a request received, waiting for an answer */
+struct social_request
+{
+	int used;
+	unsigned int id;
+	unsigned char key[SOCIAL_KEY_SIZE];
+	char name[SOCIAL_NAME_SIZE + 1];
+	char code[SOCIAL_CODE_TEXT_SIZE];
+	unsigned int received;
+	unsigned long long utc;
+};
+
+/* an invite received, waiting to be accepted or to lapse */
+struct social_pending_invite
+{
+	int used;
+	unsigned int id;
+	unsigned int friend_id;
+	int kind;
+	struct social_join_target target;
+	unsigned char party_token[SOCIAL_TOKEN_SIZE];
+	unsigned char party_size;
+	unsigned int received;
+};
+
 /* a presence opened, awaiting the budget for its signature check */
 struct social_pending
 {
@@ -301,6 +358,38 @@ struct social_engine
 	/* presences opened and waiting for a signature check (the budget) */
 	struct social_pending pending[SOCIAL_MAX_PENDING];
 	int pending_first, pending_count;
+	/* invites received, and the last one sent: a count, and how it ended (SOCIAL_INVITE_*) */
+	struct social_pending_invite invites[SOCIAL_MAX_INVITES_TOTAL];
+	unsigned int invite_serial_in;
+	unsigned int invite_serial;
+	int invite_result;
+	/* requests: sent (waiting for an answer), received, and the keys (the first 8 bytes of their hashes) refused for good or for now */
+	struct social_sent sent[SOCIAL_MAX_SENT];
+	struct social_request requests[SOCIAL_MAX_REQUESTS];
+	unsigned char ignored[SOCIAL_MAX_IGNORED][SOCIAL_BLOCK_SIZE];
+	int ignored_count, ignored_next;
+	unsigned char blocked[SOCIAL_MAX_BLOCKED][SOCIAL_BLOCK_SIZE];
+	int blocked_count;
+	/* the times of the last new codes this machine sent a request to */
+	unsigned int add_times[4];
+	int add_times_count;
+	/* a hello a second at most, and the circle before the last rotation (friends still listen to it for the hello that gives them the new key) */
+	unsigned int hello_last;
+	int hello_valid;
+	char old_circle_topic[SOCIAL_TOPIC_SIZE];
+	unsigned int rotated_time;
+	int rotated;
+	/* the store: changed since the last save (hard: a friend, a list, the circle or a setting; soft: only the windows and sequence), when, and the last save */
+	int store_dirty, store_soft;
+	unsigned int store_dirty_time, store_soft_time, store_saved_time;
+	int store_saved;
+	/* the file was written by a newer version and is left alone */
+	int store_locked;
+	/* the circle generation a file named (read before its key) */
+	int store_circle_generation;
+	/* the last request by code: a count, and how it ended (SOCIAL_ADD_*) */
+	unsigned int add_serial;
+	int add_result;
 	/* the topics asked of the brokers */
 	char wanted[SOCIAL_MAX_TOPICS][SOCIAL_TOPIC_SIZE];
 	int wanted_count;
@@ -341,10 +430,10 @@ void social_set_circle(struct social_engine *engine, int generation, const unsig
 /* off: nothing is subscribed, received or sent */
 void social_set_enabled(struct social_engine *engine, int enabled);
 /* the privacy settings: whether presence is shown to friends at all (appear offline), what detail it carries (SOCIAL_DETAILS_*), and whether requests are accepted */
-void social_set_share(struct social_engine *engine, int share_status, int details, int accept_requests);
-void social_set_name(struct social_engine *engine, const char *name);
+void social_engine_set_share(struct social_engine *engine, int share_status, int details, int accept_requests);
+void social_engine_set_name(struct social_engine *engine, const char *name);
 /* what the machine is doing (cheap to call again with the same) */
-void social_set_place(struct social_engine *engine, const struct social_place *place);
+void social_engine_set_place(struct social_engine *engine, const struct social_place *place);
 /* the passes of the p2p thread: timers, resends, publishes */
 void social_update(struct social_engine *engine);
 /* a message on a topic, from a broker */
@@ -365,6 +454,69 @@ struct social_friend *social_friend_add(struct social_engine *engine, const unsi
 int social_event_take(struct social_engine *engine, struct social_event *event);
 /* the log's line, with "social: " in front by the environment's log */
 void social_log(struct social_engine *engine, const char *format, ...);
+
+/* ---------- friends (social_friends.c) */
+
+/* the results of adding a friend by a typed code (in the order of social.h's SOCIAL_ADD_RESULT_*) */
+enum
+{
+	SOCIAL_ADD_OK,
+	SOCIAL_ADD_BAD_TEXT,
+	SOCIAL_ADD_BAD_CHECK,
+	SOCIAL_ADD_OWN,
+	SOCIAL_ADD_ALREADY,
+	SOCIAL_ADD_FULL,
+	SOCIAL_ADD_PENDING_FULL,
+	SOCIAL_ADD_TOO_FAST,
+	SOCIAL_ADD_OFF,
+	SOCIAL_ADD_BUSY,
+};
+
+/* sends a request to the owner of a typed code; one of SOCIAL_ADD_*. A request is sent again every five minutes while it waits */
+int social_engine_add_code(struct social_engine *engine, const char *text);
+/* a request received (by its id): becomes a friend, and the other is told. 0 if there is no such request or the list is full */
+int social_engine_accept(struct social_engine *engine, unsigned int id);
+/* ... is turned away, and asked about no more (until the list of those turned away forgets it) */
+int social_engine_ignore(struct social_engine *engine, unsigned int id);
+/* a request sent (by its id) is forgotten */
+int social_engine_cancel(struct social_engine *engine, unsigned int id);
+/* the friend is told it is not one, deleted, and this machine's circle key is changed so that it hears nothing more */
+int social_engine_remove(struct social_engine *engine, unsigned int id);
+/* ... and its key refused for good */
+int social_engine_block(struct social_engine *engine, unsigned int id);
+/* one of the blocked (by its place in the list) can ask again */
+int social_engine_unblock(struct social_engine *engine, int index);
+int social_engine_set_nickname(struct social_engine *engine, unsigned int id, const char *nickname);
+
+/* ---------- invites (social_invite.c) */
+
+/* the results of inviting a friend to the game this machine hosts (in the order of social.h's SOCIAL_INVITE_RESULT_*) */
+enum
+{
+	SOCIAL_INVITE_OK,
+	SOCIAL_INVITE_NO_FRIEND,
+	SOCIAL_INVITE_OFFLINE,
+	/* this machine hosts no game a friend could join */
+	SOCIAL_INVITE_NOTHING,
+	SOCIAL_INVITE_TOO_FAST,
+	SOCIAL_INVITE_BUSY,
+	SOCIAL_INVITE_OFF,
+};
+
+/* the friend (by id) is asked to join the game this machine hosts */
+int social_engine_invite(struct social_engine *engine, unsigned int friend_id);
+/* an invite received (by its id) is let go */
+int social_engine_invite_dismiss(struct social_engine *engine, unsigned int id);
+void social_invite_heard(struct social_engine *engine, struct social_friend *friend, const unsigned char *plain, int size, const struct social_inner *inner);
+void social_invites_update(struct social_engine *engine);
+
+/* ---------- the file (social_store.c) */
+
+/* whether a save is wanted now: something changed, and the debounce and the interval are over; foreground says the game has the screen (the card is not
+written while it is away) */
+int social_store_due(struct social_engine *engine, int foreground);
+/* the text of the file, and the change marked as saved; the length, or 0 if the engine is locked out of its file */
+int social_store_take(struct social_engine *engine, char *text, int capacity);
 
 /* ---------- for the engine's own files */
 

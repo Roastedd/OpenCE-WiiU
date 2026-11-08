@@ -15,9 +15,9 @@ TESTS = Path(__file__).resolve().parent / "tests"
 HARNESS_INCLUDE = Path(__file__).resolve().parent / "include"
 
 # the engine's units, in the folder they are included from by the drivers
-SOURCES = ("social_codec.c", "social_core.c", "social_friends.c", "social_party.c", "social_codec.h", "social_core.h")
-EXTRA_SOURCES = ("social_store.c", "social_store.h", "social_join.c", "social_join.h", "social_front.c", "social_front.h", "social_command.c",
-                 "social_command.h")
+SOURCES = ("social_codec.c", "social_core.c", "social_friends.c", "social_party.c", "social_codec.h", "social_core.h", "social.h", "social.c", "social_store.c",
+           "social_store.h", "social_front.c", "social_front.h", "social_invite.c")
+EXTRA_SOURCES = ("social_join.c", "social_join.h", "social_command.c", "social_command.h")
 CRYPTO = ("port/linux/src/p2p_crypto.c", "port/third_party/monocypher/monocypher.c", "port/third_party/monocypher/monocypher-ed25519.c",
           "port/linux/game/text_safe.c")
 
@@ -93,7 +93,7 @@ def crypto_objects():
 
 
 def sources_folder(mutations=()):
-    """a folder with src/ (the engine's sources, with mutations ((file, before, after), ...) made) and game/text_safe.h"""
+    """a folder with game/ (the engine's sources, with mutations ((file, before, after), ...) made, and text_safe) and src/ (the p2p headers they include)"""
     key = hashlib.sha256(repr(mutations).encode()).hexdigest()[:16]
     folder = Path(_directory.name) / f"sources-{key}"
     if folder.exists():
@@ -101,13 +101,15 @@ def sources_folder(mutations=()):
     (folder / "src").mkdir(parents=True)
     (folder / "game").mkdir()
     for name in SOURCES + EXTRA_SOURCES:
-        path = ROOT / "port/linux/src" / name
+        path = ROOT / "port/linux/game" / name
         if path.exists():
-            (folder / "src" / name).write_text(path.read_text(encoding="latin-1"), encoding="latin-1")
+            (folder / "game" / name).write_text(path.read_text(encoding="latin-1"), encoding="latin-1")
     for name in ("text_safe.h", "text_safe.c"):
         (folder / "game" / name).write_text((ROOT / "port/linux/game" / name).read_text(encoding="latin-1"), encoding="latin-1")
+    for name in ("p2p_internal.h", "p2p.h"):
+        (folder / "src" / name).write_text((ROOT / "port/linux/src" / name).read_text(encoding="latin-1"), encoding="latin-1")
     for name, before, after in mutations:
-        path = folder / "src" / name
+        path = folder / "game" / name
         text = path.read_text(encoding="latin-1")
         if text.count(before) != 1:
             raise LookupError(f"negative control no longer applies to {name} (found {text.count(before)} times): {before!r}")
@@ -122,7 +124,7 @@ def build(driver, mutations=(), defines=()):
     tag = hashlib.sha256(repr((driver, mutations, defines)).encode()).hexdigest()[:12]
     executable = Path(_directory.name) / f"{driver}-{tag}"
     object_file = Path(_directory.name) / f"{driver}-{tag}.o"
-    _compile(TESTS / f"{driver}.c", object_file, extra_include=[f"-I{folder / 'src'}", *[f"-D{d}" for d in defines]])
+    _compile(TESTS / f"{driver}.c", object_file, extra_include=[f"-I{folder / 'game'}", *[f"-D{d}" for d in defines]])
     link = [os.environ.get("CC", "clang"), *_flags(), str(object_file), *map(str, crypto_objects()), "-o", str(executable), "-lm", "-lpthread"]
     result = subprocess.run(link, capture_output=True, text=True, cwd=ROOT)
     if result.returncode:

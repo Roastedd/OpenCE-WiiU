@@ -176,7 +176,7 @@ FAULTS = [
     # details given away at basic
     ("details", "social_core.c", "	if (full || joinable)\n	{\n		presence->flags |= SOCIAL_PRESENCE_DETAILS;", "	if (1)\n	{\n		presence->flags |= SOCIAL_PRESENCE_DETAILS;"),
     # a solo game joinable
-    ("details", "social_core.c", "	if (clean.activity != SOCIAL_LOBBY && clean.activity != SOCIAL_GAME)\n		clean.joinable = 0;", "	(void)clean.activity;"),
+    ("details", "social_core.c", "	if (clean.activity != SOCIAL_LOBBY && clean.activity != SOCIAL_GAME)\n	{\n		clean.joinable = 0;\n		clean.has_invite = 0;\n	}", "	(void)clean.activity;"),
     # the topics never refreshed when friends change
     ("subscriptions", "social_core.c", "		engine->topics_dirty = 1;\n	}\n	if (acknowledged)", "	}\n	if (acknowledged)"),
     # a generation chosen without the clock's floor

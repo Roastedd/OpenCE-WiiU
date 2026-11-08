@@ -27,7 +27,8 @@ struct fake_node
 	struct fake_net *net;
 	int index;
 	int alive;
-	struct social_engine engine;
+	struct social_engine *engine;
+	struct social_front *front;
 	unsigned int mono_offset;
 	long long wall_offset;
 	int anchored;
@@ -68,6 +69,8 @@ struct fake_net
 	int publish_limit;
 	unsigned int delivered, lost, duplicated, limited;
 	int verbose;
+	/* the files of each machine, when it has any (a front saves them) */
+	struct social_files *files;
 };
 
 static unsigned long long fake_random(unsigned long long *state)
@@ -261,16 +264,42 @@ static struct fake_node *fake_add(struct fake_net *net, int wall_hours, int anch
 	env.log = fake_log;
 	env.platform = node->index % 2 ? SOCIAL_PLATFORM_WIIU : SOCIAL_PLATFORM_LINUX;
 	env.network_version = 41;
-	social_engine_init(&node->engine, &env);
+	{
+		struct social_front_options options;
+
+		memset(&options, 0, sizeof(options));
+		node->front = social_front_create(&env, net->files ? &net->files[node->index] : NULL, &options);
+		node->engine = social_front_engine(node->front);
+	}
 	fake_random_bytes(node, node->seed, 32);
 	{
 		char name[16];
 
 		snprintf(name, sizeof(name), "Node%d", node->index);
-		social_set_identity(&node->engine, node->seed, name, 0);
+		social_set_identity(node->engine, node->seed, name, 0);
 	}
-	social_set_enabled(&node->engine, 1);
+	social_set_enabled(node->engine, 1);
 	return node;
+}
+
+/* a machine that starts again (the process restarted): a new engine and front from the files, the clocks and the network as they were. The identity is read
+from friends.key (made from the node's seed the first time) */
+static void fake_restart(struct fake_net *net, int index)
+{
+	struct fake_node *node = &net->nodes[index];
+	struct social_env env = node->engine->env;
+	struct social_front_options options;
+	char name[16];
+
+	social_front_destroy(node->front);
+	memset(&options, 0, sizeof(options));
+	node->front = social_front_create(&env, net->files ? &net->files[index] : NULL, &options);
+	node->engine = social_front_engine(node->front);
+	snprintf(name, sizeof(name), "Node%d", index);
+	social_front_start(node->front, name, node->seed);
+	social_set_enabled(node->engine, 1);
+	memset(node->subscribed, 0, sizeof(node->subscribed));
+	node->subscribed_count = 0;
 }
 
 /* advances the network by ms in steps of 10: due messages are delivered (in time order), then every live machine has its pass */
@@ -301,13 +330,13 @@ static void fake_run(struct fake_net *net, unsigned int ms)
 			if (net->nodes[net->pending[best].node].alive)
 			{
 				net->delivered++;
-				social_heard(&net->nodes[net->pending[best].node].engine, net->pending[best].topic, net->pending[best].payload, net->pending[best].size);
+				social_front_heard(net->nodes[net->pending[best].node].front, net->pending[best].topic, net->pending[best].payload, net->pending[best].size);
 			}
 		}
 		for (index = 0; index < net->count; index++)
 		{
 			if (net->nodes[index].alive)
-				social_update(&net->nodes[index].engine);
+				social_front_tick(net->nodes[index].front);
 		}
 	}
 }

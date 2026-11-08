@@ -1305,6 +1305,27 @@ static const struct config_setting config_settings[] =
 		"Sentry project (port/windows/src/win32_crash.c): \"yes\" sends them, \"no\"\n"
 		"never does, \"ask\" asks at the next crash and writes the answer here." },
 
+	{ "social.enabled", _config_boolean, "false", "HALO_SOCIAL", _environment_value, _platform_all,
+		"Friends, invites and parties over the public MQTT brokers internet play uses\n"
+		"(port/linux/src/social_core.h): a friend code to give out and to type, a list of\n"
+		"up to 50 friends who show where they are, join and invite, a party of up to 8.\n"
+		"Off until it has been tried on the Wii U; a card file social.txt beside\n"
+		"config.toml (a 1 or a 0) overrides this. Needs network.online. Friends are only\n"
+		"found by those whose build has this and who share a broker (network.brokers_file)." },
+	{ "social.name", _config_string, "\"\"", "HALO_SOCIAL_NAME", _environment_value, _platform_all,
+		"The name friends see (11 letters, digits and punctuation); empty: the first\n"
+		"player's profile name, else PLAYER." },
+	{ "social.share_status", _config_boolean, "true", "HALO_SOCIAL_SHARE_STATUS", _environment_value, _platform_all,
+		"Friends see that you are online and where. false: you appear offline (you still\n"
+		"see them)." },
+	{ "social.share_details", _config_string, "\"basic\"", "HALO_SOCIAL_SHARE_DETAILS", _environment_value, _platform_all,
+		"How much friends see of what you are doing: \"none\" (only that you are online),\n"
+		"\"basic\" (the menus, a lobby or a game; the game's map, type and players too when\n"
+		"it can be joined) or \"full\" (map, type and players of any multiplayer game)." },
+	{ "social.requests", _config_boolean, "true", "HALO_SOCIAL_REQUESTS", _environment_value, _platform_all,
+		"Friend requests from people who typed your code are taken. false: none are (those\n"
+		"you sent still get their answers)." },
+
 	{ "debug.network_test", _config_string, "\"\"", "HALO_NETWORK_TEST", _environment_value, _platform_all,
 		"Automated system link sessions for testing (port/linux/game/network_test.c):\n"
 		"\"host:<map>\" hosts a game on that map, \"local:<map>\" plays a local (split\n"
@@ -2320,6 +2341,7 @@ static const struct
 	{ "streamer.swearing", { "off", "severe", "strong", "mild", NULL }, NULL },
 	{ "streamer.insults", { "off", "severe", "strong", "mild", NULL }, NULL },
 	{ "crash_reports.upload", { "ask", "yes", "no", NULL }, NULL },
+	{ "social.share_details", { "none", "basic", "full", NULL }, NULL },
 };
 
 #define NUMBER_OF_CONFIG_WORDS (sizeof(config_words) / sizeof(config_words[0]))

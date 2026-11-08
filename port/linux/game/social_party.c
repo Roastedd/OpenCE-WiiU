@@ -4,7 +4,7 @@ SOCIAL_PARTY.C
 Parties of up to eight over the brokers (social_core.h).
 */
 
-#include "p2p_internal.h"
+#include "../src/p2p_internal.h"
 #include "social_core.h"
 
 #include <string.h>

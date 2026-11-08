@@ -4,9 +4,9 @@ SOCIAL_CODEC.C
 The bytes of the friends layer (social_codec.h).
 */
 
-#include "p2p_internal.h"
+#include "../src/p2p_internal.h"
 #include "social_core.h"
-#include "../game/text_safe.h"
+#include "text_safe.h"
 
 #include <stdio.h>
 #include <string.h>
