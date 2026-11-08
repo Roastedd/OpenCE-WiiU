@@ -99,6 +99,9 @@ MODES.update({name: "host:levels\\test\\bloodgulch\\bloodgulch" for name in SPLI
 # the main menu and back: menu (the main menu alone, no network test), menu-cycle (from the main menu a game of one player on bloodgulch, the main menu
 # again 20 s in, as the pause menu's Quit goes, and so on: network_test.c's "solo:"), menu-campaign (the same with b30, 50 s in, past its opening
 # cinematic). Their --ticks is a count of frames (the menu has no game ticks), and their frames are not compared
+# local-slayer: Blood Gulch slayer as the game server of this machine's one player (a split screen game of one: the server connection with no remote machine, which
+# halo/net_overlap.txt 2 lets use the tick overlap; HALO_BOTS=N through GAME_DIGEST_ENV makes it a game with bots, and HALO_NETWORK_TEST_SHOOT / _KILL events in it)
+MODES["local-slayer"] = "local:bloodgulch"
 MODES.update({"menu": "", "menu-cycle": "solo:levels\\test\\bloodgulch\\bloodgulch", "menu-campaign": "solo:levels\\b30\\b30",
               "menu-solo": "solo:levels\\b30\\b30"})
 MENU_CUES = {"menu-cycle": "20 main_menu", "menu-campaign": "50 main_menu"}

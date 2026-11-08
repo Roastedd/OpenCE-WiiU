@@ -72,10 +72,21 @@ class SmoothDefaultsTests(unittest.TestCase):
             result = build_and_run((fixture, [mutated], flags))
             self.assertNotEqual(result.returncode, 0)
 
+    def test_a_governor_switched_on_in_a_network_game_is_detected(self):
+        fixture, sources, flags = SMOOTH
+        with tempfile.TemporaryDirectory(prefix='halo-smooth-fault-') as directory:
+            source = (ROOT / 'port/linux/game/smooth_defaults.c').read_text()
+            before = 'if (!reason && main_smooth_defaults_net_game())'
+            self.assertEqual(source.count(before), 1)
+            mutated = Path(directory) / 'smooth_defaults.c'
+            mutated.write_text(source.replace(before, 'if (0)', 1))
+            result = build_and_run((fixture, [mutated], flags))
+            self.assertNotEqual(result.returncode, 0)
+
     def test_a_rule_that_lets_co_op_or_a_host_in_on_a_client_setting_is_detected(self):
         fixture, sources, flags = SMOOTH
         for before, after in (('const int network_allowed = !map->coop && (', 'const int network_allowed = ('),
-                              ('map->connection == SMOOTH_CONNECTION_SERVER && !map->local_server && map->net_overlap >= 2', 'map->connection == SMOOTH_CONNECTION_SERVER && map->net_overlap >= 1')):
+                              ('map->connection == SMOOTH_CONNECTION_SERVER && map->net_overlap >= 2', 'map->connection == SMOOTH_CONNECTION_SERVER && map->net_overlap >= 1')):
             with self.subTest(before=before[:50]), tempfile.TemporaryDirectory(prefix='halo-smooth-fault-') as directory:
                 source = (ROOT / 'port/linux/game/smooth_defaults.c').read_text()
                 self.assertEqual(source.count(before), 1)

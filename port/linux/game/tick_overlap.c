@@ -136,6 +136,11 @@ static struct
 	boolean net_frame;
 	unsigned long net_frames, net_barriers, net_barrier_waits;
 	unsigned long long net_barrier_ticks, net_barrier_max_ticks;
+	/* how far behind the clock the picture of a network game's overlap frame is, in thousandths of a tick: the clock's place after the frame's ticks (the tick and the fraction of the next
+	the leftover brings) less the place of the pose drawn (the pair's earlier tick and the fraction blended). The serial loop's frame is one tick behind by the way it blends; this is the
+	overlap's two (more when the tick thread was late and the pair is held) */
+	unsigned long long net_age_sum;
+	unsigned long net_age_frames, net_age_max;
 	/* the numbers (the game thread's, but for the tick thread's, which it adds under the lock at a job's end) */
 	unsigned long long log_started_ticks;
 	unsigned long frames, overlap_frames, serial_frames, primed_frames, held_frames, no_pair_frames;
@@ -912,6 +917,16 @@ boolean tick_overlap_post_frame(
 			o.held_frames++;
 		}
 		tick_overlap_set_view(tick, fraction, ticks);
+		if (o.net_frame)
+		{
+			const real clock_fraction = PIN(leftover_after * speed * TICKS_PER_SECOND, 0.0f, 1.0f);
+			const long age = (long)(((double)(time_now + ticks) + (double)clock_fraction - ((double)(tick - 1) + (double)fraction)) * 1000.0);
+
+			o.net_age_sum += (unsigned long long)(age > 0 ? age : 0);
+			o.net_age_frames++;
+			if ((unsigned long)age > o.net_age_max)
+				o.net_age_max = (unsigned long)age;
+		}
 		if (!o.late_window_start)
 		{
 			o.late_window_start = tick_overlap_now();
@@ -1220,6 +1235,11 @@ void tick_overlap_log(
 		platform_log("tick overlap, network game: %lu overlapped frames, the drawing reached the barrier in %lu and waited for the tick thread in %lu (%.2f ms in all, most %.2f ms)",
 			o.net_frames, o.net_barriers, o.net_barrier_waits, (double)o.net_barrier_ticks / per_ms, (double)o.net_barrier_max_ticks / per_ms);
 	}
+	if (o.net_age_frames)
+	{
+		platform_log("tick overlap, network game: the picture %.2f ticks behind the clock on average (most %.2f; %.1f ms a tick at 30 a second; the serial loop's frames blend one tick behind: 1.00)",
+			(double)o.net_age_sum / 1000.0 / (double)o.net_age_frames, (double)o.net_age_max / 1000.0, 1000.0 / 30.0);
+	}
 	if (o.serial_waits)
 	{
 		platform_log("tick overlap, serial frames: the game thread waited %.2f ms a frame for the tick thread (%lu frames)",
@@ -1244,6 +1264,8 @@ void tick_overlap_log(
 	o.waits_long = o.serial_waits = o.active_frames = 0;
 	o.net_frames = o.net_barriers = o.net_barrier_waits = 0;
 	o.net_barrier_ticks = o.net_barrier_max_ticks = 0;
+	o.net_age_sum = 0;
+	o.net_age_frames = o.net_age_max = 0;
 	o.jobs = o.ticks = 0;
 	o.job_ticks = o.job_max_ticks = o.tick_work_ticks = 0;
 	o.ahead_sum = 0;

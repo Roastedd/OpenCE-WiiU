@@ -43,7 +43,8 @@ long wiiu_study_number(const char *name, long fallback)
 long tick_snapshot_card(void) { return snapshot_card; }
 long render_governor_card(void) { return governor_card; }
 char const *main_smooth_defaults_reason(void) { return reason_now; }
-int main_smooth_defaults_net_game(void) { return 0; }
+static int net_game_now;
+int main_smooth_defaults_net_game(void) { return net_game_now; }
 void tick_overlap_decide(int mid_map) { calls[0]++; calls[2] += mid_map; }
 void render_governor_decide(int map_ok, int on) { calls[1]++; last_governor_map_ok = map_ok; last_governor_on = on; }
 
@@ -213,7 +214,18 @@ static void test_network_maps(void)
 		CHECK(smooth_defaults_reason(&map) && strstr(smooth_defaults_reason(&map), "hosted"));
 		map.coop = 0;
 		map.local_server = 1;
+		/* (a server of this machine's players: the game with bots is one player and may be let in with 2; two or more players are split screen whatever the card says) */
+		CHECK((smooth_defaults_reason(&map) == NULL) == (net >= 2));
+		CHECK(net >= 2 || strstr(smooth_defaults_reason(&map), "split screen"));
+		map.spawn_players = 2;
 		CHECK(smooth_defaults_reason(&map) && strstr(smooth_defaults_reason(&map), "split screen"));
+		map.spawn_players = 1;
+		map.local_players = 2;
+		CHECK(smooth_defaults_reason(&map) && strstr(smooth_defaults_reason(&map), "split screen"));
+		map.local_players = 0;
+		map.coop = 1;
+		CHECK(smooth_defaults_reason(&map) && strstr(smooth_defaults_reason(&map), "split screen"));
+		map.coop = 0;
 		map = one_player();
 		map.net_overlap = (int)net;
 		map.connection = SMOOTH_CONNECTION_FILM;
@@ -282,6 +294,17 @@ static void test_decisions(void)
 	CHECK(smooth_defaults_value(SMOOTH_TICK_THREAD) == 1 && smooth_defaults_value(SMOOTH_TICK_SNAPSHOT) == 1 && smooth_defaults_value(SMOOTH_TICK_OVERLAP) == 1 && smooth_defaults_value(SMOOTH_GOVERNOR) == 1);
 	CHECK(strcmp(smooth_defaults_label(), "smooth defaults on") == 0);
 
+	/* a network game that the card lets in (the rule says NULL for it): the overlap's three on, the governor not */
+	reset_log();
+	reason_now = NULL;
+	net_game_now = 1;
+	smooth_defaults_new_map();
+	net_game_now = 0;
+	CHECK(smooth_defaults_map_ok());
+	CHECK(logged("a network game: halo/net_overlap.txt"));
+	CHECK(last_governor_on == 0);
+	CHECK(smooth_defaults_value(SMOOTH_TICK_THREAD) == 1 && smooth_defaults_value(SMOOTH_TICK_SNAPSHOT) == 1 && smooth_defaults_value(SMOOTH_TICK_OVERLAP) == 1 && smooth_defaults_value(SMOOTH_GOVERNOR) == 0);
+
 	/* the next map is a hosted game: everything off again, nothing left over */
 	reset_log();
 	reason_now = "a hosted network game";
@@ -300,7 +323,7 @@ static void test_decisions(void)
 	reason_now = NULL;
 	smooth_defaults_new_map();
 	CHECK(smooth_defaults_value(SMOOTH_TICK_OVERLAP) == 1 && smooth_defaults_value(SMOOTH_GOVERNOR) == 1);
-	CHECK(smooth_defaults_map_count() == 5);
+	CHECK(smooth_defaults_map_count() == 6);
 	/* a map that stops being one in the middle of it: decided again, with the owners' queues left as they are */
 	reset_log();
 	reason_now = "a network session is open (system link or internet)";

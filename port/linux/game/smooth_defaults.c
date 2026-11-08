@@ -85,9 +85,10 @@ void smooth_defaults_resolve(struct smooth_defaults *out, long const card[NUMBER
 
 char const *smooth_defaults_reason(struct smooth_defaults_map const *map)
 {
-	/* (halo/net_overlap.txt: a game joined as a client, and with 2 the host of one with remote machines, may use the overlap; never network co-op, nor a split screen's server) */
+	/* (halo/net_overlap.txt: a game joined as a client, and with 2 a game this machine hosts - with remote machines, or of its own players alone: a game with bots - may use the
+	overlap; never network co-op. A server of this machine's players is still split screen if there are two or more of them: the rule below) */
 	const int network_allowed = !map->coop && ((map->connection == SMOOTH_CONNECTION_CLIENT && map->net_overlap >= 1) ||
-		(map->connection == SMOOTH_CONNECTION_SERVER && !map->local_server && map->net_overlap >= 2));
+		(map->connection == SMOOTH_CONNECTION_SERVER && map->net_overlap >= 2));
 
 	if (map->main_menu)
 		return "the main menu's scene";
@@ -95,10 +96,12 @@ char const *smooth_defaults_reason(struct smooth_defaults_map const *map)
 		return "a saved film";
 	if (map->connection == SMOOTH_CONNECTION_SERVER)
 	{
-		if (map->local_server)
-			return "split screen (a game server of this machine's players)";
 		if (!network_allowed)
+		{
+			if (map->local_server)
+				return "split screen (a game server of this machine's players)";
 			return map->coop && map->net_overlap >= 2 ? "a hosted network co-op game" : "a hosted network game";
+		}
 	}
 	else if (map->connection == SMOOTH_CONNECTION_CLIENT)
 	{
@@ -189,6 +192,13 @@ static void decide(int mid_map)
 	cards_once();
 	reason = main_smooth_defaults_reason();
 	smooth_defaults_resolve(&decided, sd.now.card, reason, 1);
+	/* (a network game that halo/net_overlap.txt lets in gets the overlap, not the governor: the governor sheds what is drawn by the mean of the frames and was never tuned for a joined game,
+	where it would also confound the comparison of the overlap with the serial loop. Its own card file and its own study) */
+	if (!reason && main_smooth_defaults_net_game())
+	{
+		decided.value[SMOOTH_GOVERNOR] = 0;
+		decided.source[SMOOTH_GOVERNOR] = SMOOTH_SOURCE_MAP_OFF;
+	}
 	sd.now = decided;
 	sd.decided = 1;
 	sd.map_ok = reason == NULL;
