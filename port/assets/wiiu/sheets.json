@@ -1,0 +1,82 @@
+{
+ "comment": "Written by tools/wiiu_hud_sheets.py: smaller copies of the high-res HUD's largest sheets for the Wii U (tools/embed_assets.py --wiiu).",
+ "assets": [
+  {
+   "name": "hud_ammo_meters__0",
+   "how": "crop",
+   "source_width": 2048,
+   "source_height": 2048,
+   "blue_only_texels_dropped": 2621440,
+   "width": 2048,
+   "height": 768,
+   "source_sha256": "92e1963a35c06768d554e9e1ad7d0c1c5d2746f43b4e30707bf925716b7443a8"
+  },
+  {
+   "name": "hud_unit_meters__0",
+   "how": "crop",
+   "source_width": 2048,
+   "source_height": 2048,
+   "blue_only_texels_dropped": 2070441,
+   "width": 2048,
+   "height": 768,
+   "source_sha256": "9302debd73711b29d0f55c55e39a51b28a187499a9fae245b90957c8eef556b2"
+  },
+  {
+   "name": "hud_damage_arrows__0",
+   "how": "crop",
+   "source_width": 2048,
+   "source_height": 2048,
+   "blue_only_texels_dropped": 0,
+   "width": 2048,
+   "height": 576,
+   "source_sha256": "829dac4855828893c6f7e8c7ae6fdf47e47dbcd1ab30254efe5b5173aa7b6ed1"
+  },
+  {
+   "name": "ce_hud_ammo_meters",
+   "how": "crop",
+   "source_width": 2048,
+   "source_height": 2048,
+   "blue_only_texels_dropped": 0,
+   "width": 2048,
+   "height": 704,
+   "source_sha256": "d0ea3e4546ee029dca2cdc1e403834ea55c47d6e38ec3a69c45255abc7e167f8"
+  },
+  {
+   "name": "ce_hud_unit_meters",
+   "how": "crop",
+   "source_width": 2048,
+   "source_height": 2048,
+   "blue_only_texels_dropped": 0,
+   "width": 2048,
+   "height": 1088,
+   "source_sha256": "0c296d156223d80248141682201e69d0cf8270d87259fa9854034239136c9df5"
+  },
+  {
+   "name": "pistol__pistol_scope_mask__0",
+   "how": "shrink",
+   "source_width": 2048,
+   "source_height": 2048,
+   "width": 1024,
+   "height": 1024,
+   "source_sha256": "eabda32ebf946eaa8c77ddb0e04070bbe0caaae3f2770b48f2bb2f98706e65a7"
+  },
+  {
+   "name": "pistol__pistol_scope_mask_split__0",
+   "how": "shrink",
+   "source_width": 2048,
+   "source_height": 2048,
+   "width": 1024,
+   "height": 1024,
+   "source_sha256": "ff9b3dd079bb401809afc7a65f20616d750d3dc4acf366a5cff7c0ec77a23ea4"
+  },
+  {
+   "name": "sniper__sniper_scope_mask_sm__0",
+   "how": "shrink",
+   "source_width": 2048,
+   "source_height": 2048,
+   "width": 1024,
+   "height": 1024,
+   "source_sha256": "a966474838f23a7e9f03f739a0073a4b6823f1c5bae72f58ed92a8b883d0f175"
+  }
+ ]
+}
