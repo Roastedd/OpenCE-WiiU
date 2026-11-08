@@ -81,30 +81,41 @@ static const struct
 	byte type;
 	const char *name;
 	const char *entry;
+	short count;
 } messages[] = {
-	{ _distributed_message_player_statistics, "player_statistics", "distributed_player_statistics" },
-	{ _distributed_message_pings, "pings", "distributed_player_ping" },
-	{ _distributed_message_structure_bsp, "structure_bsp", "distributed_structure_bsp" },
-	{ _distributed_message_pickups, "pickups", "distributed_pickup" },
-	{ _distributed_message_player_inputs, "player_inputs", "distributed_player_input" },
-	{ _distributed_message_object_changes, "object_changes", "distributed_object_change" },
-	{ _distributed_message_object_states, "object_states", "distributed_object_state" },
-	{ _distributed_message_vehicle_prediction, "vehicle_prediction", "distributed_object_state" },
-	{ _distributed_message_inventories, "inventories", "distributed_inventory" },
-	{ _distributed_message_damage_animations, "damage_animations", "distributed_damage_animation" },
-	{ _distributed_message_damage_events, "damage_events", "distributed_damage_event" },
-	{ _distributed_message_hit_reports, "hit_reports", "distributed_hit_report" },
-	{ _distributed_message_fire_origins, "fire_origins", "distributed_fire_origin" },
-	{ _distributed_message_actor_states, "actor_states", "distributed_actor_state" },
-	{ _distributed_message_actor_damage, "actor_damage", "distributed_actor_damage" },
-	{ _distributed_message_coop_presentation, "coop_presentation", "distributed_coop_presentation" },
-	{ _distributed_message_coop_events, "coop_events", "distributed_coop_event" },
-	{ _distributed_message_coop_device_groups, "coop_device_groups", "distributed_coop_device_group" },
-	{ _distributed_message_coop_object_names, "coop_object_names", "distributed_coop_object_names" },
-	{ _distributed_message_coop_object_transforms, "coop_object_transforms", "distributed_coop_object_transform" },
-	{ _distributed_message_coop_object_looks, "coop_object_looks", "distributed_coop_object_look" },
-	{ _distributed_message_coop_screen_effect, "coop_screen_effect", "rasterizer_screen_effect_port_state" },
-	{ _distributed_message_coop_device_states, "coop_device_states", "distributed_coop_device_state" },
+	{ _distributed_message_player_statistics, "player_statistics", "distributed_player_statistics", 0 },
+	{ _distributed_message_pings, "pings", "distributed_player_ping", 0 },
+	{ _distributed_message_structure_bsp, "structure_bsp", "distributed_structure_bsp", 0 },
+	{ _distributed_message_pickups, "pickups", "distributed_pickup", 0 },
+	{ _distributed_message_player_inputs, "player_inputs", "distributed_player_input", 0 },
+	{ _distributed_message_object_changes, "object_changes", "distributed_object_change", 0 },
+	{ _distributed_message_object_states, "object_states", "distributed_object_state", 0 },
+	{ _distributed_message_vehicle_prediction, "vehicle_prediction", "distributed_object_state", 0 },
+	{ _distributed_message_inventories, "inventories", "distributed_inventory", 0 },
+	{ _distributed_message_damage_animations, "damage_animations", "distributed_damage_animation", 0 },
+	{ _distributed_message_damage_events, "damage_events", "distributed_damage_event", 0 },
+	{ _distributed_message_hit_reports, "hit_reports", "distributed_hit_report", 0 },
+	{ _distributed_message_fire_origins, "fire_origins", "distributed_fire_origin", 0 },
+	{ _distributed_message_actor_states, "actor_states", "distributed_actor_state", 0 },
+	{ _distributed_message_actor_damage, "actor_damage", "distributed_actor_damage", 0 },
+	{ _distributed_message_coop_presentation, "coop_presentation", "distributed_coop_presentation", 0 },
+	{ _distributed_message_coop_events, "coop_events", "distributed_coop_event", 0 },
+	{ _distributed_message_coop_device_groups, "coop_device_groups", "distributed_coop_device_group", 0 },
+	{ _distributed_message_coop_object_names, "coop_object_names", "distributed_coop_object_names", 0 },
+	{ _distributed_message_coop_object_transforms, "coop_object_transforms", "distributed_coop_object_transform", 0 },
+	{ _distributed_message_coop_object_looks, "coop_object_looks", "distributed_coop_object_look", 0 },
+	{ _distributed_message_coop_screen_effect, "coop_screen_effect", "rasterizer_screen_effect_port_state", 0 },
+	{ _distributed_message_coop_device_states, "coop_device_states", "distributed_coop_device_state", 0 },
+	/* messages of bytes, which the wire step must leave as they are (the header's game time alone is turned) */
+	{ _distributed_message_chat_up, "chat_up", "distributed_chat_line", 1 },
+	{ _distributed_message_chat_down, "chat_down", "distributed_chat_line", 1 },
+	{ _distributed_message_chat_config, "chat_config", "distributed_chat_config", 1 },
+	{ _distributed_message_votekick, "votekick", "distributed_votekick_request", 1 },
+	{ _distributed_message_votekick_status, "votekick_status", "distributed_votekick_status", 1 },
+	{ _distributed_message_map_vote_choice, "map_vote_choice", "distributed_map_vote_choice", 1 },
+	{ _distributed_message_client_identity, "client_identity", "distributed_client_identity", 1 },
+	{ _distributed_message_client_build, "client_build", "distributed_client_build", 1 },
+	{ _distributed_message_coop_skip_vote, "coop_skip_vote", "distributed_coop_skip_vote", 1 },
 };
 
 static unsigned char native_message[8 + 3 * 2048];
@@ -441,7 +452,7 @@ int main(int argc, char **argv)
 			XPLAY_CHECK(0, "no layout for %s", messages[index].entry);
 			continue;
 		}
-		test_entries(messages[index].type, messages[index].name, entry, 2);
+		test_entries(messages[index].type, messages[index].name, entry, messages[index].count ? messages[index].count : 2);
 	}
 	test_unit_state();
 	test_relayed_action();
