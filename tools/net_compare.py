@@ -104,6 +104,9 @@ TOLERANCES = {
     # (fewer ticks compared than this is an error: the client's player
     # never on foot, or the two not paired)
     "drift_samples": 300,
+    # ticks apart two machines' per-second lines may be to be paired (each logs the first frame a second on: a machine drawing slowly, at three ticks a frame, logs up to two
+    # ticks late, and its lines slip against the other's: the Wii U digest's program under qemu, tools/harness/netoverlap_two_machines.sh, raises it)
+    "pair_ticks": 2,
 }
 
 LOG_PREFIX = "network test: tick "
@@ -225,7 +228,7 @@ def distance(a, b):
     return math.sqrt(sum((p - q) ** 2 for p, q in zip(a, b)))
 
 
-def pair_ticks(host, client):
+def pair_ticks(host, client, limit=2):
     """[(host tick, client tick)] of the seconds both logged, the client's
     nearest within two ticks (each logs the first frame a second on)"""
     pairs = []
@@ -233,7 +236,7 @@ def pair_ticks(host, client):
     for tick in sorted(host):
         best = None
         for other in client_ticks:
-            if abs(other - tick) <= 2 and (best is None or abs(other - tick) < abs(best - tick)):
+            if abs(other - tick) <= limit and (best is None or abs(other - tick) < abs(best - tick)):
                 best = other
         if best is not None:
             pairs.append((tick, best))
@@ -264,7 +267,7 @@ def compare_pair(host, client, tolerances, skip_seconds):
     figures = {"seconds": 0, "position_max": 0.0, "position_sum": 0.0, "position_count": 0,
                "aim_max": 0.0, "mismatches": {}}
     streaks = Streaks()
-    pairs = pair_ticks(host, client)
+    pairs = pair_ticks(host, client, tolerances.get("pair_ticks", 2))
     figures["tick_offsets"] = sorted({c - h for h, c in pairs})
     for host_tick, client_tick in pairs:
         if host_tick < skip_seconds * TICKS_PER_SECOND:

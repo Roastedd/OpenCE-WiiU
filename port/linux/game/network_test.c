@@ -1338,7 +1338,9 @@ void network_test_update(
 		network_test_run_cues();
 	if (game_in_progress() && !main_menu_loaded && game_time_get() - network_test.logged_time >= network_test.log_ticks)
 	{
-		network_test.logged_time = game_time_get();
+		/* (the next line is due at the next multiple of the interval, not an interval after this one: a machine whose frames carry several ticks logs a few ticks after the multiple, and its
+		lines do not slip away from the other machine's, which tools/net_compare.py pairs them with) */
+		network_test.logged_time = network_test.log_ticks > 1 ? game_time_get() - game_time_get() % network_test.log_ticks : game_time_get();
 		network_test_log_players();
 		if ((network_test.mode == _network_test_log || network_test.mode == _network_test_solo) && config_string("debug.test_input")[0])
 			network_test_log_scene();
