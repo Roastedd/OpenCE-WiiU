@@ -115,6 +115,17 @@ def _game_flags(target):
 
 
 @functools.lru_cache(maxsize=None)
+def _platform_semantics_header():
+    """platform_msvc_semantics.h: the same for the platform layer, which includes the SDK declarations alone"""
+    path = Path(_directory.name) / "platform_msvc_semantics.h"
+    command = [sys.executable, "tools/linux_msvc_semantics.py", "--output", str(path), "--inlines", "port/include/xdk"]
+    result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError("linux_msvc_semantics.py failed:\n" + result.stderr)
+    return path
+
+
+@functools.lru_cache(maxsize=None)
 def _semantics_header():
     """halo_msvc_semantics.h, as the build generates it (the same for both byte orders)"""
     path = Path(_directory.name) / "halo_msvc_semantics.h"
@@ -126,8 +137,23 @@ def _semantics_header():
     return path
 
 
-def _compile(target, source, output, extra=(), first=()):
-    command = [target.cc, *first, *_game_flags(target), "-O1", *extra, "-c", str(source), "-o", str(output)]
+def _platform_flags(target):
+    """the flags the Linux build compiles the platform layer's units (port/linux/src) with"""
+    import tools.linux_build as build
+
+    flags = _game_flags(target)
+    # (the same ABI, the platform layer's language and includes in the game's place)
+    abi = flags[:flags.index("-std=gnu89")]
+    return [*abi, *build.PLATFORM_FLAGS, "-include", "port/linux/include/halo_linux_prefix.h", "-include",
+            str(_platform_semantics_header()), "-Iport/linux/src",
+            "-Iport/linux/include", "-Iport/third_party/tomlc17", "-Iport/third_party/expat", "-Iport/third_party/kcp",
+            "-Iport/third_party/monocypher", "-Iport/third_party/zlib", "-Isource", "-Isource/cseries", "-idirafter",
+            "port/include/xdk"]
+
+
+def _compile(target, source, output, extra=(), first=(), platform=False):
+    command = [target.cc, *first, *(_platform_flags(target) if platform else _game_flags(target)), "-O1", *extra, "-c",
+               str(source), "-o", str(output)]
     result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
     if result.returncode:
         raise RuntimeError(f"{source} does not compile for {target.name}:\n{result.stderr[-4000:]}")
@@ -149,29 +175,33 @@ def _mutated(mutations):
 
 
 @functools.lru_cache(maxsize=None)
-def _unit(target_name, source, mutations=()):
+def _unit(target_name, source, mutations=(), platform=False):
     """a game source file compiled once for a leg (with its mutation, if it has one in mutations)"""
     target = leg(target_name)
     output = Path(_directory.name) / f"{target_name}-{Path(source).stem}-{abs(hash((source, mutations))):x}.o"
     if any(path == source for path, _, _ in mutations):
         folder = _mutated(mutations)
-        _compile(target, folder / Path(source).name, output, first=["-iquote", str(ROOT / Path(source).parent)])
+        _compile(target, folder / Path(source).name, output, first=["-iquote", str(ROOT / Path(source).parent)],
+                 platform=platform)
     else:
-        _compile(target, ROOT / source, output)
+        _compile(target, ROOT / source, output, platform=platform)
     return output
 
 
 @functools.lru_cache(maxsize=None)
-def build(driver, target_name, units=(), defines=(), mutations=()):
+def build(driver, target_name, units=(), defines=(), mutations=(), platform=False):
     """tests/<driver>.c, which includes the units it tests, and the other game source files in units linked in, for a leg"""
     target = leg(target_name)
     work = Path(_directory.name)
     tag = abs(hash((units, defines, mutations)))
     executable = work / f"{driver}-{target_name}-{tag:x}"
-    objects = [_unit(target_name, unit, mutations) for unit in units]
+    # (units under port/linux/src and port/third_party are the platform layer's, built as it is)
+    objects = [_unit(target_name, unit, mutations, unit.startswith(("port/linux/src/", "port/third_party/")))
+               for unit in units]
     driver_object = work / f"{driver}-{target_name}-{tag:x}.o"
     first = ["-iquote", str(_mutated(mutations))] if mutations else []
-    _compile(target, TESTS / f"{driver}.c", driver_object, [f"-I{TESTS}", f"-I{HARNESS_INCLUDE}", *defines], first)
+    _compile(target, TESTS / f"{driver}.c", driver_object, [f"-I{TESTS}", f"-I{HARNESS_INCLUDE}", *defines], first,
+             platform=platform)
     link = [target.cc, *target.target_flags, str(driver_object), *map(str, objects), "-o", str(executable), "-lm",
             "--error-limit=0" if False else "-Wl,--error-limit=0"]
     result = subprocess.run(link, cwd=ROOT, capture_output=True, text=True)
@@ -237,3 +267,35 @@ def check_layouts(target_name, source, inc):
     output = Path(_directory.name) / f"check-{target_name}-{Path(inc).stem}.o"
     _compile(target, TESTS / "xplay_layout_check.c", output,
              [f"-I{TESTS}", f"-DXPLAY_MODULE_SOURCE=\"{Path(source).name}\"", f"-DXPLAY_MODULE_INC=\"{inc}\""])
+
+
+def vectors_include():
+    """a folder with xplay_vectors.inc, made from the master protocol's test vectors (tests/master_vectors.json): the host-signed
+    listings and the master's signed list that tests/xplay_p2p.c reads on each byte order"""
+    import json
+
+    folder = Path(_directory.name) / "vectors"
+    folder.mkdir(exist_ok=True)
+    vectors = json.loads((TESTS / "master_vectors.json").read_text())
+
+    def string(text):
+        return json.dumps(text)
+
+    lines = ["struct xplay_vector_listing { const char *hex; int version, flags; unsigned long sequence, time; int players, "
+             "max_players, engine, kind, valid; const char *name, *map, *gametype; };",
+             "static const struct xplay_vector_listing xplay_vector_listings[] = {"]
+    for listing in vectors["listings"]:
+        lines.append(f"\t{{ {string(listing['bytes'])}, {listing['network_version']}, {listing['flags']}, {listing['sequence']}UL, "
+                     f"{listing['time']}UL, {listing['players']}, {listing['max_players']}, {listing['engine']}, "
+                     f"{listing['kind']}, {1 if listing['valid'] else 0}, {string(listing['name'])}, {string(listing['map'])}, "
+                     f"{string(listing['gametype'])} }},")
+    lines.append("};")
+    lines.append(f"#define XPLAY_VECTOR_LISTING_COUNT {len(vectors['listings'])}")
+    master = vectors["master"]["public_key"].split(":")[1]
+    lines.append(f"static const char xplay_vector_master_key[] = {string(master)};")
+    lines.append(f"static const char xplay_vector_list_body[] = {string(vectors['list']['body'])};")
+    lines.append(f"static const char xplay_vector_list_signature[] = {string(vectors['list']['signature_header'])};")
+    lines.append(f"static const char xplay_vector_list_key_id[] = {string(vectors['list']['signature_key_header'])};")
+    lines.append(f"static const unsigned long xplay_vector_list_time = {vectors['list']['signature_time_header']}UL;")
+    (folder / "xplay_vectors.inc").write_text("\n".join(lines) + "\n")
+    return folder
