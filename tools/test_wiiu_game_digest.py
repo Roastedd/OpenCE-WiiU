@@ -696,6 +696,45 @@ class BlendReuseTest(unittest.TestCase):
                 self.assertEqual(max(taken(outs[8]) or [0.0]), 0.0, "the run with the reuse off took a blend from an earlier frame")
 
 
+@unittest.skipUnless(os.environ.get("GAME_DIGEST_PACING"), "the display-clock stamp's seam: GAME_DIGEST_PACING=1 (and Docker's opence-ppc-be image, data-be's maps; runs of 400 ticks in both loops)")
+class PacingStampSeamTest(unittest.TestCase):
+    """The display-clock stamp (halo/pacing_stamp.txt, wiiu_pacing.h) moves only the fraction between two ticks, at one place (render_interpolation.c's render_interpolation_stamp_hook), and
+    only when the console's glue sets the hook. The frames of 16.667 ms (two a tick), Blood Gulch as a game of one player in the plain loop and the tick overlap, the tick thread serialised.
+    Pass: (1) with no hook set, a build with the seam draws every frame as the build before it (GAME_DIGEST_PACING_BASE, 1b3e0dcb: the digests are those of the netoverlap branch); (2) a hook
+    that moves nothing (HALO_PACING_STAMP_TEST_MS=0) changes no frame either; (3) a move of 8 or -8 ms changes the frames (the seam is the picture's time), and the run says how many of its
+    pictures it moved (the move is clamped to the tick pair and never takes the picture back in time: tools/test_wiiu_pacing.py checks that on its own)."""
+
+    FRAMES = {"HALO_TICK_FRAME_MS": "16.667", "HALO_FIXED_STEP": "0", "HALO_HUD_SHEETS": "0", "HALO_TICK_OVERLAP_SERIALIZE": "1"}
+
+    def play(self, program, name, loop, **more):
+        extra = dict(self.FRAMES, **more)
+        if loop == "plain":
+            extra.update(PLAIN)
+        return start(program, name, int(os.environ.get("GAME_DIGEST_PACING_TICKS", "400")), mode="solo-bloodgulch", extra=extra)
+
+    def test_the_seam_changes_nothing_until_a_hook_moves_the_picture(self):
+        here = build()
+        base = build("pacing-base", os.environ.get("GAME_DIGEST_PACING_BASE", "1b3e0dcb"))
+        runs = {}
+        for loop in ("plain", "overlap"):
+            runs[(loop, "base")] = self.play(base, f"pacing-base-{loop}", loop)
+            runs[(loop, "here")] = self.play(here, f"pacing-here-{loop}", loop)
+            for ms in ("0", "8", "-8"):
+                runs[(loop, ms)] = self.play(here, f"pacing-seam{ms}-{loop}", loop, HALO_PACING_STAMP_TEST_MS=ms)
+        outs = {}
+        for key, (process, out) in runs.items():
+            finish(process, out)
+            outs[key] = out
+        with open(os.devnull, "w") as quiet:
+            for loop in ("plain", "overlap"):
+                self.assertEqual(digest_compare.compare(outs[(loop, "base")], outs[(loop, "here")], out=quiet), 0, f"{loop}: the seam with no hook changed a frame")
+                self.assertEqual(digest_compare.compare(outs[(loop, "base")], outs[(loop, "0")], out=quiet), 0, f"{loop}: a hook that moves nothing changed a frame")
+                for ms in ("8", "-8"):
+                    self.assertNotEqual(digest_compare.compare(outs[(loop, "base")], outs[(loop, ms)], out=quiet), 0, f"{loop}: a move of {ms} ms changed no frame (the seam is not the picture's time)")
+                    report = (outs[(loop, ms)] / "stderr.txt").read_text(errors="replace")
+                    self.assertRegex(report, rf"pacing stamp seam: \d+ pictures moved by {ms} ms")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter,
                                      epilog=__doc__.split("\n\n", 1)[1])

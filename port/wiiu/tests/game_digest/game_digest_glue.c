@@ -24,6 +24,9 @@ runs/host-mac-perf-20261031/ticks/baseline-ppc-runtime.txt's.
 */
 
 #include "replay.h"
+#ifdef GAME_DIGEST_PACING_STAMP
+#include "wiiu_pacing.h"
+#endif
 
 #include <errno.h>
 #include <pthread.h>
@@ -386,6 +389,10 @@ static void random_frame(unsigned long frame, long tick)
 
 static void detail_flush(void);
 
+#ifdef GAME_DIGEST_PACING_STAMP
+void game_digest_stamp_report(void);
+#endif
+
 static void sink_summary(const char *how)
 {
 	FILE *summary;
@@ -406,6 +413,9 @@ static void sink_summary(const char *how)
 	if (random_log.file)
 		fflush(random_log.file);
 	detail_flush();
+#ifdef GAME_DIGEST_PACING_STAMP
+	game_digest_stamp_report();
+#endif
 	fprintf(stderr, "game digest: %lu frames (%lu of the game), game digest %016llx (%s)\n", sink.frame_count, sink.game_frames,
 		(unsigned long long)sink.game_hash, how);
 }
@@ -1164,6 +1174,45 @@ long long wiiu_microseconds_now(void)
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	return (long long)now.tv_sec * 1000000 + now.tv_nsec / 1000;
 }
+
+#ifdef GAME_DIGEST_PACING_STAMP
+/* The display-clock stamp's seam (render_interpolation.c's render_interpolation_stamp_hook, which wiiu_gx2.c sets when halo/pacing_stamp.txt asks): with HALO_PACING_STAMP_TEST_MS in the
+environment the picture's time is moved by that many ms with wiiu_pacing.c's wiiu_stamp_picture, as halo/pacing_stamp.txt 3 does on the console. Without it no hook is set and the
+frames are the ones of a build with no stamp at all. (Built only where wiiu_pacing.c has the stamp, GAME_DIGEST_PACING_STAMP: build.py; the hook is weak for a tree that has the stamp and not the seam.) */
+extern float (*render_interpolation_stamp_hook)(long tick, float fraction) __attribute__((weak));
+static struct wiiu_stamp glue_stamp;
+static double glue_stamp_ms;
+
+static unsigned glue_stamp_frames;
+
+static float glue_stamp_picture(long tick, float fraction)
+{
+	const double drawn = wiiu_stamp_picture(&glue_stamp, tick, (double)fraction, glue_stamp_ms, 0);
+
+	glue_stamp_frames++;
+	return (float)drawn;
+}
+
+/* (at the end: how many pictures the seam moved, and how many it had to hold back, clamp to the tick pair, or keep from going back in time: with a steady move none should go back) */
+void game_digest_stamp_report(void)
+{
+	if (glue_stamp_frames)
+		fprintf(stderr, "pacing stamp seam: %u pictures moved by %g ms, %u held, %u clamped to the pair, %u kept from going back\n", glue_stamp_frames, glue_stamp_ms, glue_stamp.window_held,
+			glue_stamp.window_clamped, glue_stamp.window_backward);
+}
+
+__attribute__((constructor)) static void glue_stamp_install(void)
+{
+	const char *ms = getenv("HALO_PACING_STAMP_TEST_MS");
+
+	if (ms && *ms && &render_interpolation_stamp_hook)
+	{
+		wiiu_stamp_reset(&glue_stamp, 3, 0.0);
+		glue_stamp_ms = atof(ms);
+		render_interpolation_stamp_hook = glue_stamp_picture;
+	}
+}
+#endif
 
 /* wiiu_study.c: a study switch's number from a file on the card; here from the environment (tick_thread.txt: HALO_TICK_THREAD,
 tick_overlap.txt: HALO_TICK_OVERLAP, startup.txt: HALO_STARTUP, stream.txt: HALO_STREAM, hotpaths.txt: HALO_HOTPATHS), so that a run can have the ticks on a thread of their own, and overlapped */

@@ -129,6 +129,8 @@ enum
 	/* the frames come 30 a second (display.interpolation false), not 60: a
 	frame has twice the time */
 	DK_PRESENT_THIRTY = 1 << 1,
+	/* the swap is held for two refreshes (a swap interval of 2: halo/pacing_lock.txt's locked 30, wiiu_pacing.h) */
+	DK_PRESENT_LOCK30 = 1 << 2,
 };
 
 struct dk_command_present
@@ -138,6 +140,8 @@ struct dk_command_present
 	uint32_t screenshot;
 	uint32_t gamepad[4];
 	uint32_t flags;
+	/* the display-clock stamp's number for the frame (wiiu_pacing.h, halo/pacing_stamp.txt), 0 if it was not begun */
+	uint32_t stamp_sequence;
 };
 
 /* ---------- draws (DEKO3D.md, phase 6)

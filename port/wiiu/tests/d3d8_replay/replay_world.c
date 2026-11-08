@@ -260,6 +260,22 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 	(void)now_ms;
 }
 
+/* wiiu_keyboard.c's (the touch keyboard on the GamePad): never shown here */
+void wiiu_keyboard_prewarm(void)
+{
+}
+
+int wiiu_keyboard_shown(void)
+{
+	return 0;
+}
+
+/* tick_overlap.c's: the game thread's waits for the tick thread (the locked 30's rule subtracts them from a frame's work); there is no tick thread here */
+double tick_overlap_wait_ms_total(void)
+{
+	return 0.0;
+}
+
 /* wiiu_map_summary.c: the time between two presents, for the log's note at the end of a map; the replay's game has no maps */
 void wiiu_map_summary_frame(double frame_ms)
 {

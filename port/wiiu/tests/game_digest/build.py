@@ -196,11 +196,14 @@ def generate(build_dir: Path, poison: bool = False, wiiu_input: bool = False) ->
         # (the input layer's own time functions: the stand-in coreinit/time.h)
         stand_ins = [f"-I{HERE}/stand_in"] if wiiu_input and unit in INPUT_LAYER_UNITS else []
         n.build(out, "digest_cc", unit, implicit=[semantics], variables={"cflags": " ".join(target + LAYER_FLAGS + stand_ins + includes + renames)})
+    # (the display-clock stamp's seam in the glue, if the tree being built has the stamp: a build of an earlier commit with this folder over it has not)
+    stamp_units = ["port/wiiu/src/wiiu_pacing.c"] if "wiiu_stamp_reset" in Path("port/wiiu/src/wiiu_pacing.c").read_text() else []
     for unit in [REPLAY / "replay_gx2.c", HERE / "game_digest_glue.c"]:
         out = obj / Path(unit).with_suffix(".o")
         extra.append(out.as_posix())
         poisoned = [f"-DGAME_DIGEST_POISON={POISON_PADDING}"] if poison and unit.name == "game_digest_glue.c" else []
         poisoned += ["-DGAME_DIGEST_WIIU_INPUT"] if wiiu_input and unit.name == "game_digest_glue.c" else []
+        poisoned += ["-DGAME_DIGEST_PACING_STAMP"] if stamp_units and unit.name == "game_digest_glue.c" else []
         n.build(out, "digest_cc", str(unit), implicit=[semantics, decals],
                 variables={"cflags": " ".join(target + LAYER_FLAGS + includes + poisoned)})
     # the scene (game_digest_scene.c): a unit of the game's own flags and headers, which makes objects in front of a fixed camera when GAME_DIGEST_SCENE says so
@@ -213,7 +216,7 @@ def generate(build_dir: Path, poison: bool = False, wiiu_input: bool = False) ->
     extra.append(sweep.as_posix())
     n.build(sweep, "linux_cc", str(HERE / "game_digest_sweep.c"), implicit=[semantics, build_dir / "linux-ppc" / "halo_msvc_semantics.h"],
             variables=dict(n.game_variables))
-    for unit in HOST_UNITS + (INPUT_HOST_UNITS if wiiu_input else []):
+    for unit in HOST_UNITS + stamp_units + (INPUT_HOST_UNITS if wiiu_input else []):
         out = obj / Path(unit).with_suffix(".o")
         extra.append(out.as_posix())
         n.build(out, "digest_cc", unit, variables={"cflags": " ".join(target + HOST_FLAGS + [f"-I{WIIU_SRC}", "-Iport/linux/src"])})

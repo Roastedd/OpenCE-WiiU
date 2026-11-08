@@ -802,6 +802,10 @@ static void run_stream(const unsigned char *at, const unsigned char *end);
 static void gx_gate(void);
 static void gt_log(unsigned frames);
 static void gpu_poll(void);
+static void pacing_glue_init(void);
+static void pacing_glue_swap(unsigned sequence, OSTime swap_time, unsigned swaps);
+static void pacing_glue_flips(OSTime last_flip, unsigned flips);
+static void pacing_glue_log(void);
 static void gpu_frame_begin(void);
 static int overlay_make(void);
 static const char *overlay_mode_name(int mode);
@@ -2878,10 +2882,11 @@ static int initialize(void)
 		wiiu_pacing_reset(&gx.pace_stats);
 		if (wiiu_pacing_parse(&gx.pace, text) && gx.pace.mode)
 			wiiu_log("GX2: frame pacing (halo/pacing.txt): %s, at most %u swaps wait for their flip", gx.pace.mode == 1 ? "tear when late (the swap does not wait for the vsync when the frame is late)" :
-				"never wait for the vsync (frames held to a refresh each at the fastest)", gx.pace.depth);
+				gx.pace.mode == 2 ? "never wait for the vsync (frames held to a refresh each at the fastest)" : "a deeper queue (every swap waits for the vsync, as before; the game thread may get further ahead)", gx.pace.depth);
 		else
 			wiiu_log("GX2: frame pacing (halo/pacing.txt): off, every swap waits for the vsync%s", config_boolean("display.vsync") ? "" : " (display.vsync is false: it does not)");
 	}
+	pacing_glue_init();
 	gx.panel_made = panel_make();
 	if (!gx.panel_made)
 		wiiu_log("GX2: no memory for the updater's panel: it is not drawn");
@@ -4657,6 +4662,223 @@ static void perf_windows(OSTime now)
 }
 
 /* (port/linux/game/graphics_quality.c's: whether the split screen's views hold the frames to 30 a second, for the overlay's 30HZ) */
+/* ---------- the display-clock stamp and the locked 30 (wiiu_pacing.h; halo/pacing_stamp.txt, halo/pacing_lock.txt)
+
+Both are off with no card file: no hook is set and the game runs as before. The stamp's state is shared by the game thread (which begins a frame and moves its picture's time)
+and the GX2 thread (which tells it when each swap was made and when the display flipped); neither ever waits for the other: a thread that finds the state taken skips its turn
+(a lost note is a frame not scored; a lost begin is a picture not moved). The locked 30's rule is the game thread's alone; its decision reaches the GX2 thread in the frame's
+present command (DK_PRESENT_LOCK30). */
+
+extern float (*render_interpolation_stamp_hook)(long tick, float fraction);
+extern void (*main_frame_mark_hook)(void);
+extern void (*d3d8_pacing_present_hook)(unsigned *flags, unsigned *stamp_sequence);
+extern void (*d3d8_pacing_frame_hook)(double cpu_ms, double now_ms);
+
+static struct
+{
+	volatile int busy;
+	int stamp_on;
+	struct wiiu_stamp stamp;
+	double mark_ms;
+	int marked;
+	long last_tick;
+	unsigned pending_sequence;
+	double frame_move; /* the move this frame was given, for the second asker of the same frame (the serial loop's game_frame asks before the drawing does) */
+	int frame_valid;
+	unsigned long skipped;
+	int lock_on;
+	struct wiiu_lock30 lock;
+	volatile int lock_locked;
+	double lock_log_ms;
+} pg;
+
+static int pg_enter(void)
+{
+	return !__atomic_exchange_n(&pg.busy, 1, __ATOMIC_ACQUIRE);
+}
+
+static void pg_leave(void)
+{
+	__atomic_store_n(&pg.busy, 0, __ATOMIC_RELEASE);
+}
+
+static double pg_ms(OSTime t)
+{
+	return (double)OSTicksToMicroseconds((int64_t)t) / 1000.0;
+}
+
+/* (game thread) the frame's clock step is being taken */
+static void pg_mark(void)
+{
+	pg.mark_ms = pg_ms(OSGetSystemTime());
+	pg.marked = 1;
+	pg.frame_valid = 0;
+}
+
+/* (game thread) the fraction the picture is drawn at: the clock's, moved by the stamp */
+static float pg_fraction(long tick, float fraction)
+{
+	unsigned sequence = 0, klass;
+	double move, start;
+
+	if (pg.lock_on && tick < pg.last_tick - 30)
+	{
+		/* (the ticks' count went back: a new map, whose first seconds the locked 30's rule leaves alone) */
+		wiiu_lock30_reset(&pg.lock, &pg.lock.set, pg.mark_ms);
+		pg.lock_locked = pg.lock.locked;
+	}
+	if (!pg.stamp_on)
+	{
+		pg.last_tick = tick;
+		return fraction;
+	}
+	if (pg.frame_valid)
+	{
+		/* (the same frame asking again: the serial loop's game_frame, whose effects and widgets hang off the objects, asks for the fraction before the drawing does; both get the same move) */
+		move = pg.frame_move;
+		pg.last_tick = tick;
+		if ((pg.stamp.mode != 1 && pg.stamp.mode != 3) || !pg_enter())
+			return fraction;
+		fraction = (float)wiiu_stamp_picture(&pg.stamp, tick, (double)fraction, move, 0);
+		pg_leave();
+		return fraction;
+	}
+	start = pg.marked ? pg.mark_ms : pg_ms(OSGetSystemTime());
+	pg.marked = 0;
+	klass = tick != pg.last_tick ? 1u : 0u;
+	pg.last_tick = tick;
+	if (!pg_enter())
+	{
+		pg.skipped++;
+		return fraction;
+	}
+	move = wiiu_stamp_begin(&pg.stamp, start, klass, &sequence);
+	pg.pending_sequence = sequence;
+	pg.frame_move = move;
+	pg.frame_valid = 1;
+	if (pg.stamp.mode == 1 || pg.stamp.mode == 3)
+		fraction = (float)wiiu_stamp_picture(&pg.stamp, tick, (double)fraction, move, 0);
+	pg_leave();
+	return fraction;
+}
+
+/* (game thread, in the present command) */
+static void pg_present(unsigned *flags, unsigned *sequence)
+{
+	*sequence = pg.pending_sequence;
+	pg.pending_sequence = 0;
+	if (pg.lock_locked)
+		*flags |= DK_PRESENT_LOCK30 | DK_PRESENT_THIRTY;
+}
+
+/* (game thread, once a frame, after its present) */
+static void pg_frame(double cpu_ms, double now_ms)
+{
+	int locked;
+
+	if (!pg.lock_on)
+		return;
+	locked = wiiu_lock30_frame(&pg.lock, cpu_ms, now_ms);
+	if (pg.lock.changed)
+	{
+		wiiu_log("pacing: locked 30 %s (halo/pacing_lock.txt): %s (switch %u)", locked ? "ON" : "OFF", pg.lock.reason, pg.lock.switches_total);
+		pg.lock.changed = 0;
+	}
+	pg.lock_locked = locked;
+	if (pg.lock.set.mode == 2 && now_ms - pg.lock_log_ms >= 10000.0)
+	{
+		pg.lock_log_ms = now_ms;
+		wiiu_log("pacing: locked 30 (automatic): %s for %.0f s; %u switches so far; %u frames of the last second over %.1f ms, %u over %.1f ms", pg.lock.locked ? "locked" : "not locked",
+			(now_ms - pg.lock.since_ms) / 1000.0, pg.lock.switches_total, pg.lock.frames ? pg.lock.slow : 0u, pg.lock.set.lock_over_ms, pg.lock.frames ? pg.lock.over_hold : 0u,
+			pg.lock.set.hold_ms);
+	}
+}
+
+/* (GX2 thread) a swap was made: its number among GX2's, and when */
+static void pacing_glue_swap(unsigned sequence, OSTime swap_time, unsigned swaps)
+{
+	if (!pg.stamp_on || !sequence || !pg_enter())
+		return;
+	wiiu_stamp_swap(&pg.stamp, sequence, pg_ms(swap_time), swaps);
+	pg_leave();
+}
+
+/* (GX2 thread) a look at the display: GX2's count of flips and the time of the latest */
+static void pacing_glue_flips(OSTime last_flip, unsigned flips)
+{
+	if (!pg.stamp_on || !last_flip || !pg_enter())
+		return;
+	wiiu_stamp_flip(&pg.stamp, pg_ms(last_flip), flips);
+	pg_leave();
+}
+
+/* (GX2 thread, every five seconds) */
+static void pacing_glue_log(void)
+{
+	char text[480];
+	int length = 0;
+
+	if (!pg.stamp_on || !pg_enter())
+		return;
+	length = wiiu_stamp_format(&pg.stamp, text, sizeof(text));
+	pg_leave();
+	if (length > 0)
+	{
+		char *line = text, *newline;
+
+		while (line && *line)
+		{
+			newline = strchr(line, '\n');
+			if (newline)
+				*newline = 0;
+			wiiu_log("%s", line);
+			line = newline ? newline + 1 : NULL;
+		}
+	}
+}
+
+static void pacing_glue_init(void)
+{
+	long wiiu_study_number(const char *name, long fallback);
+	const long stamp_mode = wiiu_study_number("pacing_stamp.txt", 0);
+	char text[160] = "";
+	FILE *file = fopen(WIIU_DATA_DIRECTORY "/pacing_lock.txt", "r");
+	struct wiiu_lock30_settings set;
+
+	memset(&pg, 0, sizeof(pg));
+	if (stamp_mode > 0 && stamp_mode <= 3)
+	{
+		wiiu_stamp_reset(&pg.stamp, (int)stamp_mode, (double)wiiu_study_number("pacing_stamp_test.txt", 0));
+		pg.stamp_on = 1;
+		main_frame_mark_hook = pg_mark;
+		render_interpolation_stamp_hook = pg_fraction;
+		wiiu_log("pacing: the display-clock stamp is %s (halo/pacing_stamp.txt: 1 moves the picture's time, 2 measures and logs only, 3 a test move of halo/pacing_stamp_test.txt ms)%s",
+			stamp_mode == 1 ? "applied" : stamp_mode == 2 ? "measured only" : "a test", gx.pace.mode == 1 || gx.pace.mode == 2 ?
+			"; halo/pacing.txt tears or lets frames go early, which the vsync grid it predicts does not hold" : "");
+	}
+	if (file)
+	{
+		if (!fgets(text, sizeof(text), file))
+			text[0] = 0;
+		fclose(file);
+		if (wiiu_lock30_parse(&set, text) && set.mode)
+		{
+			wiiu_lock30_reset(&pg.lock, &set, 0.0);
+			pg.lock_on = 1;
+			pg.lock_locked = pg.lock.locked;
+			d3d8_pacing_frame_hook = pg_frame;
+			wiiu_log("pacing: the locked 30 is %s (halo/pacing_lock.txt): a slow frame is over %.1f ms of work; locks when %.0f%% of %.0f s are slow and at most 20%% over %.1f ms, unlocks when at most %.0f%% of %.0f s are "
+				"over %.1f ms (or half of %.0f s are over %.1f ms); %.0f s at least in either, %u switches in %.0f s at most, %.0f s of quiet at a map's start",
+				set.mode == 1 ? "always on" : "automatic", set.lock_over_ms, 100.0 * set.lock_share, set.lock_s, set.hold_ms, 100.0 * set.unlock_share, set.unlock_s, set.unlock_over_ms, set.lock_s,
+				set.hold_ms, set.dwell_s, set.max_switches, set.switch_window_s, set.quiet_s);
+		}
+		else if (text[0] && text[0] != '0' && text[0] != '-')
+			wiiu_log("pacing: halo/pacing_lock.txt is not a locked 30 mode of 0 to 2 with its numbers in range: off");
+	}
+	if (pg.stamp_on || pg.lock_on)
+		d3d8_pacing_present_hook = pg_present;
+}
+
 int graphics_quality_split_screen_capped(void);
 
 static void present(const struct dk_command_present *command)
@@ -4744,6 +4966,8 @@ static void present(const struct dk_command_present *command)
 				OSSleepTicks(OSMicrosecondsToTicks((int64_t)(hold * 1000.0f)));
 			GX2GetSwapStatus(&swaps, &flips, &last_flip, &last_vsync);
 			interval = wiiu_pacing_interval(&gx.pace, last_flip ? (float)OSTicksToMicroseconds(OSGetSystemTime() - last_flip) / 1000.0f : 0.0f, swaps - flips);
+			if (command->flags & DK_PRESENT_LOCK30)
+				interval = 2;
 			if (interval != gx.pace_interval_set)
 			{
 				GX2SetSwapInterval(interval);
@@ -4754,6 +4978,19 @@ static void present(const struct dk_command_present *command)
 		}
 		else
 		{
+			/* (the locked 30, halo/pacing_lock.txt: a swap interval of 2 for as long as the frames say so, then back to what GX2 had) */
+			const int lock30 = (command->flags & DK_PRESENT_LOCK30) != 0;
+
+			if (lock30 && gx.pace_interval_set != 2)
+			{
+				GX2SetSwapInterval(2);
+				gx.pace_interval_set = 2;
+			}
+			else if (!lock30 && gx.pace_interval_set == 2)
+			{
+				GX2SetSwapInterval(config_boolean("display.vsync") ? 1 : 0);
+				gx.pace_interval_set = 99;
+			}
 			gx.pace_stats.swaps_tearing += GX2GetSwapInterval() == 0;
 			gx.pace_stats.swaps_synced += GX2GetSwapInterval() != 0;
 		}
@@ -4761,6 +4998,15 @@ static void present(const struct dk_command_present *command)
 	}
 	GX2SwapScanBuffers();
 	GX2Flush();
+	if (pg.stamp_on && command->stamp_sequence)
+	{
+		uint32_t swaps, flips;
+		OSTime last_flip, last_vsync;
+
+		GX2GetSwapStatus(&swaps, &flips, &last_flip, &last_vsync);
+		pacing_glue_swap(command->stamp_sequence, gx.pace_last_swap, swaps);
+		pacing_glue_flips(last_flip, flips);
+	}
 	if (!gx.screens_enabled)
 	{
 		GX2SetTVEnable(TRUE);
@@ -4819,6 +5065,7 @@ static void present(const struct dk_command_present *command)
 			gx.pace_last_flip = last_flip;
 			gx.pace_flips_seen = flips;
 		}
+		pacing_glue_flips(last_flip, flips);
 	}
 	if (gx.overlay_on)
 	{
@@ -4959,6 +5206,7 @@ static void present(const struct dk_command_present *command)
 				wiiu_log("%s", pace_line);
 			if (wiiu_pacing_format_late(&gx.pace_stats, pace_line, sizeof(pace_line)))
 				wiiu_log("%s", pace_line);
+			pacing_glue_log();
 			wiiu_pacing_reset(&gx.pace_stats);
 		}
 		if (gx.overlay_on)
