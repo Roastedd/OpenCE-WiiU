@@ -737,10 +737,11 @@ static const struct config_setting config_settings[] =
 		"1: the bots play the game's objective (capture the flag, oddball, king of the hill: the lobby takes bots in those games too) and\n"
 		"set out for the power weapons and powerups that spawn on a timer (normal skill and up). 0: bots in slayer games only, which roam\n"
 		"and fight as they did." },
-	{ "bots.nav", _config_integer, "1", "HALO_BOTS_NAV", _environment_value, _platform_all,
+	{ "bots.nav", _config_integer, "0", "HALO_BOTS_NAV", _environment_value, _platform_all,
 		"1: the bots walk a map by its navigation graph (navs.pack: bots_nav.h) when the pack has one for the map; the\n"
-		"graph is read on a thread of its own and used from the tick it is ready. 0: always by the engine's walkable\n"
-		"surfaces, as they did before the graph. A map with no record is walked by the surfaces either way." },
+		"graph is read on a thread of its own and used from the tick it is ready. 0 (the default): always by the engine's\n"
+		"walkable surfaces, as they did before the graph: fighting bots get stuck more often with the graph than without\n"
+		"it (reports/research/2026-11-08/bots2-result.md 4.3). A map with no record is walked by the surfaces either way." },
 	{ "bots.nav_pack", _config_string, "\"\"", "HALO_BOTS_NAV_PACK", _environment_value, _platform_all,
 		"The navigation pack's path (a real path: the console's card, or a folder on the host). Empty: navs.pack in the\n"
 		"Wii U's app folder, or beside the data folder's maps on the host." },
