@@ -51,6 +51,7 @@ menu gets FRIENDLY FIRE too.
 /* the platform layer's (port/linux/src) */
 void platform_log(char const *format, ...);
 char const *config_string(char const *name);
+long config_integer(char const *name);
 int platform_display_resolutions(long *widths, long *heights, int maximum);
 int platform_window_sizes(long *widths, long *heights, int maximum);
 /* (sdl_platform.c's PLATFORM_AUDIO_DEVICE_NAME_SIZE) */
@@ -87,6 +88,9 @@ adds to */
 /* the tags pause_patch or pause_campaign_patch adds: two buttons and their
 texts (SETTINGS, and END GAME or FRIENDLY FIRE) */
 #define PAUSE_PATCH_TAGS 4
+/* ... and the social screens' PLAYERS (screens.enable: a button of its own and its text) */
+#define PAUSE_PLAYERS_TAGS 2
+#define PAUSE_PLAYERS_SCREEN "main_menu/multiplayer_type_select/screens/players_screen"
 /* what a frame of ui.map's is drawn as in a game map, which has not got it */
 #define BLANK_PNG "ce/port/blank__0.png"
 #define UI_WIDGET_DEFINITION_TAG 'DeLa'
@@ -403,6 +407,13 @@ static char const *const port_function_names[] =
 	/* (a dedicated server's map vote: menu_functions.c) */
 	"port map vote open", "port map vote choose",
 	"port controller clear", "port controller cancel",
+	/* (the social screens': menu_screens.inl, tools/port_settings.py's social_files; last, so that the others keep their places) */
+	"port players open", "port players row", "port players add bot", "port players drop bot",
+	"port screens actions open", "port screens action run",
+	"port friends open", "port friends tab 0", "port friends tab 1", "port friends tab 2", "port friends tab 3", "port friends tab previous", "port friends tab next",
+	"port friends row", "port friends join", "port friends invite",
+	"port friend add init", "port friend add edit", "port friend add send", "port friend add back",
+	"port lobby row", "port lobby bot add", "port lobby bot drop",
 };
 
 /* the PC version's game data functions that the Xbox's have not, from
@@ -435,6 +446,8 @@ static char const *const port_game_data_input_names[] =
 	"port map vote update",
 	/* (HDR Calibration's patterns, drawn by the renderer) */
 	"port hdr calibration",
+	/* (the social screens': menu_screens.inl) */
+	"port screens menu update", "port players update", "port screens actions update", "port friends update", "port friend add update",
 };
 
 static struct
@@ -1601,6 +1614,14 @@ what is below the list moves down. */
 #define PAUSE_SETTINGS_SCREEN "main_menu/settings_select/player_setup/player_profile_edit/player_profile_edit_screen"
 #define PAUSE_BUTTON_SPACING 35
 #define PAUSE_BOX_FIRST_BUTTONS 3
+/* the frame of the box for five buttons (the host's, with PLAYERS): after the two for three and four, and the campaign's two (tools/port_settings.py's pause_box_frames) */
+#define PAUSE_BOX_FIVE_FRAME 4
+
+/* whether the pause menu gets the social screens' PLAYERS button (screens.enable) */
+static boolean pause_players_wanted(void)
+{
+	return config_integer("screens.enable") != 0;
+}
 
 static long ui_function_named(char const *name)
 {
@@ -1716,31 +1737,46 @@ static long pause_list_patch(struct cache_file_tag_instance *instances, struct u
 	boolean host, short *growth)
 {
 	struct ui_widget_child_reference *children = list->child_widgets.address;
-	long count = list->child_widgets.count, added = host || build.coop ? 2 : 1, child;
+	/* the social screens' PLAYERS, first of the buttons added (screens.enable; not without its screen) */
+	long players_widget = pause_players_wanted() ? widget_named(PAUSE_PLAYERS_SCREEN) : NONE;
+	boolean players = players_widget != NONE;
+	long count = list->child_widgets.count, added = (host || build.coop ? 2 : 1) + (players ? 1 : 0), child;
 	struct ui_widget_child_reference *grown = allocate((count + added) * sizeof(struct ui_widget_child_reference));
 	struct ui_widget_definition const *model = tag_get(UI_WIDGET_DEFINITION_TAG, children[quit].widget_tag.index);
 	long settings_widget = widget_named(PAUSE_SETTINGS_SCREEN);
 	short spacing = count >= 2 ? (short)(children[count - 1].vertical_offset - children[count - 2].vertical_offset) :
 		PAUSE_BUTTON_SPACING;
-	char const *names[2];
-	void *buttons[2];
-	long tags[2];
+	char const *names[3];
+	void *buttons[3];
+	long tags[3];
+	long slot = 0;
 
 	if (!grown || settings_widget == NONE || spacing <= 0)
 		return 0;
-	names[0] = "pause/settings_button";
-	tags[0] = next_tag();
-	buttons[0] = pause_button(instances, model, names[0], "SETTINGS",
+	if (players)
+	{
+		names[slot] = "pause/players_button";
+		tags[slot] = next_tag();
+		buttons[slot] = pause_button(instances, model, names[slot], "PLAYERS", function_index("port players open", "pause", 0),
+			build.widget_tags[players_widget], NULL, NONE);
+		if (!buttons[slot])
+			return 0;
+		slot++;
+	}
+	names[slot] = "pause/settings_button";
+	tags[slot] = next_tag();
+	buttons[slot] = pause_button(instances, model, names[slot], "SETTINGS",
 		function_index("profile set edit begin", "pause", 0), build.widget_tags[settings_widget], NULL, NONE);
-	names[1] = build.coop ? "pause/friendly_fire_button" : "pause/end_game_button";
-	tags[1] = added > 1 ? next_tag() : NONE;
-	buttons[1] = build.coop ?
-		pause_button(instances, model, names[1], "FRIENDLY FIRE ON",
+	slot++;
+	names[slot] = build.coop ? "pause/friendly_fire_button" : "pause/end_game_button";
+	tags[slot] = added > slot ? next_tag() : NONE;
+	buttons[slot] = build.coop ?
+		pause_button(instances, model, names[slot], "FRIENDLY FIRE ON",
 			function_index("port coop friendly fire", "pause", 0), NONE, "FRIENDLY FIRE OFF",
 			game_data_input_index("port coop friendly fire text", "pause", 0)) :
-		host ? pause_button(instances, model, names[1], "END GAME",
+		host ? pause_button(instances, model, names[slot], "END GAME",
 			function_index("port pause end game", "pause", 0), NONE, NULL, NONE) : NULL;
-	if (!buttons[0] || (added > 1 && !buttons[1]))
+	if (!buttons[slot - 1] || (added > slot && !buttons[slot]))
 		return 0;
 	for (child = 0; child < added; child++)
 		instance_set(instances, UI_WIDGET_DEFINITION_TAG, tags[child], names[child], "", buttons[child]);
@@ -1819,11 +1855,15 @@ static short pause_box_redraw(struct ui_widget_definition const *box, long butto
 		sequence = group->sequences.address;
 		/* (one frame: the one for the number of buttons) */
 		sequence->first_bitmap_index = (short)PIN(buttons - PAUSE_BOX_FIRST_BUTTONS, 0, group->bitmaps.count - 1);
+		/* (five buttons, the host's with PLAYERS: the frame after the campaign's) */
+		if (buttons >= PAUSE_BOX_FIRST_BUTTONS + 2 && group->bitmaps.count > PAUSE_BOX_FIVE_FRAME)
+			sequence->first_bitmap_index = PAUSE_BOX_FIVE_FRAME;
 		sequence->bitmap_count = 1;
 		reference_set(&definition->background_bitmap, BITMAP_GROUP_TAG, build.bitmap_tags[bitmap]);
 		/* (as high as the box: its texture's rows below it, empty, cropped,
 		as a split screen's 240 lines would squeeze the whole 256) */
-		height = (short)PAUSE_BOX_HEIGHT(PAUSE_BOX_FIRST_BUTTONS + sequence->first_bitmap_index);
+		height = (short)PAUSE_BOX_HEIGHT(sequence->first_bitmap_index == PAUSE_BOX_FIVE_FRAME ? PAUSE_BOX_FIRST_BUTTONS + 2 :
+			PAUSE_BOX_FIRST_BUTTONS + sequence->first_bitmap_index);
 		definition->bounds.y1 = (short)(definition->bounds.y0 + height);
 	}
 	return height;
@@ -2113,7 +2153,7 @@ static void pause_patch(struct cache_file_tag_instance *instances)
 	if (collection == NONE || quit_function == NONE)
 		return;
 	screens = tag_get('Soul', collection);
-	rebuilt = pause_rebuild(screens, quit_function, host || build.coop ? 2 : 1);
+	rebuilt = pause_rebuild(screens, quit_function, (host || build.coop ? 2 : 1) + (pause_players_wanted() ? 1 : 0));
 	for (screen = 0; screen < screens->count; screen++)
 	{
 		long screen_tag = ((struct tag_reference const *)screens->address)[screen].index;
@@ -2189,7 +2229,7 @@ static void pause_patch(struct cache_file_tag_instance *instances)
 		}
 	}
 	if (patched_list != NONE)
-		platform_log("menus: the pause menu has SETTINGS%s", host ? " and END GAME" : "");
+		platform_log("menus: the pause menu has %sSETTINGS%s", pause_players_wanted() ? "PLAYERS, " : "", host ? " and END GAME" : "");
 }
 
 /* ---------- the campaign's pause menu
@@ -2642,7 +2682,7 @@ void menu_tags_loaded(
 		STARTUP_ADD("mt_unique", unique, widget_count, 0);
 	}
 	total = widget_count + own_lists + menus->string_list_count + menus->bitmap_count +
-		(game_map ? PAUSE_PATCH_TAGS : 0);
+		(game_map ? PAUSE_PATCH_TAGS + (pause_players_wanted() ? PAUSE_PLAYERS_TAGS : 0) : 0);
 	instances = build.failed ? NULL : instances_grow(total, &build.first_index, &build.first_salt);
 	if (!instances)
 		goto failed;

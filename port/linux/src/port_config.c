@@ -546,7 +546,9 @@ static const struct config_setting config_settings[] =
 	{ "input.wiiu_gamepad_view", _config_string, "\"tv\"", "HALO_WIIU_GAMEPAD_VIEW", _environment_value, _platform_wiiu,
 		"What the GamePad's screen shows. \"tv\": the TV's picture. \"player1\": in split\n"
 		"screen, player 1's window alone, scaled to the GamePad (the menus, and a game of\n"
-		"one player, are shown whole)." },
+		"one player, are shown whole). \"social\": in a game, the social screens' view for touch\n"
+		"(chat, friends, party, bots, quick chat; needs screens.enable above 0 for its rows;\n"
+		"the TV is then the game's alone); the menus still mirror the TV." },
 	{ "input.wiiu_gamepad_keyboard", _config_boolean, "false", "HALO_WIIU_GAMEPAD_KEYBOARD", _environment_value, _platform_wiiu,
 		"The text chat's keyboard on the GamePad's touch screen: while the chat's keyboard is up\n"
 		"(D-pad Up in a network game), the GamePad shows big keys (80 x 60 pixels) and a tap\n"
@@ -700,6 +702,11 @@ static const struct config_setting config_settings[] =
 	{ "bots.teams", _config_string, "\"even\"", "HALO_BOT_TEAMS", _environment_value, _platform_all,
 		"In team games: \"even\" puts the bots on both teams, evening them with\n"
 		"the players; \"against\" puts them all on the team the players are not on." },
+	{ "screens.enable", _config_integer, "0", "HALO_SCREENS", _environment_value, _platform_all,
+		"The social screens (Players page, bot settings, Friends, toasts, the GamePad's social view):\n"
+		"0 none (nothing of them exists in the menus or the game), 1 the screens with made-up players,\n"
+		"friends, a party and toasts (for looking at them with no network), 2 the screens fed by the\n"
+		"game's own players and whatever friends service the build has (an empty Friends screen if none)." },
 	{ "bots.max", _config_integer, "15", "HALO_BOTS_MAX", _environment_value, _platform_all,
 		"The most bots there may be, 0 to 15: bots.count asks for no more than this. 15 is the game's own\n"
 		"most (a split screen game is 16 players with one of them yours)." },

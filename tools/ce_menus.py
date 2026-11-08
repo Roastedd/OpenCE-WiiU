@@ -618,8 +618,9 @@ def pause_art(art):
     for piece in ("left", "center", "right"):
         heights = [port_settings.pause_box_height(buttons) for buttons in port_settings.PAUSE_BOX_BUTTONS]
         heights += list(port_settings.PAUSE_BOX_EXTRA_HEIGHTS)
+        heights += [port_settings.pause_box_height(buttons) for buttons in port_settings.PAUSE_BOX_SOCIAL_BUTTONS]
         lines.append(art.port_picture(f"pause/pausebox_{piece}", [
-            (port_settings.pause_box_svg(piece, height), 4 if piece == "center" else 16, 256) for height in heights]))
+            (port_settings.pause_box_svg(piece, height), 4 if piece == "center" else 16, port_settings.pause_box_canvas(height)) for height in heights]))
     for piece in ("left", "center", "right"):
         lines.append(art.port_picture(f"pause/objectives_{piece}", [
             (port_settings.pause_box_svg(piece, height, header=True), 4 if piece == "center" else 16, 256)
@@ -699,9 +700,11 @@ def non_handdrawn(art: Art) -> str:
 
 def regenerate_settings():
     """Write port-owned settings and register any new screens for embedding."""
-    screens = port_settings.settings_files()
+    screens = {**port_settings.settings_files(), **port_settings.multiplayer_files(), **port_settings.social_files()}
     for name, lines in screens.items():
         (CE / name).write_text("\n".join(lines))
+    bar = CE / (port_settings.MULTIPLAYER_FOLDER.replace("/", ".") + ".xml")
+    bar.write_text(port_settings.multiplayer_bar_patched(bar.read_text()))
     manifest = MENUS / "menus.json"
     data = json.loads(manifest.read_text())
     files = set(data["files"]) | {"ce/" + name for name in screens}
@@ -771,8 +774,11 @@ def main() -> None:
         for tag in members:
             lines += widget_xml(tag, widgets[tag], tags, functions, inputs, fonts, {})
         lines.append("</menus>")
-        (CE / f"{folder.replace('/', '.')}.xml").write_text("\n".join(lines) + "\n")
-    for name, lines in [*port_settings.settings_files().items(), *port_settings.multiplayer_files().items()]:
+        text = "\n".join(lines) + "\n"
+        if folder == port_settings.MULTIPLAYER_FOLDER:
+            text = port_settings.multiplayer_bar_patched(text)
+        (CE / f"{folder.replace('/', '.')}.xml").write_text(text)
+    for name, lines in [*port_settings.settings_files().items(), *port_settings.multiplayer_files().items(), *port_settings.social_files().items()]:
         (CE / name).write_text("\n".join(lines))
     # their strings
     (CE / "strings.xml").write_text(strings_xml({

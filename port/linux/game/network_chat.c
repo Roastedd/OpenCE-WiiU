@@ -91,6 +91,8 @@ mutes.
 #include "network_chat.h"
 #include "text_filter.h"
 #include "halo_keyboard.h"
+#include "halo_social.h"
+#include "text_safe.h"
 #include "server_director.h"
 
 #include <stdio.h>
@@ -3340,4 +3342,72 @@ void network_chat_draw(
 		rows = (short)(rows - layout.rows);
 	}
 	rasterizer_text_set_scale(1.0f, 0.0f, 0.0f);
+}
+
+/* ---------- the social screens' GamePad view (screens_social.c, halo_social.h): the newest lines, the quick chat's pages, and a quick chat line said from a tap */
+
+/* the newest lines, oldest first, as clean ASCII (at most maximum): how many */
+int network_chat_recent(
+	struct halo_social_line *lines,
+	int maximum)
+{
+	int count = MIN((int)chat_line_count, maximum);
+	int index;
+
+	for (index = 0; index < count; index++)
+	{
+		struct chat_line const *line = &chat_lines[(chat_newest_line - (count - 1 - index) + CHAT_MAXIMUM_LINES) % CHAT_MAXIMUM_LINES];
+
+		csmemset(&lines[index], 0, sizeof(lines[index]));
+		text_safe_name(lines[index].name, (short)sizeof(lines[index].name), line->name, CHAT_NAME_SIZE, "SERVER");
+		text_safe_text(lines[index].text, (short)sizeof(lines[index].text), line->text, CHAT_TEXT_SIZE, (short)(HALO_SOCIAL_TEXT - 1));
+		/* (the team colour of a line is not kept with it: the name is drawn plain) */
+		lines[index].team = -1;
+	}
+	return count;
+}
+
+/* the quick chat's pages: how many, a page's name, a line (NULL past them) */
+int network_chat_quick_pages(
+	void)
+{
+	return CHAT_QUICK_PAGES;
+}
+
+char const *network_chat_quick_page_name(
+	int page)
+{
+	return page >= 0 && page < CHAT_QUICK_PAGES ? chat_quick_page_names[page] : NULL;
+}
+
+char const *network_chat_quick_line(
+	int page,
+	int slot)
+{
+	return page >= 0 && page < CHAT_QUICK_PAGES && slot >= 0 && slot < CHAT_QUICK_LINES ? chat_quick_lines[page][slot] : NULL;
+}
+
+/* a quick chat line said (a tap on its tile): through the same limits and the same send as the D-pad's */
+void network_chat_quick_send(
+	int page,
+	int slot)
+{
+	unsigned long now = system_milliseconds();
+
+	if (!network_chat_quick_line(page, slot) || !chat_quick_enabled())
+		return;
+	switch (chat_quick_take(&chat_quick.limit, (short)(page * CHAT_QUICK_LINES + slot), now))
+	{
+	case _chat_quick_sent:
+		chat_send(chat_quick_channel((short)page, game_engine_has_teams()), chat_quick_lines[page][slot], TRUE, FALSE);
+		break;
+	case _chat_quick_repeat:
+		chat_add_notice("You just said that");
+		break;
+	case _chat_quick_burst:
+		chat_add_notice("Wait a moment before the next quick chat");
+		break;
+	default:
+		break;
+	}
 }

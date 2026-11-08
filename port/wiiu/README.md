@@ -203,6 +203,21 @@ Written and tested on the build machine (`tools/harness/tests/test_wiiu_chat_inp
 - **The clock** (`halo_utc_now`, `p2p.c`): the wall clock internet play compares listings with is anchored to a TLS answer's Date (the first master's `/healthz` at start and every
   master list), so a console whose own clock is hours off sees the PC's listings and signs its own with the right time.
 
+## The social screens: Players, bots, Friends, toasts, the GamePad's social view (`wiiu-screens`)
+
+Written and tested on the build machine (`tools/harness/tests/test_screens.py`, `test_wiiu_social_view.py`, `tools/test_social_menus.py`, `tools/screens_digest.py`); **not run on a console**.
+Everything is off by default: `screens.enable` (config.toml, `HALO_SCREENS`) is 0, and then no screen, button, tag or toast exists and the frames are the base's. 1 feeds them made-up players, friends,
+a party and toasts (`screens_mock.c`), 2 the game's own players (a lobby's or a game's, bots tagged by their machine) and whatever friends service the build sets with `screens_backend_set`. The
+report is `reports/research/2026-11-08/screens-result.md` (what each screen shows, the provider interface a backend fills, pictures at the TV's and the GamePad's sizes, and the console checklist).
+
+- **PLAYERS** (the pause menu's second button in a game, its last-but-one in the host's; the lobby's rows carry the same tags): a row for each player with its name, `BOT <skill>` / `YOU` / `HOST` /
+  `PARTY` / `FRIEND`, its team and its ping; A opens the player's actions (mute, vote to kick, add as a friend; a bot's: drop, skill, team; the host's BOT SETTINGS), L drops a bot and R adds one.
+- **BOT SETTINGS** (`bots.count`, `bots.skill`, `bots.teams`) from the Players page's button and the host's actions.
+- **FRIENDS** (the Multiplayer screen's bar, the Players page's button): four tabs (FRIENDS, REQUESTS, PARTY, BLOCKED; L and R turn them), JOIN and INVITE, ADD FRIEND by the code typed on the
+  GamePad's keyboard. **Toasts** (a friend is online, an invitation answered with the D-pad, a join that failed in plain words) are drawn over the frame by `screens_toast.c`.
+- **The GamePad's social view** (`input.wiiu_gamepad_view = "social"`, with `wiiu_social_view.c`): in a game the GamePad shows the chat, the friends, the party, the bots, the quick chat's four
+  lines and a KEYBOARD button instead of the TV's picture (which saves its blit); the glyphs are the GamePad keyboard's, so the atlas is made when it is asked for.
+
 ## Wii Remote
 
 Branch `wiiu-wimote`. A Wii Remote is read like the Pro and Classic Controllers: its own KPAD channel, a player in `src/wiiu_pad_players.c`'s map by its

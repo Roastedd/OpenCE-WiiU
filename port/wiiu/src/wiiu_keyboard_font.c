@@ -7,6 +7,7 @@ nothing. The GX2 thread makes its texture of the atlas when it is ready (wiiu_gx
 */
 
 #include "wiiu_keyboard.h"
+#include "wiiu_social_view.h"
 #include "wiiu_shell.h"
 #include "port_config.h"
 #include "text_hires.h"
@@ -29,9 +30,54 @@ int wiiu_keyboard_enabled(void)
 	if (read_at != config_changes())
 	{
 		read_at = config_changes();
-		enabled = config_boolean("input.wiiu_gamepad_keyboard");
+		/* (the social view draws its texts from the same glyphs: it asks for them too) */
+		enabled = config_boolean("input.wiiu_gamepad_keyboard") || !strcmp(config_string("input.wiiu_gamepad_view"), "social");
 	}
 	return enabled;
+}
+
+/* ---------- the GamePad's social view (wiiu_social_view.h): input.wiiu_gamepad_view "social" */
+
+int wiiu_social_view_enabled(void)
+{
+	static int enabled;
+	static unsigned long read_at = (unsigned long)-1;
+
+	if (read_at != config_changes())
+	{
+		read_at = config_changes();
+		enabled = !strcmp(config_string("input.wiiu_gamepad_view"), "social");
+	}
+	return enabled;
+}
+
+int wiiu_social_view_shown(void)
+{
+	struct halo_social_view view;
+
+	if (!wiiu_social_view_enabled() || !wiiu_keyboard_atlas())
+		return 0;
+	wiiu_social_view_snapshot(&view);
+	return view.active;
+}
+
+/* the game's thread, every frame: the view as it is now (the glyphs are asked for the first time) */
+void halo_social_view_publish(const struct halo_social_view *view)
+{
+	if (!wiiu_social_view_enabled())
+		return;
+	wiiu_keyboard_prewarm();
+	wiiu_social_view_publish(view);
+}
+
+int halo_social_event_next(struct halo_social_event *event)
+{
+	return wiiu_social_event_pop(event);
+}
+
+int halo_social_view_wanted(void)
+{
+	return wiiu_social_view_enabled();
 }
 
 static int rasterize(int font, unsigned long code, unsigned char *buffer, int stride, int max_width, int max_height, int *left, int *top, int *width, int *height, float *advance)
