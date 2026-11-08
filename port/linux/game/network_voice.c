@@ -480,6 +480,9 @@ static void voice_fill_header(
 	header->type = type;
 	header->count = 1;
 	header->game_time = game_in_progress() ? game_time_get() : 0;
+	/* port: in the wire's order, little-endian (network_wire_order.c), as every other message's header has it: the message is
+	sent as it is, and a big-endian machine's game time went out the other way round */
+	NETWORK_WIRE(header->game_time);
 }
 
 /* ---------- the host */
