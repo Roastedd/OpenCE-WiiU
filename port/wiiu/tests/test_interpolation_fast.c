@@ -102,8 +102,8 @@ int main(void)
 
 	/* the parser */
 	if (wiiu_gpu_offload_parse(NULL) != 0 || wiiu_gpu_offload_parse("") != 0 || wiiu_gpu_offload_parse("0\n") != 0 || wiiu_gpu_offload_parse("-1") != 0 ||
-		wiiu_gpu_offload_parse("1\n") != 1 || wiiu_gpu_offload_parse(" 3 ") != 3 || wiiu_gpu_offload_parse("0x2") != 2 || wiiu_gpu_offload_parse("255") != 7 ||
-		wiiu_gpu_offload_parse("8") != 0 || wiiu_gpu_offload_parse("abc") != 0)
+		wiiu_gpu_offload_parse("1\n") != 1 || wiiu_gpu_offload_parse(" 3 ") != 3 || wiiu_gpu_offload_parse("0x2") != 2 || wiiu_gpu_offload_parse("255") != 31 ||
+		wiiu_gpu_offload_parse("8") != 8 || wiiu_gpu_offload_parse("16") != 16 || wiiu_gpu_offload_parse("32") != 0 || wiiu_gpu_offload_parse("abc") != 0)
 	{
 		printf("FAIL: the card file's parser\n");
 		failures++;

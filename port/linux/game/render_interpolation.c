@@ -58,6 +58,11 @@ unsigned wiiu_gpu_offload_bits(void);
 /* whether this frame's blends are made with render_interpolation_fast.h's arithmetic (set at the frame's begin) */
 static boolean interpolation_fast_blends, interpolation_check_blends;
 #define WIIU_GPU_OFFLOAD_CHECK_BIT 4u
+/* halo/gpu_offload.txt bit 8: the blends of a pose that is the tick before's and the tick's own are made every frame, as before the reuse (see overlap_object); bit 16: every
+blend taken from an earlier frame is also made afresh and compared bit for bit (the host's runs) */
+#define WIIU_GPU_OFFLOAD_NO_REUSE_BIT 8u
+#define WIIU_GPU_OFFLOAD_REUSE_CHECK_BIT 16u
+static boolean interpolation_reuse_blends, interpolation_check_reuse;
 #endif
 
 /* port/linux/src/port_config.c */
@@ -134,6 +139,13 @@ struct interpolated_object
 	/* ... the two snapshots' rotations, found when first blended */
 	struct interpolation_rotation *rotations;
 	boolean rotations_valid[2];
+#ifdef HALO_WIIU
+	/* The blend drawn last is of two snapshots that are the same bit for bit, with no correction on it: then it is the same in every frame (lerp(a, a, t) is a, and the rotation of
+	a put back is a function of a alone, whatever the finite fraction t; only its sign can change a zero, so it is kept), and in every tick that follows in which the pose stays the
+	same. Kept until a snapshot differs or a correction comes (see the overlap's key, overlap_object). rest_flags is the fast blends and the fraction's sign it was made with. */
+	boolean blend_at_rest;
+	byte rest_flags;
+#endif
 };
 
 struct interpolated_camera
@@ -205,7 +217,20 @@ struct overlap_object
 	short capacity;
 	boolean blended; /* the frame has a blend (else the pose is the tick's own) */
 	real_matrix4x3 *nodes;
+	/* What the blend in nodes is of, when it does not depend on how far the frame is into the tick: the two poses are the same bit for bit (an object at rest, which is most of
+	the objects drawn) or the pose snapped. A blend of a pose with itself is lerp(a, a, t) = a + (a - a) * t = a, found by the same arithmetic whatever the finite fraction t, whose
+	sign alone can change a zero (so the sign is part of the key); the rotation found from a, normalised and put back is likewise a function of a alone. So while the ring holds
+	the same two poses (the capture numbers of tick_snapshot_pose_serial, which name a pose for good) the frame's blend is the one before, and nothing is done. The key is not kept
+	for a blend that does depend on the fraction. */
+	long key_object_index; /* NONE when the blend in nodes is no such blend */
+	long key_previous, key_latest;
+	short key_node_count;
+	byte key_flags;
 };
+
+/* the parts of an overlap_object key that are not the poses */
+#define OVERLAP_KEY_FAST 1u
+#define OVERLAP_KEY_NEGATIVE 2u
 
 /* (by absolute index, in static memory and not in the records above: the heap's blocks are as they were without the keeping) */
 #define OVERLAP_KEPT 4
@@ -222,6 +247,7 @@ static struct
 {
 	unsigned long long lookup, snap, rotations, blend, copy;
 	unsigned long asked, repeated, no_object, no_previous, blended, snapped, nodes, rotation_nodes, rotations_kept, fixups;
+	unsigned long reused, reused_nodes, keyed; /* blends taken from an earlier frame, their nodes, and blends made that were kept for reuse */
 	struct tick_perf perf; /* the counters of the core over the calls that made a blend or looked for one (tick_perf.h) */
 } blend_stats;
 
@@ -450,6 +476,12 @@ static struct
 	double worst_quaternion, worst_matrix;
 } interpolation_check;
 
+/* halo/gpu_offload.txt bit 16: the blends taken from an earlier frame and made afresh to compare with, and how many differ */
+static struct
+{
+	unsigned long compared, differ;
+} interpolation_reuse_check;
+
 static void rotation_from_matrix(real_matrix4x3 const *matrix, struct interpolation_rotation *rotation)
 {
 	rotation_from_matrix_with(matrix, rotation, interpolation_fast_blends);
@@ -623,6 +655,9 @@ void render_interpolation_tick(void)
 		struct interpolated_object *record;
 		short node_count = (short)(object->object.node_matrices.size / (short)sizeof(real_matrix4x3));
 		boolean continuing;
+#ifdef HALO_WIIU
+		real_matrix4x3 const *pose_before;
+#endif
 
 		if (absolute_index >= MAXIMUM_INTERPOLATED_OBJECTS)
 			continue;
@@ -663,6 +698,10 @@ void render_interpolation_tick(void)
 		continuing = record->object_index == iterator.index &&
 			record->node_count == node_count &&
 			record->tick == previous_tick;
+#ifdef HALO_WIIU
+		/* (the pose the tick before left, which the blend at rest is of, if it is: kept if this tick's is the same) */
+		pose_before = continuing ? record->nodes + record->latest * record->node_capacity : NULL;
+#endif
 		if (continuing)
 		{
 			record->latest ^= 1;
@@ -677,6 +716,10 @@ void render_interpolation_tick(void)
 			record->nodes + record->latest * record->node_capacity,
 			object_get_node_matrices(iterator.index),
 			node_count * sizeof(real_matrix4x3));
+#ifdef HALO_WIIU
+		record->blend_at_rest = continuing && record->blend_at_rest &&
+			!memcmp(pose_before, record->nodes + record->latest * record->node_capacity, node_count * sizeof(real_matrix4x3));
+#endif
 		record->rotations_valid[record->latest] = FALSE;
 		record->object_index = iterator.index;
 		record->node_count = node_count;
@@ -697,6 +740,12 @@ void render_interpolation_reset(void)
 	/* (the rotations kept for a pose of the overlap's blends: the arena is let go of, and no object keeps any) */
 	memset(overlap_kept, 0, sizeof(overlap_kept));
 	rotation_arena_used = 0;
+	/* (and no blend is kept for reuse) */
+	if (overlap_objects)
+	{
+		for (index = 0; index < MAXIMUM_INTERPOLATED_OBJECTS; index++)
+			overlap_objects[index].key_object_index = NONE;
+	}
 #endif
 
 	if (interpolated_objects)
@@ -765,6 +814,43 @@ static struct interpolation_rotation const *overlap_rotations_kept(struct overla
 	return entry->rotations;
 }
 
+/* the snap test of the blends below, on the two poses of an object */
+static boolean overlap_poses_snap(real_matrix4x3 const *previous, real_matrix4x3 const *latest, short node_count)
+{
+	short node_index;
+	boolean snap = !(distance_squared(&previous[0].position, &latest[0].position) <= OBJECT_SNAP_DISTANCE * OBJECT_SNAP_DISTANCE);
+
+	for (node_index = 1; !snap && node_index < node_count; node_index++)
+	{
+		real_point3d previous_local, latest_local;
+
+		matrix4x3_inverse_transform_point(&previous[0], &previous[node_index].position, &previous_local);
+		matrix4x3_inverse_transform_point(&latest[0], &latest[node_index].position, &latest_local);
+		snap = !(distance_squared(&previous_local, &latest_local) <= NODE_SNAP_DISTANCE * NODE_SNAP_DISTANCE);
+	}
+	return snap;
+}
+
+/* the pose a frame at fraction t draws, made afresh from the two (no rotation kept): the reference the reuse check (halo/gpu_offload.txt bit 16) holds a reused blend to */
+static void overlap_blend_fresh(real_matrix4x3 const *previous, real_matrix4x3 const *latest, short node_count, real_matrix4x3 *blended)
+{
+	short node_index;
+
+	if (overlap_poses_snap(previous, latest, node_count))
+	{
+		memcpy(blended, latest, node_count * sizeof(real_matrix4x3));
+		return;
+	}
+	for (node_index = 0; node_index < node_count; node_index++)
+	{
+		struct interpolation_rotation previous_found, latest_found;
+
+		rotation_from_matrix(&previous[node_index], &previous_found);
+		rotation_from_matrix(&latest[node_index], &latest_found);
+		matrix_blend_rotations(&previous[node_index], &latest[node_index], &previous_found, &latest_found, interpolation_fraction, &blended[node_index]);
+	}
+}
+
 /* the blend a frame of the overlap draws an object with (render_interpolation_object_node_matrices): NULL if the object has no pose of the tick before
 (it is the tick's own) */
 static real_matrix4x3 *overlap_object_node_matrices_inner(long object_index)
@@ -777,6 +863,7 @@ static real_matrix4x3 *overlap_object_node_matrices_inner(long object_index)
 	long absolute_index;
 	short node_count, node_index;
 	boolean snap;
+	boolean keyed_serials_ok = FALSE;
 	unsigned long long started, entered, looked_up, snap_tested, rotated;
 	unsigned long fixups_before;
 
@@ -793,7 +880,10 @@ static real_matrix4x3 *overlap_object_node_matrices_inner(long object_index)
 		if (!overlap_objects)
 			return NULL;
 		for (index = 0; index < MAXIMUM_INTERPOLATED_OBJECTS; index++)
+		{
 			overlap_objects[index].object_index = NONE;
+			overlap_objects[index].key_object_index = NONE;
+		}
 	}
 	record = &overlap_objects[absolute_index];
 	if (record->frame == interpolation_frame && record->object_index == object_index)
@@ -833,20 +923,57 @@ static real_matrix4x3 *overlap_object_node_matrices_inner(long object_index)
 			return NULL;
 		record->nodes = nodes;
 		record->capacity = node_count;
+		record->key_object_index = NONE; /* (the old blend moved) */
 	}
 	blended = record->nodes;
 	looked_up = tick_overlap_now();
+	if (interpolation_reuse_blends)
+	{
+		/* a blend of two poses that are the same bit for bit, or a snap, is the same blend in every frame the ring holds the poses for (see overlap_object) */
+		/* (the fraction's bits: finite, and its sign; isfinite and signbit are calls in this build) */
+		uint32_t fraction_bits;
+
+		memcpy(&fraction_bits, &interpolation_fraction, sizeof(fraction_bits));
+		if ((fraction_bits & 0x7f800000u) != 0x7f800000u)
+		{
+			const long latest_serial = tick_snapshot_pose_serial(absolute_index, FALSE), previous_serial = tick_snapshot_pose_serial(absolute_index, TRUE);
+			const byte flags = (byte)((interpolation_fast_blends ? OVERLAP_KEY_FAST : 0) | ((fraction_bits >> 31) ? OVERLAP_KEY_NEGATIVE : 0));
+
+			if (latest_serial > 0 && previous_serial > 0 && record->key_object_index == object_index && record->key_latest == latest_serial &&
+				record->key_previous == previous_serial && record->key_node_count == node_count && record->key_flags == flags)
+			{
+				blend_stats.reused++;
+				blend_stats.reused_nodes += (unsigned long)node_count;
+				if (interpolation_check_reuse)
+				{
+					real_matrix4x3 fresh[MAXIMUM_INTERPOLATED_NODES];
+
+					overlap_blend_fresh(previous, latest, node_count, fresh);
+					interpolation_reuse_check.compared++;
+					if (memcmp(fresh, blended, node_count * sizeof(real_matrix4x3)))
+					{
+						if (!interpolation_reuse_check.differ++)
+							platform_log("gpu offload: a blend taken from an earlier frame differs from the same blend made afresh (object %08lx, %d nodes, fraction %g, said once)",
+								(unsigned long)object_index, (int)node_count, (double)interpolation_fraction);
+					}
+				}
+				record->blended = TRUE;
+				blend_stats.lookup += tick_overlap_now() - entered;
+				return blended;
+			}
+			record->key_object_index = NONE;
+			record->key_previous = previous_serial;
+			record->key_latest = latest_serial;
+			record->key_node_count = node_count;
+			record->key_flags = flags;
+			keyed_serials_ok = latest_serial > 0 && previous_serial > 0;
+		}
+		else
+			record->key_object_index = NONE;
+	}
 	/* (as the serial frames' blend above: a pose that moved too far for one tick is another, not this one moving; so written that a position not a
 	number snaps) */
-	snap = !(distance_squared(&previous[0].position, &latest[0].position) <= OBJECT_SNAP_DISTANCE * OBJECT_SNAP_DISTANCE);
-	for (node_index = 1; !snap && node_index < node_count; node_index++)
-	{
-		real_point3d previous_local, latest_local;
-
-		matrix4x3_inverse_transform_point(&previous[0], &previous[node_index].position, &previous_local);
-		matrix4x3_inverse_transform_point(&latest[0], &latest[node_index].position, &latest_local);
-		snap = !(distance_squared(&previous_local, &latest_local) <= NODE_SNAP_DISTANCE * NODE_SNAP_DISTANCE);
-	}
+	snap = overlap_poses_snap(previous, latest, node_count);
 	snap_tested = tick_overlap_now();
 	if (snap)
 	{
@@ -888,6 +1015,12 @@ static real_matrix4x3 *overlap_object_node_matrices_inner(long object_index)
 		}
 	}
 	record->blended = TRUE;
+	if (keyed_serials_ok && (snap || !memcmp(previous, latest, node_count * sizeof(real_matrix4x3))))
+	{
+		/* (kept for the frames that follow with the same two poses: see overlap_object) */
+		record->key_object_index = object_index;
+		blend_stats.keyed++;
+	}
 	{
 		const unsigned long long finished = tick_overlap_now();
 
@@ -935,6 +1068,8 @@ void render_interpolation_blend_log(
 		(double)blend_stats.asked / f, (double)blend_stats.repeated / f, (double)blend_stats.blended / f, (double)blend_stats.snapped / f,
 		(double)blend_stats.no_previous / f, (double)blend_stats.no_object / f, (double)blend_stats.nodes / f, (double)blend_stats.rotation_nodes / f,
 		(double)blend_stats.rotations_kept / f, (double)blend_stats.fixups / f);
+	tick_snapshot_say("tick snapshot, blends, a frame: %.1f blends taken from an earlier frame (%.1f nodes) of %.1f asked for; %.1f blends made were kept for reuse",
+		(double)blend_stats.reused / f, (double)blend_stats.reused_nodes / f, (double)blend_stats.asked / f, (double)blend_stats.keyed / f);
 	if (blend_stats.perf.stretches)
 	{
 		unsigned long long const *v = blend_stats.perf.sum;
@@ -984,6 +1119,8 @@ void render_interpolation_frame_begin(void)
 #ifdef HALO_WIIU
 	interpolation_fast_blends = (wiiu_gpu_offload_bits() & WIIU_GPU_OFFLOAD_BLEND_BIT) != 0;
 	interpolation_check_blends = (wiiu_gpu_offload_bits() & WIIU_GPU_OFFLOAD_CHECK_BIT) != 0;
+	interpolation_reuse_blends = (wiiu_gpu_offload_bits() & WIIU_GPU_OFFLOAD_NO_REUSE_BIT) == 0;
+	interpolation_check_reuse = interpolation_reuse_blends && (wiiu_gpu_offload_bits() & WIIU_GPU_OFFLOAD_REUSE_CHECK_BIT) != 0;
 #endif
 	interpolation_frame++;
 	interpolation_fraction = game_time_get_tick_fraction();
@@ -995,6 +1132,9 @@ void render_interpolation_frame_end(void)
 #ifdef HALO_WIIU
 	if (interpolation_check_blends && interpolation_fast_blends && !(interpolation_frame % 600))
 		interpolation_check_say();
+	if (interpolation_check_reuse && !(interpolation_frame % 600))
+		platform_log("gpu offload reuse check: %lu blends taken from an earlier frame compared with the same made afresh, %lu differ", interpolation_reuse_check.compared,
+			interpolation_reuse_check.differ);
 #endif
 }
 
@@ -1027,6 +1167,40 @@ real_matrix4x3 *render_interpolation_object_node_matrices(long object_index)
 		real_matrix4x3 const *latest = record->nodes + record->latest * record->node_capacity;
 		real_matrix4x3 *blended = record->nodes + 2 * record->node_capacity;
 		short node_index;
+#ifdef HALO_WIIU
+		byte rest_flags = 0;
+		boolean rest_possible = FALSE;
+
+		if (interpolation_reuse_blends)
+		{
+			/* (the fraction's bits: finite, and its sign; isfinite and signbit are calls in this build) */
+			uint32_t fraction_bits;
+
+			memcpy(&fraction_bits, &interpolation_fraction, sizeof(fraction_bits));
+			rest_possible = (fraction_bits & 0x7f800000u) != 0x7f800000u;
+			rest_flags = (byte)((interpolation_fast_blends ? OVERLAP_KEY_FAST : 0) | ((fraction_bits >> 31) ? OVERLAP_KEY_NEGATIVE : 0));
+			if (rest_possible && record->blend_at_rest && record->rest_flags == rest_flags && !correction_significant(&record->correction) &&
+				!correction_significant(&record->correction_pending))
+			{
+				/* the blend of the frame before, or of the last tick, is this frame's (see blend_at_rest) */
+				blend_stats.reused++;
+				blend_stats.reused_nodes += (unsigned long)record->node_count;
+				if (interpolation_check_reuse)
+				{
+					real_matrix4x3 fresh[MAXIMUM_INTERPOLATED_NODES];
+
+					overlap_blend_fresh(previous, latest, record->node_count, fresh);
+					interpolation_reuse_check.compared++;
+					if (memcmp(fresh, blended, record->node_count * sizeof(real_matrix4x3)) && !interpolation_reuse_check.differ++)
+						platform_log("gpu offload: a blend taken from an earlier frame differs from the same blend made afresh (serial frames, object %08lx, %d nodes, fraction %g, said once)",
+							(unsigned long)object_index, (int)record->node_count, (double)interpolation_fraction);
+				}
+				record->blended_frame = interpolation_frame;
+				return blended;
+			}
+		}
+		record->blend_at_rest = FALSE;
+#endif
 		/* (so written that a position not a number snaps) */
 		boolean snap = !(distance_squared(&previous[0].position, &latest[0].position) <=
 			OBJECT_SNAP_DISTANCE * OBJECT_SNAP_DISTANCE);
@@ -1085,6 +1259,16 @@ real_matrix4x3 *render_interpolation_object_node_matrices(long object_index)
 				blended[node_index].position.z += drawn.k;
 			}
 		}
+#ifdef HALO_WIIU
+		/* (a blend of the same pose twice, whole, and with no correction drawn on it: the same while the poses are) */
+		if (rest_possible && !snap && !correction_significant(&record->correction) && !correction_significant(&record->correction_pending) &&
+			!memcmp(previous, latest, record->node_count * sizeof(real_matrix4x3)))
+		{
+			record->blend_at_rest = TRUE;
+			record->rest_flags = rest_flags;
+			blend_stats.keyed++;
+		}
+#endif
 		record->blended_frame = interpolation_frame;
 	}
 	return record->nodes + 2 * record->node_capacity;
@@ -1149,6 +1333,9 @@ void render_interpolation_correct_object(long object_index, real_vector3d const 
 		}
 		correction_add(&record->correction, &record->correction_pending, offset);
 		record->blended_frame = NONE;
+#ifdef HALO_WIIU
+		record->blend_at_rest = FALSE;
+#endif
 	}
 	/* a local player's unit (by itself, or with what it rides): its
 	first-person view, which the observer poses from it, glides with it */

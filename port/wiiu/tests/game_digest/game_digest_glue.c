@@ -1097,7 +1097,50 @@ unsigned wiiu_gpu_offload_bits(void)
 	const char *value = getenv("HALO_GPU_OFFLOAD");
 	const long bits = value && *value ? strtol(value, NULL, 0) : 0;
 
-	return bits > 0 ? (unsigned)bits & 7u : 0;
+	return bits > 0 ? (unsigned)bits & 31u : 0;
+}
+
+/* what the shell, the card and the keyboard give the game on the console and a host run has none of (the HUD sheets' builder and the saves' writer ask to be below the game
+thread's priority on core 0; the keyboard's atlas; the card's free room, which the console does not ask for either; the bots' clock): the thread keeps its place, the keyboard is
+never shown, the room is not known, and the time is the machine's */
+void wiiu_thread_background(const char *name);
+unsigned wiiu_thread_core_id(void);
+void wiiu_keyboard_prewarm(void);
+int wiiu_keyboard_shown(void);
+int wiiu_card_free_bytes(unsigned long long *bytes);
+long long wiiu_microseconds_now(void);
+
+void wiiu_thread_background(const char *name)
+{
+	(void)name;
+}
+
+unsigned wiiu_thread_core_id(void)
+{
+	return 0;
+}
+
+void wiiu_keyboard_prewarm(void)
+{
+}
+
+int wiiu_keyboard_shown(void)
+{
+	return 0;
+}
+
+int wiiu_card_free_bytes(unsigned long long *bytes)
+{
+	(void)bytes;
+	return 0;
+}
+
+long long wiiu_microseconds_now(void)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (long long)now.tv_sec * 1000000 + now.tv_nsec / 1000;
 }
 
 /* wiiu_study.c: a study switch's number from a file on the card; here from the environment (tick_thread.txt: HALO_TICK_THREAD,
@@ -1111,6 +1154,7 @@ long wiiu_study_number(const char *name, long fallback)
 		!strcmp(name, "startup.txt") ? "HALO_STARTUP" :
 		!strcmp(name, "stream.txt") ? "HALO_STREAM" : !strcmp(name, "hotpaths.txt") ? "HALO_HOTPATHS" :
 		!strcmp(name, "stream_delay.txt") ? "HALO_STREAM_DELAY" :
+		!strcmp(name, "hud_sheets.txt") ? "HALO_HUD_SHEETS" :
 		!strcmp(name, "async_save.txt") ? "HALO_ASYNC_SAVE" : !strcmp(name, "async_save_verify.txt") ? "HALO_ASYNC_SAVE_VERIFY" :
 		!strcmp(name, "async_save_piece_kb.txt") ? "HALO_ASYNC_SAVE_PIECE_KB" : !strcmp(name, "async_save_fault.txt") ? "HALO_ASYNC_SAVE_FAULT" : NULL;
 	const char *value;

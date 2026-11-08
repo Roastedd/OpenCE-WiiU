@@ -51,8 +51,8 @@ unsigned wiiu_gpu_offload_bits(void)
 		/* (two threads may both get here the first time: they read the same file) */
 		offload_bits = bits;
 		__atomic_store_n(&offload_read, 1, __ATOMIC_RELEASE);
-		wiiu_log("gpu offload (halo/gpu_offload.txt %s): blends %s, census %s", found ? "found" : "absent", bits & WIIU_GPU_OFFLOAD_BLENDS ? "cheap" : "as before",
-			bits & WIIU_GPU_OFFLOAD_CENSUS ? "on" : "off");
+		wiiu_log("gpu offload (halo/gpu_offload.txt %s): blends %s, census %s, blends of poses at rest %s", found ? "found" : "absent", bits & WIIU_GPU_OFFLOAD_BLENDS ? "cheap" : "as before",
+			bits & WIIU_GPU_OFFLOAD_CENSUS ? "on" : "off", bits & WIIU_GPU_OFFLOAD_NO_REUSE ? "made every frame" : "kept from the frame before");
 	}
 	return offload_bits;
 }
