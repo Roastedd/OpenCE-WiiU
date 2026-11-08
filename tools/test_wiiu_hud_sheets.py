@@ -172,6 +172,42 @@ class ToolTest(unittest.TestCase):
         rgba = self.synthetic(1990, blue_below=False)
         self.assertEqual(sheets.crop_rows(rgba), 2048)
 
+    def test_the_mip_levels_of_a_copy_are_the_sheets_to_the_sixth(self):
+        """The levels the console makes (the mean of each 2 by 2) of the sheet and of its copy: the copy's rows are the sheet's top rows of every level to the sixth (every
+        copy is a multiple of 64 rows), which the HUD's sprites, drawn at one to a few texels in eight, never go beyond."""
+        for entry in json.loads(sheets.SHEETS_JSON.read_text())["assets"]:
+            if entry["how"] != "crop":
+                continue
+            full = sheets.load_rgba(sheets.HUD_ASSETS / f"{entry['name']}.png")
+            copy = sheets.load_rgba(sheets.WIIU_ASSETS / f"{entry['name']}.png")
+            for level in range(1, 7):
+                full, copy = sheets.shrink(full), sheets.shrink(copy)
+                self.assertTrue(np.array_equal(full[:copy.shape[0]], copy), (entry["name"], level))
+
+    def test_the_games_own_png_decoder_reads_the_committed_copies(self):
+        """hud_hires.c's png_decode (the code the console runs, taken out of the source as it is) on every copy: the pixels are the tool's."""
+        text = (ROOT / "port/linux/src/hud_hires.c").read_text()
+        start = text.index("static unsigned long big_endian_long")
+        end = text.index("#ifdef HALO_WIIU\nunsigned char *hud_hires_png_pixels")
+        limit = [line for line in text.splitlines() if line.startswith("#define MAXIMUM_DECODED_SIZE")]
+        self.assertEqual(len(limit), 1)
+        entries = json.loads(sheets.SHEETS_JSON.read_text())["assets"]
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            source = folder / "decode.c"
+            source.write_text("#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <zlib.h>\n" + limit[0] + "\n"
+                              "#define platform_log(...) fprintf(stderr, __VA_ARGS__)\n" + text[start:end] +
+                              "int main(int argc, char **argv){ FILE *f = fopen(argv[1], \"rb\"); static unsigned char data[1 << 24]; unsigned long size = fread(data, 1, sizeof(data), f), w = 0, h = 0;\n"
+                              "unsigned char *pixels = png_decode(data, size, &w, &h); if (!pixels) return 1; printf(\"%lu %lu\\n\", w, h); fwrite(pixels, 4, w * h, stdout); return 0; }\n")
+            decode = c_compile(folder, source, "decode", extra=["-lz"])
+            for entry in entries:
+                path = sheets.WIIU_ASSETS / f"{entry['name']}.png"
+                out = subprocess.run([str(decode), str(path)], capture_output=True)
+                self.assertEqual(out.returncode, 0, entry["name"] + out.stderr.decode())
+                header, _, body = out.stdout.partition(b"\n")
+                self.assertEqual(header.decode().split(), [str(entry["width"]), str(entry["height"])], entry["name"])
+                self.assertTrue(np.array_equal(np.frombuffer(body, dtype=np.uint8).reshape(entry["height"], entry["width"], 4), sheets.load_rgba(path)), entry["name"])
+
     def test_the_committed_copies_are_what_the_sheets_make(self):
         self.assertEqual(sheets.build(write=False), [])
 
