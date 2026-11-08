@@ -698,6 +698,12 @@ DWORD WINAPI GetTickCount(void)
 	return (DWORD)(platform_clock_nanoseconds() / 1000000ULL);
 }
 
+/* the game's clock in microseconds (the bots' cost counts, port/linux/game/bots.c) */
+long long platform_microseconds(void)
+{
+	return (long long)(platform_clock_nanoseconds() / 1000ULL);
+}
+
 /* The Xbox performance counter runs at the 733 MHz CPU clock. Report a
 microsecond counter instead: coarse enough that 32-bit intermediate
 arithmetic in the game stays in range, fine enough for frame timing. */

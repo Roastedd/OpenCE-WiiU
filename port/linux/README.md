@@ -429,6 +429,20 @@ not see a player far above or below where it looks (unless near, or shot by
 them); and from `"veteran"` it prefers high ground as it roams. halo.log's
 bots line each minute is followed by the fight's counts.
 
+What the bots cost is counted too. Each minute the bots line and the fight's counts
+are followed by two lines (`bots: cost:`): the microseconds all the bots take in
+a tick (the mean, the 99th percentile and the longest) and each bot's mean and
+99th percentile, with the sight tests cast and the path searches made. On the
+Wii U the same time is one of the parts in the tick parts line (`bots`). At the
+end of a game (and for `bots.sim_ticks`, which ends a run after that many ticks
+of bots) the game says a `bots-sim:` block: for each bot its frags, deaths,
+seconds stuck, path searches that failed or ended short of the goal, sight tests
+and think time, then the totals. `tools/harness/bots_sim.py` plays a map headless
+with some bots for some ticks (the null renderer, `debug.fixed_step` and a pinned
+`debug.random_seed`, so that two runs of one build play the same game), reads the
+block into a result, and compares two runs; `python3 tools/harness/bots_sim.py run
+--map bloodgulch --bots 6 --ticks 3600 --out DIR`.
+
 ## OpenCE gametypes
 
 Create Game's Select Gametype screen has a bank between STANDARD and
@@ -590,6 +604,7 @@ the setting for one start of the game. It has priority over the file.
 | `bots.count` | `0` | `HALO_BOTS` | Computer players (bots) in a local (split screen) Slayer game: `0` to `15` join its lobby with the players, as far as the game has room. Not in system link or internet games. `0`: none, as in the stock game. Refer to "Bots". |
 | `bots.skill` | `"normal"` | `HALO_BOT_SKILL` | How well the bots play: `"recruit"`, `"easy"`, `"normal"`, `"heroic"`, `"veteran"` or `"legendary"`: how soon they react, how far and how wide they see, how large their aim error is and how fast it settles, how fast they turn, and how they fight. `"easy"`, `"normal"`, `"heroic"` and `"legendary"` keep their numbers; `"recruit"` is below `"easy"`, and `"veteran"` halfway from `"heroic"` to `"legendary"`. Refer to "Bots". |
 | `bots.teams` | `"even"` | `HALO_BOT_TEAMS` | In a team game: `"even"` puts the bots on both teams, evening them with the players; `"against"` puts them all on the team the players are not on. |
+| `bots.sim_ticks` | `0` | `HALO_BOTS_SIM_TICKS` | For automated runs (`tools/harness/bots_sim.py`): this many game ticks after the bots first play, the game says the `bots-sim:` block (each bot's frags, deaths, seconds stuck, path failures and think time) and ends the run. `0`: never. |
 | `paths.data` | `""` | `HALO_DATA_ROOT` | The data root. Refer to "Start the game". |
 | `paths.saves` | `""` | `HALO_SAVE_ROOT` | The save root. Refer to "Files and folders". |
 | `paths.logs` | `""` | `HALO_LOG_ROOT` | The folder of `debug.txt`, `bans.txt` and `cheaters.txt`. Empty: the data root. With it, the data root can be read-only (a dedicated server's maps mounted so). |

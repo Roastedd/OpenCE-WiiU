@@ -78,6 +78,7 @@ and each bot's kills and deaths; debug.bot_trace logs each bot's state.
 #include "game/game.h"
 #include "game/game_engine.h"
 #include "game/players.h"
+#include "main/main.h"
 #include "objects/objects.h"
 #include "units/units.h"
 #include "units/bipeds.h"
@@ -100,6 +101,7 @@ and each bot's kills and deaths; debug.bot_trace logs each bot's state.
 
 #include "bots.h"
 #include "bots_combat.h"
+#include "bots_stats.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -246,6 +248,24 @@ struct bots_bot_combat
 	} track[BOTS_TRACK_TICKS];
 };
 
+/* what a bot has cost and done since the map's start (halo.log's cost line and the bots-sim block, which the headless
+runs read: tools/harness/bots_sim.py); statistics only, nothing in a bot's play reads them */
+struct bots_bot_counts
+{
+	/* its think time a tick (microseconds) */
+	struct bots_think_stats think;
+	/* the sight tests (rays) it cast, and its path searches that failed or ended short of the goal */
+	long rays;
+	long search_failures;
+	long search_partials;
+	/* the seconds it stood stuck while it walked (checked once a second) and the goals it gave up after three */
+	long stuck_seconds;
+	long stuck_giveups;
+	/* its kills and deaths as of its last tick (the players are gone by the map's end) */
+	long kills;
+	long deaths;
+};
+
 struct bots_bot
 {
 	long player_index;
@@ -326,6 +346,8 @@ struct bots_bot
 
 	/* (debug.bot_trace) its path searches */
 	long searches;
+
+	struct bots_bot_counts counts;
 };
 
 /* ---------- globals */
@@ -363,6 +385,17 @@ static struct
 	long stuck_events;
 	long stuck_giveups;
 	long last_report_tick;
+
+	/* the cost of all the bots in a tick (microseconds), and the sight tests cast */
+	struct bots_think_stats tick_think;
+	long rays;
+	/* the bot being thought for (its sight tests are counted to it) */
+	struct bots_bot *active_bot;
+	/* the map's name, for the bots-sim block, and whether the block was said (once a game) */
+	char map_name[64];
+	boolean sim_reported;
+	/* the clock at the first tick of bots (the run's time a tick) */
+	long long first_tick_microseconds;
 } bots_globals;
 
 /* the walkable surfaces the bots' searches read: a copy of the structure's
@@ -383,6 +416,32 @@ static struct
 	long roofed_count;
 	long scan_ticks;
 } bots_paths;
+
+/* ---------- the clock (the cost counts; and a budget in time: bots_budget.c) */
+
+#ifdef HALO_WIIU
+/* port/wiiu/src/wiiu_tick_parts.c: the console's time base, in microseconds */
+long long wiiu_microseconds_now(void);
+#if !defined(HALO_PROFILE)
+/* the tick parts line of the log (game.c): the bots are one of its parts */
+long long wiiu_tick_part_now(void);
+void wiiu_tick_part(const char *name, long long started);
+#define BOTS_TICK_PART
+#endif
+
+static long long bots_clock_microseconds(void)
+{
+	return wiiu_microseconds_now();
+}
+#else
+/* port/linux/src/xbox_kernel.c: the game's clock in microseconds */
+long long platform_microseconds(void);
+
+static long long bots_clock_microseconds(void)
+{
+	return platform_microseconds();
+}
+#endif
 
 /* ---------- settings */
 
@@ -1293,6 +1352,8 @@ static void bots_prepare_map(void)
 	}
 }
 
+static void bots_report_sim(char const *why);
+
 void bots_initialize_for_new_map(void)
 {
 	long index;
@@ -1312,6 +1373,12 @@ void bots_initialize_for_new_map(void)
 	bots_globals.stuck_events = 0;
 	bots_globals.stuck_giveups = 0;
 	csmemset(bots_globals.combat_counts, 0, sizeof(bots_globals.combat_counts));
+	bots_think_reset(&bots_globals.tick_think);
+	bots_globals.rays = 0;
+	bots_globals.active_bot = NULL;
+	bots_globals.sim_reported = FALSE;
+	bots_globals.map_name[0] = 0;
+	bots_globals.first_tick_microseconds = 0;
 	/* (the first line a minute into the game) */
 	bots_globals.last_report_tick = 0;
 	/* (the weapon definitions are the new map's) */
@@ -1320,6 +1387,7 @@ void bots_initialize_for_new_map(void)
 
 void bots_dispose_from_old_map(void)
 {
+	bots_report_sim("the map's end");
 	bots_paths_release();
 	bots_globals.map_ready = FALSE;
 }
@@ -1528,7 +1596,10 @@ static void bots_search(struct bots_bot *bot, long unit_index)
 	if (state->node_count >= PATH_NODE_LIST_SIZE)
 		bots_globals.search_overflows++;
 	if (!reached)
+	{
 		bots_globals.search_partials++;
+		bot->counts.search_partials++;
+	}
 	csmemset(&path, 0, sizeof(path));
 	if (bots_search_build(state, &start, &bot->goal_point, &path))
 	{
@@ -1546,6 +1617,7 @@ static void bots_search(struct bots_bot *bot, long unit_index)
 		bot->path.valid = FALSE;
 		bot->path_failures++;
 		bots_globals.search_failures++;
+		bot->counts.search_failures++;
 	}
 	/* (an item it finds no way to: another, and not this one a while) */
 	if (bot->goal_kind == _bots_goal_item && !reached)
@@ -1568,6 +1640,9 @@ static boolean bots_line_of_sight(long unit_index, real_point3d const *eye, real
 	vector.i = point->x - eye->x;
 	vector.j = point->y - eye->y;
 	vector.k = point->z - eye->z;
+	bots_globals.rays++;
+	if (bots_globals.active_bot)
+		bots_globals.active_bot->counts.rays++;
 	if (!collision_test_vector(_collision_test_for_line_of_sight_flags, eye, &vector, unit_index, &collision))
 		return TRUE;
 	/* (the target's vehicle: seen) */
@@ -2780,6 +2855,7 @@ static void bots_bot_unstick(struct bots_bot *bot, struct bots_tick *tick)
 			tick->object->object.parent_object_index == NONE)
 		{
 			bots_globals.stuck_events++;
+			bot->counts.stuck_seconds++;
 			bot->stuck_count++;
 			bot->unstick_until_tick = now + TICKS_PER_SECOND / 2;
 			bot->unstick_direction = tick->move_direction + (bots_random_real(bot) < 0.5f ? -1.0f : 1.0f) * BOTS_PI * 0.5f;
@@ -2787,6 +2863,7 @@ static void bots_bot_unstick(struct bots_bot *bot, struct bots_tick *tick)
 			if (bot->stuck_count >= 3)
 			{
 				bots_globals.stuck_giveups++;
+				bot->counts.stuck_giveups++;
 				bot->goal_kind = _bots_goal_none;
 				bot->stuck_count = 0;
 				bots_pick_roam_goal(bot, &tick->position);
@@ -2954,6 +3031,8 @@ static void bots_bot_update(struct bots_bot *bot, long bot_index, struct player_
 	bots_bot_trace(bot, bot_index, &tick);
 }
 
+static void bots_report_cost(void);
+
 /* halo.log's line, a minute into the game and each minute on */
 static void bots_report(void)
 {
@@ -2997,6 +3076,80 @@ static void bots_report(void)
 			counts[_bots_combat_count_halts], counts[_bots_combat_count_paced], counts[_bots_combat_count_rescopes],
 			counts[_bots_combat_count_high_ground], counts[_bots_combat_count_out_of_view]);
 	}
+	bots_report_cost();
+}
+
+/* the cost line, a minute into the game and each minute on (after the bots line and the fight's counts): what the bots cost a tick */
+static void bots_report_cost(void)
+{
+	char line[220];
+	int length = 0;
+	long index;
+
+	platform_log("bots: cost: all bots a tick mean %ld us, 99%% within %ld, longest %ld (%ld ticks), %ld sight tests, "
+		"%ld searches", bots_think_mean(&bots_globals.tick_think), bots_think_percentile(&bots_globals.tick_think, 99),
+		bots_globals.tick_think.maximum_microseconds, bots_globals.tick_think.samples, bots_globals.rays,
+		bots_globals.searches);
+	line[0] = 0;
+	for (index = 0; index < BOTS_MAXIMUM; index++)
+	{
+		struct bots_bot *bot = &bots_globals.bots[index];
+
+		if (bot->player_index == NONE || !bot->counts.think.samples)
+			continue;
+		if (length < (int)sizeof(line) - 30)
+			length += snprintf(line + length, sizeof(line) - (size_t)length, " %ld:%ld/%ld", index + 1,
+				bots_think_mean(&bot->counts.think), bots_think_percentile(&bot->counts.think, 99));
+	}
+	platform_log("bots: cost per bot, us a tick (mean/99%%):%s", line);
+}
+
+/* the block the headless runs read at the end of a game (tools/harness/bots_sim.py): each bot's frags, deaths, time stuck, path
+failures and think time, then the totals; once a game */
+static void bots_report_sim(char const *why)
+{
+	struct bots_think_stats think;
+	long frags = 0, deaths = 0, stuck = 0, searches = 0, failed = 0, partial = 0, rays = 0, count = 0, index;
+
+	if (bots_globals.sim_reported || !bots_globals.ticks)
+		return;
+	bots_globals.sim_reported = TRUE;
+	for (index = 0; index < BOTS_MAXIMUM; index++)
+	{
+		if (bots_globals.bots[index].player_index != NONE && bots_globals.bots[index].counts.think.samples)
+			count++;
+	}
+	platform_log("bots-sim: begin (%s) map %s ticks %ld bots %ld ms_per_tick %.3f", why, bots_globals.map_name,
+		bots_globals.ticks, count, bots_globals.ticks > 1 ? (double)(bots_clock_microseconds() -
+		bots_globals.first_tick_microseconds) / 1000.0 / (double)bots_globals.ticks : 0.0);
+	bots_think_reset(&think);
+	for (index = 0; index < BOTS_MAXIMUM; index++)
+	{
+		struct bots_bot const *bot = &bots_globals.bots[index];
+		struct bots_bot_counts const *counts = &bot->counts;
+
+		if (bot->player_index == NONE || !counts->think.samples)
+			continue;
+		platform_log("bots-sim: bot %ld %s frags %ld deaths %ld stuck_s %ld giveups %ld searches %ld failed %ld short %ld rays %ld "
+			"think_us %ld/%ld/%ld", index + 1, bots_skills[bots_globals.skill].name, counts->kills, counts->deaths,
+			counts->stuck_seconds, counts->stuck_giveups, bot->searches, counts->search_failures, counts->search_partials,
+			counts->rays, bots_think_mean(&counts->think), bots_think_percentile(&counts->think, 99),
+			counts->think.maximum_microseconds);
+		frags += counts->kills;
+		deaths += counts->deaths;
+		stuck += counts->stuck_seconds;
+		searches += bot->searches;
+		failed += counts->search_failures;
+		partial += counts->search_partials;
+		rays += counts->rays;
+		bots_think_add(&think, &counts->think);
+	}
+	platform_log("bots-sim: total frags %ld deaths %ld stuck_s %ld searches %ld failed %ld short %ld rays %ld", frags, deaths,
+		stuck, searches, failed, partial, rays);
+	platform_log("bots-sim: tick_us mean %ld p99 %ld max %ld ticks %ld (the bots' think time in a tick; per bot: think_us "
+		"is mean/p99/max)", bots_think_mean(&bots_globals.tick_think), bots_think_percentile(&bots_globals.tick_think, 99),
+		bots_globals.tick_think.maximum_microseconds, bots_globals.tick_think.samples);
+	platform_log("bots-sim: end");
 }
 
 void bots_update_actions(struct player_action *actions)
@@ -3004,6 +3157,10 @@ void bots_update_actions(struct player_action *actions)
 	struct data_iterator iterator;
 	struct player_datum *player;
 	long count = 0;
+	long long tick_started = 0;
+#ifdef BOTS_TICK_PART
+	long long part_started = 0;
+#endif
 
 	/* (local games alone: no other machine sees a bot) */
 	if (!game_engine_running() || !network_game_is_splitscreen_local())
@@ -3014,6 +3171,7 @@ void bots_update_actions(struct player_action *actions)
 		long bot_index;
 		long absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index);
 		struct bots_bot *bot;
+		long long bot_started;
 
 		if (player->local_player_index != NONE || !bots_machine_is_bot(player->network_player_data.machine_index))
 			continue;
@@ -3021,6 +3179,12 @@ void bots_update_actions(struct player_action *actions)
 		bots; the skill once a tick) */
 		if (!count)
 		{
+			tick_started = bots_clock_microseconds();
+			if (!bots_globals.first_tick_microseconds)
+				bots_globals.first_tick_microseconds = tick_started;
+#ifdef BOTS_TICK_PART
+			part_started = wiiu_tick_part_now();
+#endif
 			if (!bots_globals.map_ready)
 				bots_prepare_map();
 			bots_globals.skill = bots_skill();
@@ -3031,13 +3195,31 @@ void bots_update_actions(struct player_action *actions)
 		bot = &bots_globals.bots[bot_index];
 		if (bot->player_index != iterator.datum_index)
 			bots_bot_reset(bot, iterator.datum_index, bot_index);
+		bot->counts.kills = (long)player->statistics.kills[0];
+		bot->counts.deaths = (long)player->statistics.deaths;
+		bot_started = bots_clock_microseconds();
+		bots_globals.active_bot = bot;
 		if (absolute_index >= 0 && absolute_index < HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
 			bots_bot_update(bot, bot_index, &actions[absolute_index]);
+		bots_globals.active_bot = NULL;
+		bots_think_note(&bot->counts.think, (long)(bots_clock_microseconds() - bot_started));
 		count++;
 	}
 	if (count)
 	{
+		bots_think_note(&bots_globals.tick_think, (long)(bots_clock_microseconds() - tick_started));
+#ifdef BOTS_TICK_PART
+		wiiu_tick_part("game_tick_bots_section", part_started);
+#endif
 		bots_globals.ticks++;
+		if (!bots_globals.map_name[0])
+			snprintf(bots_globals.map_name, sizeof(bots_globals.map_name), "%s", main_get_multiplayer_map_name());
 		bots_report();
+		/* (bots.sim_ticks, the headless runs': that many ticks of bots, then the block and the end of the run) */
+		if (config_integer("bots.sim_ticks") > 0 && bots_globals.ticks >= config_integer("bots.sim_ticks"))
+		{
+			bots_report_sim("bots.sim_ticks");
+			exit(0);
+		}
 	}
 }
