@@ -184,6 +184,25 @@ Controllers (none was connected), split screen play, a real finger (the calibrat
 console: the GamePad's gyro aiming (`input.wiiu_gyro_aim` "always" or "zoom"; off by default; the axes' signs and scale are unmeasured), a tap outside the
 menus that skips a cinematic, Classic Controllers, and the Wii Remote with a Nunchuk (next section).
 
+## Typing: the chat's keyboard, the quick chat and text fields (`wiiu-typing`)
+
+Written and tested on the build machine (`tools/harness/tests/test_wiiu_chat_input.py`, `test_wiiu_keyboard.py`, `test_chat_logic.py`, `test_text_safe.py`,
+`test_halo_clock.py`); **not run on a console**. The console test plan is in `reports/research/2026-11-07/typing-result.md`.
+
+- **The chat's keyboard on the controllers** (`xinput_wiiu.c`, `wiiu_chat_input.h`): D-pad Up opens the chat's on-screen keyboard in a network game (the TV's, as on the
+  desktop); the Wii U's letters, not their places: A types, B closes, X deletes, Y gives capitals, + sends, the left stick or the D-pad moves, D-pad Up and Down turn the channel.
+  While it is up the game gets nothing from that controller (nor the gyro). On the other ports (split screen), their D-pad Up opens their own keyboard.
+- **The GamePad's keyboard** (`input.wiiu_gamepad_keyboard`, off by default; `wiiu_keyboard.c`, `wiiu_keyboard_font.c`, drawn by `keyboard_draw` in `wiiu_gx2.c`): over the
+  GamePad's screen, 80 x 60 pixel keys, the channel chips, the line with a caret, CLOSE; a tap presses the key under the finger. Its glyphs (the menus' Overpass fonts) are rasterized
+  on a thread of its own when a network game starts or the menus first show, so the first keystroke rasterizes nothing; nothing is drawn or computed while it is closed.
+  With the setting off, or if the glyphs could not be made, the GamePad mirrors the TV and the TV's keyboard is all there is.
+- **The quick chat** (`input.quick_chat`, `"auto"`: on here): D-pad Down opens a page of four lines (D-pad up, left, right, down say them; L and R, or Y, turn the three pages;
+  B closes it). The lines go as ordinary English chat lines, so every player sees them.
+- **Text in the menus**: with the GamePad's keyboard on, a menu's text field (the server's name, a password, a link) is typed on it; its keys reach the field as the Xbox's debug
+  keyboard's keystrokes (`XInputDebugGetKeystroke`), DONE and CANCEL as the Xbox's A and B pressed for six polls. The controller's A and B still do the same.
+- **The clock** (`halo_utc_now`, `p2p.c`): the wall clock internet play compares listings with is anchored to a TLS answer's Date (the first master's `/healthz` at start and every
+  master list), so a console whose own clock is hours off sees the PC's listings and signs its own with the right time.
+
 ## Wii Remote
 
 Branch `wiiu-wimote`. A Wii Remote is read like the Pro and Classic Controllers: its own KPAD channel, a player in `src/wiiu_pad_players.c`'s map by its

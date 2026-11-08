@@ -109,7 +109,16 @@ struct halo_chat_keyboard_view
 	char text[HALO_CHAT_KEYBOARD_TEXT];
 	/* the characters of the keys of the first four rows, as the page and capitals have them */
 	char keys[HALO_CHAT_KEYBOARD_ROWS][HALO_CHAT_KEYBOARD_COLUMNS];
+	/* 0: the chat's line; 1: a menu's text field (platform_text_field), with no channels, its line shown as stars if masked, and DONE and CANCEL in place of SEND and CLOSE */
+	int mode;
+	int masked;
+	/* the characters the line may hold (0: the chat's 63) */
+	int limit;
 };
+
+/* a menu's text field is being edited (menu_functions.c: platform_text_field begins and ends it; the keys typed reach it as the keyboard's keystrokes): its text now and the most it
+holds, every frame while it is edited, for a platform that shows a keyboard of its own for it. Nothing on the desktop. */
+void platform_text_field_text(char const *text, int maximum);
 
 /* the keyboard as it is now (every frame, after network_chat_update); the platform keeps the latest for the thread that draws it. Nothing on the desktop. */
 void halo_chat_keyboard_publish(const struct halo_chat_keyboard_view *view);

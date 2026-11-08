@@ -527,6 +527,13 @@ void platform_text_typing(int typing)
 #endif
 }
 
+/* (the Wii U shows a keyboard of its own for a field: its text and size) */
+void platform_text_field_text(char const *text, int maximum)
+{
+	(void)text;
+	(void)maximum;
+}
+
 void platform_text_field(int typing, int password)
 {
 	text_typing_field = typing != 0;

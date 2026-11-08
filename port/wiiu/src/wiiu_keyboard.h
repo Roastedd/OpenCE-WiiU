@@ -77,7 +77,8 @@ struct wk_hit
 	int row, column, channel;
 };
 
-/* what a finger at a place of the GamePad's picture (pixels) touches: a key (all of its 80 x 60 cell), a chip, the close chip, or nothing. Returns the kind. */
+/* what a finger at a place of the GamePad's picture (pixels) touches: a key (all of its 80 x 60 cell), a chip, the close chip, or nothing. Returns the kind. (A menu's field has two
+buttons: the first chip, DONE, and the close chip, CANCEL.) */
 int wiiu_keyboard_hit(float x, float y, struct wk_hit *hit);
 
 /* ---------- the glyphs */
@@ -158,6 +159,71 @@ void wiiu_keyboard_publish(const struct halo_chat_keyboard_view *view);
 /* the drawing thread, or the game's: the latest published keyboard; always a whole one (never half of one frame's and half of the next's) */
 void wiiu_keyboard_snapshot(struct halo_chat_keyboard_view *view);
 
+/* ---------- a menu's text field (platform_text_field: the server's name, a password, a link)
+
+The same keyboard types into a field the menus edit: the view has mode 1 (no channels; DONE and CANCEL for SEND and CLOSE; a masked field shows stars), a key tapped is a
+keystroke for the game's key queue as the Xbox's debug keyboard would give it (XInputDebugGetKeystroke: the game's input reads it and the field takes the character), and DONE and
+CANCEL are the Xbox A and B pressed for a moment, which the field's row takes as "done" and "back". The text is the menu's own (platform_text_field_text); this keeps the page and
+the capitals. */
+
+enum
+{
+	WK_ACTION_NONE,
+	/* a character to type (or the shift or symbols page changed: nothing for the game) */
+	WK_ACTION_CHARACTER,
+	WK_ACTION_DELETE,
+	WK_ACTION_DONE,
+	WK_ACTION_CANCEL,
+	WK_ACTION_PAGE,
+};
+
+struct wk_action
+{
+	int kind;
+	char character;
+};
+
+struct wk_field
+{
+	int active;
+	int masked;
+	int limit;
+	int shift, symbols;
+	int row, column;
+	int length;
+	char text[HALO_CHAT_KEYBOARD_TEXT];
+};
+
+/* the character of a key of the first four rows on the page and capitals the field has (the chat keyboard's, network_chat.c: the harness checks that they agree), 0 for none */
+char wiiu_keyboard_page_key(int symbols, int shift, int row, int column);
+
+void wiiu_keyboard_field_begin(struct wk_field *field, int masked);
+void wiiu_keyboard_field_end(struct wk_field *field);
+/* the field's text now (printable ASCII only is kept; at most the keyboard's line) and the most it holds */
+void wiiu_keyboard_field_text(struct wk_field *field, const char *text, int maximum);
+/* a tap at a place of the GamePad's picture: the action it is (and the page or capitals changed for Aa and #+=); WK_ACTION_NONE for none */
+int wiiu_keyboard_field_tap(struct wk_field *field, float x, float y, struct wk_action *action);
+/* the field as a view to draw */
+void wiiu_keyboard_field_view(const struct wk_field *field, struct halo_chat_keyboard_view *view);
+
+/* A character as the Xbox's debug keyboard reports it: the virtual key whose key the game's input table knows (a letter or digit, or the punctuation key a symbol is on) and its
+flags (XINPUT_DEBUG_KEYSTROKE_FLAG_SHIFT for a capital or a shifted symbol), so that the character reaches the game as typed. 0 for a character that is none of printable ASCII. */
+int wiiu_keyboard_keystroke(char character, unsigned char *virtual_key, unsigned char *flags);
+
+/* the keystrokes waiting for the game's input (the game's thread pushes them from a tap and pops them as the game reads its keys): a press and its release for each; they are
+dropped when the queue is full */
+enum { WK_KEYSTROKE_QUEUE = 64 };
+struct wk_keystroke
+{
+	unsigned char virtual_key;
+	char ascii;
+	unsigned char flags;
+};
+void wiiu_keyboard_keys_clear(void);
+void wiiu_keyboard_keys_type(char character);
+void wiiu_keyboard_keys_delete(void);
+int wiiu_keyboard_keys_next(struct wk_keystroke *keystroke);
+
 /* ---------- the console's pieces (wiiu_keyboard_font.c) */
 
 /* input.wiiu_gamepad_keyboard: whether the GamePad shows the keyboard (off: the controller's keyboard on the TV, which the GamePad then mirrors, is all there is) */
@@ -166,7 +232,13 @@ int wiiu_keyboard_enabled(void);
 void wiiu_keyboard_prewarm(void);
 /* the atlas, or NULL while it is not made (or could not be) */
 const struct wk_atlas *wiiu_keyboard_atlas(void);
-/* whether the GamePad is showing the keyboard now: it is open on the first player's controller, the atlas is made, and the setting is on */
+/* whether the GamePad is showing the keyboard now: it is open (for the chat on the first player's controller, or for a menu's field), the atlas is made, and the setting is on */
 int wiiu_keyboard_shown(void);
+
+/* a menu's text field (platform_text_field, from the game's thread): begun with the keyboard on (and the glyphs asked for), ended; whether one is being edited */
+void wiiu_keyboard_field_set(int typing, int masked);
+int wiiu_keyboard_field_active(void);
+/* a tap on the GamePad (pixels) while the field is edited: the keyboard's key typed, deleted or changed, or DONE or CANCEL pulsed. Returns the action's kind (WK_ACTION_*). */
+int wiiu_keyboard_field_press(float x, float y);
 
 #endif

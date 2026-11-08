@@ -703,6 +703,44 @@ static void vote_pad_hold_over(XINPUT_GAMEPAD *pad)
 		pad->wButtons &= (WORD)~vote_held_buttons;
 }
 
+/* A menu's text field (platform_text_field: wiiu_keyboard.h) edited with the GamePad's keyboard: a tap on its keys types into the game's key queue (XInputDebugGetKeystroke below),
+and DONE and CANCEL are the Xbox's A and B pressed for a few polls, which the field's row takes as "done" and the menu as "back" (a press the game sees once: it counts a button's
+ticks). The tap is the keyboard's alone: d3d8_gx2.c's pointer leaves the screen's touch to it meanwhile. */
+#define FIELD_PRESS_POLLS 6
+static int field_press_a, field_press_b;
+
+static void field_apply(XINPUT_GAMEPAD *state)
+{
+	float x, y;
+
+	if (wiiu_keyboard_field_active() && wiiu_chat_tap_take_pixels(&chat_tap, &x, &y))
+	{
+		switch (wiiu_keyboard_field_press(x, y))
+		{
+		case WK_ACTION_DONE:
+			field_press_a = FIELD_PRESS_POLLS;
+			break;
+		case WK_ACTION_CANCEL:
+			field_press_b = FIELD_PRESS_POLLS;
+			break;
+		default:
+			break;
+		}
+	}
+	if (!wiiu_keyboard_field_active())
+		field_press_a = field_press_b = 0;
+	if (field_press_a > 0)
+	{
+		field_press_a--;
+		state->bAnalogButtons[XINPUT_GAMEPAD_A] = 0xff;
+	}
+	if (field_press_b > 0)
+	{
+		field_press_b--;
+		state->bAnalogButtons[XINPUT_GAMEPAD_B] = 0xff;
+	}
+}
+
 /* the updater's panel is answered by the Wii U's letters: a Wii Remote's Xbox face buttons count as the letters of the same name, as the menus take them */
 static unsigned int panel_buttons(const struct wiiu_pad *pad)
 {
@@ -756,6 +794,8 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 		pad_state(&pad, &state->Gamepad);
 	virtual_pad_apply((unsigned int)port, &state->Gamepad);
 	if (port == 0)
+		field_apply(&state->Gamepad);
+	if (port == 0)
 		test_input_gamepad(&state->Gamepad);
 	hold_to_skip((unsigned int)port, &state->Gamepad);
 	if (port == 0)
@@ -804,8 +844,16 @@ DWORD WINAPI XInputDebugInitKeyboardQueue(PXINPUT_DEBUG_KEYQUEUE_PARAMETERS para
 	return ERROR_SUCCESS;
 }
 
+/* the Xbox's debug keyboard: the GamePad keyboard's keys for a menu's text field (wiiu_keyboard.h), a press and a release each; nothing otherwise */
 DWORD WINAPI XInputDebugGetKeystroke(PXINPUT_DEBUG_KEYSTROKE keystroke)
 {
+	struct wk_keystroke next;
+
 	memset(keystroke, 0, sizeof(*keystroke));
-	return ERROR_HANDLE_EOF;
+	if (!wiiu_keyboard_keys_next(&next))
+		return ERROR_HANDLE_EOF;
+	keystroke->VirtualKey = next.virtual_key;
+	keystroke->Ascii = next.ascii;
+	keystroke->Flags = next.flags;
+	return ERROR_SUCCESS;
 }

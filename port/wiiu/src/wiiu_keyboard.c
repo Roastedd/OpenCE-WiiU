@@ -260,7 +260,7 @@ int wiiu_keyboard_build(const struct halo_chat_keyboard_view *view, const struct
 	struct wk_rect rectangle;
 	char text[HALO_CHAT_KEYBOARD_TEXT + 2];
 	char label[8];
-	int row, column, channel, length, start;
+	int row, column, channel, length, start, menu, maximum_characters;
 	float pen, available, caret_x;
 	const float *prompt_color;
 
@@ -270,35 +270,37 @@ int wiiu_keyboard_build(const struct halo_chat_keyboard_view *view, const struct
 	b.quads = quads;
 	b.count = 0;
 	b.maximum = maximum;
+	menu = view->mode == 1;
 	/* the panel over the whole screen (the game's picture shows faintly through) */
 	rect_add(&b, 0.0f, 0.0f, (float)WK_WIDTH, (float)WK_HEIGHT, color_panel);
-	/* the chips */
-	for (channel = 0; channel < WK_CHANNELS; channel++)
+	/* the chips (a menu's field has DONE, and CANCEL where CLOSE is) */
+	for (channel = 0; channel < (menu ? 1 : WK_CHANNELS); channel++)
 	{
 		wiiu_keyboard_chip_rect(channel, &rectangle);
-		rect_add(&b, rectangle.x0, rectangle.y0, rectangle.x1, rectangle.y1, channel == view->channel ? color_accent : color_key);
-		text_centred(&b, WK_FONT_LABEL, 0.8f, &rectangle, channel_names[channel], color_white);
+		rect_add(&b, rectangle.x0, rectangle.y0, rectangle.x1, rectangle.y1, menu || channel == view->channel ? color_accent : color_key);
+		text_centred(&b, WK_FONT_LABEL, 0.8f, &rectangle, menu ? "DONE" : channel_names[channel], color_white);
 	}
 	wiiu_keyboard_close_rect(&rectangle);
 	rect_add(&b, rectangle.x0, rectangle.y0, rectangle.x1, rectangle.y1, color_close);
-	text_centred(&b, WK_FONT_LABEL, 0.8f, &rectangle, "CLOSE", color_white);
+	text_centred(&b, WK_FONT_LABEL, 0.8f, &rectangle, menu ? "CANCEL" : "CLOSE", color_white);
 	/* the letters left, between the chips and CLOSE, to the right */
-	length = view->length < 0 ? 0 : view->length > WK_LINE_CHARACTERS ? WK_LINE_CHARACTERS : view->length;
-	snprintf(label, sizeof(label), "%d", WK_LINE_CHARACTERS - length);
+	maximum_characters = view->limit > 0 && view->limit < WK_LINE_CHARACTERS ? view->limit : WK_LINE_CHARACTERS;
+	length = view->length < 0 ? 0 : view->length > maximum_characters ? maximum_characters : view->length;
+	snprintf(label, sizeof(label), "%d", maximum_characters - length);
 	{
 		const float width = wiiu_keyboard_text_width(atlas, WK_FONT_LABEL, 0.8f, label, (int)strlen(label));
 
 		text_add(&b, WK_FONT_LABEL, 0.8f, rectangle.x0 - 16.0f - width, (float)WK_CHIP_TOP + (float)WK_CHIP_HEIGHT * 0.5f + 0.35f * WK_LABEL_PIXELS * 0.8f, label, (int)strlen(label),
-			length >= WK_LINE_CHARACTERS ? color_amber : color_dim);
+			length >= maximum_characters ? color_amber : color_dim);
 	}
 	/* the line: a box (its edge amber when the line is full), the prompt, the end of the line and a caret */
 	{
 		const float x0 = (float)WK_KEYS_LEFT, x1 = (float)(WK_KEYS_LEFT + WK_COLUMNS * WK_KEY_WIDTH);
 		const float y0 = (float)WK_FIELD_TOP, y1 = (float)(WK_FIELD_TOP + WK_FIELD_HEIGHT);
 		const float baseline = (y0 + y1) * 0.5f + 0.35f * WK_TEXT_PIXELS;
-		const char *prompt = prompts[view->channel < 0 || view->channel >= WK_CHANNELS ? 0 : view->channel];
+		const char *prompt = menu ? "Type:" : prompts[view->channel < 0 || view->channel >= WK_CHANNELS ? 0 : view->channel];
 
-		if (length >= WK_LINE_CHARACTERS)
+		if (length >= maximum_characters)
 			rect_add(&b, x0 - 2.0f, y0 - 2.0f, x1 + 2.0f, y1 + 2.0f, color_amber);
 		rect_add(&b, x0, y0, x1, y1, color_field);
 		prompt_color = view->channel == 1 ? color_accent : color_pale;
@@ -307,6 +309,9 @@ int wiiu_keyboard_build(const struct halo_chat_keyboard_view *view, const struct
 		memcpy(text, view->text, HALO_CHAT_KEYBOARD_TEXT);
 		text[HALO_CHAT_KEYBOARD_TEXT] = 0;
 		text[length] = 0;
+		/* (a password's stars) */
+		if (menu && view->masked)
+			memset(text, '*', (size_t)length);
 		/* (the end of the line, where it is wider than the box) */
 		for (start = 0; start < length && wiiu_keyboard_text_width(atlas, WK_FONT_TEXT, 1.0f, text + start, length - start) > available; start++)
 			;
@@ -353,21 +358,247 @@ int wiiu_keyboard_build(const struct halo_chat_keyboard_view *view, const struct
 			{
 				static const char *const wide[WK_WIDE_KEYS] = { "Aa", "#+=", "SPACE", "DEL", "SEND" };
 
-				snprintf(label, sizeof(label), "%s", column / span == 1 && view->symbols ? "ABC" : wide[column / span]);
+				snprintf(label, sizeof(label), "%s", column / span == 1 && view->symbols ? "ABC" : menu && column / span == 4 ? "DONE" : wide[column / span]);
 			}
 			text_centred(&b, WK_FONT_LABEL, row < WK_ROWS - 1 ? 1.0f : 0.8f, &rectangle, label, color_white);
 		}
 	}
 	/* the buttons' words */
 	{
-		static const char hint[] = "B: CLOSE    X: DELETE    Y: SHIFT    +: SEND    UP / DOWN: CHANNEL";
+		static const char hint_chat[] = "B: CLOSE    X: DELETE    Y: SHIFT    +: SEND    UP / DOWN: CHANNEL";
+		static const char hint_menu[] = "A: DONE    B: CANCEL";
+		const char *hint = menu ? hint_menu : hint_chat;
+		const int hint_length = menu ? (int)sizeof(hint_menu) - 1 : (int)sizeof(hint_chat) - 1;
 		const float scale = 0.6f;
-		const float width = wiiu_keyboard_text_width(atlas, WK_FONT_LABEL, scale, hint, (int)sizeof(hint) - 1);
+		const float width = wiiu_keyboard_text_width(atlas, WK_FONT_LABEL, scale, hint, hint_length);
 
 		text_add(&b, WK_FONT_LABEL, scale, ((float)WK_WIDTH - width) * 0.5f, (float)WK_HINT_TOP + (float)WK_HINT_HEIGHT * 0.5f + 0.35f * WK_LABEL_PIXELS * scale, hint,
-			(int)sizeof(hint) - 1, color_dim);
+			hint_length, color_dim);
 	}
 	return b.count;
+}
+
+/* ---------- a menu's text field */
+
+/* (network_chat.c's chat_keyboard_letters and chat_keyboard_symbols, no "|": the harness checks that they agree) */
+static const char *const page_letters[HALO_CHAT_KEYBOARD_ROWS] = { "1234567890", "qwertyuiop", "asdfghjkl'", "zxcvbnm,.?" };
+static const char *const page_symbols[HALO_CHAT_KEYBOARD_ROWS] = { "1234567890", "!@#$%^&*()", "-_=+[]{};:", "\"'<>/\\?~,." };
+
+char wiiu_keyboard_page_key(int symbols, int shift, int row, int column)
+{
+	char character;
+
+	if (row < 0 || row >= HALO_CHAT_KEYBOARD_ROWS || column < 0 || column >= HALO_CHAT_KEYBOARD_COLUMNS)
+		return 0;
+	character = (symbols ? page_symbols : page_letters)[row][column];
+	if (shift && character >= 'a' && character <= 'z')
+		character = (char)(character - 'a' + 'A');
+	return character;
+}
+
+void wiiu_keyboard_field_begin(struct wk_field *field, int masked)
+{
+	memset(field, 0, sizeof(*field));
+	field->active = 1;
+	field->masked = masked != 0;
+	field->limit = WK_LINE_CHARACTERS;
+	field->row = 1;
+}
+
+void wiiu_keyboard_field_end(struct wk_field *field)
+{
+	memset(field, 0, sizeof(*field));
+}
+
+void wiiu_keyboard_field_text(struct wk_field *field, const char *text, int maximum)
+{
+	int length = 0;
+
+	if (!field->active)
+		return;
+	field->limit = maximum > 0 && maximum < WK_LINE_CHARACTERS ? maximum : WK_LINE_CHARACTERS;
+	for (; text && *text && length < WK_LINE_CHARACTERS; text++)
+	{
+		if (*text >= ' ' && *text <= '~' && *text != '|')
+			field->text[length++] = *text;
+	}
+	field->text[length] = 0;
+	field->length = length;
+}
+
+int wiiu_keyboard_field_tap(struct wk_field *field, float x, float y, struct wk_action *action)
+{
+	struct wk_hit hit;
+
+	action->kind = WK_ACTION_NONE;
+	action->character = 0;
+	if (!field->active)
+		return action->kind;
+	switch (wiiu_keyboard_hit(x, y, &hit))
+	{
+	case WK_HIT_KEY:
+		field->row = hit.row;
+		field->column = hit.column;
+		if (hit.row < WK_ROWS - 1)
+		{
+			action->character = wiiu_keyboard_page_key(field->symbols, field->shift, hit.row, hit.column);
+			if (action->character)
+				action->kind = WK_ACTION_CHARACTER;
+		}
+		else
+		{
+			switch (hit.column / WK_WIDE_COLUMNS)
+			{
+			case 0:
+				field->shift = !field->shift;
+				action->kind = WK_ACTION_PAGE;
+				break;
+			case 1:
+				field->symbols = !field->symbols;
+				action->kind = WK_ACTION_PAGE;
+				break;
+			case 2:
+				action->kind = WK_ACTION_CHARACTER;
+				action->character = ' ';
+				break;
+			case 3:
+				action->kind = WK_ACTION_DELETE;
+				break;
+			default:
+				action->kind = WK_ACTION_DONE;
+				break;
+			}
+		}
+		break;
+	case WK_HIT_CHANNEL:
+		/* (DONE is the first chip; the others are not there) */
+		if (hit.channel == 0)
+			action->kind = WK_ACTION_DONE;
+		break;
+	case WK_HIT_CLOSE:
+		action->kind = WK_ACTION_CANCEL;
+		break;
+	default:
+		break;
+	}
+	return action->kind;
+}
+
+void wiiu_keyboard_field_view(const struct wk_field *field, struct halo_chat_keyboard_view *view)
+{
+	int row, column;
+
+	memset(view, 0, sizeof(*view));
+	if (!field->active)
+		return;
+	view->open = 1;
+	view->mode = 1;
+	view->masked = field->masked;
+	view->limit = field->limit;
+	view->shift = field->shift;
+	view->symbols = field->symbols;
+	view->row = field->row;
+	view->column = field->column;
+	memcpy(view->text, field->text, sizeof(view->text));
+	view->text[sizeof(view->text) - 1] = 0;
+	view->length = (int)strlen(view->text);
+	for (row = 0; row < HALO_CHAT_KEYBOARD_ROWS; row++)
+		for (column = 0; column < HALO_CHAT_KEYBOARD_COLUMNS; column++)
+			view->keys[row][column] = wiiu_keyboard_page_key(field->symbols, field->shift, row, column);
+}
+
+/* the Windows virtual keys the game's input table knows (input_xbox.c's virtual_key_to_key_code): a letter or digit is its own; a symbol is on one of these keys, shifted or not */
+int wiiu_keyboard_keystroke(char character, unsigned char *virtual_key, unsigned char *flags)
+{
+	static const struct { char plain, shifted; unsigned char key; } symbols[] =
+	{
+		{ '1', '!', '1' }, { '2', '@', '2' }, { '3', '#', '3' }, { '4', '$', '4' }, { '5', '%', '5' }, { '6', '^', '6' }, { '7', '&', '7' }, { '8', '*', '8' }, { '9', '(', '9' },
+		{ '0', ')', '0' }, { ';', ':', 0xBA }, { '=', '+', 0xBB }, { ',', '<', 0xBC }, { '-', '_', 0xBD }, { '.', '>', 0xBE }, { '/', '?', 0xBF }, { '`', '~', 0xC0 },
+		{ '[', '{', 0xDB }, { '\\', '|', 0xDC }, { ']', '}', 0xDD }, { '\'', '"', 0xDE },
+	};
+	unsigned i;
+
+	*virtual_key = 0;
+	*flags = 0;
+	if (character == ' ')
+	{
+		*virtual_key = 0x20;
+		return 1;
+	}
+	if (character >= 'a' && character <= 'z')
+	{
+		*virtual_key = (unsigned char)(character - 'a' + 'A');
+		return 1;
+	}
+	if (character >= 'A' && character <= 'Z')
+	{
+		*virtual_key = (unsigned char)character;
+		*flags = 0x02;
+		return 1;
+	}
+	for (i = 0; i < sizeof(symbols) / sizeof(symbols[0]); i++)
+	{
+		if (character == symbols[i].plain || character == symbols[i].shifted)
+		{
+			*virtual_key = symbols[i].key;
+			*flags = character == symbols[i].shifted && character != symbols[i].plain ? 0x02 : 0;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static struct
+{
+	struct wk_keystroke queue[WK_KEYSTROKE_QUEUE];
+	unsigned int read, write;
+} keystrokes;
+
+void wiiu_keyboard_keys_clear(void)
+{
+	keystrokes.read = keystrokes.write = 0;
+}
+
+static void key_push(unsigned char virtual_key, char ascii, unsigned char flags)
+{
+	if (keystrokes.write - keystrokes.read >= WK_KEYSTROKE_QUEUE)
+		return;
+	keystrokes.queue[keystrokes.write % WK_KEYSTROKE_QUEUE].virtual_key = virtual_key;
+	keystrokes.queue[keystrokes.write % WK_KEYSTROKE_QUEUE].ascii = ascii;
+	keystrokes.queue[keystrokes.write % WK_KEYSTROKE_QUEUE].flags = flags;
+	keystrokes.write++;
+}
+
+/* a press and its release (0x40: XINPUT_DEBUG_KEYSTROKE_FLAG_KEYUP), together or not at all: the queue has room for both */
+static void key_pair(unsigned char virtual_key, char ascii, unsigned char flags)
+{
+	if (keystrokes.write - keystrokes.read + 2 > WK_KEYSTROKE_QUEUE)
+		return;
+	key_push(virtual_key, ascii, flags);
+	key_push(virtual_key, ascii, (unsigned char)(flags | 0x40));
+}
+
+void wiiu_keyboard_keys_type(char character)
+{
+	unsigned char virtual_key, flags;
+
+	if (character >= ' ' && character <= '~' && character != '|' && wiiu_keyboard_keystroke(character, &virtual_key, &flags))
+		key_pair(virtual_key, character, flags);
+}
+
+void wiiu_keyboard_keys_delete(void)
+{
+	/* (VK_BACK; the Xbox keyboard's Ascii for it is 8) */
+	key_pair(0x08, 8, 0);
+}
+
+int wiiu_keyboard_keys_next(struct wk_keystroke *keystroke)
+{
+	if (keystrokes.read == keystrokes.write)
+		return 0;
+	*keystroke = keystrokes.queue[keystrokes.read % WK_KEYSTROKE_QUEUE];
+	keystrokes.read++;
+	return 1;
 }
 
 /* ---------- publishing */

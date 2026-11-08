@@ -84,6 +84,21 @@ const struct wk_atlas *wiiu_keyboard_atlas(void)
 	return &atlas;
 }
 
+/* the keyboard that is drawn is the menu's field while one is edited, else the chat's, as the game published it; both come from the game's thread */
+static struct halo_chat_keyboard_view chat_view;
+static struct wk_field field;
+
+static void publish_current(void)
+{
+	struct halo_chat_keyboard_view view;
+
+	if (field.active)
+		wiiu_keyboard_field_view(&field, &view);
+	else
+		view = chat_view;
+	wiiu_keyboard_publish(&view);
+}
+
 int wiiu_keyboard_shown(void)
 {
 	struct halo_chat_keyboard_view view;
@@ -97,10 +112,59 @@ int wiiu_keyboard_shown(void)
 /* the game's thread: the chat's keyboard as it is now, once a frame; a network game started */
 void halo_chat_keyboard_publish(const struct halo_chat_keyboard_view *view)
 {
-	wiiu_keyboard_publish(view);
+	chat_view = *view;
+	publish_current();
 }
 
 void halo_chat_keyboard_prewarm(void)
 {
 	wiiu_keyboard_prewarm();
+}
+
+/* ---------- a menu's text field */
+
+void wiiu_keyboard_field_set(int typing, int masked)
+{
+	if (typing && wiiu_keyboard_enabled())
+	{
+		/* (the glyphs, if they are not made: the keyboard shows when they are) */
+		wiiu_keyboard_prewarm();
+		wiiu_keyboard_keys_clear();
+		wiiu_keyboard_field_begin(&field, masked);
+	}
+	else
+	{
+		wiiu_keyboard_field_end(&field);
+		wiiu_keyboard_keys_clear();
+	}
+	publish_current();
+}
+
+int wiiu_keyboard_field_active(void)
+{
+	return field.active;
+}
+
+/* menu_functions.c, every frame the field is edited: what is typed, for the keyboard's line */
+void platform_text_field_text(char const *text, int maximum)
+{
+	if (!field.active)
+		return;
+	wiiu_keyboard_field_text(&field, text, maximum);
+	publish_current();
+}
+
+int wiiu_keyboard_field_press(float x, float y)
+{
+	struct wk_action action;
+
+	if (!field.active || !wiiu_keyboard_shown())
+		return WK_ACTION_NONE;
+	wiiu_keyboard_field_tap(&field, x, y, &action);
+	if (action.kind == WK_ACTION_CHARACTER)
+		wiiu_keyboard_keys_type(action.character);
+	else if (action.kind == WK_ACTION_DELETE)
+		wiiu_keyboard_keys_delete();
+	publish_current();
+	return action.kind;
 }

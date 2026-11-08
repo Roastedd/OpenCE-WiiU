@@ -19,6 +19,7 @@ Linux code does when its feature is off. What the Wii U does need (input, audio,
 #include "update.h"
 #include "wiiu_https.h"
 #include "wiiu_input.h"
+#include "wiiu_keyboard.h"
 #include "wiiu_virtual_pads.h"
 
 #include <stdio.h>
@@ -96,10 +97,11 @@ void platform_clipboard_set(char const *text)
 	(void)text;
 }
 
+/* a menu's text field (the server's name, a password, a link): the GamePad's touch keyboard types into it (wiiu_keyboard.h), when input.wiiu_gamepad_keyboard is on; the field's
+text is platform_text_field_text's (wiiu_keyboard_font.c) */
 void platform_text_field(int typing, int password)
 {
-	(void)typing;
-	(void)password;
+	wiiu_keyboard_field_set(typing, password);
 }
 
 void platform_text_typing(int typing)

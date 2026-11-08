@@ -4,6 +4,9 @@
 that draw the keyboard (inside the screen, the line's end in its box, nothing when closed) and the keyboard as the game's thread publishes it. */
 #include "wiiu_keyboard.h"
 #include "wiiu_keyboard_code.inc"
+/* the game's own tables, taken from its sources: the virtual keys its input knows (vk_mapped), the chat keyboard's pages (chat_letters, chat_symbols) and the keys' ascii codes
+(ascii_mapped) */
+#include "reference.inc"
 
 /* a rasterizer with no font: every glyph of a font is a box of its size, filled with its code; a space has none */
 static int fail_measures, fail_glyph_code, glyph_width = 10, glyph_height = 16;
@@ -381,6 +384,210 @@ int main(int argc, char **argv)
 		published.sequence++;
 		wiiu_keyboard_snapshot(&back);
 		CHECK(back.open && back.length == 3, "and whole again");
+	}
+	/* a key's page: the chat keyboard's letters and symbols, capitals on letters alone, none off the keyboard */
+	CASE("pages")
+	{
+		int symbols, shift;
+
+		for (symbols = 0; symbols < 2; symbols++)
+			for (shift = 0; shift < 2; shift++)
+				for (row = 0; row < 4; row++)
+					for (column = 0; column < 10; column++)
+					{
+						char expected = (symbols ? chat_symbols : chat_letters)[row][column];
+
+						if (shift && expected >= 'a' && expected <= 'z')
+							expected = (char)(expected - 'a' + 'A');
+						CHECK(wiiu_keyboard_page_key(symbols, shift, row, column) == expected, "page %d %d key %d,%d is '%c' not '%c'", symbols, shift, row, column,
+							wiiu_keyboard_page_key(symbols, shift, row, column), expected);
+					}
+		CHECK(wiiu_keyboard_page_key(0, 0, 4, 0) == 0 && wiiu_keyboard_page_key(0, 0, -1, 0) == 0 && wiiu_keyboard_page_key(0, 0, 0, 10) == 0 && wiiu_keyboard_page_key(0, 0, 0, -1) == 0, "off the pages");
+	}
+
+	/* every printable character the keyboard can type is a keystroke the game's input takes: a virtual key its table maps, with shift for a capital or a shifted symbol; a character
+	typed by the key it is on gives the character back as the game reads it */
+	CASE("keystrokes")
+	{
+		unsigned char key, flags;
+		int character, symbols, shift;
+
+		for (character = 0; character < 256; character++)
+		{
+			const int printable = character >= ' ' && character <= '~';
+			const int got = wiiu_keyboard_keystroke((char)character, &key, &flags);
+
+			if (!printable)
+			{
+				CHECK(!got, "character %d is a keystroke", character);
+				continue;
+			}
+			CHECK(got, "'%c' has no keystroke", character);
+			CHECK(vk_mapped[key], "'%c' is virtual key %02X, which the game's input does not know", character, key);
+			CHECK(ascii_mapped[character], "'%c' is an ascii code the game does not take", character);
+			CHECK((flags & ~0x02) == 0, "'%c' has flags %02X", character, flags);
+			if (character >= 'A' && character <= 'Z')
+				CHECK(flags == 0x02 && key == character, "capital %c", character);
+			if (character >= 'a' && character <= 'z')
+				CHECK(flags == 0 && key == character - 32, "letter %c", character);
+			if (character >= '0' && character <= '9')
+				CHECK(flags == 0 && key == character, "digit %c", character);
+		}
+		/* every character on the keyboard's pages */
+		for (symbols = 0; symbols < 2; symbols++)
+			for (shift = 0; shift < 2; shift++)
+				for (row = 0; row < 4; row++)
+					for (column = 0; column < 10; column++)
+					{
+						const char typed = wiiu_keyboard_page_key(symbols, shift, row, column);
+
+						CHECK(wiiu_keyboard_keystroke(typed, &key, &flags) && vk_mapped[key], "'%c' on the pages", typed);
+					}
+		CHECK(!wiiu_keyboard_keystroke('\n', &key, &flags) && !wiiu_keyboard_keystroke((char)0xE9, &key, &flags) && !wiiu_keyboard_keystroke(0, &key, &flags), "none for a line end, a high byte, nothing");
+		/* a shifted symbol is its key with shift: ! is 1, : is the semicolon's */
+		CHECK(wiiu_keyboard_keystroke('!', &key, &flags) && key == '1' && flags == 0x02, "!");
+		CHECK(wiiu_keyboard_keystroke(':', &key, &flags) && key == 0xBA && flags == 0x02, ":");
+		CHECK(wiiu_keyboard_keystroke(';', &key, &flags) && key == 0xBA && flags == 0, ";");
+	}
+
+	/* the queue: a press and its release for each character, in order, one pair at a time, dropped when full; delete is VK_BACK with ascii 8 */
+	CASE("queue")
+	{
+		struct wk_keystroke keystroke;
+		int count = 0;
+
+		wiiu_keyboard_keys_clear();
+		CHECK(!wiiu_keyboard_keys_next(&keystroke), "empty");
+		wiiu_keyboard_keys_type('a');
+		wiiu_keyboard_keys_type('B');
+		wiiu_keyboard_keys_delete();
+		wiiu_keyboard_keys_type('|');
+		wiiu_keyboard_keys_type('\n');
+		CHECK(wiiu_keyboard_keys_next(&keystroke) && keystroke.ascii == 'a' && keystroke.virtual_key == 'A' && keystroke.flags == 0, "a down");
+		CHECK(wiiu_keyboard_keys_next(&keystroke) && keystroke.ascii == 'a' && keystroke.virtual_key == 'A' && keystroke.flags == 0x40, "a up");
+		CHECK(wiiu_keyboard_keys_next(&keystroke) && keystroke.ascii == 'B' && keystroke.flags == 0x02, "B down with shift");
+		CHECK(wiiu_keyboard_keys_next(&keystroke) && keystroke.ascii == 'B' && keystroke.flags == 0x42, "B up");
+		CHECK(wiiu_keyboard_keys_next(&keystroke) && keystroke.virtual_key == 0x08 && keystroke.ascii == 8 && keystroke.flags == 0, "delete down");
+		CHECK(wiiu_keyboard_keys_next(&keystroke) && keystroke.virtual_key == 0x08 && keystroke.flags == 0x40, "delete up");
+		CHECK(!wiiu_keyboard_keys_next(&keystroke), "nothing for a pipe or a line end");
+		/* full: whole pairs only */
+		for (row = 0; row < 200; row++)
+			wiiu_keyboard_keys_type('z');
+		while (wiiu_keyboard_keys_next(&keystroke))
+			count++;
+		CHECK(count == WK_KEYSTROKE_QUEUE, "%d queued", count);
+		wiiu_keyboard_keys_type('q');
+		wiiu_keyboard_keys_clear();
+		CHECK(!wiiu_keyboard_keys_next(&keystroke), "cleared");
+	}
+
+	/* a menu's field: taps are characters (on the page and capitals the field has), delete, DONE (the chip or the SEND key), CANCEL; Aa and #+= change the page and give nothing to
+	type; nothing happens while it is not edited; the text is the menu's, printable ASCII only, and the view shows it */
+	CASE("field")
+	{
+		struct wk_field field;
+		struct wk_action action;
+		struct halo_chat_keyboard_view view;
+		struct wk_rect key;
+
+		memset(&field, 0, sizeof(field));
+		CHECK(wiiu_keyboard_field_tap(&field, 100.0f, 150.0f, &action) == WK_ACTION_NONE, "not edited");
+		wiiu_keyboard_field_begin(&field, 0);
+		wiiu_keyboard_field_text(&field, "My Server|\x01\xE9", 24);
+		CHECK(field.length == 9 && !strcmp(field.text, "My Server") && field.limit == 24, "the menu's text: '%s' %d", field.text, field.limit);
+		/* q */
+		wiiu_keyboard_key_rect(1, 0, &key);
+		CHECK(wiiu_keyboard_field_tap(&field, key.x0 + 5.0f, key.y0 + 5.0f, &action) == WK_ACTION_CHARACTER && action.character == 'q' && field.row == 1 && field.column == 0, "q");
+		/* Aa, then q is Q */
+		wiiu_keyboard_key_rect(4, 0, &key);
+		CHECK(wiiu_keyboard_field_tap(&field, key.x0 + 130.0f, key.y0 + 5.0f, &action) == WK_ACTION_PAGE && field.shift, "Aa");
+		wiiu_keyboard_key_rect(1, 0, &key);
+		CHECK(wiiu_keyboard_field_tap(&field, key.x0 + 5.0f, key.y0 + 5.0f, &action) == WK_ACTION_CHARACTER && action.character == 'Q', "Q");
+		/* #+= and a symbol */
+		wiiu_keyboard_key_rect(4, 2, &key);
+		CHECK(wiiu_keyboard_field_tap(&field, key.x0 + 5.0f, key.y0 + 5.0f, &action) == WK_ACTION_PAGE && field.symbols, "#+=");
+		wiiu_keyboard_key_rect(1, 0, &key);
+		CHECK(wiiu_keyboard_field_tap(&field, key.x0 + 5.0f, key.y0 + 5.0f, &action) == WK_ACTION_CHARACTER && action.character == '!', "!");
+		/* space, delete, DONE by the key and by the chip, CANCEL by CLOSE's place */
+		wiiu_keyboard_key_rect(4, 4, &key);
+		CHECK(wiiu_keyboard_field_tap(&field, key.x0 + 5.0f, key.y0 + 5.0f, &action) == WK_ACTION_CHARACTER && action.character == ' ', "space");
+		wiiu_keyboard_key_rect(4, 6, &key);
+		CHECK(wiiu_keyboard_field_tap(&field, key.x0 + 5.0f, key.y0 + 5.0f, &action) == WK_ACTION_DELETE, "delete");
+		wiiu_keyboard_key_rect(4, 8, &key);
+		CHECK(wiiu_keyboard_field_tap(&field, key.x0 + 5.0f, key.y0 + 5.0f, &action) == WK_ACTION_DONE, "done by SEND's place");
+		wiiu_keyboard_chip_rect(0, &key);
+		CHECK(wiiu_keyboard_field_tap(&field, key.x0 + 5.0f, key.y0 + 5.0f, &action) == WK_ACTION_DONE, "done by the first chip");
+		wiiu_keyboard_chip_rect(1, &key);
+		CHECK(wiiu_keyboard_field_tap(&field, key.x0 + 5.0f, key.y0 + 5.0f, &action) == WK_ACTION_NONE, "the other chips are not there");
+		wiiu_keyboard_chip_rect(2, &key);
+		CHECK(wiiu_keyboard_field_tap(&field, key.x0 + 5.0f, key.y0 + 5.0f, &action) == WK_ACTION_NONE, "the other chips are not there");
+		wiiu_keyboard_close_rect(&key);
+		CHECK(wiiu_keyboard_field_tap(&field, key.x0 + 5.0f, key.y0 + 5.0f, &action) == WK_ACTION_CANCEL, "cancel");
+		CHECK(wiiu_keyboard_field_tap(&field, 400.0f, 90.0f, &action) == WK_ACTION_NONE, "the line");
+		/* the view */
+		wiiu_keyboard_field_begin(&field, 1);
+		wiiu_keyboard_field_text(&field, "secret", 16);
+		field.shift = 1;
+		wiiu_keyboard_field_view(&field, &view);
+		CHECK(view.open && view.mode == 1 && view.masked && view.limit == 16 && view.length == 6 && !strcmp(view.text, "secret") && view.shift, "the view");
+		CHECK(!memcmp(view.keys[1], "QWERTYUIOP", 10) && !memcmp(view.keys[0], "1234567890", 10), "its keys");
+		wiiu_keyboard_field_end(&field);
+		wiiu_keyboard_field_view(&field, &view);
+		CHECK(!view.open && !field.active && field.length == 0, "ended");
+		/* the text of a field that is not edited is not kept */
+		wiiu_keyboard_field_text(&field, "x", 5);
+		CHECK(field.length == 0, "not kept");
+	}
+
+	/* the field drawn: DONE and CANCEL, no channel chips, stars for a password, the characters left from the field's own limit */
+	CASE("field-quads")
+	{
+		static struct wk_quad quads[WK_MAXIMUM_QUADS];
+		struct halo_chat_keyboard_view chat, menu, masked;
+		struct wk_rect chip, close;
+		int count_chat, count_menu, index, in_chip1 = 0, in_chip2 = 0, in_line_masked = 0, in_line_clear = 0, ok = 1;
+
+		atlas_make();
+		view_make(&chat, "secret");
+		view_make(&menu, "secret");
+		menu.mode = 1;
+		menu.limit = 8;
+		masked = menu;
+		masked.masked = 1;
+		count_chat = wiiu_keyboard_build(&chat, &atlas, 0, quads, WK_MAXIMUM_QUADS);
+		count_menu = wiiu_keyboard_build(&menu, &atlas, 0, quads, WK_MAXIMUM_QUADS);
+		CHECK(count_menu > 100 && count_menu < count_chat, "the menu's field has fewer chips than the chat: %d against %d", count_menu, count_chat);
+		for (index = 0; index < count_menu; index++)
+			ok &= quads[index].x0 >= 0.0f && quads[index].x1 <= WK_WIDTH && quads[index].y0 >= 0.0f && quads[index].y1 <= WK_HEIGHT;
+		CHECK(ok, "inside the screen");
+		wiiu_keyboard_chip_rect(1, &chip);
+		wiiu_keyboard_chip_rect(2, &close);
+		for (index = 0; index < count_menu; index++)
+		{
+			const float cx = (quads[index].x0 + quads[index].x1) / 2.0f, cy = (quads[index].y0 + quads[index].y1) / 2.0f;
+
+			in_chip1 += cx > chip.x0 && cx < chip.x1 && cy > chip.y0 && cy < chip.y1;
+			in_chip2 += cx > close.x0 && cx < close.x1 && cy > close.y0 && cy < close.y1;
+		}
+		CHECK(in_chip1 == 0 && in_chip2 == 0, "chips the field has not: %d %d", in_chip1, in_chip2);
+		/* the same text, stars or not: the glyph quads of the line are as many, but their texture is the one star's */
+		{
+			static struct wk_quad again[WK_MAXIMUM_QUADS];
+			int count_masked = wiiu_keyboard_build(&masked, &atlas, 0, again, WK_MAXIMUM_QUADS);
+
+			CHECK(count_masked == count_menu, "the same count of quads: %d and %d", count_masked, count_menu);
+			for (index = 0; index < count_menu; index++)
+			{
+				const struct wk_quad *a = &quads[index], *b = &again[index];
+
+				if (a->y0 >= (float)WK_FIELD_TOP && a->y1 <= (float)(WK_FIELD_TOP + WK_FIELD_HEIGHT) && a->x0 > 95.0f && a->u1 > a->u0)
+				{
+					in_line_clear++;
+					in_line_masked += b->u0 == atlas.glyphs[WK_FONT_TEXT]['*' - WK_GLYPH_FIRST].u0;
+				}
+			}
+			CHECK(in_line_clear >= 6 && in_line_masked == in_line_clear, "stars: %d of %d", in_line_masked, in_line_clear);
+		}
 	}
 	return 0;
 }
