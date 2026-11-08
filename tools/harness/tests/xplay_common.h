@@ -131,8 +131,20 @@ static void xplay_hex(const char *name, const void *data, long size)
 	long index;
 
 	printf("%s %ld ", name, size);
-	for (index = 0; index < size; index++)
-		printf("%02x", bytes[index]);
+	if (size > 1024)
+	{
+		/* (a long record: its first 64 bytes, and a 64-bit FNV-1a of all of it) */
+		unsigned long long hash = 0xCBF29CE484222325ULL;
+
+		for (index = 0; index < size; index++)
+			hash = (hash ^ bytes[index]) * 0x100000001B3ULL;
+		for (index = 0; index < 64; index++)
+			printf("%02x", bytes[index]);
+		printf(" fnv1a64=%08lx%08lx", (unsigned long)(hash >> 32), (unsigned long)(hash & 0xFFFFFFFFUL));
+	}
+	else
+		for (index = 0; index < size; index++)
+			printf("%02x", bytes[index]);
 	printf("\n");
 }
 

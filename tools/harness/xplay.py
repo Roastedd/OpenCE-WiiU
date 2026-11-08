@@ -105,7 +105,6 @@ def _game_flags(target):
     config = build._load_port_config()
     semantics = _semantics_header()
     abi = build.target_flags(sln, build.LINUX_ABI_FLAGS)
-    abi = [flag for flag in abi if flag not in ("-g",)]
     # (the leg's own target flags replace the build's: the same architecture, run as this machine can)
     abi = [flag for flag in abi if not flag.startswith("--target=") and flag not in ("-m32",)]
     if target.big_endian:
@@ -182,6 +181,8 @@ def build(driver, target_name, units=(), defines=(), mutations=()):
         missing = sorted(set(re.findall(r"undefined symbol: (\S+)", result.stderr)))
         if not missing:
             raise RuntimeError(f"{driver} does not link for {target_name}:\n{result.stderr[-4000:]}")
+        if os.environ.get("XPLAY_DEBUG"):
+            print(f"{driver} ({target_name}) leaves undefined: " + " ".join(missing), file=sys.stderr)
         stubs = work / f"{driver}-{target_name}-{tag:x}-stubs.s"
         stubs.write_text("\n".join(f".globl {name}\n.bss\n.balign 16\n.type {name},@object\n.size {name},256\n{name}:\n.zero 256"
                                     for name in missing) + "\n")
