@@ -1981,11 +1981,11 @@ def _lobby() -> list:
                          ['<on event="left right" run="swap player team"/>',
                           f'<on event="a" run="port lobby row" open="{SOCIAL}/actions_screen" branch="true"/>',
                           '<child widget="main_menu/new_select/list_item_text" x="25"/>',
-                          f'<child widget="{base}/scr_lobby_name" x="22"/>', f'<child widget="{base}/scr_lobby_tag" x="214"/>',
+                          f'<child widget="{base}/scr_lobby_name" x="22"/>', f'<child widget="{base}/scr_lobby_tag" x="206"/>',
                           '<child widget="main_menu/new_select/list_item_arrows"/>'])
     lines += _widget(f"{base}/scr_lobby_name", [("type", "text"), ("width", 190), ("height", 28), ("font", "ui\\large_ui"), ("color", "#FF2896FF"),
                                                 ("text_y", 3), ("text_flags", "no_focus_test")], [])
-    lines += _widget(f"{base}/scr_lobby_tag", [("type", "text"), ("width", 164), ("height", 28), ("font", "ui\\small_ui"), ("color", "#FF2896FF"),
+    lines += _widget(f"{base}/scr_lobby_tag", [("type", "text"), ("width", 162), ("height", 28), ("font", "ui\\small_ui"), ("color", "#FF2896FF"),
                                                ("align", "right"), ("text_y", 8), ("text_flags", "no_focus_test")], [])
     lines += _widget(f"{base}/lobby_desc", [("width", 640), ("height", 480)],
                      ['<child widget="main_menu/current_profile_name"/>',
@@ -2611,7 +2611,7 @@ SOCIAL_PLAYER_ROWS, SOCIAL_FRIEND_ROWS, SOCIAL_ACTION_ROWS = 10, 9, 8
 # a column: its x in the row, its width, its font (large or small), its text's y in the row
 SOCIAL_PLAYER_COLUMNS = [("name", 26, 190, "large"), ("tag", 220, 150, "small"), ("team", 374, 56, "small"), ("ping", 434, 58, "small")]
 SOCIAL_FRIEND_COLUMNS = [("mark", 8, 24, "large"), ("name", 32, 190, "large"), ("status", 226, 282, "small")]
-SOCIAL_LOBBY_COLUMNS = [("name", 22, 190, "large"), ("tag", 214, 164, "small")]
+SOCIAL_LOBBY_COLUMNS = [("name", 22, 190, "large"), ("tag", 206, 162, "small")]
 SOCIAL_TEXT_COLOR = "#FF2896FF"
 SOCIAL_TITLE_COLOR = "#FF2995FD"
 SOCIAL_FONTS = {"large": ("ui\\large_ui", 4), "small": ("ui\\small_ui", 5)}

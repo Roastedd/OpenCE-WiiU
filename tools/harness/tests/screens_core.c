@@ -282,7 +282,7 @@ static void player_cells(void)
 	CHECK(cells[SCREENS_PLAYER_PING].color == SCREENS_COLOR_ALERT && cells[SCREENS_PLAYER_NAME].color == SCREENS_COLOR_GREY, "204 ms is red; a muted player's name is grey");
 	/* the lobby's cell: the team word and a bot's tag */
 	screens_lobby_cells(&rows[2], 1, cells);
-	CHECK(!strcmp(cells[SCREENS_LOBBY_TAG].text, "BLUE  BOT HEROIC") && cells[SCREENS_LOBBY_TAG].color == SCREENS_COLOR_AMBER, "lobby: team and bot: '%s'", cells[SCREENS_LOBBY_TAG].text);
+	CHECK(!strcmp(cells[SCREENS_LOBBY_TAG].text, "BLUE BOT HEROIC") && cells[SCREENS_LOBBY_TAG].color == SCREENS_COLOR_AMBER, "lobby: team and bot: '%s'", cells[SCREENS_LOBBY_TAG].text);
 	screens_lobby_cells(&rows[1], 1, cells);
 	CHECK(!strcmp(cells[SCREENS_LOBBY_TAG].text, "RED") && cells[SCREENS_LOBBY_TAG].color == SCREENS_COLOR_RED_TEAM, "lobby: a person in a team game: '%s'", cells[SCREENS_LOBBY_TAG].text);
 	screens_lobby_cells(&rows[1], 0, cells);

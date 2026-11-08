@@ -371,7 +371,7 @@ def render_all(out_dir, only=None):
         state = actions_state(data)
         state["texts"][("", "actions_answer")] = ""
         emit(name, lambda size, state=state: render_screen(menus, size, f"{S}/actions_screen", state))
-    for tab_scenario, focus, name in (("friends", 0, "friends"), ("friends", 6, "friends-needs-map"), ("requests", 0, "friends-requests"), ("party", 1, "friends-party"),
+    for tab_scenario, focus, name in (("friends", 0, "friends"), ("friends", 5, "friends-needs-map"), ("requests", 0, "friends-requests"), ("party", 1, "friends-party"),
                                       ("blocked", 0, "friends-blocked"), ("friends-empty", 0, "friends-empty"), ("friends-offline", 0, "friends-offline"),
                                       ("friends-nofriendservice", 0, "friends-no-service")):
         data = dump(tab_scenario, focus)

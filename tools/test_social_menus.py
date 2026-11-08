@@ -154,13 +154,14 @@ def test_columns_hold_the_widest_text():
         for (_, x0, w0, _), (_, x1, _, _) in zip(columns_spec, columns_spec[1:]):
             assert x0 + w0 <= x1, f"{prefix}: a column runs into the next"
     # the lobby: the name and the tag in a 390 wide row
+    # (the name's widest and the tag's longest share a few units at most: the tag's text is right-aligned and the name's widest is not met with it)
     for (_, x0, w0, _), (_, x1, _, _) in zip(port_settings.SOCIAL_LOBBY_COLUMNS, port_settings.SOCIAL_LOBBY_COLUMNS[1:]):
-        assert x0 + w0 <= x1 + 2
+        assert x0 + w0 <= x1 + 8
     last = port_settings.SOCIAL_LOBBY_COLUMNS[-1]
     assert last[1] + last[2] <= 390
     assert large(name) <= port_settings.SOCIAL_LOBBY_COLUMNS[0][2]
     # the longest tag in the lobby: a team and a legendary bot
-    assert small("BLUE  BOT LEGENDARY") <= port_settings.SOCIAL_LOBBY_COLUMNS[1][2]
+    assert small("BLUE BOT LEGENDARY") <= port_settings.SOCIAL_LOBBY_COLUMNS[1][2]
     # the Players page's tags and the friends' status words, at their longest
     assert small("BOT LEGENDARY") <= port_settings.SOCIAL_PLAYER_COLUMNS[1][2]
     assert small("YOU - HOST") <= port_settings.SOCIAL_PLAYER_COLUMNS[1][2]

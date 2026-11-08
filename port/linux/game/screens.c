@@ -317,7 +317,7 @@ void screens_lobby_cells(struct screens_roster_row const *row, int teams, struct
 		snprintf(text, sizeof(text), "%s", screens_team_word(row->team));
 	tag_text(row, tag, (int)sizeof(tag), &color);
 	if (row->flags & SCREENS_ROW_BOT)
-		snprintf(text + strlen(text), sizeof(text) - strlen(text), "%s%s", text[0] ? "  " : "", tag);
+		snprintf(text + strlen(text), sizeof(text) - strlen(text), "%s%s", text[0] ? " " : "", tag);
 	else if (!text[0])
 		snprintf(text, sizeof(text), "%s", tag);
 	cell_set(&cells[SCREENS_LOBBY_TAG], SCREENS_FONT_SMALL, (float)SCREENS_LOBBY_TAG_WIDTH,
