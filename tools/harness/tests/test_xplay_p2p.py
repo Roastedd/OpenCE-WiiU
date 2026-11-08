@@ -18,8 +18,7 @@ import xplay  # noqa: E402
 LEGS = xplay.legs()
 ORDER = sorted(LEGS, key=lambda name: name != "le")
 UNITS = ("source/cseries/cseries.c", "port/linux/src/p2p_crypto.c", "port/third_party/monocypher/monocypher.c",
-         "port/third_party/monocypher/monocypher-ed25519.c", "port/third_party/kcp/ikcp.c", "port/linux/src/server_json.c",
-         "port/linux/src/master_list.c")
+         "port/third_party/monocypher/monocypher-ed25519.c", "port/third_party/kcp/ikcp.c", "port/linux/src/server_json.c")
 
 pytestmark = pytest.mark.skipif(not LEGS, reason="needs 32-bit x86 (-m32 or qemu-i386) or PowerPC (qemu-ppc) and clang")
 

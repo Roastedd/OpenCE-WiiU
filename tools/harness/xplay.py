@@ -282,13 +282,13 @@ def vectors_include():
         return json.dumps(text)
 
     lines = ["struct xplay_vector_listing { const char *hex; int version, flags; unsigned long sequence, time; int players, "
-             "max_players, engine, kind, valid; const char *name, *map, *gametype; };",
+             "max_players, engine, kind, valid; const char *name, *map, *gametype, *base64; };",
              "static const struct xplay_vector_listing xplay_vector_listings[] = {"]
     for listing in vectors["listings"]:
         lines.append(f"\t{{ {string(listing['bytes'])}, {listing['network_version']}, {listing['flags']}, {listing['sequence']}UL, "
                      f"{listing['time']}UL, {listing['players']}, {listing['max_players']}, {listing['engine']}, "
                      f"{listing['kind']}, {1 if listing['valid'] else 0}, {string(listing['name'])}, {string(listing['map'])}, "
-                     f"{string(listing['gametype'])} }},")
+                     f"{string(listing['gametype'])}, {string(listing['base64'])} }},")
     lines.append("};")
     lines.append(f"#define XPLAY_VECTOR_LISTING_COUNT {len(vectors['listings'])}")
     master = vectors["master"]["public_key"].split(":")[1]

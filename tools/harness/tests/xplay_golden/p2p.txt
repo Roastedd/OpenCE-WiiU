@@ -14,3 +14,4 @@ vector_listing_1 38 19 7 1760900030 3 8 2 129 Hardcore SWAT|prisoner|Team Slayer
 vector_listing_2 38 8 413 1760900100 0 16 1 0 OpenCE Dedicated|bloodgulch|CTF
 vector_listing_3 38 37 412 1760900000 5 16 1 0 openCE Dedicated|bloodgulch|CTF
 master_list_verify ok
+master_list_game OpenCE Dedicated|bloodgulch|CTF|Publisher 1 5/16

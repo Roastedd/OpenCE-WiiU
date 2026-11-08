@@ -9,6 +9,7 @@ equal. */
 #include "xplay_common.h"
 #define time(place) xplay_time(place)
 #include "p2p_lobby.c"
+#include "master_list.c"
 #undef time
 #include "ikcp.h"
 #include "xplay_vectors.inc"
@@ -48,6 +49,28 @@ void p2p_hex(const unsigned char *bytes, int size, char *text)
 		text[index * 2 + 1] = digits[bytes[index] & 15];
 	}
 	text[size * 2] = 0;
+}
+
+/* (p2p.c's, which is not linked) */
+void p2p_key_hash(const unsigned char *key, unsigned char *hash)
+{
+	unsigned char digest[P2P_SHA256_SIZE];
+
+	p2p_sha256(key, P2P_KEY_SIZE, digest);
+	memcpy(hash, digest, P2P_KEY_HASH_SIZE);
+}
+
+void p2p_identifier_from_hash(const unsigned char *hash, unsigned char *result)
+{
+	memcpy(result, hash, P2P_IDENTIFIER_SIZE);
+	result[0] = (unsigned char)((result[0] & 0xFC) | 0x02);
+}
+
+pthread_mutex_t p2p_lock = PTHREAD_MUTEX_INITIALIZER;
+
+unsigned long p2p_now(void)
+{
+	return 5000;
 }
 
 int halo_server_mode(void)
@@ -280,6 +303,34 @@ static void test_vectors(void)
 		xplay_vector_list_signature, xplay_vector_list_key_id, key, xplay_vector_list_time + 100000, why, sizeof(why)) == 0,
 		"a list days old is taken");
 	printf("master_list_verify ok\n");
+
+	/* the master's list taken into the browser: each listing of the vectors in an entry, as the master's list body has them; the
+	valid ones are taken (the one altered after signing is not; the three valid ones are one host's, so the browser keeps its newest) */
+	{
+		static char body[4096];
+		long length = sprintf(body, "{\"protocol\":1,\"servers\":[");
+		unsigned char master_key_id[8];
+		int taken, listed = 0;
+
+		for (index = 0; index < XPLAY_VECTOR_LISTING_COUNT; index++)
+			length += sprintf(body + length, "%s{\"listing\":\"%s\",\"publisher\":{\"name\":\"Publisher %ld\"},\"region\":\"eu-west\","
+				"\"network_version\":38,\"dedicated\":%s}", index ? "," : "", xplay_vector_listings[index].base64, index,
+				xplay_vector_listings[index].valid ? "true" : "false");
+		length += sprintf(body + length, "]}");
+		memset(&lobby, 0, sizeof(lobby));
+		lobby.browsing = 1;
+		memset(master_key_id, 0x39, sizeof(master_key_id));
+		taken = take_list(body, (unsigned long)length, master_key_id);
+		for (index = 0; index < MAXIMUM_GAMES; index++)
+			if (lobby.games[index].used)
+				listed++;
+		XPLAY_CHECK(taken == 2 && listed >= 1, "the master's list: %d taken, %d listed, not 2 and one or more", taken, listed);
+		for (index = 0; index < MAXIMUM_GAMES; index++)
+			if (lobby.games[index].used)
+				printf("master_list_game %s|%s|%s|%s %d/%d\n", lobby.games[index].listing.name, lobby.games[index].listing.map,
+					lobby.games[index].listing.gametype, lobby.games[index].listing.publisher,
+					lobby.games[index].listing.player_count, lobby.games[index].listing.maximum_player_count);
+	}
 }
 
 int main(int argc, char **argv)
