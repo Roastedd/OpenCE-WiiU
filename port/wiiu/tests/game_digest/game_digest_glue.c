@@ -85,8 +85,30 @@ static void clock_frame(void)
 	audio_frame();
 }
 
+/* GAME_DIGEST_REAL_CLOCK=1 (a run that plays with another machine, tools/harness/netoverlap_two_machines.sh): the game's clock in milliseconds is the machine's own, as the
+other machine's is. The frames' clock below would put the game's timeouts and round trips on the pace of the frames, which under qemu is not the other machine's. */
+static int real_clock_wanted(void)
+{
+	static int wanted = -1;
+
+	if (wanted < 0)
+	{
+		const char *value = getenv("GAME_DIGEST_REAL_CLOCK");
+
+		wanted = value && *value && strcmp(value, "0");
+	}
+	return wanted;
+}
+
 unsigned long __wrap_system_milliseconds(void)
 {
+	if (real_clock_wanted())
+	{
+		struct timespec now;
+
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		return 1000UL + (unsigned long)now.tv_sec * 1000UL + (unsigned long)now.tv_nsec / 1000000UL;
+	}
 	if ((!clock_thread_known || pthread_equal(pthread_self(), clock_thread)) && ++clock_reads > 100000)
 		clock_extra++;
 	return 1000UL + clock_frames * 100UL / 3UL + clock_extra;
