@@ -4957,6 +4957,8 @@ static void present(const struct dk_command_present *command)
 				wiiu_log("%s", pace_line);
 			if (wiiu_pacing_format_display(&gx.pace_stats, pace_line, sizeof(pace_line)))
 				wiiu_log("%s", pace_line);
+			if (wiiu_pacing_format_late(&gx.pace_stats, pace_line, sizeof(pace_line)))
+				wiiu_log("%s", pace_line);
 			wiiu_pacing_reset(&gx.pace_stats);
 		}
 		if (gx.overlay_on)

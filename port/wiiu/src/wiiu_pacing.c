@@ -108,6 +108,21 @@ int wiiu_pacing_format_display(const struct wiiu_pacing_stats *stats, char *out,
 		stats->flips, stats->shown[0], stats->shown[1], stats->shown[2], stats->shown[3], stats->away, stats->swaps_synced, stats->swaps_tearing);
 }
 
+int wiiu_pacing_format_late(const struct wiiu_pacing_stats *stats, char *out, unsigned size)
+{
+	const double minutes = stats->sum_ms / 60000.0;
+	const unsigned late_flips = stats->flips - stats->shown[0];
+
+	if (!stats->frames || minutes <= 0.0)
+	{
+		out[0] = 0;
+		return 0;
+	}
+	return snprintf(out, size, "pacing: late: %u of %u frames over 17.5 ms (%.1f%%, %.0f a minute); %u of %u flips shown for 2 or more refreshes (%.1f%%, %.0f a minute)",
+		stats->over_17, stats->frames, 100.0 * stats->over_17 / stats->frames, stats->over_17 / minutes, late_flips, stats->flips,
+		stats->flips ? 100.0 * late_flips / stats->flips : 0.0, late_flips / minutes);
+}
+
 int wiiu_pacing_parse(struct wiiu_pacing_policy *policy, const char *text)
 {
 	int mode = 0, depth = 1;

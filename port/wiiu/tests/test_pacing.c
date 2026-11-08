@@ -98,10 +98,15 @@ int main(void)
 	stats.swaps_tearing = 50;
 	CHECK(wiiu_pacing_format_display(&stats, text, sizeof(text)) > 50 && strlen(text) < 200);
 	printf("%s\n", text);
+	/* the late line: 300 frames of 23.4 ms (all over 17.5, in 7,020 ms: 300 / 0.117 minutes) and 290 flips, a third of them (97) of 2 refreshes */
+	CHECK(wiiu_pacing_format_late(&stats, text, sizeof(text)) > 50 && strlen(text) < 200);
+	printf("%s\n", text);
+	CHECK(strstr(text, "300 of 300 frames over 17.5 ms (100.0%, 2564 a minute)") && strstr(text, "97 of 290 flips shown for 2 or more refreshes (33.4%, 829 a minute)"));
 	wiiu_pacing_reset(&stats);
 	CHECK(wiiu_pacing_format_frames(&stats, text, sizeof(text)) == 0 && text[0] == 0);
 	CHECK(wiiu_pacing_format_threads(&stats, text, sizeof(text)) == 0);
 	CHECK(wiiu_pacing_format_display(&stats, text, sizeof(text)) == 0);
+	CHECK(wiiu_pacing_format_late(&stats, text, sizeof(text)) == 0 && text[0] == 0);
 
 	/* the card */
 	CHECK(wiiu_pacing_parse(&policy, "1\n") && policy.mode == 1 && policy.depth == 1);

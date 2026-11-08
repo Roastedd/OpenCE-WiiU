@@ -54,6 +54,8 @@ void wiiu_pacing_flip(struct wiiu_pacing_stats *stats, float since_last_flip_ms,
 int wiiu_pacing_format_frames(const struct wiiu_pacing_stats *stats, char *out, unsigned size);
 int wiiu_pacing_format_threads(const struct wiiu_pacing_stats *stats, char *out, unsigned size);
 int wiiu_pacing_format_display(const struct wiiu_pacing_stats *stats, char *out, unsigned size);
+/* the late frames and flips of the window, as a share and a count a minute of the window's frame time (log only: nothing reads it): "pacing: late: ..." */
+int wiiu_pacing_format_late(const struct wiiu_pacing_stats *stats, char *out, unsigned size);
 
 /* the policy */
 struct wiiu_pacing_policy
