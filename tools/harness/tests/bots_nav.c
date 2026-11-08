@@ -361,6 +361,29 @@ int main(int argc, char **argv)
 		bots_nav_dispose(nav);
 		return 0;
 	}
+	/* a pack file made elsewhere (tools/bots_nav_pack.py's test): read through the pack's functions, the map's numbers said on stdout */
+	CASE("file")
+	{
+		FILE *file = fopen(argv[2], "rb");
+		unsigned char *bytes = malloc(1 << 20);
+		size_t count;
+		unsigned long surfaces, walkable, offset, size;
+		char const *why = NULL;
+		struct bots_nav *nav;
+
+		CHECK(file != NULL, "no file");
+		count = fread(bytes, 1, 1 << 20, file);
+		fclose(file);
+		CHECK(bots_nav_pack_check(bytes, count, &why), "crc: %s", why ? why : "?");
+		CHECK(bots_nav_pack_find(bytes, count, argv[3], &surfaces, &walkable, &offset, &size, &why), "find: %s", why ? why : "?");
+		nav = bots_nav_parse_record(argv[3], bytes + offset, size, &why);
+		CHECK(nav != NULL, "parse: %s", why ? why : "?");
+		printf("%lu %lu %ld %ld %ld %ld %.3f %.3f %.3f %.3f\n", surfaces, walkable, nav->area_count, nav->link_count, nav->script_count, nav->place_count,
+			nav->areas[1].x, nav->links[nav->areas[1].first_link].exit[1], nav->links[nav->areas[1].first_link].entry[0], nav->scripts[0].yaw);
+		bots_nav_dispose(nav);
+		free(bytes);
+		return 0;
+	}
 	fprintf(stderr, "no such case: %s\n", case_name);
 	return 2;
 }
