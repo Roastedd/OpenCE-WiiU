@@ -1614,6 +1614,9 @@ HRESULT WINAPI Direct3D_CreateDevice(UINT adapter, D3DDEVTYPE device_type, void 
 /* the GamePad's touch screen (wiiu_input.c, in the pixels of its 854x480 picture) is the menus' pointer: a tap clicks, a drag scrolls (touch_menu.c, which
 the Android build's touch screen shares). The GamePad shows the game's picture, letterboxed as blit_to (wiiu_gx2.c) does it. */
 int wiiu_input_touch(float *x, float *y);
+/* (wiiu_keyboard_font.c: the GamePad's keyboard is being shown; its glyphs asked for) */
+int wiiu_keyboard_shown(void);
+void wiiu_keyboard_prewarm(void);
 
 #define GAMEPAD_WIDTH 854.0f
 #define GAMEPAD_HEIGHT 480.0f
@@ -1644,7 +1647,7 @@ static void menu_point_from_gamepad(float gamepad_x, float gamepad_y, short *x, 
 int halo_ui_pointer_update(int menus_active, struct halo_ui_pointer *pointer)
 {
 	static struct touch_menu menu;
-	static int ready, was_active, finger_down;
+	static int ready, was_active, finger_down, warmed;
 	static float last_x, last_y;
 	struct touch_menu_output output;
 	float x, y;
@@ -1671,6 +1674,14 @@ int halo_ui_pointer_update(int menus_active, struct halo_ui_pointer *pointer)
 		was_active = menus_active != 0;
 	}
 	down = wiiu_input_touch(&x, &y);
+	/* (the GamePad's keyboard for a menu's text field has the screen's touch: its keys are not the menu's) */
+	if (menus_active && !warmed)
+	{
+		warmed = 1;
+		wiiu_keyboard_prewarm();
+	}
+	if (down && wiiu_keyboard_shown())
+		down = 0;
 	if (!menus_active)
 		return 0;
 	if (down && !finger_down)

@@ -19,6 +19,8 @@ code (under_test.inc).
 #define csstrlen strlen
 #define csstrcmp strcmp
 #define csstrncpy strncpy
+#define csmemset memset
+#include "halo_keyboard.h"
 
 #include "config.inc"
 #include "under_test.inc"
@@ -532,6 +534,185 @@ int main(int argc, char **argv)
 			"the space key: %d %d", row, column);
 		CHECK(!chat_keyboard_key_at(-0.01f, 0.5f, &row, &column) && !chat_keyboard_key_at(0.5f, 1.0f, &row, &column),
 			"a tap outside taken");
+	}
+
+	/* the keyboard given to the platform that draws it: nothing but "closed" while it is not up, else the line, the channel, the capitals and the key picked, and the
+	characters of its keys as the page and the capitals have them */
+	CASE("keyboard-view")
+	{
+		static char const *const letters[CHAT_KEYBOARD_ROWS - 1] = { "1234567890", "qwertyuiop", "asdfghjkl'", "zxcvbnm,.?" };
+		static char const *const symbols[CHAT_KEYBOARD_ROWS - 1] = { "1234567890", "!@#$%^&*()", "-_=+[]{};:", "\"'<>/\\?~,." };
+		struct halo_chat_keyboard_view view;
+
+		memset(&view, 0x55, sizeof(view));
+		chat_keyboard_view_fill(&view, FALSE, 2, TRUE, TRUE, 3, 4, "ignored", letters);
+		CHECK(!view.open && view.length == 0 && view.text[0] == 0 && view.channel == 0 && !view.shift && view.keys[0][0] == 0, "closed is all zero");
+		chat_keyboard_view_fill(&view, TRUE, 1, FALSE, FALSE, 2, 3, "need help", letters);
+		CHECK(view.open && view.channel == 1 && !view.shift && !view.symbols && view.row == 2 && view.column == 3, "the state");
+		CHECK(view.length == 9 && !strcmp(view.text, "need help"), "the line: '%s'", view.text);
+		CHECK(!memcmp(view.keys[0], "1234567890", 10) && !memcmp(view.keys[1], "qwertyuiop", 10) && !memcmp(view.keys[3], "zxcvbnm,.?", 10), "the letters");
+		chat_keyboard_view_fill(&view, TRUE, 0, TRUE, FALSE, 0, 0, "", letters);
+		CHECK(view.shift && !memcmp(view.keys[1], "QWERTYUIOP", 10) && !memcmp(view.keys[0], "1234567890", 10) && !memcmp(view.keys[3], "ZXCVBNM,.?", 10), "capitals");
+		chat_keyboard_view_fill(&view, TRUE, 0, FALSE, TRUE, 0, 0, "", symbols);
+		CHECK(view.symbols && !memcmp(view.keys[1], "!@#$%^&*()", 10) && view.keys[3][0] == '"', "the symbols' page");
+		/* a longest line fits, ended */
+		{
+			char line[CHAT_TEXT_SIZE + 8];
+
+			memset(line, 'x', sizeof(line));
+			line[sizeof(line) - 1] = 0;
+			chat_keyboard_view_fill(&view, TRUE, 0, FALSE, FALSE, 0, 0, line, letters);
+			CHECK(view.length == HALO_CHAT_KEYBOARD_TEXT - 1 && view.text[HALO_CHAT_KEYBOARD_TEXT - 1] == 0, "a long line is cut: %d", view.length);
+		}
+	}
+
+	/* a tap of the platform's keyboard: the key it is (a wide key of the last row by its first column); none off the keyboard */
+	CASE("keyboard-platform-tap")
+	{
+		short row, column;
+
+		row = 0;
+		column = 9;
+		CHECK(chat_keyboard_tap_key(&row, &column) && row == 0 && column == 9, "a letter");
+		row = CHAT_KEYBOARD_ROWS - 1;
+		column = 5;
+		CHECK(chat_keyboard_tap_key(&row, &column) && row == CHAT_KEYBOARD_ROWS - 1 && column == 4, "the second half of a wide key: %d", column);
+		row = CHAT_KEYBOARD_ROWS - 1;
+		column = CHAT_KEYBOARD_COLUMNS - 1;
+		CHECK(chat_keyboard_tap_key(&row, &column) && column == CHAT_KEYBOARD_COLUMNS - 2, "the last key's second half");
+		row = CHAT_KEYBOARD_ROWS;
+		column = 0;
+		CHECK(!chat_keyboard_tap_key(&row, &column), "a row past the keyboard");
+		row = 0;
+		column = CHAT_KEYBOARD_COLUMNS;
+		CHECK(!chat_keyboard_tap_key(&row, &column), "a column past it");
+		row = -1;
+		column = 0;
+		CHECK(!chat_keyboard_tap_key(&row, &column), "before it");
+		row = 0;
+		column = -1;
+		CHECK(!chat_keyboard_tap_key(&row, &column), "before it");
+	}
+
+	/* the quick chat's lines: a page of four, each a line the chat sends as it is (nothing a clean-up would change), short enough for a tile, with no repeat on a page */
+	CASE("quick-table")
+	{
+		short page, slot, other;
+		char cleaned[CHAT_TEXT_SIZE];
+
+		CHECK(CHAT_QUICK_PAGES == 3 && CHAT_QUICK_LINES == 4, "three pages of four");
+		for (page = 0; page < CHAT_QUICK_PAGES; page++)
+		{
+			CHECK(chat_quick_page_names[page] && strlen(chat_quick_page_names[page]) >= 3 && strlen(chat_quick_page_names[page]) <= 8, "page %d has a name", page);
+			for (slot = 0; slot < CHAT_QUICK_LINES; slot++)
+			{
+				char const *line = chat_quick_lines[page][slot];
+
+				CHECK(line && line[0], "page %d line %d is empty", page, slot);
+				CHECK(strlen(line) <= 20, "'%s' is %d characters", line, (int)strlen(line));
+				CHECK(chat_text_clean(cleaned, line, CHAT_TEXT_SIZE) == (short)strlen(line) && !strcmp(cleaned, line), "'%s' is changed by the chat: '%s'", line, cleaned);
+				CHECK(!strchr(line, '|') && line[0] != '/' && line[0] != '!', "'%s' is a command or has a pipe", line);
+				for (other = 0; other < slot; other++)
+					CHECK(strcmp(line, chat_quick_lines[page][other]), "'%s' twice on page %d", line, page);
+			}
+		}
+	}
+
+	/* a button pressed picks its line: up, left, right, down, the first if more are pressed; the others none */
+	CASE("quick-slot")
+	{
+		CHECK(chat_quick_slot(FLAG(HALO_CHAT_PAD_UP)) == 0 && chat_quick_slot(FLAG(HALO_CHAT_PAD_LEFT)) == 1 && chat_quick_slot(FLAG(HALO_CHAT_PAD_RIGHT)) == 2 &&
+			chat_quick_slot(FLAG(HALO_CHAT_PAD_DOWN)) == 3, "the four");
+		CHECK(chat_quick_slot(FLAG(HALO_CHAT_PAD_DOWN) | FLAG(HALO_CHAT_PAD_LEFT)) == 1 && chat_quick_slot(FLAG(HALO_CHAT_PAD_RIGHT) | FLAG(HALO_CHAT_PAD_UP)) == 0, "the first");
+		CHECK(chat_quick_slot(0) == NONE && chat_quick_slot(FLAG(HALO_CHAT_PAD_A) | FLAG(HALO_CHAT_PAD_B) | FLAG(HALO_CHAT_PAD_START) | FLAG(HALO_CHAT_PAD_PAGE_NEXT) |
+			FLAG(HALO_CHAT_PAD_STICK_UP) | FLAG(HALO_CHAT_PAD_X) | FLAG(HALO_CHAT_PAD_Y)) == NONE, "the others");
+	}
+
+	/* the pages turn round, and say who they are to: the calls and the plan to the team (everyone without teams), the rest to everyone */
+	CASE("quick-page")
+	{
+		short page;
+
+		CHECK(chat_quick_page_turn(0, 1) == 1 && chat_quick_page_turn(1, 1) == 2 && chat_quick_page_turn(2, 1) == 0, "forward round");
+		CHECK(chat_quick_page_turn(0, -1) == 2 && chat_quick_page_turn(2, -1) == 1 && chat_quick_page_turn(1, -1) == 0, "back round");
+		CHECK(chat_quick_channel(0, TRUE) == _chat_channel_team && chat_quick_channel(1, TRUE) == _chat_channel_team && chat_quick_channel(2, TRUE) == _chat_channel_everyone, "with teams");
+		for (page = 0; page < CHAT_QUICK_PAGES; page++)
+			CHECK(chat_quick_channel(page, FALSE) == _chat_channel_everyone, "page %d without teams", page);
+	}
+
+	/* a page left open closes after 4 seconds without a press, across the clock's wrap */
+	CASE("quick-expired")
+	{
+		CHECK(!chat_quick_expired(1000, 1000) && !chat_quick_expired(1000, 4999) && chat_quick_expired(1000, 5000), "4 seconds");
+		/* (the game's clock is 32 bits; on a host with 64-bit longs the wrap is not there to cross) */
+		if (sizeof(unsigned long) == 4)
+			CHECK(!chat_quick_expired(0xFFFFFF00UL, 0x100UL) && chat_quick_expired(0xFFFFFF00UL, 0x100UL + 4000UL), "across the wrap");
+	}
+
+	/* the limits: three lines at once, one more every 2 seconds, none within 0.8 s of the last, the same line not again within 5 s */
+	CASE("quick-limit")
+	{
+		struct chat_quick_limit limit;
+		unsigned long now = 100000;
+
+		memset(&limit, 0, sizeof(limit));
+		limit.last_line = NONE;
+		CHECK(chat_quick_take(&limit, 0, now) == _chat_quick_sent, "the first");
+		/* too soon after it, whatever the line: nothing counted */
+		CHECK(chat_quick_take(&limit, 1, now + 100) == _chat_quick_spacing && chat_quick_take(&limit, 1, now + 799) == _chat_quick_spacing, "spacing");
+		CHECK(chat_quick_take(&limit, 1, now + 800) == _chat_quick_sent, "after the spacing");
+		/* the same line again */
+		CHECK(chat_quick_take(&limit, 1, now + 1700) == _chat_quick_repeat, "the same line again");
+		CHECK(chat_quick_take(&limit, 2, now + 1700) == _chat_quick_sent, "the third of three");
+		/* three used: the fourth waits (the bucket refills one a period after the first: 2 s) */
+		CHECK(chat_quick_take(&limit, 3, now + 1800) == _chat_quick_spacing, "100 ms after the third");
+		CHECK(chat_quick_take(&limit, 3, now + 2500) == _chat_quick_sent, "the fourth, when a token is back (2 s after the first)");
+	}
+	CASE("quick-limit-burst")
+	{
+		struct chat_quick_limit limit;
+		unsigned long now = 200000;
+		short sent = 0, burst = 0, line;
+
+		memset(&limit, 0, sizeof(limit));
+		limit.last_line = NONE;
+		/* a line every second for ten lines of different words: the bucket lets 3 at once, then about one in two seconds */
+		for (line = 0; line < 10; line++)
+		{
+			short result = chat_quick_take(&limit, line, now + (unsigned long)line * 1000);
+
+			sent += result == _chat_quick_sent;
+			burst += result == _chat_quick_burst;
+		}
+		CHECK(sent == 7 && burst == 3, "sent %d, held back %d: three at once and one every two seconds", sent, burst);
+		/* a line every 0.8 s is held back more: the spacing's nothing counts */
+		memset(&limit, 0, sizeof(limit));
+		limit.last_line = NONE;
+		sent = 0;
+		for (line = 0; line < 20; line++)
+			sent += chat_quick_take(&limit, line, now + (unsigned long)line * 800) == _chat_quick_sent;
+		CHECK(sent == 10, "at 0.8 s apart: %d of 20 (3, then one in 2 s)", sent);
+		/* after a long wait the burst is back, no more: eight lines a second apart, six get through */
+		limit.last_line = NONE;
+		sent = 0;
+		for (line = 0; line < 8; line++)
+			sent += chat_quick_take(&limit, line, now + 1000000 + (unsigned long)line * 1000) == _chat_quick_sent;
+		CHECK(sent == 6, "after a long wait: %d of 8", sent);
+	}
+	/* the clock's wrap in the limits */
+	CASE("quick-limit-wrap")
+	{
+		struct chat_quick_limit limit;
+		unsigned long now = 0xFFFFF000UL;
+
+		/* (the game's clock is 32 bits; on a host with 64-bit longs the wrap is not there to cross) */
+		if (sizeof(unsigned long) != 4)
+			return 0;
+		memset(&limit, 0, sizeof(limit));
+		limit.last_line = NONE;
+		CHECK(chat_quick_take(&limit, 0, now) == _chat_quick_sent, "before the wrap");
+		CHECK(chat_quick_take(&limit, 1, now + 0x2000UL) == _chat_quick_sent, "after it, 8 seconds on");
+		CHECK(chat_quick_take(&limit, 0, now + 0x2001UL + 1000UL) == _chat_quick_sent, "the first line again, long since");
 	}
 
 	return 0;

@@ -547,6 +547,16 @@ static const struct config_setting config_settings[] =
 		"What the GamePad's screen shows. \"tv\": the TV's picture. \"player1\": in split\n"
 		"screen, player 1's window alone, scaled to the GamePad (the menus, and a game of\n"
 		"one player, are shown whole)." },
+	{ "input.wiiu_gamepad_keyboard", _config_boolean, "false", "HALO_WIIU_GAMEPAD_KEYBOARD", _environment_value, _platform_wiiu,
+		"The text chat's keyboard on the GamePad's touch screen: while the chat's keyboard is up\n"
+		"(D-pad Up in a network game), the GamePad shows big keys (80 x 60 pixels) and a tap\n"
+		"presses the key under it. Off: the keyboard is the TV's, used with the stick and A\n"
+		"(the GamePad then shows the TV's picture). Read when a network game starts." },
+	{ "input.quick_chat", _config_string, "\"auto\"", "HALO_QUICK_CHAT", _environment_value, _platform_all,
+		"The quick chat: in a network game with the text chat on, D-pad Down opens a page of four\n"
+		"lines (D-pad up, left, right, down say them; L and R, or Y, turn the page; B closes it),\n"
+		"sent to the team or everyone as ordinary chat lines. \"on\", \"off\", or \"auto\": on in\n"
+		"the Wii U build, where the D-pad has no use in the game, off on the desktop." },
 	{ "input.gamepad_vertical_look", _config_real, "1.0", "HALO_GAMEPAD_VERTICAL_LOOK", _environment_value, _platform_all,
 		"How fast a controller's stick looks up and down, against the game's own\n"
 		"rate: 1 is the game's (it looks up and down more slowly than it turns);\n"

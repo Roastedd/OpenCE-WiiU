@@ -30,6 +30,7 @@ Not run on a console.
 #include "wiiu_pacing.h"
 #include "wiiu_stream_queue.h"
 #include "wiiu_update.h"
+#include "wiiu_keyboard.h"
 #include "wiiu_gpu_offload.h"
 
 /* d3d8_gx2.c: the queue of streams and its buffers (halo/gx2_thread.txt 7) */
@@ -268,6 +269,11 @@ static struct
 	GX2Sampler panel_sampler;
 	unsigned panel_generation;
 	int panel_made, panel_shown;
+	/* the chat's keyboard on the GamePad (wiiu_keyboard.h): the atlas of its glyphs made into a texture when the glyphs are made, and the quads of the frame being presented
+	(none when it is closed) */
+	GX2Texture keyboard_texture;
+	GX2Sampler keyboard_sampler;
+	int keyboard_made, keyboard_failed, keyboard_count;
 	/* the GPU's own time for a frame's draws (gpu_frame_begin, gpu_frame_end, gpu_poll): the slot of samples in use, each slot's state (0 free, 1 begun,
 	2 ended and not yet read) and when it ended; the frame now drawn is measured (1) or not (2: no free slot); the five seconds' sum and longest */
 	unsigned gpu_slot;
@@ -3905,6 +3911,127 @@ static void panel_draw(GX2ColorBuffer *screen, GX2ContextState *context)
 	GX2DrawEx(GX2_PRIMITIVE_MODE_TRIANGLES, 6, 0, 1);
 }
 
+/* ---------- the chat's keyboard on the GamePad (wiiu_keyboard.h): the glyphs' atlas as a texture, and the keyboard's quads over the GamePad's picture while it is open. Nothing
+is made until the glyphs are, nothing is drawn while the keyboard is closed, and the TV is never drawn on. */
+
+static int keyboard_make(const struct wk_atlas *atlas)
+{
+	GX2Surface *surface = &gx.keyboard_texture.surface;
+	unsigned x, y;
+
+	surface->dim = GX2_SURFACE_DIM_TEXTURE_2D;
+	surface->width = WK_ATLAS_WIDTH;
+	surface->height = WK_ATLAS_HEIGHT;
+	surface->depth = 1;
+	surface->mipLevels = 1;
+	surface->format = GX2_SURFACE_FORMAT_UNORM_R8_G8_B8_A8;
+	surface->aa = GX2_AA_MODE1X;
+	surface->use = GX2_SURFACE_USE_TEXTURE;
+	surface->tileMode = GX2_TILE_MODE_LINEAR_ALIGNED;
+	GX2CalcSurfaceSizeAndAlignment(surface);
+	surface->image = gx_alloc_raw(surface->imageSize, surface->alignment ? surface->alignment : 256);
+	if (!surface->image)
+		return 0;
+	/* (white, the glyph's coverage its alpha, as the maps' fonts are) */
+	for (y = 0; y < WK_ATLAS_HEIGHT; y++)
+	{
+		uint8_t *row = (uint8_t *)surface->image + (size_t)y * surface->pitch * 4;
+
+		for (x = 0; x < WK_ATLAS_WIDTH; x++)
+		{
+			row[x * 4 + 0] = row[x * 4 + 1] = row[x * 4 + 2] = 0xff;
+			row[x * 4 + 3] = atlas->pixels[(size_t)y * WK_ATLAS_WIDTH + x];
+		}
+	}
+	gx.keyboard_texture.viewNumMips = 1;
+	gx.keyboard_texture.viewNumSlices = 1;
+	gx.keyboard_texture.compMap = GX2_COMP_MAP(GX2_SQ_SEL_R, GX2_SQ_SEL_G, GX2_SQ_SEL_B, GX2_SQ_SEL_A);
+	GX2InitTextureRegs(&gx.keyboard_texture);
+	GX2InitSampler(&gx.keyboard_sampler, GX2_TEX_CLAMP_MODE_CLAMP, GX2_TEX_XY_FILTER_MODE_LINEAR);
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, surface->image, surface->imageSize);
+	return 1;
+}
+
+/* the keyboard's quads for this frame: its view as the game's thread last published it. Each present (it costs nothing while the keyboard is closed or off). */
+static struct wk_quad keyboard_quads[WK_MAXIMUM_QUADS];
+
+static void keyboard_update(void)
+{
+	const struct wk_atlas *atlas;
+	struct halo_chat_keyboard_view view;
+
+	gx.keyboard_count = 0;
+	if (gx.keyboard_failed || !wiiu_keyboard_enabled() || !(atlas = wiiu_keyboard_atlas()))
+		return;
+	wiiu_keyboard_snapshot(&view);
+	if (!view.open)
+		return;
+	if (!gx.keyboard_made)
+	{
+		gx.keyboard_made = keyboard_make(atlas);
+		if (!gx.keyboard_made)
+		{
+			gx.keyboard_failed = 1;
+			wiiu_log("GX2: no memory for the GamePad keyboard's glyphs: it is not drawn (the TV's keyboard is)");
+			return;
+		}
+		wiiu_log("GX2: the GamePad keyboard's texture is made (%d x %d)", WK_ATLAS_WIDTH, WK_ATLAS_HEIGHT);
+	}
+	gx.keyboard_count = wiiu_keyboard_build(&view, atlas, (unsigned long)OSTicksToMilliseconds(OSGetSystemTime()), keyboard_quads, WK_MAXIMUM_QUADS);
+}
+
+/* the keyboard over the GamePad's picture (the pixels of the 854 x 480 GamePad are the quads' units: the screen's own, which its surface is) */
+static void keyboard_draw(GX2ColorBuffer *screen, GX2ContextState *context)
+{
+	static const unsigned corner_x[6] = { 0, 1, 0, 1, 1, 0 };
+	static const unsigned corner_y[6] = { 0, 0, 1, 0, 1, 1 };
+	const float screen_width = (float)screen->surface.width, screen_height = (float)screen->surface.height;
+	struct blit_vertex *vertices;
+	int quad;
+	unsigned i;
+
+	if (gx.keyboard_count <= 0)
+		return;
+	vertices = ring_reserve((uint32_t)gx.keyboard_count * 6 * sizeof(struct blit_vertex));
+	if (!vertices)
+		return;
+	for (quad = 0; quad < gx.keyboard_count; quad++)
+	{
+		const struct wk_quad *q = &keyboard_quads[quad];
+
+		for (i = 0; i < 6; i++)
+		{
+			struct blit_vertex *v = &vertices[quad * 6 + i];
+
+			v->x = (corner_x[i] ? q->x1 : q->x0) / (float)WK_WIDTH * 2.0f - 1.0f;
+			v->y = 1.0f - (corner_y[i] ? q->y1 : q->y0) / (float)WK_HEIGHT * 2.0f;
+			v->u = corner_x[i] ? q->u1 : q->u0;
+			v->v = corner_y[i] ? q->v1 : q->v0;
+			v->r = q->r;
+			v->g = q->g;
+			v->b = q->b;
+			v->a = q->a;
+		}
+	}
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER, vertices, (uint32_t)gx.keyboard_count * 6 * sizeof(struct blit_vertex));
+	GX2SetContextState(context);
+	GX2SetColorBuffer(screen, GX2_RENDER_TARGET_0);
+	GX2SetViewport(0.0f, 0.0f, screen_width, screen_height, 0.0f, 1.0f);
+	GX2SetScissor(0, 0, (uint32_t)screen_width, (uint32_t)screen_height);
+	blit_state();
+	GX2SetColorControl(GX2_LOGIC_OP_COPY, 1, FALSE, TRUE);
+	GX2SetBlendControl(GX2_RENDER_TARGET_0, GX2_BLEND_MODE_SRC_ALPHA, GX2_BLEND_MODE_INV_SRC_ALPHA, GX2_BLEND_COMBINE_MODE_ADD, TRUE, GX2_BLEND_MODE_ONE,
+		GX2_BLEND_MODE_INV_SRC_ALPHA, GX2_BLEND_COMBINE_MODE_ADD);
+	GX2SetFetchShader(&gx.blit.fetchShader);
+	GX2SetVertexShader(gx.blit.vertexShader);
+	GX2SetPixelShader(gx.blit.pixelShader);
+	GX2SetShaderMode(GX2_SHADER_MODE_UNIFORM_REGISTER);
+	GX2SetAttribBuffer(0, (uint32_t)gx.keyboard_count * 6 * sizeof(struct blit_vertex), sizeof(struct blit_vertex), vertices);
+	GX2SetPixelTexture(&gx.keyboard_texture, gx.sampler_location);
+	GX2SetPixelSampler(&gx.keyboard_sampler, gx.sampler_location);
+	GX2DrawEx(GX2_PRIMITIVE_MODE_TRIANGLES, (uint32_t)gx.keyboard_count * 6, 0, 1);
+}
+
 /* the hold-to-skip bar (xinput_wiiu.c says how far the hold is, 0 to 1): a grey frame and a white fill growing from the left, at the bottom middle of each screen, as games
 show a held skip. Its vertices are the ring's (each screen's draw its own: the GPU reads them after this returns). */
 static volatile float skip_progress;
@@ -4562,6 +4689,7 @@ static void present(const struct dk_command_present *command)
 		perf_windows(now);
 	}
 	panel_update();
+	keyboard_update();
 	if (gx.test_armed == 2)
 	{
 		gx.test_armed = 3;
@@ -4595,6 +4723,8 @@ static void present(const struct dk_command_present *command)
 			skip_bar_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState(), skip_progress);
 		if (gx.panel_shown)
 			panel_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState());
+		/* (the chat's keyboard, on the GamePad alone, while it is open) */
+		keyboard_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState());
 	}
 	GX2CopyColorBufferToScanBuffer(WHBGfxGetDRCColourBuffer(), GX2_SCAN_TARGET_DRC);
 	/* (the frame's work is handed to the GPU before the swap, whose wait for the display is then not in the time the work is said to have taken) */

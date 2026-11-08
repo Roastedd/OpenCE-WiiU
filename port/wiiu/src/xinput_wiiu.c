@@ -38,6 +38,11 @@ that is only a press does nothing then, so that a cinematic is not skipped by ac
 
 L + R + - shows or hides the performance overlay.
 
+The text chat (halo_keyboard.h). D-pad Up opens the chat's on-screen keyboard (network_chat.c); while it is up the game gets nothing from the controller that opened it (the
+port's pad is zeroed, and each button held as the keyboard closed is kept from the game until it is let go, so the B that closes it is not a new press), nor the gyro. The
+keyboard reads the Wii U's letters (wiiu_chat_input.h): A types, B closes, X deletes, Y gives capitals, + sends. A vote running takes the first port's D-pad left and right.
+The GamePad's touch is a tap at the moment a finger comes down.
+
 The GamePad's gyro can aim (input.wiiu_gyro_aim, "off" by default; "always", or "zoom" for only while zoomed in): its turn rates are added to the right stick
 while no menu has the screen.
 
@@ -49,8 +54,11 @@ GamePad's gyro, which it replaces while the first player has such a Remote), as 
 
 #include "platform.h"
 #include "port_config.h"
+#include "controller_remap.h"
 #include "wiiu_shell.h"
 #include "wiiu_input.h"
+#include "wiiu_chat_input.h"
+#include "wiiu_keyboard.h"
 #include "wiiu_pad_players.h"
 #include "wiiu_virtual_pads.h"
 #include "wiiu_update.h"
@@ -61,6 +69,11 @@ GamePad's gyro, which it replaces while the first player has such a Remote), as 
 #include <string.h>
 
 #define PORT_COUNT WIIU_PAD_PORTS
+
+/* (network_chat.c's: the chat's keyboard is up, and the port that opened it; network_votekick.c's: a vote the first port's D-pad answers is running) */
+extern unsigned char network_chat_keyboard_open(void);
+extern short network_chat_controller(void);
+extern unsigned char network_vote_pad_open(void);
 
 XPP_DEVICE_TYPE XDEVICE_TYPE_GAMEPAD_TABLE;
 XPP_DEVICE_TYPE XDEVICE_TYPE_MEMORY_UNIT_TABLE;
@@ -280,7 +293,9 @@ int halo_linux_mouse_look(short gamepad_index, float *yaw, float *pitch)
 		turn = x;
 		tilt = y;
 	}
-	if ((!mode && !remote) || port_menus_active() || (!remote && mode == 2 && player_control_get_zoom_level(0) < 0))
+	/* (nothing while the chat's keyboard is up on the first port: the view stays where it was) */
+	if ((!mode && !remote) || port_menus_active() || (!remote && mode == 2 && player_control_get_zoom_level(0) < 0) ||
+		(network_chat_keyboard_open() && network_chat_controller() == 0))
 		return 0;
 	/* (the stick's: XInputGetState of this poll, which comes first) */
 	if ((pause == 1 && wiiu_input_touch(&x, &y)) || (pause == 2 && stick_aimed_at == aim_polls))
@@ -564,6 +579,168 @@ static int controller_port(HANDLE device)
 	return -1;
 }
 
+/* ---------- the text chat's on-screen keyboard (halo_keyboard.h; wiiu_chat_input.h has the buttons' mapping) */
+
+/* each port's buttons as the pad had them this frame (the bits of halo_chat_pad_button), before the keyboard takes them from the game */
+static unsigned long chat_pad[PORT_COUNT];
+static struct wiiu_chat_tap chat_tap;
+
+unsigned long halo_chat_pad_buttons_for_port(short port)
+{
+	return port >= 0 && port < PORT_COUNT ? chat_pad[port] : 0;
+}
+
+unsigned long halo_chat_pad_buttons(void)
+{
+	short port = network_chat_controller();
+
+	return chat_pad[port >= 0 && port < PORT_COUNT ? port : 0];
+}
+
+/* (network_chat.c's: the keys, the chips and CLOSE of the GamePad's keyboard) */
+void network_chat_keyboard_press(short row, short column);
+void network_chat_keyboard_channel(short channel);
+void network_chat_keyboard_close(void);
+
+/* A tap while the GamePad shows the keyboard (wiiu_keyboard.h) is on its own keys, chips and CLOSE: it presses what it hit, and the chat is told of no tap (its own keyboard
+is hit-tested in the game's picture, which the GamePad's keyboard covers); a tap on none of them does nothing. Without the GamePad's keyboard (the setting off, the glyphs
+not made), the tap is the chat's, as a share of the picture. */
+int halo_chat_taps(float *x, float *y)
+{
+	float pixel_x, pixel_y;
+	struct wk_hit hit;
+
+	if (!wiiu_keyboard_shown())
+		return wiiu_chat_tap_take(&chat_tap, x, y);
+	if (wiiu_chat_tap_take_pixels(&chat_tap, &pixel_x, &pixel_y))
+	{
+		switch (wiiu_keyboard_hit(pixel_x, pixel_y, &hit))
+		{
+		case WK_HIT_KEY:
+			network_chat_keyboard_press((short)hit.row, (short)hit.column);
+			break;
+		case WK_HIT_CHANNEL:
+			network_chat_keyboard_channel((short)hit.channel);
+			break;
+		case WK_HIT_CLOSE:
+			network_chat_keyboard_close();
+			break;
+		default:
+			break;
+		}
+	}
+	return 0;
+}
+
+/* The players of the other ports (split screen) open their own keyboards with their D-pad Up, as the desktop's remapped chat button does (controller_remap_pressed(port,
+1 << PAD_CHAT), network_chat.c): the first port's is halo_chat_pad_buttons' (it is the GamePad's, with the controllers that share it). A press is latched when it comes and taken
+by the question, which network_chat_update asks of every port every frame. */
+static unsigned long chat_pad_last[PORT_COUNT];
+static unsigned int chat_guest_pressed[PORT_COUNT];
+
+int controller_remap_connected(short port)
+{
+	return port > 0 && port < PORT_COUNT && wiiu_input_port_present((unsigned int)port);
+}
+
+unsigned int controller_remap_pressed(short port, unsigned int mask)
+{
+	unsigned int result;
+
+	if (port <= 0 || port >= PORT_COUNT)
+		return 0;
+	result = chat_guest_pressed[port] & mask;
+	chat_guest_pressed[port] &= ~mask;
+	return result;
+}
+
+/* each button held as the keyboard closed (the B that closed it, the + that sent the line) is kept from the game until it is let go: it would see a new press of it, a pause
+menu opened, a melee, a jump (the triggers are analog buttons too) */
+static WORD chat_held_buttons[PORT_COUNT];
+static unsigned char chat_held_analog[PORT_COUNT];
+
+static void chat_pad_hold_over(int port, XINPUT_GAMEPAD *pad)
+{
+	int index;
+
+	if (network_chat_keyboard_open() && network_chat_controller() == port)
+	{
+		chat_held_buttons[port] = pad->wButtons;
+		chat_held_analog[port] = 0;
+		for (index = 0; index < 8; index++)
+			if (pad->bAnalogButtons[index])
+				chat_held_analog[port] |= (unsigned char)(1 << index);
+		memset(pad, 0, sizeof(*pad));
+		return;
+	}
+	chat_held_buttons[port] &= pad->wButtons;
+	pad->wButtons &= (WORD)~chat_held_buttons[port];
+	for (index = 0; index < 8; index++)
+	{
+		if (!(chat_held_analog[port] & (1 << index)))
+			continue;
+		if (pad->bAnalogButtons[index])
+			pad->bAnalogButtons[index] = 0;
+		else
+			chat_held_analog[port] &= (unsigned char)~(1 << index);
+	}
+}
+
+/* the first port's D-pad left and right held as a vote took them, which the game gets none of until each is let go: else a vote's end would hand it a press */
+static WORD vote_held_buttons;
+
+static void vote_pad_hold_over(XINPUT_GAMEPAD *pad)
+{
+	const WORD sides = XINPUT_GAMEPAD_DPAD_LEFT | XINPUT_GAMEPAD_DPAD_RIGHT;
+
+	if (network_vote_pad_open())
+		vote_held_buttons |= (WORD)(pad->wButtons & sides);
+	else
+		vote_held_buttons &= pad->wButtons;
+	if (network_vote_pad_open())
+		pad->wButtons &= (WORD)~sides;
+	else
+		pad->wButtons &= (WORD)~vote_held_buttons;
+}
+
+/* A menu's text field (platform_text_field: wiiu_keyboard.h) edited with the GamePad's keyboard: a tap on its keys types into the game's key queue (XInputDebugGetKeystroke below),
+and DONE and CANCEL are the Xbox's A and B pressed for a few polls, which the field's row takes as "done" and the menu as "back" (a press the game sees once: it counts a button's
+ticks). The tap is the keyboard's alone: d3d8_gx2.c's pointer leaves the screen's touch to it meanwhile. */
+#define FIELD_PRESS_POLLS 6
+static int field_press_a, field_press_b;
+
+static void field_apply(XINPUT_GAMEPAD *state)
+{
+	float x, y;
+
+	if (wiiu_keyboard_field_active() && wiiu_chat_tap_take_pixels(&chat_tap, &x, &y))
+	{
+		switch (wiiu_keyboard_field_press(x, y))
+		{
+		case WK_ACTION_DONE:
+			field_press_a = FIELD_PRESS_POLLS;
+			break;
+		case WK_ACTION_CANCEL:
+			field_press_b = FIELD_PRESS_POLLS;
+			break;
+		default:
+			break;
+		}
+	}
+	if (!wiiu_keyboard_field_active())
+		field_press_a = field_press_b = 0;
+	if (field_press_a > 0)
+	{
+		field_press_a--;
+		state->bAnalogButtons[XINPUT_GAMEPAD_A] = 0xff;
+	}
+	if (field_press_b > 0)
+	{
+		field_press_b--;
+		state->bAnalogButtons[XINPUT_GAMEPAD_B] = 0xff;
+	}
+}
+
 /* the updater's panel is answered by the Wii U's letters: a Wii Remote's Xbox face buttons count as the letters of the same name, as the menus take them */
 static unsigned int panel_buttons(const struct wiiu_pad *pad)
 {
@@ -601,9 +778,23 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 		memset(&pad, 0, sizeof(pad));
 		have_pad = 0;
 	}
+	/* (what the pad has, for the chat's keyboard, before it takes it from the game; the finger once a frame, for its taps) */
+	chat_pad[port] = have_pad ? wiiu_chat_buttons(&pad) : 0;
+	if (port > 0 && (chat_pad[port] & ~chat_pad_last[port] & (1UL << HALO_CHAT_PAD_UP)))
+		chat_guest_pressed[port] |= 1u << PAD_CHAT;
+	chat_pad_last[port] = chat_pad[port];
+	if (port == 0)
+	{
+		float touch_x, touch_y;
+		const int touched = wiiu_input_touch(&touch_x, &touch_y);
+
+		wiiu_chat_tap_poll(&chat_tap, touched, touch_x, touch_y);
+	}
 	if (have_pad)
 		pad_state(&pad, &state->Gamepad);
 	virtual_pad_apply((unsigned int)port, &state->Gamepad);
+	if (port == 0)
+		field_apply(&state->Gamepad);
 	if (port == 0)
 		test_input_gamepad(&state->Gamepad);
 	hold_to_skip((unsigned int)port, &state->Gamepad);
@@ -615,6 +806,10 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 		if (state->Gamepad.sThumbRX > 9000 || state->Gamepad.sThumbRX < -9000 || state->Gamepad.sThumbRY > 9000 || state->Gamepad.sThumbRY < -9000)
 			stick_aimed_at = aim_polls;
 	}
+	/* the chat's keyboard takes the controller that opened it from the game; a vote running takes the first port's D-pad left and right */
+	chat_pad_hold_over(port, &state->Gamepad);
+	if (port == 0)
+		vote_pad_hold_over(&state->Gamepad);
 	if (memcmp(&state->Gamepad, &controllers[port].previous, sizeof(state->Gamepad)))
 	{
 		controllers[port].packet_number++;
@@ -649,8 +844,16 @@ DWORD WINAPI XInputDebugInitKeyboardQueue(PXINPUT_DEBUG_KEYQUEUE_PARAMETERS para
 	return ERROR_SUCCESS;
 }
 
+/* the Xbox's debug keyboard: the GamePad keyboard's keys for a menu's text field (wiiu_keyboard.h), a press and a release each; nothing otherwise */
 DWORD WINAPI XInputDebugGetKeystroke(PXINPUT_DEBUG_KEYSTROKE keystroke)
 {
+	struct wk_keystroke next;
+
 	memset(keystroke, 0, sizeof(*keystroke));
-	return ERROR_HANDLE_EOF;
+	if (!wiiu_keyboard_keys_next(&next))
+		return ERROR_HANDLE_EOF;
+	keystroke->VirtualKey = next.virtual_key;
+	keystroke->Ascii = next.ascii;
+	keystroke->Flags = next.flags;
+	return ERROR_SUCCESS;
 }

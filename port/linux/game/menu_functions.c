@@ -3112,6 +3112,7 @@ int p2p_peer_address(unsigned char const *identifier, unsigned long *address);
 int platform_clipboard_get(char *text, int size);
 void platform_clipboard_set(char const *text);
 void platform_text_field(int typing, int password);
+void platform_text_field_text(char const *text, int maximum);
 int config_boolean(char const *name);
 void ui_widget_port_post_button(short controller_index, short button_index);
 
@@ -3271,6 +3272,8 @@ static void text_field_show(struct widget_instance *value, char const *text, boo
 			}
 		}
 		text = text_field.text;
+		/* (a platform with a keyboard of its own for the field shows what is typed) */
+		platform_text_field_text(text_field.text, text_field.maximum);
 	}
 	for (index = 0; text[index] && index < TEXT_FIELD_LENGTH; index++)
 		shown[index] = editing && text_field.masked ? L'*' : (wchar_t)(unsigned char)text[index];

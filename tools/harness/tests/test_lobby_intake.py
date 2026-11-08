@@ -31,7 +31,7 @@ def generated(fault=None):
                                                           'listing_current', 'listing_wanted')])
     if fault:
         code = mutated(code, *fault)
-    return (('config.inc', config), ('under_test.inc', code))
+    return (('config.inc', config), ('halo_clock.h', read('port/linux/src/halo_clock.h')), ('under_test.inc', code))
 
 
 @pytest.mark.parametrize('case', ['filter', 'burst'])

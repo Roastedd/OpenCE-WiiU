@@ -178,6 +178,15 @@ enum
 	middle, between the touch controls (the lines are at the top left) */
 	CHAT_KEYBOARD_WIDTH_PERCENT = 40,
 	CHAT_KEYBOARD_WIDTH_PERCENT_ANDROID = 36,
+	/* the quick chat (D-pad Down): its pages of four lines (up, left, right, down), left open this long without a press, the least between two lines sent, the lines
+	sent at once and the time to gain another, and how long the same line is not sent again */
+	CHAT_QUICK_PAGES = 3,
+	CHAT_QUICK_LINES = 4,
+	CHAT_QUICK_IDLE_MILLISECONDS = 4000,
+	CHAT_QUICK_SPACING_MILLISECONDS = 800,
+	CHAT_QUICK_BURST = 3,
+	CHAT_QUICK_REFILL_MILLISECONDS = 2000,
+	CHAT_QUICK_REPEAT_MILLISECONDS = 5000,
 };
 
 /* the lines' size, of the HUD font's: laid out at its size, then drawn scaled
@@ -348,6 +357,30 @@ static struct
 	short bottom;
 } chat_keyboard;
 
+/* the quick chat limits (chat_quick_take): the lines sent at once and when the last came (the host's own limits stand behind these: chat_rate_take) */
+struct chat_quick_limit
+{
+	struct chat_rate rate;
+	boolean sent;
+	/* (system_milliseconds) */
+	unsigned long sent_at;
+	/* the line last sent (page * CHAT_QUICK_LINES + slot), NONE for none, and when */
+	short last_line;
+	unsigned long last_line_at;
+};
+
+/* the quick chat's page, up for the first player's controller (D-pad Down opens it) */
+static struct
+{
+	boolean open;
+	short page;
+	/* (system_milliseconds) when it was opened or last pressed */
+	unsigned long last_input;
+	/* the first controller's buttons last frame (a press acts) */
+	unsigned long held;
+	struct chat_quick_limit limit;
+} chat_quick;
+
 /* its keys' characters but the last row's, the letters' and the symbols' */
 static char const *const chat_keyboard_letters[CHAT_KEYBOARD_ROWS - 1] =
 	{ "1234567890", "qwertyuiop", "asdfghjkl'", "zxcvbnm,.?" };
@@ -386,6 +419,9 @@ static struct
 /* whether this machine is in a network game (the lines of the last are let
 go as the next starts) */
 static boolean chat_in_game;
+/* a game has started: the keyboard's glyphs are to be drawn once, unseen, in the next view's HUD (the hi-res text rasterizes a glyph the first time it is drawn, and 70
+of them at once would be a hitch at the first keystroke) */
+static boolean chat_glyphs_warm;
 
 /* (system_milliseconds) when "Text chat is off in this game" was last said
 (once a while, however often D-pad Up is pressed) */
@@ -922,6 +958,104 @@ static boolean chat_text_has_link(
 		}
 	}
 	return FALSE;
+}
+
+/* ---------- the quick chat (pure: tools/harness/tests/chat_logic.c) */
+
+/* its lines, a page of four (D-pad up, left, right, down): sent as ordinary English chat lines, so that every player sees them whatever build they have; none past 20
+characters, so that a tile of the page holds it in the HUD's font */
+static char const *const chat_quick_lines[CHAT_QUICK_PAGES][CHAT_QUICK_LINES] =
+{
+	{ "Enemy here!", "Need backup!", "Cover me!", "Fall back!" },
+	{ "Follow me", "Wait for me", "Go go go!", "Hold here" },
+	{ "Good game", "Nice shot!", "Thanks!", "Sorry!" },
+};
+
+static char const *const chat_quick_page_names[CHAT_QUICK_PAGES] = { "CALLS", "PLAN", "SOCIAL" };
+
+/* the line a button pressed picks (D-pad up, left, right, down: 0 to 3), the first of them if more are pressed; NONE for none */
+static short chat_quick_slot(
+	unsigned long pressed)
+{
+	if (TEST_FLAG(pressed, HALO_CHAT_PAD_UP))
+		return 0;
+	if (TEST_FLAG(pressed, HALO_CHAT_PAD_LEFT))
+		return 1;
+	if (TEST_FLAG(pressed, HALO_CHAT_PAD_RIGHT))
+		return 2;
+	if (TEST_FLAG(pressed, HALO_CHAT_PAD_DOWN))
+		return 3;
+	return NONE;
+}
+
+/* the page turned by one (direction 1 or -1), round the pages */
+static short chat_quick_page_turn(
+	short page,
+	short direction)
+{
+	return (short)((page + direction % CHAT_QUICK_PAGES + CHAT_QUICK_PAGES) % CHAT_QUICK_PAGES);
+}
+
+/* who a page's lines are to: the calls and the plan to the team (everyone in a game without teams, where a team's line is heard by all anyway), the rest to everyone */
+static short chat_quick_channel(
+	short page,
+	boolean has_teams)
+{
+	return page < 2 && has_teams ? _chat_channel_team : _chat_channel_everyone;
+}
+
+/* whether the page has been left open too long without a press */
+static boolean chat_quick_expired(
+	unsigned long last_input,
+	unsigned long now)
+{
+	return now - last_input >= CHAT_QUICK_IDLE_MILLISECONDS;
+}
+
+/* what the limits say of a line (page * CHAT_QUICK_LINES + slot) now: sent, or too soon after the last (nothing is said), the same line again, or the lines at once used up
+(a notice for those). A line sent counts. */
+enum
+{
+	_chat_quick_sent,
+	_chat_quick_spacing,
+	_chat_quick_repeat,
+	_chat_quick_burst,
+};
+
+static short chat_quick_take(
+	struct chat_quick_limit *limit,
+	short line,
+	unsigned long now)
+{
+	unsigned long gained;
+
+	if (limit->sent && now - limit->sent_at < CHAT_QUICK_SPACING_MILLISECONDS)
+		return _chat_quick_spacing;
+	if (limit->last_line == line && limit->sent && now - limit->last_line_at < CHAT_QUICK_REPEAT_MILLISECONDS)
+		return _chat_quick_repeat;
+	if (!limit->rate.started)
+	{
+		limit->rate.started = TRUE;
+		limit->rate.tokens = CHAT_QUICK_BURST;
+		limit->rate.refilled = now;
+	}
+	gained = (now - limit->rate.refilled) / CHAT_QUICK_REFILL_MILLISECONDS;
+	if (gained > 0)
+	{
+		limit->rate.tokens = (short)MIN((unsigned long)CHAT_QUICK_BURST, limit->rate.tokens + gained);
+		limit->rate.refilled += gained * CHAT_QUICK_REFILL_MILLISECONDS;
+	}
+	/* (full: the next token comes a whole period after one is spent) */
+	if (limit->rate.tokens >= CHAT_QUICK_BURST)
+		limit->rate.refilled = now;
+	if (limit->rate.tokens <= 0)
+		return _chat_quick_burst;
+	limit->rate.tokens--;
+	limit->sent = TRUE;
+	limit->sent_at = now;
+	limit->last_line = line;
+	limit->last_line_at = now;
+	return _chat_quick_sent;
 }
 
 /* ---------- the lines */
@@ -1953,7 +2087,7 @@ static void chat_keyboard_update(
 unsigned char network_chat_keyboard_open(
 	void)
 {
-	return chat_input.active && chat_keyboard.open;
+	return (chat_input.active && chat_keyboard.open) || chat_quick.open;
 }
 
 /* whether the chat is out of sight: a menu up (the pause menu, however it
@@ -1987,6 +2121,101 @@ static void chat_host_update_rates(
 	}
 }
 
+/* the quick chat's controller (pressed: the first controller's buttons pressed this frame): B closes it; the shoulders (and Y) turn the page; D-pad up, left, right or down
+says that line of the page, to the page's channel, and closes it. A line the limits refuse is not sent (too soon after the last, nothing said; the same line again, or the lines
+used up, a notice and the page closed). */
+static void chat_quick_update(
+	unsigned long pressed,
+	unsigned long now)
+{
+	short slot;
+
+	if (TEST_FLAG(pressed, HALO_CHAT_PAD_B))
+	{
+		chat_quick.open = FALSE;
+		return;
+	}
+	if (TEST_FLAG(pressed, HALO_CHAT_PAD_PAGE_PREVIOUS))
+	{
+		chat_quick.page = chat_quick_page_turn(chat_quick.page, -1);
+		chat_quick.last_input = now;
+	}
+	if (TEST_FLAG(pressed, HALO_CHAT_PAD_PAGE_NEXT) || TEST_FLAG(pressed, HALO_CHAT_PAD_Y))
+	{
+		chat_quick.page = chat_quick_page_turn(chat_quick.page, 1);
+		chat_quick.last_input = now;
+	}
+	slot = chat_quick_slot(pressed);
+	if (slot != NONE)
+	{
+		short line = (short)(chat_quick.page * CHAT_QUICK_LINES + slot);
+
+		switch (chat_quick_take(&chat_quick.limit, line, now))
+		{
+		case _chat_quick_sent:
+			chat_send(chat_quick_channel(chat_quick.page, game_engine_has_teams()), chat_quick_lines[chat_quick.page][slot], TRUE, FALSE);
+			chat_quick.open = FALSE;
+			break;
+		case _chat_quick_repeat:
+			chat_add_notice("You just said that");
+			chat_quick.open = FALSE;
+			break;
+		case _chat_quick_burst:
+			chat_add_notice("Wait a moment before the next quick chat");
+			chat_quick.open = FALSE;
+			break;
+		default:
+			/* (too soon after the last: the page stays, waiting) */
+			break;
+		}
+		return;
+	}
+	if (chat_quick_expired(chat_quick.last_input, now))
+		chat_quick.open = FALSE;
+}
+
+/* whether D-pad Down opens the quick chat (input.quick_chat): "on", "off", or "auto" (the default: on in the Wii U build, where the D-pad has no use in the game, off on
+the desktop, where a controller's layout may bind it) */
+static boolean chat_quick_enabled(
+	void)
+{
+	static boolean enabled;
+	static unsigned long read_at = (unsigned long)-1;
+
+	/* (read again when Settings changes it) */
+	if (read_at != config_changes())
+	{
+		char const *setting = config_string("input.quick_chat");
+
+		read_at = config_changes();
+#ifdef HALO_WIIU
+		enabled = !(setting && chat_names_equal(setting, "off"));
+#else
+		enabled = setting && chat_names_equal(setting, "on");
+#endif
+	}
+	return enabled;
+}
+
+/* D-pad Down: the quick chat's page, unless the chat is off in this game (it says so, as D-pad Up does) */
+static void chat_quick_open(
+	unsigned long now)
+{
+	if (!TEST_FLAG(chat_config_flags(), _chat_config_allowed_bit))
+	{
+		if (!chat_off_noticed || now - chat_off_noticed_at >= CHAT_LINE_MILLISECONDS + CHAT_FADE_MILLISECONDS)
+		{
+			chat_off_noticed = TRUE;
+			chat_off_noticed_at = now;
+			chat_add_notice("Text chat is off in this game");
+		}
+		return;
+	}
+	chat_quick.open = TRUE;
+	chat_quick.last_input = now;
+	chat_quick.page = 0;
+}
+
 /* The command's opening press is not navigation, even when bound to B,
  * a channel direction or a key-repeat direction. */
 static unsigned long chat_keyboard_buttons(unsigned long buttons)
@@ -1995,7 +2224,7 @@ static unsigned long chat_keyboard_buttons(unsigned long buttons)
 	return buttons & ~chat_keyboard.opening_buttons;
 }
 
-void network_chat_update(
+static void chat_update(
 	void)
 {
 	unsigned long held;
@@ -2003,6 +2232,9 @@ void network_chat_update(
 	unsigned long pad = chat_keyboard_buttons(halo_chat_pad_buttons());
 	unsigned long pad_pressed = pad & ~chat_keyboard.held;
 	unsigned long now = system_milliseconds();
+	/* (the first controller's buttons as it holds them, whoever has them: a press acts once) */
+	unsigned long quick_pad = halo_chat_pad_buttons_for_port(0);
+	unsigned long quick_pressed = quick_pad & ~chat_quick.held;
 	short port, requested_port = NONE, requested_channel = _chat_channel_everyone;
 	unsigned int chat_mask = (1u << PAD_CHAT) | (1u << PAD_TEAM_CHAT) | (1u << PAD_VEHICLE_CHAT);
 	struct key_stroke key;
@@ -2021,6 +2253,7 @@ void network_chat_update(
 	}
 
 	chat_keyboard.held = pad;
+	chat_quick.held = quick_pad;
 	/* (the host's settings: a client's as the host sends them in each game;
 	and the last game's lines and counts let go as the next starts) */
 	if (!chat_network_game() || !game_in_progress())
@@ -2038,6 +2271,11 @@ void network_chat_update(
 			csmemset(chat_motion_sensors, 0, sizeof(chat_motion_sensors));
 			chat_off_noticed = FALSE;
 			csmemset(chat_rates, 0, sizeof(chat_rates));
+			csmemset(&chat_quick.limit, 0, sizeof(chat_quick.limit));
+			chat_quick.limit.last_line = NONE;
+			/* (the keyboard's glyphs made ahead of the first keystroke, off this thread where the platform draws it itself; and the HUD's drawn once unseen) */
+			halo_chat_keyboard_prewarm();
+			chat_glyphs_warm = TRUE;
 		}
 		if (chat_host())
 		{
@@ -2072,7 +2310,22 @@ void network_chat_update(
 		(chat_input.active && chat_input.physical && !controller_remap_connected(chat_input.controller)))
 	{
 		chat_input_end();
+		chat_quick.open = FALSE;
 		chat_actions_held = 0;
+		return;
+	}
+	/* (the quick chat's page: it takes the first controller's buttons, and the keyboard's keys are not read while it is up) */
+	if (chat_quick.open)
+	{
+		if (console_is_active())
+			chat_quick.open = FALSE;
+		else
+			chat_quick_update(quick_pressed, now);
+		return;
+	}
+	if (!chat_input.active && TEST_FLAG(quick_pressed, HALO_CHAT_PAD_DOWN) && !console_is_active() && chat_quick_enabled())
+	{
+		chat_quick_open(now);
 		return;
 	}
 	if (!chat_input.active)
@@ -2177,8 +2430,102 @@ void network_chat_update(
 	chat_scroll = (short)PIN(chat_scroll, 0, MAX(chat_line_count - 1, 0));
 }
 
+/* the keyboard as the platform that draws it itself needs it (halo_keyboard.h): closed (nothing else set) or open for the first player's controller, with the line, the
+channel, the capitals and the key picked, and the keys' characters as the page (rows: the letters' or the symbols') and the capitals have them (pure: tools/harness/tests/
+chat_logic.c) */
+static void chat_keyboard_view_fill(
+	struct halo_chat_keyboard_view *view,
+	boolean open,
+	short channel,
+	boolean shift,
+	boolean symbols,
+	short row,
+	short column,
+	char const *text,
+	char const *const *rows)
+{
+	short key_row;
+	short key_column;
+
+	csmemset(view, 0, sizeof(*view));
+	if (!open)
+		return;
+	view->open = TRUE;
+	view->channel = channel;
+	view->shift = shift;
+	view->symbols = symbols;
+	view->row = row;
+	view->column = column;
+	csstrncpy(view->text, text, HALO_CHAT_KEYBOARD_TEXT - 1);
+	view->length = (int)csstrlen(view->text);
+	for (key_row = 0; key_row < HALO_CHAT_KEYBOARD_ROWS; key_row++)
+	{
+		for (key_column = 0; key_column < HALO_CHAT_KEYBOARD_COLUMNS; key_column++)
+			view->keys[key_row][key_column] = chat_keyboard_character(rows, key_row, key_column, shift);
+	}
+}
+
+/* a key the platform's own keyboard was tapped on (row 0 to 4, column 0 to 9): the key it is, a wide key of the last row by its first column; FALSE off the keyboard (pure) */
+static boolean chat_keyboard_tap_key(
+	short *row,
+	short *column)
+{
+	if (*row < 0 || *row >= CHAT_KEYBOARD_ROWS || *column < 0 || *column >= CHAT_KEYBOARD_COLUMNS)
+		return FALSE;
+	if (*row == CHAT_KEYBOARD_ROWS - 1)
+		*column = (short)(*column - *column % CHAT_KEYBOARD_WIDE_COLUMNS);
+	return TRUE;
+}
+
+/* every frame (main.c), after the keys and pads: the lines and the keyboard, and the keyboard given to the platform to draw (halo_chat_keyboard_publish) */
+void network_chat_update(
+	void)
+{
+	struct halo_chat_keyboard_view view;
+
+	chat_update();
+	chat_keyboard_view_fill(&view, chat_input.active && chat_keyboard.open && chat_input.controller == 0, chat_input.channel, chat_keyboard.shift, chat_keyboard.symbols,
+		chat_keyboard.row, chat_keyboard.column, chat_input.text, chat_keyboard.symbols ? chat_keyboard_symbols : chat_keyboard_letters);
+	halo_chat_keyboard_publish(&view);
+}
+
+/* the platform's own keyboard, for the first player's controller: a key tapped is the key picked and pressed; a chip is the channel; CLOSE closes it. Nothing unless the
+keyboard is up for that controller. */
+static boolean chat_keyboard_platform_open(
+	void)
+{
+	return chat_input.active && chat_keyboard.open && chat_input.controller == 0;
+}
+
+void network_chat_keyboard_press(
+	short row,
+	short column)
+{
+	if (!chat_keyboard_platform_open() || !chat_keyboard_tap_key(&row, &column))
+		return;
+	chat_keyboard.row = row;
+	chat_keyboard.column = column;
+	chat_keyboard_press();
+}
+
+void network_chat_keyboard_channel(
+	short channel)
+{
+	if (chat_keyboard_platform_open() && channel >= 0 && channel < NUMBER_OF_CHAT_CHANNELS)
+		chat_input.channel = channel;
+}
+
+void network_chat_keyboard_close(
+	void)
+{
+	if (chat_keyboard_platform_open())
+		chat_input_end();
+}
+
 short network_chat_controller(void)
 {
+	if (chat_quick.open)
+		return 0;
 	return chat_input.active && chat_keyboard.open ? chat_input.controller : NONE;
 }
 
@@ -2643,6 +2990,134 @@ static void chat_keyboard_draw(
 	}
 }
 
+/* the quick chat's page, at the bottom middle of the window (above the weapon and clear of the lines at the left and the keyboard at the right): the four lines on tiles in
+a cross, each with the D-pad's direction it is said with, the page's name and the buttons' words under it. Black tiles as the vote's box (network_votekick.c) has; the
+lines grey while the last one's spacing is not over. */
+static void chat_quick_draw(
+	long font_index,
+	rectangle2d const *window,
+	short line_height,
+	unsigned long now)
+{
+	static char const arrows[CHAT_QUICK_LINES] = { '^', '<', '>', 'v' };
+	short window_width = (short)(window->x1 - window->x0);
+	short window_height = (short)(window->y1 - window->y0);
+	short tile_width = (short)(window_width * 22 / 100);
+	short tile_height = (short)(line_height + 10);
+	short gap = (short)(tile_height / 4);
+	short center_x = (short)((window->x0 + window->x1) / 2);
+	short center_y = (short)(window->y0 + window_height * 68 / 100);
+	boolean waiting = chat_quick.limit.sent && now - chat_quick.limit.sent_at < CHAT_QUICK_SPACING_MILLISECONDS;
+	real_argb_color color;
+	short slot;
+	rectangle2d bounds;
+	wchar_t text[CHAT_TEXT_SIZE];
+
+	if (window_width <= 0 || window_height <= 0)
+		return;
+	for (slot = 0; slot < CHAT_QUICK_LINES; slot++)
+	{
+		rectangle2d tile;
+		char line[CHAT_TEXT_SIZE];
+		short index;
+
+		/* (up, left, right, down) */
+		tile.x0 = (short)(center_x - tile_width / 2);
+		tile.y0 = (short)(center_y - tile_height / 2);
+		if (slot == 0)
+			tile.y0 = (short)(tile.y0 - tile_height - gap);
+		else if (slot == 3)
+			tile.y0 = (short)(tile.y0 + tile_height + gap);
+		else
+			tile.x0 = (short)(tile.x0 + (slot == 1 ? -1 : 1) * (tile_width + gap) * 11 / 10);
+		tile.x1 = (short)(tile.x0 + tile_width);
+		tile.y1 = (short)(tile.y0 + tile_height);
+		draw_quad(&tile, 0xB0000000);
+		csstrncpy(line, chat_quick_lines[chat_quick.page][slot], sizeof(line) - 1);
+		line[sizeof(line) - 1] = 0;
+		text[0] = (wchar_t)arrows[slot];
+		text[1] = ' ';
+		for (index = 0; line[index] && index < CHAT_TEXT_SIZE - 3; index++)
+			text[index + 2] = (wchar_t)(unsigned char)line[index];
+		text[index + 2] = 0;
+		color.alpha = waiting ? 0.45f : 1.0f;
+		color.red = color.green = color.blue = 1.0f;
+		bounds = tile;
+		bounds.y0 = (short)(tile.y0 + (tile_height - line_height) / 2);
+		bounds.y1 = (short)(bounds.y0 + line_height);
+		draw_string_set_draw_mode(font_index, NONE, 2 /* centred */, 0, &color);
+		rasterizer_draw_unicode_string(&bounds, NULL, NULL, 0, text);
+	}
+	/* (the page, and what the buttons do, under the tiles) */
+	{
+		wchar_t footer[CHAT_TEXT_SIZE];
+		char const *name = chat_quick_page_names[chat_quick.page];
+		char const *hint = "  L / R: PAGE   B: CLOSE";
+		short length = 0;
+		short index;
+
+		for (index = 0; name[index] && length < CHAT_TEXT_SIZE - 1; index++)
+			footer[length++] = (wchar_t)(unsigned char)name[index];
+		footer[length++] = (wchar_t)' ';
+		footer[length++] = (wchar_t)('1' + chat_quick.page);
+		footer[length++] = (wchar_t)'/';
+		footer[length++] = (wchar_t)('0' + CHAT_QUICK_PAGES);
+		for (index = 0; hint[index] && length < CHAT_TEXT_SIZE - 1; index++)
+			footer[length++] = (wchar_t)(unsigned char)hint[index];
+		footer[length] = 0;
+		bounds.x0 = (short)(center_x - tile_width * 2);
+		bounds.x1 = (short)(center_x + tile_width * 2);
+		bounds.y0 = (short)(center_y + tile_height + gap + tile_height + gap / 2 + 4);
+		bounds.y1 = (short)(bounds.y0 + line_height);
+		chat_color(chat_quick_channel(chat_quick.page, game_engine_has_teams()) == _chat_channel_team ? _chat_color_blue : _chat_color_notice, 1.0f, &color);
+		color.red = chat_style_white() ? 1.0f : 0.64f;
+		color.green = chat_style_white() ? 1.0f : 0.75f;
+		color.blue = chat_style_white() ? 1.0f : 0.87f;
+		draw_string_set_draw_mode(font_index, NONE, 2 /* centred */, 0, &color);
+		rasterizer_draw_unicode_string(&bounds, NULL, NULL, 0, footer);
+	}
+}
+
+/* the printable ASCII characters drawn once, all but invisible (a black at 1/255 of opacity), at the sizes the keyboard and the lines have, so that the hi-res text has
+rasterized each glyph before the first keystroke, not in the frame it is typed in: the 95 characters in four strings, at the top left of the window */
+static void chat_glyphs_draw(
+	long font_index,
+	rectangle2d const *window,
+	short line_height)
+{
+	static real const scales[2] = { 1.0f, CHAT_TEXT_SCALE };
+	real_argb_color color;
+	short scale_index;
+	short part;
+
+	color.alpha = 1.0f / 255.0f;
+	color.red = color.green = color.blue = 0.0f;
+	for (scale_index = 0; scale_index < 2; scale_index++)
+	{
+		rasterizer_text_set_scale(scales[scale_index], (real)window->x0, (real)window->y0);
+		for (part = 0; part < 4; part++)
+		{
+			wchar_t string[26];
+			rectangle2d bounds;
+			short count = 0;
+			short code;
+
+			for (code = ' ' + part * 24; code < ' ' + part * 24 + 24 && code <= '~'; code++)
+				string[count++] = (wchar_t)code;
+			string[count] = 0;
+			bounds.x0 = window->x0;
+			bounds.x1 = (short)(window->x1);
+			bounds.y0 = (short)(window->y0 + part * line_height);
+			bounds.y1 = (short)(bounds.y0 + line_height);
+			draw_string_set_draw_mode(font_index, NONE, 0 /* left */, 0, &color);
+			text_filter_suspend();
+			rasterizer_draw_unicode_string(&bounds, NULL, NULL, 0, string);
+			text_filter_resume();
+		}
+	}
+	rasterizer_text_set_scale(1.0f, 0.0f, 0.0f);
+}
+
 void network_chat_draw(
 	short local_player_index)
 {
@@ -2669,6 +3144,28 @@ void network_chat_draw(
 	/* the point the lines are scaled about */
 	short anchor;
 
+	if (chat_glyphs_warm && local_player_index == 0 && font_index != NONE && chat_network_game() && chat_shown() && !chat_hidden())
+	{
+		struct font_header *warm_font = font_definition_get(font_index);
+		short warm_height = (short)(warm_font->ascending_height + warm_font->descending_height + warm_font->leading_height);
+		rectangle2d warm_window = render.camera.window_bounds;
+
+		chat_glyphs_warm = FALSE;
+		offset_rectangle2d(&warm_window, -render.camera.viewport_bounds.x0, -render.camera.viewport_bounds.y0);
+		if (warm_height > 0)
+			chat_glyphs_draw(font_index, &warm_window, warm_height);
+	}
+	if (chat_quick.open && local_player_index == local_player_get_next(NONE) && font_index != NONE && chat_network_game() && chat_shown() && !chat_hidden())
+	{
+		struct font_header *quick_font = font_definition_get(font_index);
+		short quick_height = (short)(quick_font->ascending_height + quick_font->descending_height + quick_font->leading_height);
+		rectangle2d quick_window = render.camera.window_bounds;
+
+		offset_rectangle2d(&quick_window, -render.camera.viewport_bounds.x0, -render.camera.viewport_bounds.y0);
+		rasterizer_text_set_scale(1.0f, 0.0f, 0.0f);
+		if (quick_height > 0)
+			chat_quick_draw(font_index, &quick_window, quick_height, now);
+	}
 	if (!chat_network_game() || !chat_shown() || chat_hidden() || font_index == NONE || local_player_index < 0 ||
 		local_player_index >= MAXIMUM_LOCAL_PLAYERS || (!chat_line_count && !typing))
 	{

@@ -19,6 +19,7 @@ Linux code does when its feature is off. What the Wii U does need (input, audio,
 #include "update.h"
 #include "wiiu_https.h"
 #include "wiiu_input.h"
+#include "wiiu_keyboard.h"
 #include "wiiu_virtual_pads.h"
 
 #include <stdio.h>
@@ -96,10 +97,11 @@ void platform_clipboard_set(char const *text)
 	(void)text;
 }
 
+/* a menu's text field (the server's name, a password, a link): the GamePad's touch keyboard types into it (wiiu_keyboard.h), when input.wiiu_gamepad_keyboard is on; the field's
+text is platform_text_field_text's (wiiu_keyboard_font.c) */
 void platform_text_field(int typing, int password)
 {
-	(void)typing;
-	(void)password;
+	wiiu_keyboard_field_set(typing, password);
 }
 
 void platform_text_typing(int typing)
@@ -252,26 +254,8 @@ int update_https_request(const char *method, const char *url, const char *header
 	return 1;
 }
 
-/* ---------- the keyboard and the gamepads, as xinput_sdl.c has them: no keyboard, no on-screen keyboard's reading, no virtual
-gamepads, no debug camera's mouse */
-
-unsigned long halo_chat_pad_buttons(void)
-{
-	return 0;
-}
-
-unsigned long halo_chat_pad_buttons_for_port(short port)
-{
-	(void)port;
-	return 0;
-}
-
-int halo_chat_taps(float *x, float *y)
-{
-	(void)x;
-	(void)y;
-	return 0;
-}
+/* ---------- the keyboard and the gamepads, as xinput_sdl.c has them: no keyboard; the chat's buttons and taps are xinput_wiiu.c's (halo_chat_pad_buttons,
+halo_chat_pad_buttons_for_port, halo_chat_taps), no virtual gamepads, no debug camera's mouse */
 
 int halo_chat_wheel_steps(void)
 {
@@ -324,7 +308,8 @@ int halo_linux_debug_camera_input(int *middle, int *up, int *down, float *wheel)
 }
 
 /* ---------- controller remapping (controller_remap_input.c, on SDL's gamepads): none; the Wii U's buttons are xinput_wiiu.c's, and
-Controller Setup has no BUTTON REMAPPING there */
+Controller Setup has no BUTTON REMAPPING there (controller_remap_connected and controller_remap_pressed are xinput_wiiu.c's too: the one action there is, the chat's keyboard
+opened by D-pad Up on a guest's port) */
 
 void controller_remap_input_reset(void)
 {
@@ -346,21 +331,9 @@ int controller_remap_capture_poll(int *button)
 	return 3;
 }
 
-int controller_remap_connected(short port)
-{
-	(void)port;
-	return 0;
-}
-
 unsigned int controller_remap_held(short port)
 {
 	(void)port;
 	return 0;
 }
 
-unsigned int controller_remap_pressed(short port, unsigned int mask)
-{
-	(void)port;
-	(void)mask;
-	return 0;
-}

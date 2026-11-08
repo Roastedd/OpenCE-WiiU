@@ -220,6 +220,8 @@ static void chat_pad_record(short port, const XINPUT_GAMEPAD *pad)
 	if (pad->bAnalogButtons[XINPUT_GAMEPAD_B] >= PRESSED) buttons |= 1UL << HALO_CHAT_PAD_B;
 	if (pad->bAnalogButtons[XINPUT_GAMEPAD_X] >= PRESSED) buttons |= 1UL << HALO_CHAT_PAD_X;
 	if (pad->bAnalogButtons[XINPUT_GAMEPAD_Y] >= PRESSED) buttons |= 1UL << HALO_CHAT_PAD_Y;
+	if (pad->bAnalogButtons[XINPUT_GAMEPAD_WHITE] >= PRESSED) buttons |= 1UL << HALO_CHAT_PAD_PAGE_PREVIOUS;
+	if (pad->bAnalogButtons[XINPUT_GAMEPAD_BLACK] >= PRESSED) buttons |= 1UL << HALO_CHAT_PAD_PAGE_NEXT;
 	if (pad->sThumbLY > PUSHED) buttons |= 1UL << HALO_CHAT_PAD_STICK_UP;
 	if (pad->sThumbLY < -PUSHED) buttons |= 1UL << HALO_CHAT_PAD_STICK_DOWN;
 	if (pad->sThumbLX < -PUSHED) buttons |= 1UL << HALO_CHAT_PAD_STICK_LEFT;
@@ -242,6 +244,16 @@ unsigned long halo_chat_pad_buttons(void)
 int halo_chat_taps(float *x, float *y)
 {
 	return touch_input_chat_taps(x, y);
+}
+
+/* the keyboard is drawn by the game here (network_chat.c): nothing to give the platform */
+void halo_chat_keyboard_publish(const struct halo_chat_keyboard_view *view)
+{
+	(void)view;
+}
+
+void halo_chat_keyboard_prewarm(void)
+{
 }
 
 int halo_chat_wheel_steps(void)
@@ -513,6 +525,13 @@ void platform_text_typing(int typing)
 	/* (on a touchscreen: Android's on-screen keyboard as well, sdl_platform.c) */
 	platform_screen_keyboard(text_typing_keyboard, FALSE);
 #endif
+}
+
+/* (the Wii U shows a keyboard of its own for a field: its text and size) */
+void platform_text_field_text(char const *text, int maximum)
+{
+	(void)text;
+	(void)maximum;
 }
 
 void platform_text_field(int typing, int password)

@@ -5,6 +5,13 @@ which listings heard take a place in the queue, and a broker's burst on
 subscribing (its kept slots, most of them games long gone) leaving every live
 game a place */
 #include "config.inc"
+#include "halo_clock.h"
+
+/* (p2p.c's wall clock, unanchored here: the machine's own) */
+static unsigned long long halo_utc_now(void)
+{
+	return (unsigned long long)time(NULL);
+}
 
 static int newer_count;
 static void newer_heard(const unsigned char *key_hash)
