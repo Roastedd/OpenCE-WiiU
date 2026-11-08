@@ -150,7 +150,7 @@ double wiiu_stamp_picture(struct wiiu_stamp *stamp, long tick, double fraction, 
 void wiiu_stamp_swap(struct wiiu_stamp *stamp, unsigned sequence, double swap_ms, unsigned swap_index);
 /* The GX2 thread looked at the display: flips is GX2's count of flips, last_flip_ms the time of the latest. Frames whose swaps have flipped are scored. */
 void wiiu_stamp_flip(struct wiiu_stamp *stamp, double last_flip_ms, unsigned flips);
-/* the window's line for the log (empty if no frame was scored), then the window is cleared */
+/* the window's two lines for the log, a newline between (empty if no frame was scored), then the window is cleared */
 int wiiu_stamp_format(struct wiiu_stamp *stamp, char *out, unsigned size);
 
 /* ---------- the locked 30 */

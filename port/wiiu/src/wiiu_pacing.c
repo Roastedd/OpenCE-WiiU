@@ -472,11 +472,11 @@ int wiiu_stamp_format(struct wiiu_stamp *stamp, char *out, unsigned size)
 		out[0] = 0;
 		return 0;
 	}
-	length = snprintf(out, size, "pacing: stamp (%s): %u frames, judder rms %.2f ms as drawn, %.2f with the stamp (shrink %.2f, moves %.2f ms mean, %.1f most; %u held, %u clamped, %u not back); "
-		"flip predicted to %.2f ms; refresh %.3f ms, ready %u ms after the swap",
+	length = snprintf(out, size, "pacing: stamp (%s): %u frames, judder rms %.2f ms as drawn, %.2f ms with the stamp (shrink %.2f; moves %.2f ms mean, %.1f most)\n"
+		"pacing: stamp: flip predicted to %.2f ms; refresh %.3f ms; ready %u ms after the swap; picture held %u, clamped %u, kept from going back %u",
 		stamp->mode == 1 ? "applied" : stamp->mode == 3 ? "test" : "measured", stamp->window_frames, sqrt(stamp->sum_raw2 / n), sqrt(stamp->sum_stamped2 / n),
-		stamp->shrink, stamp->sum_move_abs / n, stamp->max_move, stamp->window_held, stamp->window_clamped, stamp->window_backward, stamp->sum_error / n,
-		stamp->refresh_ms, stamp->gpu_best);
+		stamp->shrink, stamp->sum_move_abs / n, stamp->max_move, stamp->sum_error / n, stamp->refresh_ms, stamp->gpu_best, stamp->window_held, stamp->window_clamped,
+		stamp->window_backward);
 	stamp->window_frames = stamp->window_clamped = stamp->window_held = stamp->window_backward = 0;
 	stamp->sum_raw = stamp->sum_raw2 = stamp->sum_stamped = stamp->sum_stamped2 = stamp->sum_error = stamp->sum_move_abs = stamp->max_move = 0.0;
 	return length;
