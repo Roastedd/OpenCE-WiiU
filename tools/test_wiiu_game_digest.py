@@ -652,6 +652,47 @@ class FirstPersonWeaponSwitchTest(unittest.TestCase):
         self.assertHalted(ended, log)
 
 
+@unittest.skipUnless(os.environ.get("GAME_DIGEST_BLEND_REUSE"), "the interpolation's blends of poses at rest, taken from the frame before: GAME_DIGEST_BLEND_REUSE=1 (and Docker's opence-ppc-be image, data-be's maps; six runs of 400 ticks)")
+class BlendReuseTest(unittest.TestCase):
+    """The blend of an object whose two poses are the same bit for bit (or that snapped) is taken from the frame before (render_interpolation.c, overlap_object: halo/gpu_offload.txt bit 8
+    makes every blend again, as before the reuse; bit 16 also makes each reused blend afresh and compares). The frames of 16.667 ms (two a tick, so that the fraction varies), Blood Gulch as a
+    game of one player, in the plain loop (the serial frames' blends) and the tick overlap (the ring's), the tick thread serialised so that two runs of the overlap draw alike
+    (HALO_TICK_OVERLAP_SERIALIZE: they do not otherwise), the HUD's sheet builder thread off (its timing is not the frames'). Pass: every frame of the three runs of each loop digests the
+    same (reuse off, reuse on, reuse checked), the check compared blends and found none that differs, and the runs with the reuse took blends from the frames before while the run without it did not."""
+
+    FRAMES = {"HALO_TICK_FRAME_MS": "16.667", "HALO_FIXED_STEP": "0", "HALO_HUD_SHEETS": "0", "HALO_TICK_OVERLAP_SERIALIZE": "1"}
+
+    def play(self, name, loop, bits):
+        extra = dict(self.FRAMES, HALO_GPU_OFFLOAD=str(bits))
+        if loop == "plain":
+            extra.update(PLAIN)
+        # (the program takes these from its environment: GAME_DIGEST_ENV for the ones it reads there, extra for the ones the run sets itself)
+        process, out = start(build(), name, int(os.environ.get("GAME_DIGEST_BLEND_REUSE_TICKS", "400")), mode="solo-bloodgulch", extra=extra)
+        return process, out
+
+    def test_the_reuse_changes_no_frame_and_the_check_finds_no_difference(self):
+        for loop in ("plain", "overlap"):
+            runs = {bits: self.play(f"blend-reuse-{loop}-{bits}", loop, bits) for bits in (8, 0, 16)}
+            outs = {bits: run[1] for bits, run in runs.items()}
+            for process, out in runs.values():
+                finish(process, out)
+            with open(os.devnull, "w") as quiet:
+                self.assertEqual(digest_compare.compare(outs[8], outs[0], out=quiet), 0, f"{loop}: the reuse changed a frame")
+                self.assertEqual(digest_compare.compare(outs[8], outs[16], out=quiet), 0, f"{loop}: the checked run drew another frame")
+            checked = (outs[16] / "stderr.txt").read_text(errors="replace")
+            import re
+
+            found = re.findall(r"gpu offload reuse check: (\d+) blends taken from an earlier frame compared with the same made afresh, (\d+) differ", checked)
+            self.assertTrue(found, f"{loop}: the check said nothing")
+            self.assertGreater(int(found[-1][0]), 1000, f"{loop}: the check compared too few blends to mean anything")
+            self.assertEqual(found[-1][1], "0", f"{loop}: a reused blend differs from the same blend made afresh")
+            self.assertNotIn("differs from the same blend made afresh", checked)
+            if loop == "overlap":
+                taken = lambda out: [float(n) for n in re.findall(r"([\d.]+) blends taken from an earlier frame", (out / "stderr.txt").read_text(errors="replace"))]
+                self.assertGreater(max(taken(outs[0]) or [0.0]), 1.0, "the overlap took no blend from an earlier frame")
+                self.assertEqual(max(taken(outs[8]) or [0.0]), 0.0, "the run with the reuse off took a blend from an earlier frame")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter,
                                      epilog=__doc__.split("\n\n", 1)[1])
