@@ -13,6 +13,13 @@ friends.key and friends.txt (social_store.h).
 #include <stdlib.h>
 #include <string.h>
 
+/* The game's folder compiles fopen, remove and rename as the translators of Xbox paths (port/linux/include/stdio.h: "d:\\maps", "z:\\saved"), which take a host path such as
+the card's folder for a path under the data root and open a file that is not there ("/vol/external01/..." becomes "<data root>/vol/external01/..."). The files here are named by
+host path (config_folder), so these three are the C library's. */
+#undef fopen
+#undef remove
+#undef rename
+
 enum
 {
 	LINE_MAXIMUM = 300,
