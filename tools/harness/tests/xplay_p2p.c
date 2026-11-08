@@ -12,6 +12,7 @@ equal. */
 #include "master_list.c"
 #undef time
 #include "ikcp.h"
+void p2p_blake2b_256(const void *data, unsigned long size, unsigned char *digest);
 #include "xplay_vectors.inc"
 
 #define FIXED_TIME 1760900000UL
@@ -116,6 +117,9 @@ static void test_crypto(void)
 	xplay_hex("hmac_sha256", digest, 32);
 	p2p_sha512(message, 100, digest);
 	xplay_hex("sha512", digest, 64);
+	/* (BLAKE2b, which hashes the Custom Edition maps: map_share_files.c) */
+	p2p_blake2b_256(message, 100, digest);
+	xplay_hex("blake2b_256", digest, 32);
 
 	/* (the tunnel's packet: a header of 1 + identifier + 8, authenticated, and the inner bytes sealed) */
 	size = p2p_aead_seal(key, nonce, message, 17, message + 20, 63, sealed);
