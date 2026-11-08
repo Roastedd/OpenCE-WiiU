@@ -25,6 +25,8 @@ enum
 	SOCIAL_API_MAX_REQUESTS = 16,
 	SOCIAL_API_MAX_SENT = 16,
 	SOCIAL_API_MAX_INVITES = 12,
+	SOCIAL_API_MAX_PARTY = 8,
+	SOCIAL_API_PARTY_CHAT_LINES = 8,
 };
 
 /* where a person is (presence's activity) */
@@ -63,6 +65,8 @@ struct social_friend_info
 	struct social_join_target join;
 	/* the exchange of keys with it is done (until then it cannot see this machine's presence) */
 	int keys_exchanged;
+	/* the party its owner leads and lets friends into (social_party_join_friend), when party_open */
+	unsigned char party_token[SOCIAL_TOKEN_SIZE];
 };
 
 /* an invite received: to a game (kind 1: target says where, what map, how many) or to a party (kind 2) */
@@ -74,6 +78,7 @@ struct social_invite_info
 	int kind;
 	struct social_join_target target;
 	unsigned char party_size;
+	unsigned char party_token[SOCIAL_TOKEN_SIZE];
 	unsigned int seconds_ago;
 };
 
@@ -90,6 +95,51 @@ struct social_sent_info
 	unsigned int id;
 	char code[SOCIAL_CODE_TEXT_SIZE];
 	unsigned int seconds_ago;
+};
+
+/* a member of the party: itself too (self) */
+struct social_party_member_info
+{
+	unsigned int id;
+	char name[SOCIAL_NAME_SIZE + 1];
+	int leader, self;
+	/* heard from lately (this machine always is) */
+	int online;
+	/* it follows the leader into games */
+	int auto_follow;
+	int hosting, in_game;
+	/* what became of its following the leader's game: SOCIAL_FOLLOW_*, and a sentence for it ("" if there is nothing to say) */
+	int follow_result;
+	char follow_text[64];
+};
+
+struct social_party_chat_info
+{
+	char name[SOCIAL_NAME_SIZE + 1];
+	char text[SOCIAL_CHAT_SIZE + 1];
+	unsigned int seconds_ago;
+};
+
+struct social_party_info
+{
+	/* this machine is in a party, or has asked to join one and is not listed yet (joining) */
+	int active, joining, is_leader;
+	/* the leader lets its friends in (their presence shows the party) */
+	int open;
+	/* this machine follows the leader's games */
+	int auto_follow;
+	int member_count;
+	struct social_party_member_info members[SOCIAL_API_MAX_PARTY];
+	/* the leader's game that can be joined, and a count of them */
+	int game_present;
+	struct social_join_target game;
+	unsigned int game_order;
+	/* the last lines of party chat, oldest first */
+	int chat_count;
+	struct social_party_chat_info chat[SOCIAL_API_PARTY_CHAT_LINES];
+	/* what became of the last party call: a number that goes up with each, and its SOCIAL_PARTY_RESULT_* */
+	unsigned int serial;
+	int result;
 };
 
 /* Everything a screen needs, as of the last pass of the thread that does the work. */
@@ -116,6 +166,7 @@ struct social_snapshot
 	/* what became of the last social_invite_friend: a number that goes up with each, and its SOCIAL_INVITE_RESULT_* */
 	unsigned int invite_serial;
 	int invite_result;
+	struct social_party_info party;
 	/* what became of the last social_add_code once the thread that does the work took it: a number that goes up with each, and its SOCIAL_ADD_RESULT_* */
 	unsigned int add_serial;
 	int add_result;
@@ -186,6 +237,44 @@ void social_invite_friend(unsigned int friend_id);
 /* an invite received (snapshot.invites[].id) is let go: after it was joined (social_join_invite does this), or turned down */
 void social_invite_dismiss(unsigned int invite_id);
 
+/* ---------- parties */
+
+/* the results of a party call (the snapshot's party.result) */
+enum
+{
+	SOCIAL_PARTY_RESULT_OK,
+	SOCIAL_PARTY_RESULT_NOT_IN_PARTY,
+	SOCIAL_PARTY_RESULT_ALREADY_IN_PARTY,
+	SOCIAL_PARTY_RESULT_NOT_LEADER,
+	SOCIAL_PARTY_RESULT_NO_SUCH_FRIEND,
+	SOCIAL_PARTY_RESULT_FRIEND_OFFLINE,
+	SOCIAL_PARTY_RESULT_FULL,
+	SOCIAL_PARTY_RESULT_TOO_FAST,
+	SOCIAL_PARTY_RESULT_OFF,
+	SOCIAL_PARTY_RESULT_NO_SUCH_MEMBER,
+	SOCIAL_PARTY_RESULT_BAD_TEXT,
+};
+
+const char *social_party_result_text(int result);
+/* what a member reports of following the leader's game (SOCIAL_FOLLOW_*) in words; "" for none */
+const char *social_follow_text(int follow_result);
+
+/* A party of one, this machine leading it; up to eight. The leader invites friends (their invites show in the snapshot, and any member can accept one with
+social_party_join_invite) and may let its friends in without (social_party_set_open: their presence shows the party, social_party_join_friend). Members follow the
+leader's game into the menus' server browser's join (social_join.h) while auto_follow is on. */
+void social_party_make(void);
+void social_party_invite(unsigned int friend_id);
+void social_party_join_invite(unsigned int invite_id);
+void social_party_join_friend(unsigned int friend_id);
+void social_party_leave(void);
+/* the leader removes a member (who may not come back), or hands the lead to one */
+void social_party_kick(unsigned int member_id);
+void social_party_transfer(unsigned int member_id);
+void social_party_set_open(int open);
+void social_party_set_auto_follow(int on);
+/* a line of up to 63 characters to the party (the sender's own line is in the snapshot's chat at once); the result is the snapshot's party.result */
+void social_party_chat(const char *text);
+
 /* ---------- what is shown of this machine */
 
 /* the name shown to friends (the first player's profile name); social_set_share: whether friends see this machine at all (off: appears offline, but still hears
@@ -213,6 +302,13 @@ enum
 	/* an invite to a game: id is the invite's (the snapshot has it), name who from; to a party */
 	SOCIAL_API_EVENT_INVITE,
 	SOCIAL_API_EVENT_PARTY_INVITE,
+	/* this machine is in a party now (joined, or made one), has left it, was kicked, or the lead changed (name: the new leader's) */
+	SOCIAL_API_EVENT_PARTY_JOINED,
+	SOCIAL_API_EVENT_PARTY_LEFT,
+	SOCIAL_API_EVENT_PARTY_KICKED,
+	SOCIAL_API_EVENT_PARTY_LEADER,
+	/* a line of party chat (name, text) */
+	SOCIAL_API_EVENT_PARTY_CHAT,
 };
 
 struct social_api_event
@@ -221,6 +317,7 @@ struct social_api_event
 	unsigned int id;
 	char name[SOCIAL_NAME_SIZE + 1];
 	char code[SOCIAL_CODE_TEXT_SIZE];
+	char text[SOCIAL_CHAT_SIZE + 1];
 };
 
 /* the oldest event, removed; 0 if none */

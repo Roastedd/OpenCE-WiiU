@@ -25,6 +25,7 @@ structures. */
 #include "social_party.c"
 #include "social_store.c"
 #include "social_front.c"
+#include "social.c"
 #include "social_fake.h"
 
 static unsigned long long test_state = 88172645463325252ULL;

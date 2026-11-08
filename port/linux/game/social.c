@@ -61,6 +61,68 @@ const char *social_invite_result_text(int result)
 	return "Unknown result";
 }
 
+const char *social_party_result_text(int result)
+{
+	switch (result)
+	{
+	case SOCIAL_PARTY_RESULT_OK:
+		return "Done";
+	case SOCIAL_PARTY_RESULT_NOT_IN_PARTY:
+		return "You are not in a party";
+	case SOCIAL_PARTY_RESULT_ALREADY_IN_PARTY:
+		return "You are in a party already";
+	case SOCIAL_PARTY_RESULT_NOT_LEADER:
+		return "Only the party's leader can do that";
+	case SOCIAL_PARTY_RESULT_NO_SUCH_FRIEND:
+		return "That friend is not on your list";
+	case SOCIAL_PARTY_RESULT_FRIEND_OFFLINE:
+		return "Your friend is offline, or has no party open";
+	case SOCIAL_PARTY_RESULT_FULL:
+		return "The party is full";
+	case SOCIAL_PARTY_RESULT_TOO_FAST:
+		return "Wait a moment";
+	case SOCIAL_PARTY_RESULT_OFF:
+		return "Friends are turned off";
+	case SOCIAL_PARTY_RESULT_NO_SUCH_MEMBER:
+		return "That is not a member of the party";
+	case SOCIAL_PARTY_RESULT_BAD_TEXT:
+		return "There is nothing to send";
+	}
+	return "Unknown result";
+}
+
+const char *social_follow_text(int follow_result)
+{
+	switch (follow_result)
+	{
+	case 1:
+		return "joining";
+	case 2:
+		return "joined";
+	case 3:
+		return "game is full";
+	case 4:
+		return "game is closed";
+	case 5:
+		return "other version";
+	case 6:
+		return "needs a map";
+	case 7:
+		return "cannot connect";
+	case 8:
+		return "no answer";
+	case 9:
+		return "in another game";
+	case 10:
+		return "not following";
+	case 11:
+		return "banned";
+	case 12:
+		return "game was replaced";
+	}
+	return "";
+}
+
 int social_is_enabled(void)
 {
 	return social_global_front && social_front_enabled(social_global_front);
@@ -107,6 +169,35 @@ void social_set_share(int show_status, int details, int accept_requests)
 
 void social_invite_friend(unsigned int friend_id) { if (social_global_front) social_front_invite(social_global_front, friend_id); }
 void social_invite_dismiss(unsigned int invite_id) { if (social_global_front) social_front_invite_dismiss(social_global_front, invite_id); }
+
+void social_party_make(void) { if (social_global_front) social_front_party(social_global_front, 1, 0, 0, NULL); }
+void social_party_invite(unsigned int friend_id) { if (social_global_front) social_front_party(social_global_front, 2, friend_id, 0, NULL); }
+void social_party_join_friend(unsigned int friend_id) { if (social_global_front) social_front_party(social_global_front, 4, friend_id, 0, NULL); }
+void social_party_leave(void) { if (social_global_front) social_front_party(social_global_front, 5, 0, 0, NULL); }
+void social_party_kick(unsigned int member_id) { if (social_global_front) social_front_party(social_global_front, 6, member_id, 0, NULL); }
+void social_party_transfer(unsigned int member_id) { if (social_global_front) social_front_party(social_global_front, 7, member_id, 0, NULL); }
+void social_party_set_open(int open) { if (social_global_front) social_front_party(social_global_front, 8, 0, open, NULL); }
+void social_party_set_auto_follow(int on) { if (social_global_front) social_front_party(social_global_front, 9, 0, on, NULL); }
+void social_party_chat(const char *text) { if (social_global_front) social_front_party(social_global_front, 10, 0, 0, text); }
+
+void social_party_join_invite(unsigned int invite_id)
+{
+	static struct social_snapshot snapshot;
+	int index;
+
+	if (!social_global_front)
+		return;
+	social_front_snapshot(social_global_front, &snapshot);
+	for (index = 0; index < snapshot.invite_count; index++)
+	{
+		if (snapshot.invites[index].id == invite_id && snapshot.invites[index].kind == 2)
+		{
+			social_front_party_token(social_global_front, snapshot.invites[index].party_token);
+			social_front_invite_dismiss(social_global_front, invite_id);
+			return;
+		}
+	}
+}
 
 int social_event_next(struct social_api_event *event)
 {

@@ -60,6 +60,9 @@ void social_engine_init(struct social_engine *engine, const struct social_env *e
 	engine->start_time = engine->send_time;
 	engine->place.activity = SOCIAL_MENUS;
 	engine->topics_dirty = 1;
+	engine->party.leader = -1;
+	engine->party.self = -1;
+	engine->party.auto_follow = 1;
 	strcpy(engine->name, "PLAYER");
 }
 
@@ -349,7 +352,7 @@ int social_send(struct social_engine *engine, const char *topic, int kind, const
 	return 1;
 }
 
-static void flush(struct social_engine *engine)
+void social_flush(struct social_engine *engine)
 {
 	if (!engine->queue_count)
 		return;
@@ -948,7 +951,7 @@ void social_update(struct social_engine *engine)
 	social_invites_update(engine);
 	social_party_update(engine);
 	presence_update(engine);
-	flush(engine);
+	social_flush(engine);
 }
 
 void social_shutdown(struct social_engine *engine)
@@ -958,6 +961,7 @@ void social_shutdown(struct social_engine *engine)
 	if (!engine->enabled || !engine->has_identity || !engine->generation_ready)
 		return;
 	social_party_shutdown(engine);
+	social_flush(engine);
 	if (engine->share_status && engine->presence_sent && !engine->presence_offline_sent)
 	{
 		presence_build(engine, &presence);

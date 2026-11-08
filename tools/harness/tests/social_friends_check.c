@@ -26,6 +26,7 @@ Cases are named on the command line (test_social_friends.py). */
 #include "social_party.c"
 #include "social_store.c"
 #include "social_front.c"
+#include "social.c"
 #include "social_fake.h"
 
 static unsigned long long test_state = 0x1234567899ULL;

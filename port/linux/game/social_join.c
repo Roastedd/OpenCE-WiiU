@@ -349,10 +349,70 @@ int social_join_invite(unsigned int invite_id)
 	return SOCIAL_JOIN_REASON_BAD_INVITE;
 }
 
+/* the party leader's game: joined when the engine says (the machine idle, this one in the menus), and what came of it told back */
+static unsigned int follow_order;
+static int follow_active;
+
+static int follow_result_of(int state, int reason)
+{
+	if (state == SOCIAL_JOIN_READY)
+		return SOCIAL_FOLLOW_JOINED;
+	switch (reason)
+	{
+	case SOCIAL_JOIN_REASON_FULL:
+		return SOCIAL_FOLLOW_FULL;
+	case SOCIAL_JOIN_REASON_CLOSED:
+		return SOCIAL_FOLLOW_CLOSED;
+	case SOCIAL_JOIN_REASON_VERSION:
+		return SOCIAL_FOLLOW_VERSION;
+	case SOCIAL_JOIN_REASON_MAP_MISSING:
+		return SOCIAL_FOLLOW_MAP_MISSING;
+	case SOCIAL_JOIN_REASON_NO_ROUTE:
+	case SOCIAL_JOIN_REASON_STRICT_NAT:
+		return SOCIAL_FOLLOW_NO_ROUTE;
+	case SOCIAL_JOIN_REASON_BUSY:
+		return SOCIAL_FOLLOW_BUSY;
+	case SOCIAL_JOIN_REASON_TOGETHER:
+		return SOCIAL_FOLLOW_JOINED;
+	case SOCIAL_JOIN_REASON_BANNED:
+		return SOCIAL_FOLLOW_BANNED;
+	case SOCIAL_JOIN_REASON_LEFT:
+		return SOCIAL_FOLLOW_REPLACED;
+	}
+	return SOCIAL_FOLLOW_NO_ANSWER;
+}
+
 void social_join_update(void)
 {
-	if (global_ready && global_machine.state == SOCIAL_JOIN_WORKING)
+	struct social_join_target target;
+	unsigned int order;
+
+	if (!global_ready)
+		return;
+	if (global_machine.state == SOCIAL_JOIN_WORKING)
 		social_join_machine_update(&global_machine);
+	if (!social_global_front)
+		return;
+	if (follow_active)
+	{
+		if (global_machine.state == SOCIAL_JOIN_READY || global_machine.state == SOCIAL_JOIN_FAILED)
+		{
+			social_front_follow_report(social_global_front, follow_order, follow_result_of(global_machine.state, global_machine.reason));
+			follow_active = 0;
+			if (global_machine.state == SOCIAL_JOIN_FAILED)
+				social_join_machine_done(&global_machine);
+		}
+		else if (global_machine.state == SOCIAL_JOIN_IDLE)
+			follow_active = 0;
+	}
+	else if (global_machine.state == SOCIAL_JOIN_IDLE && social_front_follow(social_global_front, &target, &order))
+	{
+		/* (a join of the player's own is not interrupted; this one starts only when none goes on) */
+		social_front_follow_report(social_global_front, order, SOCIAL_FOLLOW_JOINING);
+		follow_order = order;
+		follow_active = 1;
+		social_join_machine_target(&global_machine, &target);
+	}
 }
 
 void social_join_cancel(void)

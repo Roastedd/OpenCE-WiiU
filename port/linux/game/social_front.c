@@ -34,6 +34,9 @@ enum
 	_command_place,
 	_command_invite,
 	_command_invite_dismiss,
+	_command_party,
+	_command_party_token,
+	_command_follow_report,
 };
 
 struct command
@@ -41,6 +44,7 @@ struct command
 	int type;
 	unsigned int id;
 	int a, b, c;
+	unsigned char token[SOCIAL_TOKEN_SIZE];
 	char text[80];
 	struct social_place place;
 };
@@ -74,6 +78,10 @@ struct social_front
 	int save_result;
 	unsigned int saves, failures;
 	int key_written;
+	/* the leader's game to follow, as of the last pass */
+	int follow_want;
+	struct social_join_target follow_target;
+	unsigned int follow_order;
 };
 
 struct social_engine *social_front_engine(struct social_front *front)
@@ -328,6 +336,7 @@ static void snapshot_make(struct social_front *front, struct social_snapshot *sn
 			info->private_game = !!(presence->flags & SOCIAL_PRESENCE_PRIVATE);
 			info->in_party = !!(presence->flags & SOCIAL_PRESENCE_IN_PARTY);
 			info->party_open = !!(presence->flags & SOCIAL_PRESENCE_PARTY_OPEN);
+			memcpy(info->party_token, presence->party_token, SOCIAL_TOKEN_SIZE);
 			word(info->map, sizeof(info->map), presence->map);
 			word(info->gametype, sizeof(info->gametype), presence->gametype);
 			info->players = presence->players;
@@ -395,11 +404,77 @@ static void snapshot_make(struct social_front *front, struct social_snapshot *sn
 		info->kind = held->kind;
 		info->target = held->target;
 		info->party_size = held->party_size;
+		memcpy(info->party_token, held->party_token, SOCIAL_TOKEN_SIZE);
 		info->seconds_ago = (social_now(engine) - held->received) / 1000;
 		(void)from;
 		count++;
 	}
 	snapshot->invite_count = count;
+	{
+		const struct social_party *party = &engine->party;
+		struct social_party_info *out = &snapshot->party;
+		int member_order[SOCIAL_MAX_PARTY_MEMBERS], ordered = 0, slot;
+
+		out->active = party->active;
+		out->joining = party->joining;
+		out->is_leader = party->active && !party->joining && party->leader == party->self;
+		out->open = party->open;
+		out->auto_follow = party->auto_follow;
+		out->game_present = party->game_present;
+		out->game = party->game;
+		out->game_order = party->game_order;
+		out->serial = engine->party_serial;
+		out->result = engine->party_result;
+		if (party->active)
+		{
+			/* the leader first, then the list's order, then the rest */
+			if (party->leader >= 0)
+				member_order[ordered++] = party->leader;
+			for (slot = 0; slot < party->roster_count; slot++)
+			{
+				for (index = 0; index < SOCIAL_MAX_PARTY_MEMBERS; index++)
+				{
+					if (party->members[index].used && index != party->leader && !memcmp(party->members[index].hash, party->roster[slot], SOCIAL_BLOCK_SIZE))
+						member_order[ordered++] = index;
+				}
+			}
+			for (index = 0; index < SOCIAL_MAX_PARTY_MEMBERS; index++)
+			{
+				int listed = 0;
+
+				for (slot = 0; slot < ordered; slot++)
+					listed |= member_order[slot] == index;
+				if (party->members[index].used && !listed)
+					member_order[ordered++] = index;
+			}
+			for (slot = 0; slot < ordered; slot++)
+			{
+				const struct social_member *member = &party->members[member_order[slot]];
+				struct social_party_member_info *info = &out->members[slot];
+
+				info->id = member->id;
+				word(info->name, sizeof(info->name), member->name);
+				info->leader = member_order[slot] == party->leader;
+				info->self = member_order[slot] == party->self;
+				info->online = info->self || (member->heard && !social_elapsed(engine, member->heard_time, SOCIAL_PARTY_LEADER_SILENCE));
+				info->auto_follow = info->self ? party->auto_follow : !!(member->flags & 2);
+				info->hosting = info->self ? engine->place.hosting : !!(member->flags & 4);
+				info->in_game = info->self ? engine->place.activity == SOCIAL_GAME : !!(member->flags & 8);
+				info->follow_result = member->follow_result;
+				word(info->follow_text, sizeof(info->follow_text), social_follow_text(member->follow_result));
+			}
+			out->member_count = ordered;
+			for (slot = 0; slot < party->chat_count; slot++)
+			{
+				const struct social_chat_line *line = &party->chat[(party->chat_first + slot) % 8];
+
+				word(out->chat[slot].name, sizeof(out->chat[slot].name), line->name);
+				word(out->chat[slot].text, sizeof(out->chat[slot].text), line->text);
+				out->chat[slot].seconds_ago = (social_now(engine) - line->time) / 1000;
+			}
+			out->chat_count = party->chat_count;
+		}
+	}
 	snapshot->invite_serial = engine->invite_serial;
 	snapshot->invite_result = engine->invite_result;
 	snapshot->add_serial = engine->add_serial;
@@ -506,6 +581,55 @@ int social_front_add_code(struct social_front *front, const char *text)
 
 void social_front_invite(struct social_front *front, unsigned int friend_id) { post_id(front, _command_invite, friend_id); }
 void social_front_invite_dismiss(struct social_front *front, unsigned int id) { post_id(front, _command_invite_dismiss, id); }
+void social_front_party(struct social_front *front, int what, unsigned int id, int value, const char *text)
+{
+	struct command command;
+
+	memset(&command, 0, sizeof(command));
+	command.type = _command_party;
+	command.a = what;
+	command.id = id;
+	command.b = value;
+	snprintf(command.text, sizeof(command.text), "%s", text ? text : "");
+	post(front, &command);
+}
+
+void social_front_party_token(struct social_front *front, const unsigned char *token)
+{
+	struct command command;
+
+	memset(&command, 0, sizeof(command));
+	command.type = _command_party_token;
+	memcpy(command.token, token, SOCIAL_TOKEN_SIZE);
+	post(front, &command);
+}
+
+int social_front_follow(struct social_front *front, struct social_join_target *target, unsigned int *order)
+{
+	int want;
+
+	pthread_mutex_lock(&front->lock);
+	want = front->follow_want;
+	if (want)
+	{
+		*target = front->follow_target;
+		*order = front->follow_order;
+	}
+	pthread_mutex_unlock(&front->lock);
+	return want;
+}
+
+void social_front_follow_report(struct social_front *front, unsigned int order, int result)
+{
+	struct command command;
+
+	memset(&command, 0, sizeof(command));
+	command.type = _command_follow_report;
+	command.id = order;
+	command.a = result;
+	post(front, &command);
+}
+
 void social_front_accept(struct social_front *front, unsigned int id) { post_id(front, _command_accept, id); }
 void social_front_ignore(struct social_front *front, unsigned int id) { post_id(front, _command_ignore, id); }
 void social_front_cancel(struct social_front *front, unsigned int id) { post_id(front, _command_cancel, id); }
@@ -620,6 +744,26 @@ static void run_command(struct social_front *front, const struct command *comman
 	case _command_invite:
 		social_engine_invite(engine, command->id);
 		break;
+	case _command_party_token:
+		social_engine_party_result(engine, social_engine_party_join(engine, command->token));
+		break;
+	case _command_follow_report:
+		social_engine_party_follow_report(engine, command->id, command->a);
+		break;
+	case _command_party:
+		switch (command->a)
+		{
+		case 1: social_engine_party_result(engine, social_engine_party_make(engine)); break;
+		case 2: social_engine_party_result(engine, social_engine_party_invite(engine, command->id)); break;
+		case 4: social_engine_party_result(engine, social_engine_party_join_friend(engine, command->id)); break;
+		case 5: social_engine_party_result(engine, social_engine_party_leave(engine)); break;
+		case 6: social_engine_party_result(engine, social_engine_party_kick(engine, command->id)); break;
+		case 7: social_engine_party_result(engine, social_engine_party_transfer(engine, command->id)); break;
+		case 8: social_engine_party_result(engine, social_engine_party_set_open(engine, command->b)); break;
+		case 9: social_engine_party_result(engine, social_engine_party_set_auto_follow(engine, command->b)); break;
+		case 10: social_engine_party_result(engine, social_engine_party_chat(engine, command->text)); break;
+		}
+		break;
 	case _command_invite_dismiss:
 		social_engine_invite_dismiss(engine, command->id);
 		break;
@@ -673,6 +817,11 @@ void social_front_tick(struct social_front *front)
 		case SOCIAL_EVENT_OFFLINE: type = SOCIAL_API_EVENT_OFFLINE; break;
 		case SOCIAL_EVENT_INVITE: type = SOCIAL_API_EVENT_INVITE; break;
 		case SOCIAL_EVENT_PARTY_INVITE: type = SOCIAL_API_EVENT_PARTY_INVITE; break;
+		case SOCIAL_EVENT_PARTY_JOINED: type = SOCIAL_API_EVENT_PARTY_JOINED; break;
+		case SOCIAL_EVENT_PARTY_LEFT: type = SOCIAL_API_EVENT_PARTY_LEFT; break;
+		case SOCIAL_EVENT_PARTY_KICKED: type = SOCIAL_API_EVENT_PARTY_KICKED; break;
+		case SOCIAL_EVENT_PARTY_LEADER: type = SOCIAL_API_EVENT_PARTY_LEADER; break;
+		case SOCIAL_EVENT_PARTY_CHAT: type = SOCIAL_API_EVENT_PARTY_CHAT; break;
 		}
 		if (type == SOCIAL_API_EVENT_NONE)
 			continue;
@@ -681,6 +830,7 @@ void social_front_tick(struct social_front *front)
 		out.id = event.id;
 		word(out.name, sizeof(out.name), event.name);
 		word(out.code, sizeof(out.code), event.code);
+		word(out.text, sizeof(out.text), event.text);
 		pthread_mutex_lock(&front->lock);
 		if (front->event_count == EVENT_QUEUE)
 		{
@@ -689,6 +839,21 @@ void social_front_tick(struct social_front *front)
 		}
 		front->events[(front->event_first + front->event_count) % EVENT_QUEUE] = out;
 		front->event_count++;
+		pthread_mutex_unlock(&front->lock);
+	}
+	/* the leader's game to follow */
+	{
+		struct social_join_target target;
+		unsigned int order = 0;
+		int want = social_party_follow_wanted(engine, &target, &order);
+
+		pthread_mutex_lock(&front->lock);
+		front->follow_want = want;
+		if (want)
+		{
+			front->follow_target = target;
+			front->follow_order = order;
+		}
 		pthread_mutex_unlock(&front->lock);
 	}
 	/* the snapshot, when anything changed or a second has gone (the ages) */

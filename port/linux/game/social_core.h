@@ -81,6 +81,18 @@ enum
 	SOCIAL_ADD_PER_WINDOW = 4,
 	SOCIAL_REPLY_SPACING = 5000,
 	SOCIAL_ROTATION_LIFE = 120000,
+	SOCIAL_PARTY_HEARTBEAT_LEADER = 4000,
+	SOCIAL_PARTY_HEARTBEAT = 6000,
+	SOCIAL_PARTY_CHANGE_SPACING = 1000,
+	SOCIAL_PARTY_LEADER_SILENCE = 12000,
+	SOCIAL_PARTY_MEMBER_SILENCE = 30000,
+	SOCIAL_PARTY_JOIN_WAIT = 15000,
+	SOCIAL_PARTY_INVITE_LIFE = 120000,
+	SOCIAL_PARTY_DROPPED_LIFE = 600000,
+	SOCIAL_PARTY_CHAT_RATE = 4,
+	SOCIAL_PARTY_FOLLOW_RETRY = 3000,
+	SOCIAL_PARTY_FOLLOW_TRIES = 7,
+	SOCIAL_PARTY_FOLLOW_LAST = 60000,
 	SOCIAL_STORE_DEBOUNCE = 2000,
 	SOCIAL_STORE_INTERVAL = 30000,
 	SOCIAL_STORE_SOFT_INTERVAL = 300000,
@@ -294,6 +306,84 @@ struct social_request
 	unsigned long long utc;
 };
 
+/* a member of the party (this machine too) */
+struct social_member
+{
+	int used;
+	unsigned int id;
+	unsigned char key[SOCIAL_KEY_SIZE];
+	unsigned char hash[SOCIAL_HASH_SIZE_FULL];
+	char name[SOCIAL_NAME_SIZE + 1];
+	struct social_window window;
+	int heard;
+	unsigned int heard_time;
+	unsigned char flags, place, follow_result, roster_index;
+	unsigned short net_version, term;
+	/* its chat lines in the current second */
+	unsigned int chat_start;
+	int chat_count;
+};
+
+struct social_chat_line
+{
+	char name[SOCIAL_NAME_SIZE + 1];
+	char text[SOCIAL_CHAT_SIZE + 1];
+	unsigned int time;
+};
+
+/* the party this machine is in, if any */
+struct social_party
+{
+	int active;
+	unsigned char token[SOCIAL_TOKEN_SIZE];
+	char topic[SOCIAL_TOPIC_SIZE];
+	unsigned char seal[SOCIAL_KEY_SIZE];
+	unsigned short term;
+	/* the member that leads (an index into members), -1 until the leader is known; this machine's own */
+	int leader;
+	int self;
+	struct social_member members[SOCIAL_MAX_PARTY_MEMBERS];
+	/* the leader's list, in the order they joined: the first bytes of their keys' hashes */
+	unsigned char roster[SOCIAL_MAX_PARTY_MEMBERS][SOCIAL_BLOCK_SIZE];
+	int roster_count;
+	/* this machine asked to join and has not been listed yet */
+	int joining;
+	unsigned int join_time;
+	int open;
+	int auto_follow;
+	unsigned int state_time;
+	int state_dirty;
+	unsigned int leader_heard;
+	/* the leader's game: where it is, counted so that a new one is told from the last */
+	unsigned short game_order;
+	int game_present;
+	struct social_join_target game;
+	/* following it: what was done about the order, and the tries after a refusal for lack of room */
+	unsigned short follow_done_order;
+	int follow_done;
+	int follow_running;
+	int follow_tries;
+	unsigned int follow_time;
+	int follow_retry_wait;
+	int follow_final_retry;
+	unsigned int follow_started;
+	/* the keys invited (a leader's), and kicked */
+	unsigned char invited[SOCIAL_MAX_PARTY_MEMBERS][SOCIAL_KEY_SIZE];
+	unsigned int invited_time[SOCIAL_MAX_PARTY_MEMBERS];
+	unsigned char banned[SOCIAL_MAX_PARTY_MEMBERS][SOCIAL_BLOCK_SIZE];
+	int banned_count;
+	struct social_chat_line chat[8];
+	int chat_count, chat_first;
+	unsigned int chat_sent[3];
+	int chat_sent_count;
+	unsigned char own_follow_result;
+	/* the place in the old leader's list this machine claimed the lead from (a leader's STATE carries it: of two claims of one term the lower wins), 0 for a party made here */
+	unsigned int claim_index;
+	/* keys of members dropped for silence or by a claim, remembered for ten minutes: when such a key speaks again it is a member (a partition healing) */
+	unsigned char dropped[SOCIAL_MAX_PARTY_MEMBERS][SOCIAL_KEY_SIZE];
+	unsigned int dropped_time[SOCIAL_MAX_PARTY_MEMBERS];
+};
+
 /* an invite received, waiting to be accepted or to lapse */
 struct social_pending_invite
 {
@@ -363,6 +453,10 @@ struct social_engine
 	unsigned int invite_serial_in;
 	unsigned int invite_serial;
 	int invite_result;
+	struct social_party party;
+	/* the last party call: a count, and how it ended (SOCIAL_PARTY_*) */
+	unsigned int party_serial;
+	int party_result;
 	/* requests: sent (waiting for an answer), received, and the keys (the first 8 bytes of their hashes) refused for good or for now */
 	struct social_sent sent[SOCIAL_MAX_SENT];
 	struct social_request requests[SOCIAL_MAX_REQUESTS];
@@ -510,6 +604,68 @@ int social_engine_invite_dismiss(struct social_engine *engine, unsigned int id);
 void social_invite_heard(struct social_engine *engine, struct social_friend *friend, const unsigned char *plain, int size, const struct social_inner *inner);
 void social_invites_update(struct social_engine *engine);
 
+/* ---------- parties (social_party.c) */
+
+/* the results of a party call (in the order of social.h's SOCIAL_PARTY_RESULT_*) */
+enum
+{
+	SOCIAL_PARTY_OK,
+	SOCIAL_PARTY_NOT_IN_PARTY,
+	SOCIAL_PARTY_ALREADY_IN_PARTY,
+	SOCIAL_PARTY_NOT_LEADER,
+	SOCIAL_PARTY_NO_FRIEND,
+	SOCIAL_PARTY_OFFLINE,
+	SOCIAL_PARTY_FULL,
+	SOCIAL_PARTY_TOO_FAST,
+	SOCIAL_PARTY_OFF,
+	SOCIAL_PARTY_NO_SUCH_MEMBER,
+	SOCIAL_PARTY_BAD_TEXT,
+};
+
+/* a party of one, this machine leading */
+int social_engine_party_make(struct social_engine *engine);
+/* the leader asks a friend (by id): the party's token goes to it as an invite, and its key is let in when it asks */
+int social_engine_party_invite(struct social_engine *engine, unsigned int friend_id);
+/* joins the party with this token (an invite's, or a friend's open party): the leader lists this machine when it hears it asks */
+int social_engine_party_join(struct social_engine *engine, const unsigned char *token);
+/* ... a friend's open party */
+int social_engine_party_join_friend(struct social_engine *engine, unsigned int friend_id);
+int social_engine_party_leave(struct social_engine *engine);
+/* the leader removes a member (by id), who may not come back; or hands the lead to one */
+int social_engine_party_kick(struct social_engine *engine, unsigned int member_id);
+int social_engine_party_transfer(struct social_engine *engine, unsigned int member_id);
+int social_engine_party_set_open(struct social_engine *engine, int open);
+int social_engine_party_set_auto_follow(struct social_engine *engine, int on);
+/* a line of 63 characters to the party */
+int social_engine_party_chat(struct social_engine *engine, const char *text);
+/* what the game thread did about the leader's game of this order: SOCIAL_FOLLOW_* */
+int social_engine_party_follow_report(struct social_engine *engine, unsigned int order, int result);
+/* whether the game thread should join the leader's game now (the machine is in the menus, following is on, there is a game not followed): the target and its order */
+int social_party_follow_wanted(const struct social_engine *engine, struct social_join_target *target, unsigned int *order);
+/* the member the machine is (an index), -1 if it is in no party */
+const struct social_member *social_party_member_by_id(const struct social_engine *engine, unsigned int id);
+
+/* a party call's result noted for the snapshot */
+void social_engine_party_result(struct social_engine *engine, int result);
+/* what a member reports of following the leader (STATE's follow_result) */
+enum
+{
+	SOCIAL_FOLLOW_NONE,
+	SOCIAL_FOLLOW_JOINING,
+	SOCIAL_FOLLOW_JOINED,
+	SOCIAL_FOLLOW_FULL,
+	SOCIAL_FOLLOW_CLOSED,
+	SOCIAL_FOLLOW_VERSION,
+	SOCIAL_FOLLOW_MAP_MISSING,
+	SOCIAL_FOLLOW_NO_ROUTE,
+	SOCIAL_FOLLOW_NO_ANSWER,
+	SOCIAL_FOLLOW_BUSY,
+	SOCIAL_FOLLOW_OPTED_OUT,
+	SOCIAL_FOLLOW_BANNED,
+	SOCIAL_FOLLOW_REPLACED,
+	NUMBER_OF_SOCIAL_FOLLOWS,
+};
+
 /* ---------- the file (social_store.c) */
 
 /* whether a save is wanted now: something changed, and the debounce and the interval are over; foreground says the game has the screen (the card is not
@@ -531,6 +687,8 @@ unsigned int social_next_sequence(struct social_engine *engine);
 struct social_friend *social_friend_by_key(struct social_engine *engine, const unsigned char *key);
 /* works out the pair key and tags if not yet; 0 if the friend's key is unusable */
 int social_friend_pair(struct social_engine *engine, struct social_friend *friend);
+/* what is queued sent now, as far as the bucket allows */
+void social_flush(struct social_engine *engine);
 /* topics wanted changed */
 void social_topics_changed(struct social_engine *engine);
 /* a signature check may be made now (the budget is spent) */
