@@ -255,7 +255,13 @@ int main(void)
 	r = run_pipeline(&s);
 	printf("F measure only: rms %.2f as drawn, %.2f stamped (the model applies no move)\n", r.raw_rms, r.stamped_rms);
 	CHECK(fabs(r.raw_rms - r.stamped_rms) < 1e-9);
-	CHECK(wiiu_stamp_format(&stamp, text, sizeof(text)) > 100 && strlen(text) < 330 && strstr(text, "measured"));
+	CHECK(wiiu_stamp_format(&stamp, text, sizeof(text)) > 100 && strstr(text, "measured"));
+	{
+		/* (two lines, each under the log's line) */
+		const char *newline = strchr(text, '\n');
+
+		CHECK(newline && (size_t)(newline - text) < 190 && strlen(newline + 1) < 190 && !strchr(newline + 1, '\n'));
+	}
 	printf("%s\n", text);
 	CHECK(wiiu_stamp_format(&stamp, text, sizeof(text)) == 0);
 	/* the learnt numbers: the swap-to-ready time the model has (4 ms) and the display's period (the model's grid is 16.667) */
