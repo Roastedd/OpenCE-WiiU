@@ -384,6 +384,9 @@ union argb_color *interface_get_rgb_color(
 	return color;
 }
 
+/* port: the social screens' toasts (port/linux/game/screens_toast.c; nothing with screens.enable 0) */
+void screens_toast_frame(void);
+
 void interface_draw_fullscreen_overlays(
 	void)
 {
@@ -392,6 +395,7 @@ void interface_draw_fullscreen_overlays(
 	hud_render_timer();
 	/* port: a map's download (port/linux/game/map_share.c) */
 	map_share_render();
+	screens_toast_frame();
 	/* port: a network game's round trip to the host (display.latency_meter) */
 	latency_meter_draw();
 	/* port: display.stats_log, a line a second in the log (stats_log.c) */
