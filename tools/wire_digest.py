@@ -86,12 +86,32 @@ def smoke(head, arguments, results):
     (arguments.out / "wire-smoke.json").write_text(json.dumps(results, indent=1, default=str))
 
 
+def repeated(base, head, name, mode, number, menu, extra, own, times, results):
+    """times runs of each build, two at a time; every run against every other: the base's against each other (how much one build moves by itself under this machine's load), the head's, and
+    the base's against the head's"""
+    runs = []
+    for index in range(times):
+        pair = (start(base, f"wire-{name}-base{index}", mode, number, extra, own), start(head, f"wire-{name}-head{index}", mode, number, extra, own))
+        for kind, run in zip(("base", "head"), pair):
+            summary = digest.finish(*run)
+            runs.append((f"{kind}{index}", run[1], summary.get("game-digest")))
+    matrix = {}
+    for i, (a, out_a, _) in enumerate(runs):
+        for b, out_b, _ in runs[i + 1:]:
+            matrix[f"{a} vs {b}"] = compare(out_a, out_b, menu=menu)
+    results[name + "-repeat"] = {"digests": {label: value for label, _, value in runs}, "compare": matrix,
+                                 "base_vs_base_equal": all(v == 0 for k, v in matrix.items() if k.startswith("base") and " vs base" in k),
+                                 "base_vs_head_equal": all(v == 0 for k, v in matrix.items() if k.startswith("base") and " vs head" in k)}
+    print(name, "repeat", json.dumps(results[name + "-repeat"], default=str), flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="1b3e0dcb")
     parser.add_argument("--ticks", type=int, default=300)
     parser.add_argument("--frames", type=int, default=200)
     parser.add_argument("--controls", action="store_true")
+    parser.add_argument("--repeat", type=int, default=0, help="N: run each scenario N times by each build and compare every pair (the base against itself too), to see how much the runs move by themselves")
     parser.add_argument("--smoke", action="store_true", help="only the screens-on smoke runs (screens.enable 2 with the friends layer on: each screen opened by debug.menu_open)")
     parser.add_argument("--only", action="append", help="a scenario's name (several): the others are left out")
     parser.add_argument("out", type=Path)
@@ -107,6 +127,9 @@ def main():
         if arguments.only and name not in arguments.only:
             continue
         number = arguments.frames if count is None else arguments.ticks
+        if arguments.repeat:
+            repeated(base, head, name, mode, number, count is None, dict(OFF, **extra), own, arguments.repeat, results)
+            continue
         pair = (start(base, f"wire-{name}-base", mode, number, dict(OFF, **extra), own), start(head, f"wire-{name}-head", mode, number, dict(OFF, **extra), own))
         summaries = [digest.finish(*run) for run in pair]
         out_a, out_b = pair[0][1], pair[1][1]
