@@ -4691,12 +4691,14 @@ void bots_tick(void)
 			bots_paths_scan();
 		}
 		/* (debug.bots_bake_nav: the navigation bake of the map, with the first bot that has a unit; then the end of the run) */
+#ifndef HALO_WIIU
 		if (player->unit_index != NONE && config_string("debug.bots_bake_nav")[0] && bots_globals.ticks > 2)
 		{
 			if (!bots_nav_bake_run(player->unit_index, main_get_multiplayer_map_name(), config_string("debug.bots_bake_nav")))
 				platform_log("bots: bake: failed");
 			exit(0);
 		}
+#endif
 		bot_index = player->network_player_data.machine_index - BOTS_FIRST_MACHINE;
 		bot = &bots_globals.bots[bot_index];
 		if (bot->player_index != iterator.datum_index)
