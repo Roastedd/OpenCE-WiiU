@@ -30,6 +30,8 @@ What it does not do (bots2-result.md): the validation by driving a unit through 
 hint file; the exposure and cover analysis.
 */
 
+/* the console reads the pack and never makes it: the bake is for the desktop's builds (and the big-endian test build) */
+#ifndef HALO_WIIU
 /* (the output file is a real path, not an Xbox one) */
 #define HALO_LINUX_PLATFORM_LAYER 1
 
@@ -494,7 +496,10 @@ static void bake_clearance(void)
 		{
 			float centre[3] = { node->p[0], node->p[1], node->p[2] + bake.height * 0.55f };
 
-			if (!bake_sphere_clear(centre, centre, bake.radius * 0.6f))
+			float knee_centre[3] = { node->p[0], node->p[1], node->p[2] + bake.radius * 1.1f + 0.1f };
+
+			/* (room for the biped's whole width at the body and at the knees: a node is not where its bot's pill meets a wall) */
+			if (!bake_sphere_clear(centre, centre, bake.radius * 1.0f) || !bake_sphere_clear(knee_centre, knee_centre, bake.radius * 0.9f))
 			{
 				low++;
 				continue;
@@ -2147,3 +2152,5 @@ int bots_nav_bake_run(long unit_index, char const *map_name, char const *path)
 		return ok;
 	}
 }
+
+#endif /* !HALO_WIIU */
