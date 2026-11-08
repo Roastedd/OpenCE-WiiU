@@ -69,6 +69,7 @@ game with a password is not: its token is sealed.
 #include "posix.h"
 #include "port_config.h"
 #include "p2p_internal.h"
+#include "halo_clock.h"
 #include "halo_port_limits.h"
 #include "server_mode.h"
 #include "server_master.h"
@@ -323,7 +324,7 @@ static int listing_make_token(unsigned char *bytes, int flags, const unsigned ch
 	bytes[size++] = (unsigned char)flags;
 	put_long(bytes + size, ++lobby.sequence);
 	size += 4;
-	put_long(bytes + size, (unsigned long)time(NULL));
+	put_long(bytes + size, (unsigned long)halo_utc_now());
 	size += 4;
 	memcpy(bytes + size, p2p_signing_key(), P2P_KEY_SIZE);
 	size += P2P_KEY_SIZE;
@@ -434,7 +435,7 @@ one within LIVE_WINDOW (not one long gone, published again by someone who
 kept it) */
 static int listing_current(const struct listing *listing, int retained)
 {
-	long difference = (long)(listing->time - (unsigned long)time(NULL));
+	long difference = halo_clock_listing_difference(listing->time, (double)halo_utc_now());
 	long window = retained ? RETAINED_WINDOW : LIVE_WINDOW;
 
 	return difference <= window && difference >= -window;

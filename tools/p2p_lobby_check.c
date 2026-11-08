@@ -37,6 +37,8 @@ static const unsigned char *hosting_token;
 
 void posix_random_bytes(void *buffer, unsigned long size) { memset(buffer, 0x5a, size); }
 unsigned long p2p_now(void) { return clock_now; }
+/* (p2p.c's wall clock, unanchored: the machine's own) */
+unsigned long long halo_utc_now(void) { return (unsigned long long)time(NULL); }
 int config_boolean(const char *name) { (void)name; return 1; }
 void platform_log(const char *format, ...) { (void)format; }
 

@@ -76,6 +76,14 @@ struct p2p_candidate
 
 /* the milliseconds of a monotonic clock */
 unsigned long p2p_now(void);
+/* Unix seconds in UTC now (halo_clock.h): the machine's own clock until a TLS answer's Date has anchored it (halo_utc_anchor), then that time moved on by the
+monotonic clock. Any thread. */
+unsigned long long halo_utc_now(void);
+/* a Date's time (Unix seconds, as http_date_parse gives it, less half the round trip of the request it came with) as the anchor; 1 when it became the anchor (it
+differs from the clock's estimate by more than a few seconds, or there is none), 0 when it was refused or the anchor stays. */
+int halo_utc_anchor(double utc_seconds);
+/* the machine's own clock less the anchored clock's, in seconds, as of the last anchor taken; 0 with none, and *anchored says whether there is one */
+long halo_utc_offset_seconds(int *anchored);
 /* looks up a host name (posix_resolve_ipv4), letting go of the p2p lock
 while it waits; the p2p thread's */
 unsigned long p2p_resolve(const char *host);

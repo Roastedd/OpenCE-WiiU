@@ -76,6 +76,8 @@ only look up and create stand-ins.
 #include "server_master.h"
 #include "port_config.h"
 #include "p2p_internal.h"
+#include "halo_clock.h"
+#include "master_list.h"
 #include "player_link.h"
 #include "log_address.h"
 #include "ikcp.h"
@@ -550,6 +552,47 @@ static int has_identifier;
 unsigned long p2p_now(void)
 {
 	return GetTickCount();
+}
+
+/* ---------- the wall clock (halo_clock.h) */
+
+static struct halo_clock utc_clock;
+static pthread_mutex_t utc_lock = PTHREAD_MUTEX_INITIALIZER;
+
+unsigned long long halo_utc_now(void)
+{
+	double now;
+
+	pthread_mutex_lock(&utc_lock);
+	now = halo_clock_now(&utc_clock, (unsigned int)p2p_now(), (double)time(NULL));
+	pthread_mutex_unlock(&utc_lock);
+	return (unsigned long long)now;
+}
+
+int halo_utc_anchor(double utc_seconds)
+{
+	int taken;
+	long skew;
+
+	pthread_mutex_lock(&utc_lock);
+	taken = halo_clock_anchor(&utc_clock, utc_seconds, (unsigned int)p2p_now(), (double)time(NULL));
+	skew = (long)utc_clock.skew;
+	pthread_mutex_unlock(&utc_lock);
+	if (taken)
+		platform_log("clock: anchored to a server's Date; this machine's own clock is %ld seconds %s of it", skew < 0 ? -skew : skew,
+			skew < 0 ? "behind" : "ahead");
+	return taken;
+}
+
+long halo_utc_offset_seconds(int *anchored)
+{
+	long skew;
+
+	pthread_mutex_lock(&utc_lock);
+	*anchored = utc_clock.anchored;
+	skew = utc_clock.anchored ? (long)utc_clock.skew : 0;
+	pthread_mutex_unlock(&utc_lock);
+	return skew;
 }
 
 static int elapsed(unsigned long since, unsigned long time)
@@ -4707,6 +4750,8 @@ void p2p_initialize(unsigned long local_address)
 	if (p2p.in_process)
 		platform_log("Internet play: the peers' datagrams and connections are handed to the game in the process "
 			"(network.tunnel_in_process), with no stand-in sockets");
+	/* (the wall clock anchored to a master's TLS answer, for the listings: master_list.c) */
+	master_list_clock_probe();
 	if (command_line_invite(invite, sizeof(invite)))
 		p2p_join_invite(invite);
 }

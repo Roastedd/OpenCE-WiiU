@@ -384,30 +384,32 @@ static void header_value(const char *headers, const char *name, char *value, int
 	}
 }
 
-/* the time a list is checked against: this machine's clock; on the Wii U, when its clock is more than the list's freshness from the time of the TLS answer that
-brought the list (the answer's Date, which a certificate vouches for), that time, said once in the log */
+/* the time a list is checked against: the wall clock of internet play (halo_utc_now, p2p.c): this machine's own clock until a TLS answer's Date has anchored it,
+which the console's clock, often hours off, cannot spoil; said once in the log when the two differ by more than the list's freshness */
 static unsigned long list_check_time(const struct fetched *fetched, const char *master)
 {
-	unsigned long now = (unsigned long)time(NULL);
-#ifdef HALO_WIIU
 	static int said;
+	unsigned long now = (unsigned long)halo_utc_now();
+	double own = (double)time(NULL);
 
-	if (fetched->server_time > 0.0 && (fetched->server_time - (double)now > FRESH_SECONDS || (double)now - fetched->server_time > FRESH_SECONDS))
-	{
-		if (!said)
-		{
-			said = 1;
-			platform_log("server browser: this console's clock is %.0f seconds %s of %s's (its answer's Date): the list is checked against that time. "
-				"Setting the console's clock right (System Settings) removes this.", fetched->server_time > (double)now ? fetched->server_time - (double)now :
-				(double)now - fetched->server_time, fetched->server_time > (double)now ? "behind" : "ahead", master);
-		}
-		return (unsigned long)fetched->server_time;
-	}
-#else
 	(void)fetched;
-	(void)master;
-#endif
+	if (!said && (own - (double)now > FRESH_SECONDS || (double)now - own > FRESH_SECONDS))
+	{
+		said = 1;
+		platform_log("server browser: this machine's clock is %.0f seconds %s of %s's (its answer's Date): lists and games are checked against that time. "
+			"Setting the clock right removes this.", own > (double)now ? own - (double)now : (double)now - own, own > (double)now ? "ahead" : "behind", master);
+	}
 	return now;
+}
+
+/* a fetch's answer Date, as the wall clock's anchor (halo_utc_anchor): the Date is the time the answer was made, so the time of its arrival is later by about half
+of the whole exchange (at most a few seconds: sent and arrived are p2p_now's milliseconds) */
+static void clock_note(const struct fetched *fetched, unsigned long sent)
+{
+	double took = (double)(unsigned int)(p2p_now() - sent) / 1000.0;
+
+	if (fetched->server_time > 0.0)
+		halo_utc_anchor(fetched->server_time + (took > 10.0 ? 5.0 : took / 2.0));
 }
 
 #if defined(HALO_WEB)
@@ -512,6 +514,12 @@ static int fetch(const char *url, struct fetched *fetched)
 	fetched->size = (unsigned long)body_size;
 	header_value(headers, "Signature", fetched->signature, sizeof(fetched->signature));
 	header_value(headers, "Signature-Key", fetched->key, sizeof(fetched->key));
+	{
+		char date[64];
+
+		header_value(headers, "Date", date, sizeof(date));
+		fetched->server_time = http_date_parse(date);
+	}
 	free(headers);
 	return 1;
 }
@@ -689,6 +697,7 @@ static void *list_thread_main(void *argument)
 			struct fetched fetched;
 			char url[MASTER_LIST_URL_SIZE + 64];
 			char why[128];
+			unsigned long sent = p2p_now();
 
 			memset(&fetched, 0, sizeof(fetched));
 			snprintf(url, sizeof(url), "%s/v1/servers", urls[index]);
@@ -696,7 +705,7 @@ static void *list_thread_main(void *argument)
 			{
 				platform_log("server browser: no answer from %s", urls[index]);
 			}
-			else if (fetched.status != 200)
+			else if (clock_note(&fetched, sent), fetched.status != 200)
 			{
 				platform_log("server browser: %s answered %d", urls[index], fetched.status);
 			}
@@ -734,6 +743,94 @@ static void *list_thread_main(void *argument)
 	}
 	pthread_mutex_unlock(&list.lock);
 	return NULL;
+}
+
+/* ---------- the wall clock's probe */
+
+enum { CLOCK_PROBE_TRIES = 3, CLOCK_PROBE_RETRY_SECONDS = 20 };
+
+static pthread_mutex_t clock_probe_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t clock_probe_wake = PTHREAD_COND_INITIALIZER;
+static int clock_probe_running, clock_probe_started;
+
+/* GET <first master>/healthz (a small answer with a Date, certificate-checked): the anchor of the wall clock before any list is asked for. Tried three times, 20
+seconds apart, and given up on (the lists' own answers anchor it once the browser is open) */
+static void *clock_probe_main(void *unused)
+{
+	char urls[MASTER_LIST_MAXIMUM_MASTERS][MASTER_LIST_URL_SIZE];
+	unsigned char keys[MASTER_LIST_MAXIMUM_MASTERS][MASTER_LIST_KEY_SIZE];
+	int count, attempt;
+
+	(void)unused;
+#ifdef HALO_WIIU
+	wiiu_thread_background("clock probe");
+#endif
+	count = master_list_client_masters(urls, keys);
+	for (attempt = 0; attempt < CLOCK_PROBE_TRIES && count > 0; attempt++)
+	{
+		struct fetched fetched;
+		char url[MASTER_LIST_URL_SIZE + 16];
+		unsigned long sent = p2p_now();
+		int anchored = 0;
+
+		memset(&fetched, 0, sizeof(fetched));
+		snprintf(url, sizeof(url), "%s/healthz", urls[0]);
+		/* (any answer with a Date: a master without /healthz says 404 in a TLS answer all the same) */
+		if (fetch(url, &fetched) && fetched.status >= 200 && fetched.status < 500 && fetched.server_time > 0.0)
+		{
+			clock_note(&fetched, sent);
+			anchored = 1;
+		}
+		free(fetched.body);
+		if (anchored)
+			break;
+		{
+			struct timespec until;
+
+			pthread_mutex_lock(&clock_probe_lock);
+			clock_gettime(CLOCK_REALTIME, &until);
+			until.tv_sec += CLOCK_PROBE_RETRY_SECONDS;
+			pthread_cond_timedwait(&clock_probe_wake, &clock_probe_lock, &until);
+			pthread_mutex_unlock(&clock_probe_lock);
+		}
+	}
+	pthread_mutex_lock(&clock_probe_lock);
+	clock_probe_running = 0;
+	pthread_mutex_unlock(&clock_probe_lock);
+	return NULL;
+}
+
+void master_list_clock_probe(void)
+{
+#if !defined(HALO_WEB)
+	pthread_t thread;
+	int created;
+
+	pthread_mutex_lock(&clock_probe_lock);
+	if (clock_probe_running || clock_probe_started || !config_boolean("network.online") || master_list_policy() == _master_listings_brokers)
+	{
+		pthread_mutex_unlock(&clock_probe_lock);
+		return;
+	}
+	clock_probe_started = clock_probe_running = 1;
+#ifdef HALO_WIIU
+	{
+		pthread_attr_t attributes;
+
+		pthread_attr_init(&attributes);
+		pthread_attr_setstacksize(&attributes, WIIU_LIST_STACK_BYTES);
+		created = pthread_create(&thread, &attributes, clock_probe_main, NULL);
+		pthread_attr_destroy(&attributes);
+	}
+#else
+	created = pthread_create(&thread, NULL, clock_probe_main, NULL);
+#endif
+	if (created == 0)
+		pthread_detach(thread);
+	else
+		clock_probe_running = 0;
+	pthread_mutex_unlock(&clock_probe_lock);
+#endif
 }
 
 void master_list_browse(int on)

@@ -58,6 +58,11 @@ answer came, with its status and its body (malloc'd, NUL terminated after
 its size: the caller frees it; 1 MB at most). Any thread; it may block */
 int master_list_get(const char *url, int *status, char **body, unsigned long *size);
 
+/* anchors the wall clock of internet play (halo_utc_now, p2p_internal.h) once, on a thread of its own: GET <first master>/healthz and the answer's Date, which a
+certificate vouches for (the Wii U's own clock is often hours off). Tried three times, 20 seconds apart. Nothing when internet play is off, the masters are not asked
+(network.listings "brokers"), or in the web build (the page's fetch gives no headers). The lists' answers anchor it too, whenever the browser is open. */
+void master_list_clock_probe(void);
+
 /* the server browser open (asked every 30 seconds) or closed */
 void master_list_browse(int on);
 /* Refresh: asked again now */
