@@ -193,6 +193,11 @@ static volatile long interpolation_rendering_threads;
 static real interpolation_fraction = 1.0f;
 
 #ifdef HALO_WIIU
+/* The display-clock stamp (halo/pacing_stamp.txt, wiiu_pacing.h; set by wiiu_gx2.c when the card asks for it, NULL otherwise): given the tick pair's later tick and the
+fraction the clock gives, the fraction to draw, the picture's time moved by how much later or earlier than the average frame this one will be on the display. Only the
+picture's time: no tick is touched. */
+float (*render_interpolation_stamp_hook)(long tick, float fraction);
+
 /* The overlap's frames (tick_overlap.h): the tick thread runs beside the drawing, so nothing here is kept by the tick. A frame blends the node
 matrices of the two ticks the ring of the snapshot holds for it (tick_snapshot.c), the pose each object had after the tick before the frame's tick and
 after it, and the cameras of the same two. All of it is the game thread's. */
@@ -1124,6 +1129,10 @@ void render_interpolation_frame_begin(void)
 #endif
 	interpolation_frame++;
 	interpolation_fraction = game_time_get_tick_fraction();
+#ifdef HALO_WIIU
+	if (render_interpolation_stamp_hook && interpolation_rendering)
+		interpolation_fraction = render_interpolation_stamp_hook(interpolation_tick, interpolation_fraction);
+#endif
 }
 
 void render_interpolation_frame_end(void)

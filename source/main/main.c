@@ -2543,6 +2543,11 @@ static boolean main_framerate_throttle_enabled(
 by vsync, and frames fall between the 30 Hz ticks
 (port/linux/game/render_interpolation.c): no vertical blank throttle, and
 the frame is timed with the performance counter. */
+#ifdef HALO_WIIU
+/* port: told when a frame's clock step is taken, for the display-clock stamp (halo/pacing_stamp.txt, set by wiiu_gx2.c when the card asks, NULL otherwise) */
+void (*main_frame_mark_hook)(void);
+#endif
+
 static void main_update_time_unthrottled(
 	void)
 {
@@ -2552,6 +2557,10 @@ static void main_update_time_unthrottled(
 	real seconds_elapsed = 0.0f;
 
 	QueryPerformanceCounter(&counter);
+#ifdef HALO_WIIU
+	if (main_frame_mark_hook)
+		main_frame_mark_hook();
+#endif
 	QueryPerformanceFrequency(&frequency);
 	if (previous_counter.QuadPart && frequency.QuadPart)
 	{

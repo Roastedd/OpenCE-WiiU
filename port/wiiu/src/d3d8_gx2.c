@@ -293,6 +293,11 @@ int halo_model_detail_stock(void)
 /* port/linux/game/render_governor.c's (the Direct3D layer is built without the game's headers): dynamic quality's model level of detail, 1 with it off */
 float render_governor_lod_scale(void);
 void render_governor_frame(double work_ms, double tick_ms, double render_ms, double now_ms);
+double tick_overlap_wait_ms_total(void);
+/* the frame pacing's glue (wiiu_gx2.c; set when halo/pacing_lock.txt or halo/pacing_stamp.txt asks, NULL otherwise): what the present command is given (DK_PRESENT_LOCK30 and the
+stamp's number for the frame), and, once a frame, the frame's CPU time in ms and the time */
+void (*d3d8_pacing_present_hook)(unsigned *flags, unsigned *stamp_sequence);
+void (*d3d8_pacing_frame_hook)(double cpu_ms, double now_ms);
 /* wiiu_render_passes.c's: the part of the rendering the game thread stayed longest in since the last call, and for how long (NULL if none) */
 const char *wiiu_render_pass_longest(double *milliseconds);
 
@@ -4468,6 +4473,17 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 		}
 		/* dynamic quality (render_governor.c): the frame's work, and how it divides */
 		render_governor_frame(work, frame_tick_ms, frame_render_ms, start);
+		if (d3d8_pacing_frame_hook)
+		{
+			/* the locked 30's rule (halo/pacing_lock.txt, wiiu_pacing.h) is given the frame's CPU time: its work less the waits for the GX2 thread's streams and slots, for the renderer
+			to be idle and for the tick thread (a locked 30 holds the game thread in them for half of each frame) */
+			static double tick_wait_before;
+			const double tick_wait = tick_overlap_wait_ms_total();
+			const double cpu = work - (slot_wait_ms_total() - slot_before) - (waits_ms - waits_before) - (idle_ms - idle_before) - (tick_wait - tick_wait_before);
+
+			tick_wait_before = tick_wait;
+			d3d8_pacing_frame_hook(cpu > 0.0 ? cpu : 0.0, start);
+		}
 		sum_tick_ms += frame_tick_ms;
 		sum_render_ms += frame_render_ms;
 		sum_ticks += frame_ticks;
@@ -4534,6 +4550,15 @@ static void D3DDevice_Present_inner(CONST RECT *source_rectangle, CONST RECT *de
 		/* (for dynamic resolution's controller, which runs where the frame's GPU time is measured, on the GX2 thread: whether the frame is a menu's,
 		and the frame rate it has to keep) */
 		command->flags = (port_menus_active() ? DK_PRESENT_MENUS : 0u) | (halo_interpolation_enabled() ? 0u : DK_PRESENT_THIRTY);
+		command->stamp_sequence = 0;
+		if (d3d8_pacing_present_hook)
+		{
+			/* (the locked 30: the swap interval of 2, and the frames' budget is a 30's; the display-clock stamp's number for this frame) */
+			unsigned pacing_flags = 0;
+
+			d3d8_pacing_present_hook(&pacing_flags, &command->stamp_sequence);
+			command->flags |= pacing_flags;
+		}
 		if (screenshot_every > 0 && device.frame % (unsigned long)screenshot_every == 0 && command->back_buffer.width &&
 			*config_string("debug.screenshot_directory"))
 		{
