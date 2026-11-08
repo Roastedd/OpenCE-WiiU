@@ -35,6 +35,11 @@ UNITS = {
     "map_vote": ("port/linux/game/network_map_vote.c", ["distributed_"]),
     "shield": ("port/linux/game/network_shield_effects.c", ["distributed_"]),
     "map_share": ("port/linux/game/map_share.c", ["distributed_"]),
+    "engine_ctf": ("source/game/game_engine_ctf.c", ["ctf_network_state"]),
+    "engine_oddball": ("source/game/game_engine_oddball.c", ["oddball_network_state"]),
+    "engine_slayer": ("source/game/game_engine_slayer.c", ["slayer_network_state"]),
+    "engine_race": ("source/game/game_engine_race.c", ["race_network_state"]),
+    "engine_king": ("source/game/game_engine_king.c", ["king_globals", "king_extra_hills_network_state"]),
     "infection": ("port/linux/game/infection.c", ["distributed_"]),
     "raw": ("port/linux/game/network_wire_order.c", ["network_wire_advertisement", "network_game"]),
 }
