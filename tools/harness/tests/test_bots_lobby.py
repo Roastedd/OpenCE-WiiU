@@ -12,18 +12,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import CHECK_FAILED, build, constant, enum_with, function, mutated, read, run, structure  # noqa: E402
 
 CASES = ["fills", "room", "fewer", "even", "against", "follows-players", "never-network", "slayer-only",
-         "not-once-started", "no-player-no-bots", "names-and-machines"]
+         "not-once-started", "no-player-no-bots", "names-and-machines", "objectives-games", "hosted-off", "hosted-lobby", "hosted-ingame", "hosted-ingame-off"]
 GAME_MANAGER_FUNCTIONS = ("network_game_invalidate_player", "network_player_is_valid", "network_game_player_is_valid",
                           "network_game_add_player", "network_game_remove_player")
 
 # a fault in network_game_server_port_bots, and the case that must catch it
 NEGATIVE_CONTROLS = {
-    "bots-in-network-games": (("network_game_is_splitscreen_local() && ", ""), "never-network"),
-    "bots-in-any-gametype": ((" && server->game.variant.game_engine_index == game_engine_slayer", ""), "slayer-only"),
-    "bots-once-started": (("server->state != _network_game_server_state_pregame || server->sent_start_game_message",
-                           "server->state != _network_game_server_state_pregame"), "not-once-started"),
+    "bots-in-network-games": (("else if (bots_online_enabled() && bots_game_allowed(", "else if (bots_game_allowed("), "hosted-off"),
+    "bots-in-any-gametype": (("if (bots_game_allowed(server->game.variant.game_engine_index))\n			wanted = PIN(bots_wanted_count(), 0, BOTS_MAXIMUM);", "wanted = PIN(bots_wanted_count(), 0, BOTS_MAXIMUM);"), "slayer-only"),
+    "bots-once-started": (("boolean pregame = server->state == _network_game_server_state_pregame && !server->sent_start_game_message;",
+                           "boolean pregame = server->state == _network_game_server_state_pregame;"), "not-once-started"),
+    "local-game-ingame": (("if (local ? !pregame : !(pregame || (bots_online_enabled() && ingame)))", "if (!pregame && !ingame)"), "not-once-started"),
+    "ingame-all-at-once": (("		return;\n	}\n\n	/* those not wanted leave (the last first) */", "	}\n\n	/* those not wanted leave (the last first) */"), "hosted-ingame"),
+    "ingame-no-clock": (("if (!bots_host_change_allowed((long)system_milliseconds(), 4000) )\n			return;", ""), "hosted-ingame"),
     "teams-not-evened": (("team_counts[1] < team_counts[0] ? 1 : 0", "1"), "even"),
-    "against-the-players": (("human_team == 0 ? 1 : 0", "human_team"), "against"),
+    "against-the-players": (("team_index = human_team == 0 ? 1 : 0;\n		else\n			team_index = team_counts[1] < team_counts[0] ? 1 : 0;", "team_index = human_team;\n		else\n			team_index = team_counts[1] < team_counts[0] ? 1 : 0;"), "against"),
     "one-too-many-stays": (("bot_index >= wanted; bot_index--", "bot_index > wanted; bot_index--"), "fewer"),
     "bots-alone": (("if (human_team == NONE)\n\t\twanted = 0;", ""), "no-player-no-bots"),
     "teams-not-followed": (("else if (server->game.players[slot_of_bot[bot_index]].team_index != team_index)",
@@ -55,11 +58,13 @@ def generated(fault=None):
         code += function(manager, name) + "\n"
     for name in ("bots_machine_is_bot", "bots_network_player"):
         code += function(bots, name) + "\n"
+    director = read("port/linux/game/bots_director.c").replace('#include "bots_director.h"', "")
+    code += director + "\n"
     lobby = function(server, "network_game_server_port_bots")
     if fault:
         lobby = mutated(lobby, *fault)
     code += lobby + "\n"
-    return (("config.inc", config), ("under_test.inc", code))
+    return (("config.inc", config), ("bots_director.h", read("port/linux/game/bots_director.h")), ("under_test.inc", code))
 
 
 @pytest.mark.parametrize("case", CASES)

@@ -23,6 +23,8 @@ typedef unsigned short word;
 
 #include "config.inc"
 
+#include "bots_director.h"
+
 #define MAXIMUM_NETWORK_MACHINE_COUNT HALO_PORT_MAXIMUM_NETWORK_MACHINES
 #define MAXIMUM_NETWORK_PLAYER_COUNT HALO_PORT_MAXIMUM_NETWORK_PLAYERS
 #define NETWORK_GAME_PLAYER_SLOTS HALO_PORT_MAXIMUM_NETWORK_PLAYERS
@@ -58,6 +60,26 @@ static boolean network_game_is_splitscreen_local(void) { return local_game; }
 static long bots_wanted_count(void) { return wanted; }
 static short bots_teams(void) { return teams_setting; }
 static boolean network_game_player_slot_held(long player_index) { (void)player_index; return FALSE; }
+/* the hosted game's: bots.online, bots.objectives, how many the director wants, the host's change clock and its asks, and the messages a game in progress is told */
+static boolean online_setting;
+static boolean objectives_setting;
+static long hosted_wanted_value;
+static boolean change_allowed_value;
+static long joined_messages, removed_messages;
+static unsigned long clock_ms;
+static boolean bots_online_enabled(void) { return online_setting; }
+static boolean bots_game_allowed(long game_engine_index)
+{
+	return game_engine_index == game_engine_slayer ||
+		(objectives_setting && (game_engine_index == game_engine_ctf || game_engine_index == game_engine_oddball || game_engine_index == game_engine_king));
+}
+static long bots_hosted_wanted(long humans, long maximum_players, long bots_present) { (void)humans; (void)maximum_players; (void)bots_present; return hosted_wanted_value; }
+static boolean bots_host_change_allowed(long milliseconds, long grace) { (void)milliseconds; (void)grace; return change_allowed_value; }
+static long bots_host_take_drop(void) { return NONE; }
+static boolean bots_host_take_add(long *team, short *skill) { *team = NONE; *skill = NONE; return TRUE; }
+static void bots_set_skill(long bot_index, short skill) { (void)bot_index; (void)skill; }
+static unsigned long system_milliseconds(void) { return clock_ms; }
+static boolean network_game_server_send_player_joined_info_ingame(struct network_game_server *server, struct network_player *player) { (void)server; (void)player; joined_messages++; return TRUE; }
 static void get_unique_random_color(struct network_game_server *server, struct network_player *player)
 {
 	(void)server;
@@ -70,11 +92,22 @@ static boolean network_game_server_send_game_data_pregame(struct network_game_se
 	return TRUE;
 }
 
+/* (a bot leaves a game in progress: every machine told, the server's list drops it: network_game_server_remove_bot_ingame's own work) */
+static void network_game_server_remove_bot_ingame(struct network_game_server *server, struct network_player *player);
+
 /* (the game's own code, as its build compiles it: a char index, a char
 machine index against the session's 128) */
 #pragma clang diagnostic ignored "-Wchar-subscripts"
 #pragma clang diagnostic ignored "-Wtautological-constant-out-of-range-compare"
 #include "under_test.inc"
+
+static void network_game_server_remove_bot_ingame(struct network_game_server *server, struct network_player *player)
+{
+	struct network_player leaving = *player;
+
+	removed_messages++;
+	network_game_remove_player(&server->game, &leaving);
+}
 
 static struct network_game_server server;
 
@@ -92,6 +125,11 @@ static void lobby(short game_engine_index, long maximum)
 	local_game = TRUE;
 	teams_setting = _bots_teams_even;
 	sends = 0;
+	online_setting = FALSE;
+	objectives_setting = FALSE;
+	hosted_wanted_value = 0;
+	change_allowed_value = TRUE;
+	joined_messages = removed_messages = 0;
 }
 
 /* a player of this machine (0) on the team */
@@ -277,6 +315,99 @@ int main(int argc, char **argv)
 		server.game.variant.game_engine_index = game_engine_king;
 		network_game_server_port_bots(&server);
 		CHECK(bots_in(&team0, &team1) == 0, "%ld bots stayed for King of the Hill", bots_in(&team0, &team1));
+		return 0;
+	}
+	/* with bots.objectives the games that have an objective take bots too (capture the flag, oddball, king), race never */
+	CASE("objectives-games")
+	{
+		lobby(game_engine_ctf, 16);
+		player(0, 0);
+		wanted = 4;
+		objectives_setting = TRUE;
+		network_game_server_port_bots(&server);
+		CHECK(bots_in(&team0, &team1) == 4, "%ld bots in CTF with objectives on", bots_in(&team0, &team1));
+		server.game.variant.game_engine_index = game_engine_king;
+		network_game_server_port_bots(&server);
+		CHECK(bots_in(&team0, &team1) == 4, "%ld bots in king", bots_in(&team0, &team1));
+		server.game.variant.game_engine_index = game_engine_race;
+		network_game_server_port_bots(&server);
+		CHECK(bots_in(&team0, &team1) == 0, "%ld bots stayed for a race", bots_in(&team0, &team1));
+		return 0;
+	}
+	/* a hosted game with bots.online off has none, as ever */
+	CASE("hosted-off")
+	{
+		lobby(game_engine_slayer, 16);
+		player(0, 0);
+		local_game = FALSE;
+		hosted_wanted_value = 5;
+		network_game_server_port_bots(&server);
+		CHECK(bots_in(&team0, &team1) == 0 && sends == 0, "%ld bots in a hosted game with bots.online off", bots_in(&team0, &team1));
+		return 0;
+	}
+	/* a hosted lobby (bots.online) fills up to what the director wants, the humans counted for the teams; the humans pushing out: fewer wanted, fewer stay */
+	CASE("hosted-lobby")
+	{
+		lobby(game_engine_slayer, 16);
+		player(0, 0);
+		player(1, 0);
+		local_game = FALSE;
+		online_setting = TRUE;
+		hosted_wanted_value = 5;
+		network_game_server_port_bots(&server);
+		count = bots_in(&team0, &team1);
+		CHECK(count == 5 && server.game.player_count == 7, "%ld bots, %d players", count, server.game.player_count);
+		CHECK(team1 - (team0 + 2) <= 1 && (team0 + 2) - team1 <= 1, "teams of %ld and %ld", team0 + 2, team1);
+		CHECK(sends == 1, "the lobby sent %ld times", sends);
+		hosted_wanted_value = 2;
+		network_game_server_port_bots(&server);
+		CHECK(bots_in(&team0, &team1) == 2 && sends == 2, "%ld bots when the humans pushed them out", bots_in(&team0, &team1));
+		return 0;
+	}
+	/* a game in progress: one bot added or removed at a time, each told to the machines, and only when the change clock allows it */
+	CASE("hosted-ingame")
+	{
+		lobby(game_engine_slayer, 16);
+		player(0, 0);
+		local_game = FALSE;
+		online_setting = TRUE;
+		server.state = _network_game_server_state_ingame;
+		hosted_wanted_value = 3;
+		change_allowed_value = FALSE;
+		network_game_server_port_bots(&server);
+		CHECK(bots_in(&team0, &team1) == 0 && joined_messages == 0, "a bot joined before the change clock allowed it");
+		change_allowed_value = TRUE;
+		network_game_server_port_bots(&server);
+		CHECK(bots_in(&team0, &team1) == 1 && joined_messages == 1, "%ld bots, %ld messages after one change", bots_in(&team0, &team1), joined_messages);
+		network_game_server_port_bots(&server);
+		network_game_server_port_bots(&server);
+		network_game_server_port_bots(&server);
+		CHECK(bots_in(&team0, &team1) == 3 && joined_messages == 3, "%ld bots, %ld messages for 3", bots_in(&team0, &team1), joined_messages);
+		CHECK(sends == 0, "a game in progress sent the lobby's settings");
+		hosted_wanted_value = 1;
+		network_game_server_port_bots(&server);
+		CHECK(bots_in(&team0, &team1) == 2 && removed_messages == 1, "%ld bots, %ld removals after one change", bots_in(&team0, &team1), removed_messages);
+		network_game_server_port_bots(&server);
+		network_game_server_port_bots(&server);
+		CHECK(bots_in(&team0, &team1) == 1 && removed_messages == 2, "%ld bots, %ld removals for 1", bots_in(&team0, &team1), removed_messages);
+		/* (the game's room: no bot past a full game) */
+		hosted_wanted_value = 9;
+		server.game.maximum_players = 3;
+		network_game_server_port_bots(&server);
+		network_game_server_port_bots(&server);
+		CHECK(server.game.player_count <= 3, "%d players in a game of 3", server.game.player_count);
+		return 0;
+	}
+	/* a hosted game in progress with bots.online off: no bot is added to it */
+	CASE("hosted-ingame-off")
+	{
+		lobby(game_engine_slayer, 16);
+		player(0, 0);
+		local_game = FALSE;
+		server.state = _network_game_server_state_ingame;
+		hosted_wanted_value = 3;
+		network_game_server_port_bots(&server);
+		CHECK(bots_in(&team0, &team1) == 0 && joined_messages == 0, "a bot joined a hosted game with bots.online off");
 		return 0;
 	}
 	/* nothing changes once the game is started, nor in the game */
