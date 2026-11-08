@@ -77,7 +77,9 @@ def smoke(head, arguments, results):
     screen), the D-pad and A pressed on the game's own test input; the log's `screens:` lines say what each screen opened with, and which provider (the game's roster with the
     social backend). There is no network (the run has none), so the layer is up with no broker: the service reads CONNECTING and the lists are empty."""
     for name, screen, buttons in (("friends", f"{SOCIAL}/friends_screen", "wait,wait,right,right,a,wait,down,down,a,b,b"), ("players", f"{SOCIAL}/players_screen", "wait,wait,down,a,b,b"),
-                                  ("add", f"{SOCIAL}/add/friend_add_screen", "wait,wait,a,b")):
+                                  ("add", f"{SOCIAL}/add/friend_add_screen", "wait,wait,a,b"),
+                                  # (the screen a friend's JOIN opens, by the name menu_screens.inl opens it with: the Direct Link list)
+                                  ("join", "main_menu/multiplayer_type_select/join_game/join_game_screen", "wait,wait")):
         extra = dict(OFF, HALO_SCREENS="2", HALO_MENU_OPEN=screen, HALO_TEST_INPUT=f"menu:{buttons}")
         run = start(head, f"wire-smoke-{name}", "menu", arguments.frames, extra, {})
         digest.finish(*run)
