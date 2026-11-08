@@ -700,6 +700,11 @@ static const struct config_setting config_settings[] =
 	{ "bots.teams", _config_string, "\"even\"", "HALO_BOT_TEAMS", _environment_value, _platform_all,
 		"In team games: \"even\" puts the bots on both teams, evening them with\n"
 		"the players; \"against\" puts them all on the team the players are not on." },
+	{ "screens.enable", _config_integer, "0", "HALO_SCREENS", _environment_value, _platform_all,
+		"The social screens (Players page, bot settings, Friends, toasts, the GamePad's social view):\n"
+		"0 none (nothing of them exists in the menus or the game), 1 the screens with made-up players,\n"
+		"friends, a party and toasts (for looking at them with no network), 2 the screens fed by the\n"
+		"game's own players and whatever friends service the build has (an empty Friends screen if none)." },
 	{ "bots.max", _config_integer, "15", "HALO_BOTS_MAX", _environment_value, _platform_all,
 		"The most bots there may be, 0 to 15: bots.count asks for no more than this. 15 is the game's own\n"
 		"most (a split screen game is 16 players with one of them yours)." },
