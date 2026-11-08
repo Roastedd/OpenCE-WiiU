@@ -45,6 +45,12 @@ long long wiiu_tick_part_now(void)
 	return (long long)OSGetSystemTime();
 }
 
+/* the time base in microseconds (the bots' cost counts, port/linux/game/bots.c) */
+long long wiiu_microseconds_now(void)
+{
+	return (long long)OSTicksToMicroseconds(OSGetSystemTime());
+}
+
 /* the start of a tick: the time, and the counters of the core the tick runs on */
 long long wiiu_tick_begin(void)
 {

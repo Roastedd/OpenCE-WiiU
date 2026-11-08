@@ -37,10 +37,15 @@ int bots_machine_is_bot(long machine_index);
 controller, name and no team or colour yet */
 void bots_network_player(long bot_index, struct network_player *player);
 
-/* the game tick (players_update_before_game): every bot's controls this
-tick, into the actions of the players by their index; nothing outside a
-local game */
-void bots_update_actions(struct player_action *actions);
+/* the bots' tick (update_server_next_update, player_queues_new.c), once for each update the server builds and before it is built:
+every bot decides its controls this tick. They are taken by bots_fill_action, into the queue of the bot's player. Nothing
+outside a local game. */
+void bots_tick(void);
+/* the controls the bots' tick built for the player with that index (the player's absolute index): TRUE and the action, or FALSE
+for a player that is no bot's */
+boolean bots_fill_action(long player_index, struct player_action *action);
+/* one bot's own skill level, by its number (0 up), from now on; NONE: the setting's again (bots.skill) */
+void bots_set_skill(long bot_index, short skill);
 
 /* a map's start and end (players.c) */
 void bots_initialize_for_new_map(void);

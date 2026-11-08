@@ -4874,9 +4874,6 @@ void players_update_before_game(
 	/* port: or the main menu's scene's idle players (players_idle_actions) */
 	if (update_client_dequeue(actions) || players_idle_actions(actions))
 	{
-		/* port: the controls of a local game's bots this tick
-		(port/linux/game/bots.c), in place of what their queues held */
-		bots_update_actions(actions);
 		data_iterator_new(&iterator, player_data);
 		while (player = data_iterator_next(&iterator))
 		{
