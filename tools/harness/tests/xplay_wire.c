@@ -10,6 +10,8 @@ equal. */
 
 #include "xplay_common.h"
 #include "network_distributed.c"
+#include "network_shield_effects.c"
+#include "network_aim_assist.c"
 #include "xplay_layouts_distributed.inc"
 #include "xplay_layouts_objects.inc"
 #include "xplay_layouts_damage.inc"
@@ -39,6 +41,13 @@ boolean network_distributed_client_send(void *message, word size)
 {
 	memcpy(sent_unreliable, message, size);
 	sent_unreliable_size = size;
+	return TRUE;
+}
+
+boolean network_distributed_server_send_to_machine_reliably(long machine_index, void *message, word size)
+{
+	memcpy(sent_reliable, message, size);
+	sent_reliable_size = size;
 	return TRUE;
 }
 
@@ -437,6 +446,43 @@ static void test_packed_messages(void)
 		"the relayed actions' update is %02x%02x%02x%02x, not 3d2c1b0a", out[16], out[17], out[18], out[19]);
 }
 
+/* the messages whose own code turns their words before they go: the host's shield effects choice and its aim assist policy,
+and the messages of bytes with no entries (the game state's and notices' are bytes, a header alone for the object sync and the
+client's ready) */
+static void test_policy_messages(void)
+{
+	struct shield_effects_message shield;
+	struct aim_assist_policy_message policy;
+	unsigned char out[64];
+
+	memset(&shield, 0, sizeof(shield));
+	shield_effects_message_make(&shield, 0x1203);
+	sent_reliable_size = 0;
+	distributed_send_to_machine_reliably(0, &shield, _distributed_message_shield_effects, 1, (word)sizeof(shield));
+	XPLAY_CHECK(sent_reliable_size == (long)sizeof(shield) && sent_reliable[8] == 0x03 && sent_reliable[9] == 0x12 &&
+		sent_reliable[10] == 0 && sent_reliable[11] == 0, "shield effects: the choice is %02x%02x on the wire, not 0312", sent_reliable[8],
+		sent_reliable[9]);
+	memcpy(out, sent_reliable, (size_t)sent_reliable_size);
+	byte_swap_message_header((word *)out, _byte_order_network);
+	xplay_hex("shield_effects", out, sent_reliable_size);
+
+	memset(&policy, 0, sizeof(policy));
+	policy.block_mouse = 0x0102;
+	aim_assist_policy_message_wire_order(&policy);
+	sent_reliable_size = 0;
+	distributed_send_to_machine_reliably(0, &policy, _distributed_message_aim_assist_policy, 1, (word)sizeof(policy));
+	XPLAY_CHECK(sent_reliable_size == (long)sizeof(policy) && sent_reliable[8] == 0x02 && sent_reliable[9] == 0x01,
+		"aim assist policy: the word is %02x%02x on the wire, not 0201", sent_reliable[8], sent_reliable[9]);
+	memcpy(out, sent_reliable, (size_t)sent_reliable_size);
+	byte_swap_message_header((word *)out, _byte_order_network);
+	xplay_hex("aim_assist_policy", out, sent_reliable_size);
+}
+
+static const struct xplay_structure bytes_only[] = {
+	{ "bytes", 0, NULL, 0 },
+	{ "bytes", 37, NULL, 0 },
+};
+
 int main(int argc, char **argv)
 {
 	long index;
@@ -454,6 +500,11 @@ int main(int argc, char **argv)
 		}
 		test_entries(messages[index].type, messages[index].name, entry, messages[index].count ? messages[index].count : 2);
 	}
+	test_entries(_distributed_message_objects_synchronized, "objects_synchronized", &bytes_only[0], 0);
+	test_entries(_distributed_message_client_ready, "client_ready", &bytes_only[0], 1);
+	test_entries(_distributed_message_game_state, "game_state", &bytes_only[1], 0);
+	test_entries(_distributed_message_notice, "notice", &bytes_only[1], 0);
+	test_policy_messages();
 	test_unit_state();
 	test_relayed_action();
 	test_packed_messages();

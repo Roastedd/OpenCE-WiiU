@@ -37,6 +37,8 @@ NEGATIVE_CONTROLS = {
     "header-game-time-not-turned": ("port/linux/game/network_distributed.c", "\tNETWORK_WIRE(header->game_time);\n\tdistributed_wire_entries",
                                     "\tdistributed_wire_entries"),
     "batch-length-not-turned": ("port/linux/game/network_distributed.c", "\tNETWORK_WIRE(wire_length);\n", ""),
+    "shield-effects-not-turned": ("port/linux/game/network_shield_effects.c", "\tNETWORK_WIRE(message->effects);\n", ""),
+    "aim-assist-policy-not-turned": ("port/linux/game/network_aim_assist.c", "    NETWORK_WIRE(message->block_mouse);\n", ""),
     "relayed-update-not-turned": ("port/linux/game/network_distributed.c",
                                   "\t\t\tnetwork_wire_values(entries, sizeof(long), sizeof(long));\n", ""),
 }
