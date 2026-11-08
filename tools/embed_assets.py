@@ -25,6 +25,7 @@ assembly through tools/android_asm_convert.py, which rewrites identifiers in
 operands (it keeps .ascii strings as they are, but once garbled them).
 """
 
+import hashlib
 import json
 import struct
 import sys
@@ -57,6 +58,9 @@ WINDOW_ICON = Path("port/assets/icon/opence-icon-256.png")
 # the pointer the menus show in place of the system's (port/linux/src/sdl_platform.c)
 MENU_CURSOR = Path("port/assets/cursor/menu_cursor.png")
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+# the Wii U's smaller copies of the largest HUD sheets (tools/wiiu_hud_sheets.py), embedded in their place by --wiiu
+WIIU_ASSETS = Path("port/assets/wiiu")
+WIIU_SHEETS = WIIU_ASSETS / "sheets.json"
 
 
 def font_files() -> List[str]:
@@ -101,6 +105,35 @@ def hud_asset_inputs() -> List[Path]:
             *(SMAA_ASSETS / name for name, _ in smaa_files()),
             *([WINDOW_ICON] if (ROOT / WINDOW_ICON).is_file() else []),
             *([MENU_CURSOR] if (ROOT / MENU_CURSOR).is_file() else [])]
+
+
+def wiiu_sheets() -> dict:
+    """The Wii U's smaller copies by the name of the sheet each stands for: the entry tools/wiiu_hud_sheets.py wrote (how, the sheet's size and the copy's,
+    the SHA-256 of the sheet it was made from)."""
+    if not (ROOT / WIIU_SHEETS).is_file():
+        return {}
+    return {sheet["name"]: sheet for sheet in json.loads((ROOT / WIIU_SHEETS).read_text())["assets"]}
+
+
+def wiiu_sheet_inputs() -> List[Path]:
+    """The Wii U's smaller copies of HUD sheets and the list that describes them (what --wiiu is made from besides hud_asset_inputs)."""
+    if not (ROOT / WIIU_SHEETS).is_file():
+        return []
+    return [WIIU_SHEETS, *(WIIU_ASSETS / f"{name}.png" for name in wiiu_sheets())]
+
+
+def wiiu_sheet_data(sheet: dict, source: bytes, source_size: tuple) -> bytes:
+    """The PNG of a sheet's copy for the Wii U. It stops if the sheet has changed since the copy was made, or the copy is not the size the list says: the copy
+    is committed, and a stale one would draw a sheet that is no longer the game's."""
+    name = sheet["name"]
+    if hashlib.sha256(source).hexdigest() != sheet["source_sha256"]:
+        sys.exit(f"{name}: the sheet has changed since port/assets/wiiu/{name}.png was made: python3 tools/wiiu_hud_sheets.py build")
+    if source_size != (sheet["source_width"], sheet["source_height"]):
+        sys.exit(f"{name}: the sheet is {source_size[0]}x{source_size[1]}, not the {sheet['source_width']}x{sheet['source_height']} its copy was made from")
+    data = (ROOT / WIIU_ASSETS / f"{name}.png").read_bytes()
+    if png_size(data, f"{name} (Wii U copy)") != (sheet["width"], sheet["height"]):
+        sys.exit(f"{name}: port/assets/wiiu/{name}.png is not the {sheet['width']}x{sheet['height']} that sheets.json says")
+    return data
 
 
 def hud_configure_inputs() -> List[Path]:
@@ -227,6 +260,7 @@ def main() -> None:
         "",
     ]
     table = []
+    wiiu_copies = wiiu_sheets() if wiiu else {}
     custom_edition = {}
     if (ROOT / CUSTOM_EDITION_HUD).is_file():
         custom_edition = {(entry["tag"], entry["bitmap"]): entry
@@ -238,6 +272,10 @@ def main() -> None:
         scale = asset["scale"]
         if (width, height) != (asset["width"] * scale, asset["height"] * scale):
             sys.exit(f"{name}: {width}x{height}, not {scale}x its bitmap's {asset['width']}x{asset['height']}")
+        # (the Wii U: a smaller copy of the largest sheets, in the table as the sheet it stands for: its width and height are the sheet's, which the bitmap's
+        # size was checked against above, and the image the game thread decodes is the copy, which it draws with the v coordinate of the sheet: wiiu_hud_sheet.h)
+        if wiiu and asset["name"] in wiiu_copies:
+            data = wiiu_sheet_data(wiiu_copies[asset["name"]], data, (width, height))
         lines.append(f"static const unsigned int asset{index}[] = {{")
         lines.extend(words(data))
         lines.append("};")

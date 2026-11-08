@@ -221,6 +221,7 @@ struct xgpu_texture_description
 	BOOL hires;         /* a high-res HUD texture drawn in the texture's place (hud_hires.h) */
 	BOOL hires_coverage; /* ... whose green is its coverage (a meter's) */
 	BOOL hires_point_threshold; /* ... whose red holds discrete segment data */
+	float hires_v_scale; /* ... drawn from a copy of the sheet cut below its last used row (wiiu_hud_sheet.h): the multiplier of v, 0 for none (the Wii U's) */
 	BOOL ce_meter_channels;
 };
 

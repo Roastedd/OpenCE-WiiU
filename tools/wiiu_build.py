@@ -45,7 +45,7 @@ from .linux_build import (EXPAT_DIR, EXPAT_SOURCES, GAME_FLAGS, KCP_DIR, LINUX_A
                           compile_launcher, configuration_defines, game_defines_and_includes, game_sources, miniupnpc_sources,
                           linux_configure_inputs, musl_math_cflags, musl_math_sources, opus_cflags,
                           opus_sources, updater_defines, xdk_headers)
-from .embed_assets import hud_asset_inputs
+from .embed_assets import hud_asset_inputs, wiiu_sheet_inputs
 from .ninja_syntax import Writer
 
 LINUX_DIR = Path("port/linux")
@@ -407,7 +407,7 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
     # the high-res HUD's, the menus' titles' and buttons' pictures, the fonts and the menus' files: big-endian words, from tools/embed_assets.py --wiiu
     assets_source = build_dir / "generated" / "hud_assets.c"
     n.rule(name="wiiu_embed_assets", command="$python tools/embed_assets.py $out --wiiu", description="WIIU EMBED $out")
-    n.build(outputs=assets_source, rule="wiiu_embed_assets", implicit=[Path("tools/embed_assets.py"), *hud_asset_inputs()])
+    n.build(outputs=assets_source, rule="wiiu_embed_assets", implicit=[Path("tools/embed_assets.py"), *hud_asset_inputs(), *wiiu_sheet_inputs()])
     add_object(assets_source, f"{platform_cflags} -I{platform_dir}")
     for source in sorted((MBEDTLS_DIR / "library").glob("*.c")):
         if _is_excluded(source):

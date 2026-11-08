@@ -3019,6 +3019,9 @@ static BOOL stage_facts_make(int stage, const unsigned long serials[STAGE_SERIAL
 				made.scale[0] = 1.0f / (float)description.width;
 				made.scale[1] = 1.0f / (float)description.height;
 			}
+			/* (a sheet drawn from a copy cut below its last used row: the game's v finds the same texel through the sheet's height over the copy's, wiiu_hud_sheet.h) */
+			if (description.hires_v_scale > 0.0f)
+				made.scale[1] *= description.hires_v_scale;
 		}
 		made.present = 1;
 		made.kind = (uint32_t)kind;

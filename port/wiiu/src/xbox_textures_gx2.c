@@ -34,6 +34,7 @@ a time, and only the atlas's rows that changed are sent again.
 #include "menu_files.h"
 #include "text_hires.h"
 #include "wiiu_png_chain.h"
+#include "wiiu_hud_sheet.h"
 #include "../../linux/game/cache_file_formats.h"
 
 /* (the high-res HUD's and the menus' PNGs come from hud_hires.c and menu_files.c, built without OpenGL here: hud_hires_png_pixels, menu_art_name, menu_art_png,
@@ -675,7 +676,11 @@ struct png_chain
 	unsigned long width, height, levels;
 	unsigned char *base, *rest;
 	unsigned long bytes;
+	/* (the milliseconds of the decoding and of the levels, for the log line of the HUD's sheets: hud_image) */
+	unsigned long decode_ms, mips_ms;
 };
+
+unsigned long system_milliseconds(void);
 
 static unsigned long png_level_count(unsigned long width, unsigned long height)
 {
@@ -704,12 +709,14 @@ static int png_chain_build(const void *png, unsigned long size, struct png_chain
 {
 	unsigned long level, rest_bytes = 0;
 	STARTUP_TIMER(decoding);
+	const unsigned long decode_started = system_milliseconds();
 
 	memset(chain, 0, sizeof(*chain));
 	chain->base = hud_hires_png_pixels(png, size, &chain->width, &chain->height);
 	STARTUP_ADD("png_decode", decoding, 1, chain->base ? chain->width * chain->height * 4 : 0);
 	if (!chain->base)
 		return 0;
+	chain->decode_ms = system_milliseconds() - decode_started;
 	chain->levels = png_level_count(chain->width, chain->height);
 	chain->bytes = chain->width * chain->height * 4;
 	/* (red first to blue first) */
@@ -719,6 +726,7 @@ static int png_chain_build(const void *png, unsigned long size, struct png_chain
 	if (rest_bytes)
 	{
 		STARTUP_TIMER(averaging);
+		const unsigned long mips_started = system_milliseconds();
 		const unsigned char *above = chain->base;
 		unsigned char *at;
 
@@ -740,6 +748,7 @@ static int png_chain_build(const void *png, unsigned long size, struct png_chain
 		}
 		STARTUP_ADD("png_mips", averaging, chain->levels - 1, rest_bytes);
 		chain->bytes += rest_bytes;
+		chain->mips_ms = system_milliseconds() - mips_started;
 	}
 	return 1;
 }
@@ -872,9 +881,16 @@ static int prepared_take(const void *png, unsigned long size, struct png_chain *
 	return found;
 }
 
+/* what the last image png_image made took, for the HUD's log line (the game thread's alone): the milliseconds of the decoding and of the levels (a chain made ahead
+says what its maker took), of the copies into pieces and the sending, and the bytes of the image with its levels */
+static struct
+{
+	unsigned long decode_ms, mips_ms, send_ms, send_started, bytes;
+} png_last;
+
 /* an image of a PNG (8-bit RGBA) with all its mip levels, as
 hud_hires_png_texture makes in GL: its number, or 0 */
-static uint32_t png_image(const void *png, unsigned long size, unsigned long *levels)
+static uint32_t png_image(const void *png, unsigned long size, unsigned long *levels, unsigned long *width_out, unsigned long *height_out)
 {
 	struct png_chain chain;
 	unsigned long level;
@@ -890,6 +906,14 @@ static uint32_t png_image(const void *png, unsigned long size, unsigned long *le
 		return 0;
 	}
 	*levels = chain.levels;
+	if (width_out)
+		*width_out = chain.width;
+	if (height_out)
+		*height_out = chain.height;
+	png_last.decode_ms = chain.decode_ms;
+	png_last.mips_ms = chain.mips_ms;
+	png_last.bytes = chain.bytes;
+	png_last.send_started = system_milliseconds();
 	image_make(id, chain.width, chain.height, chain.levels);
 	{
 		const unsigned char *at = chain.rest;
@@ -906,6 +930,7 @@ static uint32_t png_image(const void *png, unsigned long size, unsigned long *le
 		}
 	}
 	png_chain_free(&chain);
+	png_last.send_ms = system_milliseconds() - png_last.send_started;
 	STARTUP_ADD("png_all", whole, 1, 0);
 	return id;
 }
@@ -990,7 +1015,7 @@ static uint32_t menu_image(unsigned long data, unsigned long *levels)
 	if (!menu_images[menu_image_count].name)
 		return 0;
 	png = menu_art_png(name, &size);
-	menu_images[menu_image_count].id = png ? png_image(png, size, &menu_images[menu_image_count].levels) : 0;
+	menu_images[menu_image_count].id = png ? png_image(png, size, &menu_images[menu_image_count].levels, NULL, NULL) : 0;
 	if (!menu_images[menu_image_count].id)
 		platform_log("menus: could not draw %s", name);
 	*levels = menu_images[menu_image_count].levels;
@@ -1002,12 +1027,16 @@ static struct
 {
 	uint32_t id;
 	unsigned long levels;
+	/* the multiplier of v the image is drawn with: 1, or the sheet's height over the rows of the copy the Wii U embeds in its place (wiiu_hud_sheet.h) */
+	float v_scale;
 	BOOL tried;
 } *hud_images;
 
-unsigned long system_milliseconds(void);
+/* the sheets made (the log line of every HUD sheet says how many are held, and their bytes with their levels) */
+static unsigned hud_held_count;
+static unsigned long hud_held_bytes;
 
-static uint32_t hud_image(long asset, unsigned long *levels)
+static uint32_t hud_image(long asset, unsigned long *levels, float *v_scale)
 {
 	if (asset < 0 || asset >= (long)hud_hires_embedded_count)
 		return 0;
@@ -1024,20 +1053,36 @@ static uint32_t hud_image(long asset, unsigned long *levels)
 		logs. Said by name, once each, to tell which bitmap a hitch was, and how big the image the GX2 thread is to find memory for) */
 		static unsigned told;
 		const unsigned long started = system_milliseconds();
+		unsigned long width = 0, height = 0;
 
 		hud_images[asset].tried = TRUE;
-		hud_images[asset].id = png_image(embedded->png, embedded->png_size, &hud_images[asset].levels);
+		hud_images[asset].v_scale = 1.0f;
+		hud_images[asset].id = png_image(embedded->png, embedded->png_size, &hud_images[asset].levels, &width, &height);
 		if (!hud_images[asset].id)
 			platform_log("high-res hud: could not decode the texture for %s bitmap %d", embedded->tag,
 				embedded->bitmap);
-		else if (told < 80)
+		else
 		{
-			told++;
-			platform_log("high-res hud: image %u made for %s bitmap %d (the game's bitmap is %ux%u; the image has %lu levels) in %lu ms", (unsigned)hud_images[asset].id, embedded->tag,
-				embedded->bitmap, embedded->width, embedded->height, hud_images[asset].levels, system_milliseconds() - started);
+			/* (the Wii U embeds a smaller copy of some sheets: the table has the sheet's size, the image its own) */
+			if (wiiu_hud_sheet_fits(embedded->width, embedded->height, width, height))
+				hud_images[asset].v_scale = wiiu_hud_sheet_v_scale(embedded->width, embedded->height, width, height);
+			else
+				platform_log("high-res hud: the image for %s bitmap %d is %lux%lu, which does not stand for its sheet's %ux%u: drawn unscaled", embedded->tag,
+					embedded->bitmap, width, height, embedded->width, embedded->height);
+			hud_held_count++;
+			hud_held_bytes += png_last.bytes;
+			if (told < 80)
+			{
+				told++;
+				platform_log("high-res hud: image %u made for %s bitmap %d (the game's bitmap is %ux%u; the image is %lux%lu with %lu levels, v scale %g) in %lu ms: decode %lu, levels %lu, send %lu; %u held, %lu KB",
+					(unsigned)hud_images[asset].id, embedded->tag, embedded->bitmap, embedded->width, embedded->height, width, height, hud_images[asset].levels,
+					(double)hud_images[asset].v_scale, system_milliseconds() - started, png_last.decode_ms, png_last.mips_ms, png_last.send_ms, hud_held_count, hud_held_bytes >> 10);
+			}
 		}
 	}
 	*levels = hud_images[asset].levels;
+	if (v_scale)
+		*v_scale = hud_images[asset].v_scale;
 	return hud_images[asset].id;
 }
 
@@ -1130,6 +1175,7 @@ its coordinates are in; *atlas: whether it is the text's atlas */
 static uint32_t texture_entry_result(struct texture_entry *entry, int *kind, struct xgpu_texture_description *description, int *atlas)
 {
 	unsigned long levels = 1;
+	float v_scale = 1.0f;
 	uint32_t id;
 
 	*kind = (int)entry->kind;
@@ -1162,21 +1208,23 @@ static uint32_t texture_entry_result(struct texture_entry *entry, int *kind, str
 	{
 		const long asset = hud_hires_placeholder_asset(entry->data);
 
-		if (asset >= 0 && (id = hud_image(asset, &levels)) != 0)
+		if (asset >= 0 && (id = hud_image(asset, &levels, &v_scale)) != 0)
 		{
 			*kind = DK_TEXTURE_2D;
 			description->levels = levels;
 			description->hires = TRUE;
+			description->hires_v_scale = v_scale;
 			description->hires_coverage = hud_hires_override_coverage(asset);
 			description->hires_point_threshold = hud_hires_override_point_threshold(asset);
 			return id;
 		}
 	}
-	if (entry->override >= 0 && (id = hud_image(entry->override, &levels)) != 0)
+	if (entry->override >= 0 && (id = hud_image(entry->override, &levels, &v_scale)) != 0)
 	{
 		*kind = DK_TEXTURE_2D;
 		description->levels = levels;
 		description->hires = TRUE;
+		description->hires_v_scale = v_scale;
 		description->hires_coverage = hud_hires_override_coverage(entry->override);
 		description->hires_point_threshold = hud_hires_override_point_threshold(entry->override);
 		return id;
@@ -1295,7 +1343,7 @@ static uint32_t dk_texture_get_inner(const DWORD *resource, const D3DCOLOR *pale
 			entry->override = hud_hires_override_find(entry->address, entry->description.width,
 				entry->description.height, entry->description.levels > 1 ?
 				xgpu_texture_level_offset(&entry->description, 1) : xgpu_texture_face_size(&entry->description));
-			if (entry->override >= 0 && !hud_image(entry->override, &levels))
+			if (entry->override >= 0 && !hud_image(entry->override, &levels, NULL))
 				entry->override = -1;
 		}
 		if (entry->override < 0 && platform_is_contiguous((void *)entry->address) &&

@@ -228,6 +228,22 @@ class D3D8ReplayTest(unittest.TestCase):
             with self.subTest(fault=fault[1]):
                 self.assertNotEqual(self.mutated_digests([fault], [("sync", "lag", 1)])[0], reference)
 
+    def test_a_sheet_drawn_from_a_cropped_copy_carries_the_scaled_v(self):
+        # (the replay's HUD sheet is 16 x 8 in the table; REPLAY_HUD_PNG_HEIGHT=4 decodes a copy of its top 4 rows, as the Wii U embeds for the meters' and arrows'
+        # sheets: the stage's texture scale, which every draw carries to the GPU, has its v multiplied by 2 (wiiu_hud_sheet.h), and a layer that leaves it out draws
+        # another picture)
+        crop = {"REPLAY_HUD_PNG_HEIGHT": "4"}
+        fault = ("port/wiiu/src/d3d8_gx2.c", "made.scale[1] *= description.hires_v_scale;", "(void)description.hires_v_scale;")
+        with tempfile.TemporaryDirectory(prefix="opence-d3d8-replay-") as folder:
+            executable = self.build_in(folder)
+            cropped = [replay(executable, mode, schedule, seed, frames=300, environment=crop)["digest"] for mode, schedule, seed in SCHEDULES[:2]]
+            whole = replay(executable, "sync", "lag", 1, frames=300)["digest"]
+        with tempfile.TemporaryDirectory(prefix="opence-d3d8-replay-") as folder:
+            unscaled = replay(self.build_in(folder, [fault]), "sync", "lag", 1, frames=300, environment=crop)["digest"]
+        self.assertEqual(cropped[0], cropped[1])      # (the same pictures whichever way the streams run)
+        self.assertNotEqual(cropped[0], whole)        # (the copy's draws are not the sheet's: the scale, and the image)
+        self.assertNotEqual(cropped[0], unscaled)
+
     def test_a_stage_remembered_across_frames_keeps_a_texture_from_counting_as_used(self):
         # (the texture cache drops a texture no draw has looked up for 1800 frames: the one draw of the light frames must look its texture up each frame)
         fault = ("port/wiiu/src/d3d8_gx2.c", "serials[5] = device.frame;", "serials[5] = 0;")

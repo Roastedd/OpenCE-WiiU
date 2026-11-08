@@ -395,12 +395,40 @@ char *_strdup(const char *text)
 	return copy;
 }
 
+/* ---------- what the layer reads of the port's other units, answered as a run with no card and no clock: the card's numbers are their fallbacks, a render pass
+has no longest, and the start-up timeline and the millisecond clock run from a counter (the layer's log lines that print them are not hashed) */
+
+unsigned long system_milliseconds(void)
+{
+	static unsigned long now;
+
+	return now++;
+}
+
+unsigned long startup_timeline_since_ms(long long started)
+{
+	(void)started;
+	return 0;
+}
+
+long wiiu_study_number(const char *name, long fallback)
+{
+	(void)name;
+	return fallback;
+}
+
+const char *wiiu_render_pass_longest(double *milliseconds)
+{
+	*milliseconds = 0.0;
+	return NULL;
+}
+
 /* ---------- the high-res HUD (hud_hires.h): one texture, standing for the replay's HUD placeholder and for the bitmap at replay_hud_override_address */
 
 static const unsigned int hud_png[4] = { 0x89504e47, 1, 2, 3 };
 const struct hud_hires_embedded hud_hires_embedded[1] =
 {
-	{ .tag = "replay\\hud", .bitmap = 0, .width = 16, .height = 16, .png = hud_png, .png_size = sizeof(hud_png) },
+	{ .tag = "replay\\hud", .bitmap = 0, .width = 16, .height = 8, .png = hud_png, .png_size = sizeof(hud_png) },
 };
 const unsigned int hud_hires_embedded_count = 1;
 
@@ -419,19 +447,24 @@ unsigned long hud_hires_placeholder_serial(void)
 	return hud_placeholder_serial;
 }
 
-/* (a PNG is decoded to its size's texels, made from its first word: the replay's PNGs are only told apart) */
+/* (a PNG is decoded to its size's texels, made from its first word: the replay's PNGs are only told apart. 16 by 8, the table's size for the sheet; with
+REPLAY_HUD_PNG_HEIGHT in the environment a copy of that many rows, as the Wii U embeds for the sheets it cuts: wiiu_hud_sheet.h, whose multiplier of v the draws
+then carry) */
 unsigned char *hud_hires_png_pixels(const void *png, unsigned long size, unsigned long *width, unsigned long *height)
 {
 	unsigned char *pixels;
-	unsigned long index;
+	unsigned long index, rows = 8;
 	uint32_t seed = 0x1234567u ^ (uint32_t)size ^ *(const uint32_t *)png;
+	const char *copy = getenv("REPLAY_HUD_PNG_HEIGHT");
 
+	if (copy && atoi(copy) > 0 && atoi(copy) <= 8)
+		rows = (unsigned long)atoi(copy);
 	*width = 16;
-	*height = 8;
-	pixels = malloc(16 * 8 * 4);
+	*height = rows;
+	pixels = malloc(16 * rows * 4);
 	if (!pixels)
 		return NULL;
-	for (index = 0; index < 16 * 8 * 4; index++)
+	for (index = 0; index < 16 * rows * 4; index++)
 		pixels[index] = (unsigned char)replay_random(&seed);
 	return pixels;
 }
