@@ -443,6 +443,19 @@ with some bots for some ticks (the null renderer, `debug.fixed_step` and a pinne
 block into a result, and compares two runs; `python3 tools/harness/bots_sim.py run
 --map bloodgulch --bots 6 --ticks 3600 --out DIR`.
 
+Each bot has a profile of its own (`game/bots_profile.c`): the skill level it
+plays at, which follows `bots.skill` unless the bot has been given one of its own,
+and a temperament that is not read yet. The bots decide in
+`update_server_next_update`, before the tick's update is built, and their controls
+are queued as a player's are (`bots_tick`, `bots_fill_action`): one place where
+bots enter the game, which the update, a host's relay and a client's prediction
+treat as any player's. The bots have a budget of the tick (`game/bots_budget.c`,
+`bots.budget_us` or, counted in work done and the same every run, `bots.budget_credit`)
+and a cap on their number (`bots.max`): over the budget, they look half as often,
+decide half as often, search paths every other tick, and the farthest from the
+players hold their controls, in that order. With no budget set, which is the
+default, nothing is limited or shed and the log's `bots: budget:` line says so.
+
 ## OpenCE gametypes
 
 Create Game's Select Gametype screen has a bank between STANDARD and
@@ -604,6 +617,10 @@ the setting for one start of the game. It has priority over the file.
 | `bots.count` | `0` | `HALO_BOTS` | Computer players (bots) in a local (split screen) Slayer game: `0` to `15` join its lobby with the players, as far as the game has room. Not in system link or internet games. `0`: none, as in the stock game. Refer to "Bots". |
 | `bots.skill` | `"normal"` | `HALO_BOT_SKILL` | How well the bots play: `"recruit"`, `"easy"`, `"normal"`, `"heroic"`, `"veteran"` or `"legendary"`: how soon they react, how far and how wide they see, how large their aim error is and how fast it settles, how fast they turn, and how they fight. `"easy"`, `"normal"`, `"heroic"` and `"legendary"` keep their numbers; `"recruit"` is below `"easy"`, and `"veteran"` halfway from `"heroic"` to `"legendary"`. Refer to "Bots". |
 | `bots.teams` | `"even"` | `HALO_BOT_TEAMS` | In a team game: `"even"` puts the bots on both teams, evening them with the players; `"against"` puts them all on the team the players are not on. |
+| `bots.max` | `15` | `HALO_BOTS_MAX` | The most bots there may be, `0` to `15`: `bots.count` asks for no more than this. |
+| `bots.budget_us` | `0` | `HALO_BOTS_BUDGET_US` | The most microseconds that one tick of all the bots may cost. Over it the bots look half as often, decide half as often, search paths every other tick, and the farthest hold their controls, in that order, until the cost is back under 2/5 of it. `0`: no budget, nothing limited or shed (the cost is only counted in the log). |
+| `bots.budget_credit` | `0` | `HALO_BOTS_BUDGET_CREDIT` | The same budget counted in units of work (a sight test 80, a path node 5, a goal decision 200), which is the same every run: for tests. Used before `bots.budget_us`. `0`: none. |
+| `debug.bots_skills` | `""` | `HALO_BOTS_SKILLS` | Each bot's own skill level by its place in the list (`"legendary,recruit,,normal"`: the third follows `bots.skill`); for tests. Empty: all follow `bots.skill`. |
 | `bots.sim_ticks` | `0` | `HALO_BOTS_SIM_TICKS` | For automated runs (`tools/harness/bots_sim.py`): this many game ticks after the bots first play, the game says the `bots-sim:` block (each bot's frags, deaths, seconds stuck, path failures and think time) and ends the run. `0`: never. |
 | `paths.data` | `""` | `HALO_DATA_ROOT` | The data root. Refer to "Start the game". |
 | `paths.saves` | `""` | `HALO_SAVE_ROOT` | The save root. Refer to "Files and folders". |

@@ -147,3 +147,43 @@ def test_a_short_game_with_bots(work):
     # another seed: another game
     third, other = bots_sim.run("bloodgulch", "slayer", 3, "normal", 450, 8, RUNNER, work / "c")
     assert third["fingerprint"] != first["fingerprint"]
+
+
+@needs_game
+def test_each_bot_has_a_skill_of_its_own(work):
+    # debug.bots_skills gives bots 1 and 2 levels of their own; the third follows bots.skill
+    result, text = bots_sim.run("bloodgulch", "slayer", 3, "heroic", 1850, 7, RUNNER, work / "skills",
+                                environment={"HALO_BOTS_SKILLS": "legendary,recruit"})
+    assert [result["per_bot"][str(index)]["skill"] for index in (1, 2, 3)] == ["legendary", "recruit", "heroic"]
+    # (the minute line, a minute in, says "mixed" for bots at different levels)
+    assert "3 bots (mixed)" in text
+
+
+@needs_game
+def test_the_cap_on_bots_holds(work):
+    result, text = bots_sim.run("bloodgulch", "slayer", 4, "normal", 240, 7, RUNNER, work / "max",
+                                environment={"HALO_BOTS_MAX": "2"})
+    assert result["bots"] == 2
+
+
+@needs_game
+def test_a_budget_in_credit_sheds_in_order_and_the_same_every_run(work):
+    # a cap far under what the bots cost a tick: the shedding steps up three ticks at a time, to the top, and a bot fewer is asked for
+    settings = {"HALO_BOTS_BUDGET_CREDIT": "150"}
+    first, text = bots_sim.run("bloodgulch", "slayer", 4, "normal", 600, 7, RUNNER, work / "a", environment=settings)
+    steps = [int(line.split("step ")[1].split(" of")[0]) for line in text.splitlines() if "bots: budget: step" in line]
+    assert steps[:4] == [1, 2, 3, 4], f"the steps were {steps}"
+    assert "a bot fewer is asked for" in text
+    second, again = bots_sim.run("bloodgulch", "slayer", 4, "normal", 600, 7, RUNNER, work / "b", environment=settings)
+    if bots_sim.differences(text, again):
+        second, again = bots_sim.run("bloodgulch", "slayer", 4, "normal", 600, 7, RUNNER, work / "b2", environment=settings)
+    assert bots_sim.differences(text, again) == [], "the credit mode shed differently in two runs"
+    # and the game goes on: the bots still walk and fight at the top step
+    assert first["ticks"] == 600 and first["sight_tests"] > 0
+
+
+@needs_game
+def test_no_budget_changes_nothing(work):
+    # at the default (no budget) the log says so, and no step is taken however the bots cost
+    result, text = bots_sim.run("bloodgulch", "slayer", 4, "normal", 1850, 7, RUNNER, work / "off")
+    assert "bots: budget: off" in text and "bots: budget: step" not in text and "4 bots (normal)" in text

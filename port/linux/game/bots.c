@@ -5,9 +5,10 @@ Computer players (bots) for local multiplayer games (bots.count): the lobby
 of a local (split screen) Slayer game takes as many as the setting asks for
 (network_server_manager.c adds them), and each plays as a player does -
 spawns, respawns, scores, is in the scores and the game's rules - with its
-controls from here instead of a controller: the game tick takes every bot's
-action from bots_update_actions (players_update_before_game), where a
-player's comes from its pad. A bot has no view: nothing is drawn for it.
+controls from here instead of a controller: the server decides every bot's
+controls in bots_tick, when update_server_next_update (player_queues_new.c)
+builds a tick's update, and queues them (bots_fill_action) where it queues a
+player's from its pad. A bot has no view: nothing is drawn for it.
 
 What a bot does each tick, in a player's terms:
 
@@ -68,8 +69,7 @@ random numbers (seeded per bot and game), and its path searches run in the
 tick, so the bots do the same in two runs of the same input. Nothing of a
 bot is in the game state: multiplayer games are never saved. Bots are in
 local games only, which no other machine sees: no message of the network
-protocol changes, and bots_update_actions does nothing unless a local game
-runs. halo.log has the map's preparation and each minute of play's bots
+protocol changes, and bots_tick does nothing unless a local game runs. halo.log has the map's preparation and each minute of play's bots
 line: the searches and how many failed, the times a bot stood stuck, shots
 and each bot's kills and deaths; debug.bot_trace logs each bot's state.
 */
@@ -100,7 +100,9 @@ and each bot's kills and deaths; debug.bot_trace logs each bot's state.
 #include "tag_files/tag_files.h"
 
 #include "bots.h"
+#include "bots_budget.h"
 #include "bots_combat.h"
+#include "bots_profile.h"
 #include "bots_stats.h"
 
 #include <math.h>
@@ -342,6 +344,14 @@ struct bots_bot
 	/* the buttons held last tick (a press is a tick held, then released) */
 	unsigned long previous_control_flags;
 
+	/* its own skill and temperament (bots_profile.h) */
+	struct bots_profile profile;
+
+	/* the controls it built last, and the ticks it has held them for the budget (the shedding's top step) */
+	struct player_action last_action;
+	boolean last_action_valid;
+	short held_ticks;
+
 	struct bots_bot_combat combat;
 
 	/* (debug.bot_trace) its path searches */
@@ -359,14 +369,14 @@ static struct
 	real_point3d roam_points[BOTS_MAXIMUM_ROAM_POINTS];
 	long roam_surfaces[BOTS_MAXIMUM_ROAM_POINTS];
 	struct bots_bot bots[BOTS_MAXIMUM];
-	/* the skill setting, read once a tick for every bot */
-	short skill;
+	/* the skill setting (bots.skill), read once a tick for every bot: each bot's level is its profile's, which follows this
+	unless the bot has one of its own */
+	short setting_skill;
 	/* the fight's counts for halo.log */
 	long combat_counts[NUMBER_OF_BOTS_COMBAT_COUNTS];
 	/* the path search's state (80 KB: the engine's 1024 nodes, heap and
-	table), allocated once a game has bots; the searches made this tick */
+	table), allocated once a game has bots */
 	struct path_state *search;
-	long tick_searches;
 
 	/* the statistics of halo.log's line */
 	long ticks;
@@ -396,6 +406,23 @@ static struct
 	boolean sim_reported;
 	/* the clock at the first tick of bots (the run's time a tick) */
 	long long first_tick_microseconds;
+
+	/* the tick being built (see bots_now), the game's time when the last was, and the ticks built while the game stood still
+	(a frame that owed several ticks: they decide on the world as the frame found it) */
+	long now;
+	long world_time;
+	long stale_ticks;
+
+	/* the share of a tick the bots may take (bots_budget.c), and the cap on how many there may be */
+	struct bots_budget budget;
+	short maximum_bots;
+	/* bots.sim_ticks, read at the map's start */
+	long sim_ticks;
+	/* the bots in the farther half from the players this tick (those the top step holds) */
+	boolean far_from_humans[BOTS_MAXIMUM];
+	/* the controls built this tick, by the player's index (bots_fill_action takes them), and the tick they were built for */
+	struct player_action actions[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
+	boolean action_valid[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
 } bots_globals;
 
 /* the walkable surfaces the bots' searches read: a copy of the structure's
@@ -416,6 +443,18 @@ static struct
 	long roofed_count;
 	long scan_ticks;
 } bots_paths;
+
+/* ---------- the tick being built
+
+The bots decide in update_server_next_update (bots_tick), before the tick's update is built. A frame that owes several ticks
+builds several updates before the game runs the first of them, so the game's time stands still while they are built: a bot's
+clock is the tick it is building, which is the game's time for the first and one more for each after it (and the game's time
+again, whatever it is, once the world has moved on). Run one tick a frame (debug.fixed_step, a game that keeps up) the two
+are the same. */
+static long bots_now(void)
+{
+	return bots_globals.now;
+}
 
 /* ---------- the clock (the cost counts; and a budget in time: bots_budget.c) */
 
@@ -445,11 +484,20 @@ static long long bots_clock_microseconds(void)
 
 /* ---------- settings */
 
+/* the most bots there may be (bots.max, up to BOTS_MAXIMUM) */
+static long bots_maximum(void)
+{
+	long maximum = config_integer("bots.max");
+
+	return maximum < 0 ? 0 : maximum > BOTS_MAXIMUM ? BOTS_MAXIMUM : maximum;
+}
+
 long bots_wanted_count(void)
 {
 	long count = config_integer("bots.count");
 
-	return count < 0 ? 0 : count > BOTS_MAXIMUM ? BOTS_MAXIMUM : count;
+	count = count < 0 ? 0 : count > BOTS_MAXIMUM ? BOTS_MAXIMUM : count;
+	return count > bots_maximum() ? bots_maximum() : count;
 }
 
 short bots_skill(void)
@@ -802,7 +850,7 @@ static boolean bots_item_unreachable(struct bots_bot const *bot, long item_index
 
 	for (index = 0; index < BOTS_UNREACHABLE_ITEMS; index++)
 	{
-		if (bot->unreachable_item_indices[index] == item_index && game_time_get() < bot->unreachable_item_until_ticks[index])
+		if (bot->unreachable_item_indices[index] == item_index && bots_now() < bot->unreachable_item_until_ticks[index])
 			return TRUE;
 	}
 	return FALSE;
@@ -815,15 +863,15 @@ static void bots_item_set_unreachable(struct bots_bot *bot, long item_index)
 	/* (one remembered already: kept longer) */
 	for (slot = 0; slot < BOTS_UNREACHABLE_ITEMS; slot++)
 	{
-		if (bot->unreachable_item_indices[slot] == item_index && game_time_get() < bot->unreachable_item_until_ticks[slot])
+		if (bot->unreachable_item_indices[slot] == item_index && bots_now() < bot->unreachable_item_until_ticks[slot])
 		{
-			bot->unreachable_item_until_ticks[slot] = game_time_get() + TICKS_PER_SECOND * 30;
+			bot->unreachable_item_until_ticks[slot] = bots_now() + TICKS_PER_SECOND * 30;
 			return;
 		}
 	}
 	slot = bot->unreachable_item_next;
 	bot->unreachable_item_indices[slot] = item_index;
-	bot->unreachable_item_until_ticks[slot] = game_time_get() + TICKS_PER_SECOND * 30;
+	bot->unreachable_item_until_ticks[slot] = bots_now() + TICKS_PER_SECOND * 30;
 	bot->unreachable_item_next = (slot + 1) % BOTS_UNREACHABLE_ITEMS;
 }
 
@@ -1354,6 +1402,21 @@ static void bots_prepare_map(void)
 
 static void bots_report_sim(char const *why);
 
+/* the budget the settings ask for: the credit mode (bots.budget_credit, the same every run), else the clock mode
+(bots.budget_us), else none: nothing is limited and nothing shed (bots_budget.h) */
+static void bots_prepare_budget(void)
+{
+	long credit = config_integer("bots.budget_credit");
+	long microseconds = config_integer("bots.budget_us");
+
+	if (credit > 0)
+		bots_budget_initialize(&bots_globals.budget, _bots_budget_credit, credit, bots_globals.maximum_bots, BOTS_SEARCHES_A_TICK);
+	else if (microseconds > 0)
+		bots_budget_initialize(&bots_globals.budget, _bots_budget_clock, microseconds, bots_globals.maximum_bots, BOTS_SEARCHES_A_TICK);
+	else
+		bots_budget_initialize(&bots_globals.budget, _bots_budget_off, 0, bots_globals.maximum_bots, BOTS_SEARCHES_A_TICK);
+}
+
 void bots_initialize_for_new_map(void)
 {
 	long index;
@@ -1379,6 +1442,13 @@ void bots_initialize_for_new_map(void)
 	bots_globals.sim_reported = FALSE;
 	bots_globals.map_name[0] = 0;
 	bots_globals.first_tick_microseconds = 0;
+	bots_globals.now = 0;
+	bots_globals.world_time = NONE;
+	bots_globals.stale_ticks = 0;
+	bots_globals.maximum_bots = (short)bots_maximum();
+	bots_globals.sim_ticks = config_integer("bots.sim_ticks");
+	csmemset(bots_globals.action_valid, 0, sizeof(bots_globals.action_valid));
+	bots_prepare_budget();
 	/* (the first line a minute into the game) */
 	bots_globals.last_report_tick = 0;
 	/* (the weapon definitions are the new map's) */
@@ -1555,7 +1625,7 @@ static void bots_search(struct bots_bot *bot, long unit_index)
 	long start_surface_index;
 	boolean reached;
 
-	if (bots_globals.tick_searches >= BOTS_SEARCHES_A_TICK || bot->goal_surface_index == NONE)
+	if (!bots_budget_search_allowed(&bots_globals.budget) || bot->goal_surface_index == NONE)
 		return;
 	if (!bots_globals.search)
 	{
@@ -1573,12 +1643,12 @@ static void bots_search(struct bots_bot *bot, long unit_index)
 		!TEST_FLAG(bots_paths.walkable[start_surface_index], BOTS_PATHFINDING_WALKABLE_BIT) &&
 		bots_paths_escape_direction(&start, &bot->escape_direction))
 	{
-		bot->escape_until_tick = game_time_get() + TICKS_PER_SECOND;
+		bot->escape_until_tick = bots_now() + TICKS_PER_SECOND;
 		bot->path.valid = FALSE;
-		bot->path_tick = game_time_get();
+		bot->path_tick = bots_now();
 		return;
 	}
-	bots_globals.tick_searches++;
+	bots_budget_note_search(&bots_globals.budget);
 	bots_globals.searches++;
 	bot->searches++;
 	path_input_new(&input, BOTS_PATH_RADIUS, FALSE, unit_index);
@@ -1592,6 +1662,7 @@ static void bots_search(struct bots_bot *bot, long unit_index)
 	again from there) */
 	path_state_destination(state, &bot->goal_point, bot->goal_surface_index, 1000.0f);
 	path_state_find(state);
+	bots_budget_spend(&bots_globals.budget, state->node_count * BOTS_BUDGET_SEARCH_NODE);
 	reached = state->node_count > 0 && path_node_from_hash_table(state, bot->goal_surface_index) != NONE;
 	if (state->node_count >= PATH_NODE_LIST_SIZE)
 		bots_globals.search_overflows++;
@@ -1626,7 +1697,7 @@ static void bots_search(struct bots_bot *bot, long unit_index)
 		bot->goal_kind = _bots_goal_none;
 		bot->path.valid = FALSE;
 	}
-	bot->path_tick = game_time_get();
+	bot->path_tick = bots_now();
 }
 
 /* ---------- perception */
@@ -1641,6 +1712,7 @@ static boolean bots_line_of_sight(long unit_index, real_point3d const *eye, real
 	vector.j = point->y - eye->y;
 	vector.k = point->z - eye->z;
 	bots_globals.rays++;
+	bots_budget_spend(&bots_globals.budget, BOTS_BUDGET_SIGHT_TEST);
 	if (bots_globals.active_bot)
 		bots_globals.active_bot->counts.rays++;
 	if (!collision_test_vector(_collision_test_for_line_of_sight_flags, eye, &vector, unit_index, &collision))
@@ -1690,6 +1762,7 @@ static boolean bots_target_score(struct bots_bot *bot, struct player_datum *play
 	real distance, reach, bearing;
 	real half_view = 0.5f * skill->field_of_view_degrees * BOTS_DEGREES;
 
+	bots_budget_spend(&bots_globals.budget, BOTS_BUDGET_CANDIDATE);
 	if (!bots_is_enemy(player, other))
 		return FALSE;
 	object = object_get(other->unit_index);
@@ -1720,7 +1793,7 @@ static boolean bots_target_score(struct bots_bot *bot, struct player_datum *play
 		real dx = candidate->point.x - eye->x, dy = candidate->point.y - eye->y;
 		real elevation = (real)atan2(candidate->point.z - eye->z, (real)sqrt(dx * dx + dy * dy));
 
-		if (!bots_combat_in_vertical_view(bots_globals.skill, elevation / BOTS_DEGREES, bot->pitch / BOTS_DEGREES))
+		if (!bots_combat_in_vertical_view(bot->profile.skill, elevation / BOTS_DEGREES, bot->pitch / BOTS_DEGREES))
 		{
 			bots_globals.combat_counts[_bots_combat_count_out_of_view]++;
 			return FALSE;
@@ -1734,10 +1807,10 @@ static boolean bots_target_score(struct bots_bot *bot, struct player_datum *play
 
 static long bots_find_target(struct bots_bot *bot, struct player_datum *player, real_point3d const *eye)
 {
-	struct bots_skill_definition const *skill = &bots_skills[bots_globals.skill];
+	struct bots_skill_definition const *skill = &bots_skills[bot->profile.skill];
 	struct data_iterator iterator;
 	struct player_datum *other;
-	boolean hurt = game_time_get() - bot->hurt_tick < TICKS_PER_SECOND * 2;
+	boolean hurt = bots_now() - bot->hurt_tick < TICKS_PER_SECOND * 2;
 	struct bots_target_candidate candidates[BOTS_MAXIMUM + MAXIMUM_LOCAL_PLAYERS];
 	long candidate_count = 0, index;
 	boolean ordered = TRUE;
@@ -1811,7 +1884,7 @@ static void bots_set_goal(struct bots_bot *bot, short kind, real_point3d const *
 	bot->goal_kind = kind;
 	bot->goal_point = *point;
 	bot->goal_surface_index = surface_index;
-	bot->goal_tick = game_time_get();
+	bot->goal_tick = bots_now();
 	bot->path.valid = FALSE;
 	bot->path_failures = 0;
 	bot->climb_until_tick = 0;
@@ -1823,9 +1896,9 @@ and the one of the most credit for its height above the bot */
 static short bots_roam_higher(struct bots_bot *bot, real_point3d const *position, short index)
 {
 	short best = index, tries;
-	real best_credit = bots_combat_high_ground(bots_globals.skill, bots_globals.roam_points[index].z - position->z);
+	real best_credit = bots_combat_high_ground(bot->profile.skill, bots_globals.roam_points[index].z - position->z);
 
-	if (bots_globals.skill < _bots_skill_veteran)
+	if (bot->profile.skill < _bots_skill_veteran)
 		return index;
 	for (tries = 0; tries < 2; tries++)
 	{
@@ -1834,7 +1907,7 @@ static short bots_roam_higher(struct bots_bot *bot, real_point3d const *position
 
 		if (bots_distance2d(&bots_globals.roam_points[other], position) < 6.0f)
 			continue;
-		credit = bots_combat_high_ground(bots_globals.skill, bots_globals.roam_points[other].z - position->z);
+		credit = bots_combat_high_ground(bot->profile.skill, bots_globals.roam_points[other].z - position->z);
 		if (credit > best_credit)
 		{
 			best_credit = credit;
@@ -1855,8 +1928,9 @@ static void bots_pick_roam_goal(struct bots_bot *bot, real_point3d const *positi
 
 	if (bots_globals.roam_point_count <= 0)
 		return;
+	bots_budget_spend(&bots_globals.budget, BOTS_BUDGET_DECISION);
 	bot->hunting = FALSE;
-	if (bots_random_real(bot) < bots_combat_hunt_chance(bots_globals.skill))
+	if (bots_random_real(bot) < bots_combat_hunt_chance(bot->profile.skill))
 	{
 		struct player_datum *player = player_get(bot->player_index);
 		struct data_iterator iterator;
@@ -1883,7 +1957,7 @@ static void bots_pick_roam_goal(struct bots_bot *bot, real_point3d const *positi
 					bots_random_real(bot) * 6.0f;
 
 				/* (a place above the enemy counts as nearer, from veteran) */
-				distance -= bots_combat_high_ground(bots_globals.skill,
+				distance -= bots_combat_high_ground(bot->profile.skill,
 					bots_globals.roam_points[index].z - enemy->object.position.z);
 
 				if (distance < nearest_distance && bots_distance2d(&bots_globals.roam_points[index], position) > 4.0f)
@@ -1919,7 +1993,7 @@ static void bots_pick_roam_goal(struct bots_bot *bot, real_point3d const *positi
 the map */
 static void bots_choose_goal(struct bots_bot *bot, long player_index, real_point3d const *position, boolean fighting)
 {
-	long now = game_time_get();
+	long now = bots_now();
 
 	if (!fighting && bot->target_player_index != NONE && bot->target_last_surface_index != NONE &&
 		now - bot->target_seen_tick < TICKS_PER_SECOND * 8)
@@ -1943,13 +2017,14 @@ static void bots_choose_goal(struct bots_bot *bot, long player_index, real_point
 		if (item && item->object.parent_object_index == NONE)
 			bots_item_set_unreachable(bot, bot->item_index);
 		bot->goal_kind = _bots_goal_none;
-		bot->item_check_tick = now + TICKS_PER_SECOND * 2;
+		bot->item_check_tick = now + TICKS_PER_SECOND * 2 * bots_budget_decision_scale(&bots_globals.budget);
 	}
 	if (now >= bot->item_check_tick)
 	{
 		long item_index = bots_find_item(bot, unit_get(player_get(player_index)->unit_index), position, fighting ? 8.0f : 20.0f);
 
-		bot->item_check_tick = now + TICKS_PER_SECOND;
+		bot->item_check_tick = now + TICKS_PER_SECOND * bots_budget_decision_scale(&bots_globals.budget);
+		bots_budget_spend(&bots_globals.budget, BOTS_BUDGET_DECISION);
 		if (item_index != NONE)
 		{
 			real_point3d ground;
@@ -1974,7 +2049,7 @@ static void bots_choose_goal(struct bots_bot *bot, long player_index, real_point
 it has nowhere to go */
 static boolean bots_follow_path(struct bots_bot *bot, long unit_index, real_point3d const *position, real *direction)
 {
-	long now = game_time_get();
+	long now = bots_now();
 
 	if (bot->goal_kind == _bots_goal_none)
 		return FALSE;
@@ -2059,9 +2134,41 @@ static boolean bots_follow_path(struct bots_bot *bot, long unit_index, real_poin
 
 /* ---------- a bot's tick */
 
+/* the level that debug.bots_skills ("normal,legendary,,recruit": a bot's level by its place, an empty place the setting's) gives the
+bot, or NONE */
+static short bots_debug_skill(long bot_index)
+{
+	char const *list = config_string("debug.bots_skills");
+	short skill;
+
+	while (bot_index > 0 && *list)
+	{
+		char const *comma = strchr(list, ',');
+
+		if (!comma)
+			return NONE;
+		list = comma + 1;
+		bot_index--;
+	}
+	for (skill = 0; skill < NUMBER_OF_BOTS_SKILLS; skill++)
+	{
+		size_t length = strlen(bots_skills[skill].name);
+
+		if (!strncmp(list, bots_skills[skill].name, length) && (list[length] == ',' || list[length] == 0))
+			return skill;
+	}
+	return NONE;
+}
+
 static void bots_bot_reset(struct bots_bot *bot, long player_index, long bot_index)
 {
+	short own_skill;
+
 	csmemset(bot, 0, sizeof(*bot));
+	bots_profile_reset(&bot->profile, bots_globals.setting_skill);
+	own_skill = bots_debug_skill(bot_index);
+	if (own_skill != NONE)
+		bots_profile_set_skill(&bot->profile, own_skill);
 	bot->player_index = player_index;
 	bot->unit_index = NONE;
 	bot->target_player_index = NONE;
@@ -2132,7 +2239,7 @@ moment, as a person misses it; the places kept a tick each */
 static void bots_level_trail(struct bots_bot *bot, long now, real_point3d *aim_point)
 {
 	struct bots_bot_combat *combat = &bot->combat;
-	long delay = bots_combat_track_delay_ticks(bots_globals.skill);
+	long delay = bots_combat_track_delay_ticks(bot->profile.skill);
 	long slot;
 
 	if (now < 0)
@@ -2156,7 +2263,7 @@ static void bots_level_aim_point(struct bots_bot *bot, struct bots_tick *tick, l
 {
 	struct bots_bot_combat *combat = &bot->combat;
 	struct object_datum *target = object_get(target_unit_index);
-	boolean head = tick->weapon_index != NONE && bots_combat_aim_head(bots_globals.skill,
+	boolean head = tick->weapon_index != NONE && bots_combat_aim_head(bot->profile.skill,
 		target->object.shield_vitality, bots_weapon_kind(weapon_get(tick->weapon_index)->definition_index)->precision);
 
 	if (head)
@@ -2195,7 +2302,7 @@ static void bots_level_aim_error(struct bots_bot *bot, struct bots_tick *tick)
 {
 	real *errors[2];
 	real const scale[2] = { 1.0f, 0.6f };
-	real floor = bots_combat_range_error_floor(bots_globals.skill, tick->target_distance) * BOTS_DEGREES;
+	real floor = bots_combat_range_error_floor(bot->profile.skill, tick->target_distance) * BOTS_DEGREES;
 	short index;
 
 	errors[0] = &bot->aim_error_yaw;
@@ -2204,7 +2311,7 @@ static void bots_level_aim_error(struct bots_bot *bot, struct bots_tick *tick)
 	{
 		real random = bots_random_signed(bot);
 
-		*errors[index] = bots_combat_aim_wander(bots_globals.skill, *errors[index] / BOTS_DEGREES, scale[index], random) *
+		*errors[index] = bots_combat_aim_wander(bot->profile.skill, *errors[index] / BOTS_DEGREES, scale[index], random) *
 			BOTS_DEGREES;
 		if (floor > 0.0f && (real)fabs(*errors[index]) < floor * scale[index])
 		{
@@ -2223,7 +2330,7 @@ static boolean bots_level_may_fire(struct bots_bot *bot, struct bots_tick *tick)
 {
 	struct bots_bot_combat *combat = &bot->combat;
 	struct bots_weapon_kind const *kind;
-	short skill = bots_globals.skill;
+	short skill = bot->profile.skill;
 
 	/* (a vehicle's gun: as ever) */
 	if (tick->weapon_index == NONE || tick->object->object.parent_object_index != NONE)
@@ -2286,7 +2393,7 @@ later */
 static boolean bots_level_melee(struct bots_bot *bot, struct bots_tick *tick, long target_unit_index)
 {
 	struct bots_bot_combat *combat = &bot->combat;
-	int choice = bots_combat_melee(bots_globals.skill, tick->target_distance, tick->now >= bot->melee_tick,
+	int choice = bots_combat_melee(bot->profile.skill, tick->target_distance, tick->now >= bot->melee_tick,
 		bots_unit_back_turned(target_unit_index, &tick->position), object_get(target_unit_index)->object.shield_vitality,
 		combat->charging, bots_random_real(bot));
 
@@ -2296,7 +2403,7 @@ static boolean bots_level_melee(struct bots_bot *bot, struct bots_tick *tick, lo
 		return FALSE;
 	}
 	if (combat->melee_ready_tick == NONE)
-		combat->melee_ready_tick = tick->now + bots_combat_melee_delay(bots_globals.skill, bots_random_real(bot));
+		combat->melee_ready_tick = tick->now + bots_combat_melee_delay(bot->profile.skill, bots_random_real(bot));
 	if (tick->now < combat->melee_ready_tick)
 		return FALSE;
 	combat->melee_ready_tick = NONE;
@@ -2315,7 +2422,7 @@ while it is in the hand, from HEROIC) */
 static void bots_level_grenade(struct bots_bot *bot, struct bots_tick *tick, long reaction_ticks)
 {
 	struct bots_bot_combat *combat = &bot->combat;
-	short skill = bots_globals.skill;
+	short skill = bot->profile.skill;
 	long now = tick->now;
 	boolean has = tick->unit->unit.grenade_counts[0] > 0 || tick->unit->unit.grenade_counts[1] > 0;
 
@@ -2380,7 +2487,7 @@ the level's rhythm */
 static void bots_level_move(struct bots_bot *bot, struct bots_tick *tick, struct object_datum *target)
 {
 	struct bots_bot_combat *combat = &bot->combat;
-	short skill = bots_globals.skill;
+	short skill = bot->profile.skill;
 	long now = tick->now;
 	real_point3d const *target_point = &target->object.bounding_sphere_center;
 	real to_target = (real)atan2(target_point->y - tick->position.y, target_point->x - tick->position.x);
@@ -2490,7 +2597,7 @@ second) */
 static void bots_level_prenade(struct bots_bot *bot, struct bots_tick *tick)
 {
 	struct bots_bot_combat *combat = &bot->combat;
-	short skill = bots_globals.skill;
+	short skill = bot->profile.skill;
 	boolean has = tick->unit->unit.grenade_counts[0] > 0 || tick->unit->unit.grenade_counts[1] > 0;
 	struct player_datum *target;
 	real_point3d point;
@@ -2547,14 +2654,18 @@ static void bots_level_prenade(struct bots_bot *bot, struct bots_tick *tick)
 the one gone a while */
 static void bots_bot_look(struct bots_bot *bot, struct bots_tick *tick)
 {
-	if (tick->now >= bot->next_look_tick)
+	/* (a look the budget has no room for waits for the next tick) */
+	if (tick->now >= bot->next_look_tick && bots_budget_over(&bots_globals.budget))
+		bots_budget_note_deferred(&bots_globals.budget);
+	else if (tick->now >= bot->next_look_tick)
 	{
 		long target = bots_find_target(bot, tick->player, bots_tick_eye(tick));
+		long interval = 3;
 
-		bot->next_look_tick = tick->now + 3;
-		/* (3 to 5 ticks apart: never a metronome) */
-		bot->next_look_tick += bots_combat_look_jitter(bots_combat_hash01((unsigned long)bot->player_index ^ 0x5BD1E995UL,
+		/* (3 to 5 ticks apart: never a metronome; twice that once the budget has had to shed load) */
+		interval += bots_combat_look_jitter(bots_combat_hash01((unsigned long)bot->player_index ^ 0x5BD1E995UL,
 			(unsigned long)tick->now));
+		bot->next_look_tick = tick->now + interval * bots_budget_look_scale(&bots_globals.budget);
 		if (target != NONE)
 		{
 			struct player_datum *target_player = player_get(target);
@@ -2608,7 +2719,7 @@ static void bots_bot_fight(struct bots_bot *bot, struct bots_tick *tick)
 	/* (a reaction of 0.85 to 1.35 of the level's, another each sighting; the
 	aim trailing the target at the lowest levels, at the head or ahead of a
 	throw) */
-	reaction_ticks = bots_combat_reaction_ticks(bots_globals.skill, reaction_ticks,
+	reaction_ticks = bots_combat_reaction_ticks(bot->profile.skill, reaction_ticks,
 		bots_combat_hash01((unsigned long)bot->player_index, (unsigned long)bot->target_first_seen_tick));
 	bots_level_trail(bot, now, &aim_point);
 	bots_level_aim_point(bot, tick, target_player->unit_index, &aim_point);
@@ -2683,7 +2794,7 @@ static void bots_bot_fight(struct bots_bot *bot, struct bots_tick *tick)
 	if (bots_level_melee(bot, tick, target_player->unit_index))
 	{
 		tick->flags |= FLAG(_unit_control_use_equipment_bit);
-		bot->melee_tick = now + bots_combat_melee_cooldown(bots_globals.skill, bots_random_real(bot));
+		bot->melee_tick = now + bots_combat_melee_cooldown(bot->profile.skill, bots_random_real(bot));
 	}
 	/* a grenade at middle range, by the level's rules */
 	bots_level_grenade(bot, tick, reaction_ticks);
@@ -2693,13 +2804,13 @@ static void bots_bot_fight(struct bots_bot *bot, struct bots_tick *tick)
 	{
 		bot->strafe_sign = bots_random_real(bot) < 0.5f ? -1.0f : 1.0f;
 		/* (the level's strafes, short jiggles at the top) */
-		bot->strafe_until_tick = now + bots_combat_strafe_ticks(bots_globals.skill, bots_random_real(bot));
+		bot->strafe_until_tick = now + bots_combat_strafe_ticks(bot->profile.skill, bots_random_real(bot));
 	}
 	{
 		real to_target = (real)atan2(dy, dx);
 		real range = bots_weapon_range(tick->weapon_index);
 		real forward = tick->target_distance > range * 1.3f ? 0.8f : tick->target_distance < range * 0.6f ? -0.5f : 0.0f;
-		real side = bot->strafe_sign * bots_combat_strafe_strength(bots_globals.skill);
+		real side = bot->strafe_sign * bots_combat_strafe_strength(bot->profile.skill);
 
 		tick->move_direction = (real)atan2((real)sin(to_target) * forward + (real)sin(to_target + BOTS_PI * 0.5f) * side,
 			(real)cos(to_target) * forward + (real)cos(to_target + BOTS_PI * 0.5f) * side);
@@ -2707,8 +2818,8 @@ static void bots_bot_fight(struct bots_bot *bot, struct bots_tick *tick)
 		tick->throttle_scale = 1.0f;
 	}
 	/* crouches, halts, a retreat, a charge, a step in, jumps, by level */
-	if (bots_combat_crouch_chance(bots_globals.skill) > 0.0f &&
-		bots_combat_crouch_step(&bot->combat.crouch, bots_globals.skill, now, bots_random_real(bot)))
+	if (bots_combat_crouch_chance(bot->profile.skill) > 0.0f &&
+		bots_combat_crouch_step(&bot->combat.crouch, bot->profile.skill, now, bots_random_real(bot)))
 	{
 		tick->flags |= FLAG(_unit_control_crouch_modifier_bit);
 	}
@@ -2920,9 +3031,9 @@ static void bots_bot_update(struct bots_bot *bot, long bot_index, struct player_
 	real vitality;
 
 	csmemset(&tick, 0, sizeof(tick));
-	tick.skill = &bots_skills[bots_globals.skill];
+	tick.skill = &bots_skills[bot->profile.skill];
 	tick.player = player_get(bot->player_index);
-	tick.now = game_time_get();
+	tick.now = bots_now();
 	tick.throttle_scale = 1.0f;
 	tick.action = action;
 	csmemset(action, 0, sizeof(*action));
@@ -3033,10 +3144,29 @@ static void bots_bot_update(struct bots_bot *bot, long bot_index, struct player_
 
 static void bots_report_cost(void);
 
+/* the name of the level the bots play at: the one they all play at, "mixed" if they differ */
+static char const *bots_report_skill_name(void)
+{
+	long index;
+	short skill = NONE;
+
+	for (index = 0; index < BOTS_MAXIMUM; index++)
+	{
+		struct bots_bot const *bot = &bots_globals.bots[index];
+
+		if (bot->player_index == NONE || !bot->counts.think.samples)
+			continue;
+		if (skill != NONE && skill != bot->profile.skill)
+			return "mixed";
+		skill = bot->profile.skill;
+	}
+	return bots_skills[skill == NONE ? bots_globals.setting_skill : skill].name;
+}
+
 /* halo.log's line, a minute into the game and each minute on */
 static void bots_report(void)
 {
-	long now = game_time_get();
+	long now = bots_now();
 	long count = 0, index;
 	char line[400];
 	int length = 0;
@@ -3061,7 +3191,7 @@ static void bots_report(void)
 		return;
 	platform_log("bots: tick %ld, %ld bots (%s): searches %ld (%ld failed, %ld short, %ld full, %ld unavoided, "
 		"%ld unsmoothed), stuck %ld (goals given up %ld), kills/deaths%s", now, count,
-		bots_skills[bots_globals.skill].name, bots_globals.searches, bots_globals.search_failures,
+		bots_report_skill_name(), bots_globals.searches, bots_globals.search_failures,
 		bots_globals.search_partials, bots_globals.search_overflows, bots_globals.search_unavoided,
 		bots_globals.search_unsmoothed, bots_globals.stuck_events, bots_globals.stuck_giveups, line);
 	{
@@ -3086,10 +3216,19 @@ static void bots_report_cost(void)
 	int length = 0;
 	long index;
 
-	platform_log("bots: cost: all bots a tick mean %ld us, 99%% within %ld, longest %ld (%ld ticks), %ld sight tests, "
-		"%ld searches", bots_think_mean(&bots_globals.tick_think), bots_think_percentile(&bots_globals.tick_think, 99),
-		bots_globals.tick_think.maximum_microseconds, bots_globals.tick_think.samples, bots_globals.rays,
-		bots_globals.searches);
+	struct bots_budget const *budget = &bots_globals.budget;
+
+	platform_log("bots: cost: all bots a tick mean %ld us, 99%% within %ld, longest %ld (%ld ticks, %ld on a world that "
+		"stood still), %ld sight tests, %ld searches", bots_think_mean(&bots_globals.tick_think),
+		bots_think_percentile(&bots_globals.tick_think, 99), bots_globals.tick_think.maximum_microseconds,
+		bots_globals.tick_think.samples, bots_globals.stale_ticks, bots_globals.rays, bots_globals.searches);
+	if (budget->mode == _bots_budget_off)
+		platform_log("bots: budget: off (bots.budget_us, bots.budget_credit), at most %d bots", (int)budget->maximum_bots);
+	else
+		platform_log("bots: budget: %s, cap %ld a tick, step %d of %d, %ld ticks over the cap, %ld left undone, steps %ld up %ld down, "
+			"at most %d bots", budget->mode == _bots_budget_clock ? "microseconds" : "credit", budget->cap, (int)budget->level,
+			BOTS_BUDGET_TOP_LEVEL, budget->ticks_over_cap, budget->deferred, budget->steps_up, budget->steps_down,
+			(int)budget->maximum_bots);
 	line[0] = 0;
 	for (index = 0; index < BOTS_MAXIMUM; index++)
 	{
@@ -3131,7 +3270,7 @@ static void bots_report_sim(char const *why)
 		if (bot->player_index == NONE || !counts->think.samples)
 			continue;
 		platform_log("bots-sim: bot %ld %s frags %ld deaths %ld stuck_s %ld giveups %ld searches %ld failed %ld short %ld rays %ld "
-			"think_us %ld/%ld/%ld", index + 1, bots_skills[bots_globals.skill].name, counts->kills, counts->deaths,
+			"think_us %ld/%ld/%ld", index + 1, bots_skills[bot->profile.skill].name, counts->kills, counts->deaths,
 			counts->stuck_seconds, counts->stuck_giveups, bot->searches, counts->search_failures, counts->search_partials,
 			counts->rays, bots_think_mean(&counts->think), bots_think_percentile(&counts->think, 99),
 			counts->think.maximum_microseconds);
@@ -3152,16 +3291,87 @@ static void bots_report_sim(char const *why)
 	platform_log("bots-sim: end");
 }
 
-void bots_update_actions(struct player_action *actions)
+/* the bots in the farther half of them from the players, marked (the top step of the shedding holds their controls): by the
+distance of each to the nearest player who plays on this machine */
+static void bots_mark_far_bots(void)
+{
+	real distances[BOTS_MAXIMUM], sorted[BOTS_MAXIMUM];
+	boolean present[BOTS_MAXIMUM];
+	struct data_iterator iterator;
+	struct player_datum *player;
+	long count = 0, index, other;
+
+	csmemset(present, 0, sizeof(present));
+	csmemset(bots_globals.far_from_humans, 0, sizeof(bots_globals.far_from_humans));
+	data_iterator_new(&iterator, player_data);
+	while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
+	{
+		long bot_index = player->network_player_data.machine_index - BOTS_FIRST_MACHINE;
+		real_point3d position;
+		real nearest = REAL_MAX;
+		struct data_iterator humans;
+		struct player_datum *human;
+
+		if (player->local_player_index != NONE || !bots_machine_is_bot(player->network_player_data.machine_index) ||
+			player->unit_index == NONE)
+		{
+			continue;
+		}
+		position = object_get(player->unit_index)->object.position;
+		data_iterator_new(&humans, player_data);
+		while ((human = (struct player_datum *)data_iterator_next(&humans)) != NULL)
+		{
+			if (human->local_player_index != NONE && human->unit_index != NONE)
+				nearest = MIN(nearest, bots_distance2d(&position, &object_get(human->unit_index)->object.position));
+		}
+		distances[bot_index] = nearest;
+		present[bot_index] = TRUE;
+	}
+	for (index = 0; index < BOTS_MAXIMUM; index++)
+	{
+		if (!present[index])
+			continue;
+		/* (insertion into the sorted list) */
+		for (other = count; other > 0 && sorted[other - 1] > distances[index]; other--)
+			sorted[other] = sorted[other - 1];
+		sorted[other] = distances[index];
+		count++;
+	}
+	for (index = 0; index < BOTS_MAXIMUM; index++)
+		bots_globals.far_from_humans[index] = present[index] && distances[index] > sorted[count / 2];
+}
+
+/* the controls a bot held for the budget: where it was heading and looking, its trigger and its pulses let go */
+static void bots_hold_action(struct bots_bot *bot, struct player_action *action)
+{
+	unsigned long pulses = FLAG(_unit_control_jump_bit) | FLAG(_unit_control_throw_grenade_bit) |
+		FLAG(_unit_control_use_equipment_bit) | FLAG(_unit_control_weapon_reload_bit);
+
+	*action = bot->last_action;
+	action->control_flags &= ~(pulses | FLAG(_unit_control_weapon_primary_trigger_bit));
+	action->primary_trigger = 0.0f;
+	action->desired_weapon_index = NONE;
+	action->desired_grenade_index = NONE;
+	action->desired_zoom_level = NONE;
+	bot->previous_control_flags = action->control_flags;
+}
+
+/* The bots' tick: every bot decides its controls, which bots_fill_action gives the tick's update. Called by update_server_next_update
+once for each update it builds (player_queues_new.c), before the update is: a bot's controls are queued as a player's are, so that
+the update, what the host relays and what a machine predicts treat it as they treat any player, and there is one place bots enter
+the game. Nothing outside a local game. */
+void bots_tick(void)
 {
 	struct data_iterator iterator;
 	struct player_datum *player;
 	long count = 0;
 	long long tick_started = 0;
+	long hold_ticks = 0;
 #ifdef BOTS_TICK_PART
 	long long part_started = 0;
 #endif
 
+	csmemset(bots_globals.action_valid, 0, sizeof(bots_globals.action_valid));
 	/* (local games alone: no other machine sees a bot) */
 	if (!game_engine_running() || !network_game_is_splitscreen_local())
 		return;
@@ -3171,43 +3381,90 @@ void bots_update_actions(struct player_action *actions)
 		long bot_index;
 		long absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index);
 		struct bots_bot *bot;
+		struct player_action *action;
 		long long bot_started;
 
 		if (player->local_player_index != NONE || !bots_machine_is_bot(player->network_player_data.machine_index))
 			continue;
-		/* (the roaming places and the walkable surfaces once a game has
-		bots; the skill once a tick) */
+		/* (the roaming places and the walkable surfaces once a game has bots; the skill setting and the budget once a tick) */
 		if (!count)
 		{
+			long time = game_time_get();
+
 			tick_started = bots_clock_microseconds();
 			if (!bots_globals.first_tick_microseconds)
 				bots_globals.first_tick_microseconds = tick_started;
 #ifdef BOTS_TICK_PART
 			part_started = wiiu_tick_part_now();
 #endif
+			/* (this update is for the game's time, or one past the last when the game has not ticked since the last) */
+			if (time == bots_globals.world_time)
+			{
+				bots_globals.now++;
+				bots_globals.stale_ticks++;
+			}
+			else
+			{
+				bots_globals.now = time;
+				bots_globals.world_time = time;
+			}
 			if (!bots_globals.map_ready)
 				bots_prepare_map();
-			bots_globals.skill = bots_skill();
-			bots_globals.tick_searches = 0;
+			bots_globals.setting_skill = bots_skill();
+			bots_budget_begin_tick(&bots_globals.budget, bots_globals.now);
+			hold_ticks = bots_budget_hold_ticks(&bots_globals.budget);
+			if (hold_ticks)
+				bots_mark_far_bots();
 			bots_paths_scan();
 		}
 		bot_index = player->network_player_data.machine_index - BOTS_FIRST_MACHINE;
 		bot = &bots_globals.bots[bot_index];
 		if (bot->player_index != iterator.datum_index)
 			bots_bot_reset(bot, iterator.datum_index, bot_index);
+		bots_profile_resolve(&bot->profile, bots_globals.setting_skill);
 		bot->counts.kills = (long)player->statistics.kills[0];
 		bot->counts.deaths = (long)player->statistics.deaths;
+		if (absolute_index < 0 || absolute_index >= HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
+		{
+			count++;
+			continue;
+		}
+		action = &bots_globals.actions[absolute_index];
+		bots_globals.action_valid[absolute_index] = TRUE;
 		bot_started = bots_clock_microseconds();
-		bots_globals.active_bot = bot;
-		if (absolute_index >= 0 && absolute_index < HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
-			bots_bot_update(bot, bot_index, &actions[absolute_index]);
-		bots_globals.active_bot = NULL;
+		bots_budget_elapsed(&bots_globals.budget, (long)(bot_started - tick_started));
+		bots_budget_spend(&bots_globals.budget, BOTS_BUDGET_MOTOR);
+		/* (the top step of the shedding: a bot among the farther half holds its last controls, up to a few ticks running) */
+		if (hold_ticks && bots_globals.far_from_humans[bot_index] && bot->last_action_valid && bot->held_ticks < hold_ticks)
+		{
+			bots_hold_action(bot, action);
+			bot->held_ticks++;
+			bots_budget_note_deferred(&bots_globals.budget);
+		}
+		else
+		{
+			bots_globals.active_bot = bot;
+			bots_bot_update(bot, bot_index, action);
+			bots_globals.active_bot = NULL;
+			bot->held_ticks = 0;
+		}
+		bot->last_action = *action;
+		bot->last_action_valid = TRUE;
 		bots_think_note(&bot->counts.think, (long)(bots_clock_microseconds() - bot_started));
 		count++;
 	}
 	if (count)
 	{
-		bots_think_note(&bots_globals.tick_think, (long)(bots_clock_microseconds() - tick_started));
+		long long tick_ended = bots_clock_microseconds();
+		short level;
+		char const *reason;
+
+		bots_think_note(&bots_globals.tick_think, (long)(tick_ended - tick_started));
+		bots_budget_end_tick(&bots_globals.budget, (long)(tick_ended - tick_started));
+		if (bots_budget_take_change(&bots_globals.budget, &level, &reason))
+			platform_log("bots: budget: step %d of %d at tick %ld: %s", (int)level, BOTS_BUDGET_TOP_LEVEL, bots_globals.now, reason);
+		if (bots_budget_take_shed_request(&bots_globals.budget))
+			platform_log("bots: budget: the cap is broken at the top step (a bot fewer is asked for; nothing acts on it yet)");
 #ifdef BOTS_TICK_PART
 		wiiu_tick_part("game_tick_bots_section", part_started);
 #endif
@@ -3216,10 +3473,24 @@ void bots_update_actions(struct player_action *actions)
 			snprintf(bots_globals.map_name, sizeof(bots_globals.map_name), "%s", main_get_multiplayer_map_name());
 		bots_report();
 		/* (bots.sim_ticks, the headless runs': that many ticks of bots, then the block and the end of the run) */
-		if (config_integer("bots.sim_ticks") > 0 && bots_globals.ticks >= config_integer("bots.sim_ticks"))
+		if (bots_globals.sim_ticks > 0 && bots_globals.ticks >= bots_globals.sim_ticks)
 		{
 			bots_report_sim("bots.sim_ticks");
 			exit(0);
 		}
 	}
+}
+
+boolean bots_fill_action(long player_index, struct player_action *action)
+{
+	if (player_index < 0 || player_index >= HALO_PORT_MAXIMUM_NETWORK_PLAYERS || !bots_globals.action_valid[player_index])
+		return FALSE;
+	*action = bots_globals.actions[player_index];
+	return TRUE;
+}
+
+void bots_set_skill(long bot_index, short skill)
+{
+	if (bot_index >= 0 && bot_index < BOTS_MAXIMUM && bots_globals.bots[bot_index].player_index != NONE)
+		bots_profile_set_skill(&bots_globals.bots[bot_index].profile, skill);
 }

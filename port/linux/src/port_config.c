@@ -690,6 +690,21 @@ static const struct config_setting config_settings[] =
 	{ "bots.teams", _config_string, "\"even\"", "HALO_BOT_TEAMS", _environment_value, _platform_all,
 		"In team games: \"even\" puts the bots on both teams, evening them with\n"
 		"the players; \"against\" puts them all on the team the players are not on." },
+	{ "bots.max", _config_integer, "15", "HALO_BOTS_MAX", _environment_value, _platform_all,
+		"The most bots there may be, 0 to 15: bots.count asks for no more than this. 15 is the game's own\n"
+		"most (a split screen game is 16 players with one of them yours)." },
+	{ "bots.budget_us", _config_integer, "0", "HALO_BOTS_BUDGET_US", _environment_value, _platform_all,
+		"The most microseconds that one tick of all the bots may cost; over it the bots look half as often,\n"
+		"decide half as often, search paths every other tick, and the farthest hold their controls, in that\n"
+		"order, until the cost is back under 2/5 of it. 0: no budget, nothing is limited or shed (the bots\n"
+		"cost is only counted in the log). The console's cost is not measured yet." },
+	{ "bots.budget_credit", _config_integer, "0", "HALO_BOTS_BUDGET_CREDIT", _environment_value, _platform_all,
+		"The same budget counted in units of work (a sight test is 80, a path node 5, a goal decision 200),\n"
+		"which is the same every run: for tests. Used before bots.budget_us. 0: none." },
+	{ "debug.bots_skills", _config_string, "\"\"", "HALO_BOTS_SKILLS", _environment_value, _platform_all,
+		"Each bot's own skill level, by its place in the list (\"legendary,recruit,,normal\": the first bot\n"
+		"legendary, the second recruit, the third bots.skill, the fourth normal); for tests. Empty: all follow\n"
+		"bots.skill." },
 	{ "bots.sim_ticks", _config_integer, "0", "HALO_BOTS_SIM_TICKS", _environment_value, _platform_all,
 		"For automated runs (tools/harness/bots_sim.py): this many game ticks after the bots first play, the game\n"
 		"says the bots-sim block (each bot's frags, deaths, time stuck, path failures and think time) and ends the\n"

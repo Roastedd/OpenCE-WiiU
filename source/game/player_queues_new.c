@@ -115,6 +115,7 @@ symbols in this file:
 #include "memory/data.h"
 #include "networking/network_game_globals.h"
 #include "units/units.h"
+#include "bots.h" /* port: port/linux/game/bots.c */
 
 /* ---------- constants */
 
@@ -418,6 +419,9 @@ void update_server_next_update(
 	{
 		update_server_take_local_actions();
 	}
+	/* port: the bots of a local game decide their controls for this update (port/linux/game/bots.c), where the players' own are
+	taken: queued as a player's are, they go into the update, the relay and the prediction as any player's do */
+	bots_tick();
 	update = update_server_get_update(update_number);
 	match_assert(
 		"c:\\halo\\SOURCE\\game\\player_queues_new.c",
@@ -445,6 +449,9 @@ void update_server_next_update(
 			update->update.action_count += 1;
 			continue;
 		}
+		/* port: a bot's controls (bots_tick), which pulse their own buttons: none held over from the last tick */
+		if (bots_fill_action(queue_index, &queue->current_action))
+			update_server_pending_control_flags[queue_index] = 0;
 		csmemcpy(
 			&update->update.actions[queue_index],
 			&queue->current_action,
