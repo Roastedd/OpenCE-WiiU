@@ -1024,6 +1024,25 @@ as between native builds, two networks that do not let a direct connection
 through (some company and school networks block WebRTC) cannot play
 together.
 
+### Friends, invites and parties
+
+Off by default (`social.enabled`, or the card file `social.txt` beside `config.toml`: a 1 turns it on, a 0 off, whichever the config says), because it has not run on
+a console yet. On, it uses the signalling brokers above (every ready broker, up to four) for a friends list of up to 50 per install, with no server of its own.
+
+- A **friend code** (`XXXX-XXXX-XXXX-C`, Crockford base 32, the last symbol a check over the rest) names an install: 60 bits of a SHA-256 of its Ed25519 key, kept in
+  `friends.key` beside `config.toml` (keep it to yourself). A request is sent to the code's inbox (a topic only holders of the code can work out), the other accepts, and each
+  side hands the other its **circle key**, the key its presence is sealed with. Removing or blocking a friend tells it and changes the circle key.
+- **Presence** (offline, menus, lobby, game, solo; and for a game that can be joined, its map, type, players and invite) is published to friends only, signed, on change and
+  every minute; a friend not heard for 150 seconds is offline. `social.share_status` off appears offline; `social.share_details` is none, basic or full.
+- An **invite** names the hosted game (the host's key hash and the invite's token), goes to one friend and lasts a minute. **Join** from the list or an invite checks the
+  version and the map before trying and reports failures in plain words (`social_join.h`).
+- A **party** is up to eight, one leader (the highest term; a silent leader is replaced after 12 seconds), a signed STATE every few seconds, chat of 63 characters, and
+  following the leader's game from the menus.
+- The layer is the engine in `src/social_p2p.inc` (glue, included by `p2p.c`), `game/social_*.c` (everything else) and `game/social.h` (what screens call). Nothing
+  is sent in the clear and nothing waits for the network or the card on the game's thread: calls are queued, reads copy a snapshot, and a thread of its own writes
+  `friends.txt` (a version, a check, the new file read back before the old is touched).
+- Log lines begin `social:`. The tests are `tools/harness/tests/test_social*.py` (the fake brokers are `social_fake.h`).
+
 ### Text chat
 
 Network games have a text chat, as the PC version had. Press T

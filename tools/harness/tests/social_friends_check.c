@@ -461,6 +461,9 @@ static void case_request_flood(void)
 		a->engine->statistics.verifications - verifications);
 	CHECK(a->engine->event_count <= SOCIAL_MAX_EVENTS, "events are bounded");
 	(void)signatures;
+	/* half an hour later the list has emptied, and a real request comes in */
+	fake_run(&net, 1900000);
+	CHECK(snap(a, 0)->request_count == 0, "the unanswered went: %d", snap(a, 0)->request_count);
 	{
 		int events = take_events(a, SOCIAL_API_EVENT_REQUEST, NULL);
 

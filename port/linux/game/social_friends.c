@@ -623,6 +623,15 @@ void social_friends_update(struct social_engine *engine)
 		return;
 	if (engine->rotated && social_elapsed(engine, engine->rotated_time, SOCIAL_ROTATION_LIFE))
 		engine->rotated = 0;
+	/* requests received and not answered go after half an hour */
+	for (index = 0; index < SOCIAL_MAX_REQUESTS; index++)
+	{
+		if (engine->requests[index].used && social_elapsed(engine, engine->requests[index].received, SOCIAL_REQUEST_LIFE))
+		{
+			memset(&engine->requests[index], 0, sizeof(engine->requests[index]));
+			engine->version++;
+		}
+	}
 	if (engine->env.ready(engine->env.user) <= 0)
 		return;
 	/* requests sent are sent again every five minutes (one in a pass: the queue is short) */

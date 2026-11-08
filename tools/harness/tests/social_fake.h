@@ -71,6 +71,9 @@ struct fake_net
 	int verbose;
 	/* the files of each machine, when it has any (a front saves them) */
 	struct social_files *files;
+	/* told of each message a machine publishes (once, whatever the brokers do with it) */
+	void (*tap)(void *user, int node, unsigned int time, const char *topic, const unsigned char *payload, int size);
+	void *tap_user;
 };
 
 static unsigned long long fake_random(unsigned long long *state)
@@ -178,6 +181,8 @@ static int fake_publish(void *user, const char *topic, const unsigned char *payl
 	struct fake_net *net = node->net;
 	int broker, accepted = 0;
 
+	if (net->tap)
+		net->tap(net->tap_user, node->index, net->time, topic, payload, size);
 	for (broker = 0; broker < FAKE_BROKERS; broker++)
 	{
 		if (!node->broker_ready[broker] || !net->broker_up[broker])
