@@ -546,7 +546,9 @@ static const struct config_setting config_settings[] =
 	{ "input.wiiu_gamepad_view", _config_string, "\"tv\"", "HALO_WIIU_GAMEPAD_VIEW", _environment_value, _platform_wiiu,
 		"What the GamePad's screen shows. \"tv\": the TV's picture. \"player1\": in split\n"
 		"screen, player 1's window alone, scaled to the GamePad (the menus, and a game of\n"
-		"one player, are shown whole)." },
+		"one player, are shown whole). \"social\": in a game, the social screens' view for touch\n"
+		"(chat, friends, party, bots, quick chat; needs screens.enable above 0 for its rows;\n"
+		"the TV is then the game's alone); the menus still mirror the TV." },
 	{ "input.wiiu_gamepad_keyboard", _config_boolean, "false", "HALO_WIIU_GAMEPAD_KEYBOARD", _environment_value, _platform_wiiu,
 		"The text chat's keyboard on the GamePad's touch screen: while the chat's keyboard is up\n"
 		"(D-pad Up in a network game), the GamePad shows big keys (80 x 60 pixels) and a tap\n"

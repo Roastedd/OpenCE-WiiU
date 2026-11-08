@@ -116,7 +116,7 @@ def test_layout_numbers_are_screens_h():
     # (the row's buttons: four at 120, 250, 380, 510 and five at 8, 130, 252, 374, 496)
     widgets, _, _ = all_widgets()
     bar = widgets[f"{SOCIAL}/players_button_bar"]
-    assert [int(child.get("x")) for child in bar.findall("child")] == [8, 130, 252, 374, 496]
+    assert [int(child.get("x")) for child in bar.findall("child")] == [4, 131, 258, 385, 512]
     bar = widgets[f"{SOCIAL}/friends_button_bar"]
     assert [int(child.get("x")) for child in bar.findall("child")] == [120, 250, 380, 510]
 

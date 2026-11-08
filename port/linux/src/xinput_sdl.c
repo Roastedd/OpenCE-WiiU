@@ -44,6 +44,7 @@ drive the controller.
 /* port/linux/game/network_aim_assist.c */
 extern unsigned char network_aim_assist_block_mouse(void);
 #include "halo_keyboard.h"
+#include "halo_social.h"
 #include "controller_buttons.h"
 #include "controller_remap.h"
 #include "test_input_bot.h"
@@ -254,6 +255,23 @@ void halo_chat_keyboard_publish(const struct halo_chat_keyboard_view *view)
 
 void halo_chat_keyboard_prewarm(void)
 {
+}
+
+/* the social screens' GamePad view is the Wii U's (halo_social.h): nothing on the desktop */
+void halo_social_view_publish(const struct halo_social_view *view)
+{
+	(void)view;
+}
+
+int halo_social_event_next(struct halo_social_event *event)
+{
+	(void)event;
+	return 0;
+}
+
+int halo_social_view_wanted(void)
+{
+	return 0;
 }
 
 int halo_chat_wheel_steps(void)

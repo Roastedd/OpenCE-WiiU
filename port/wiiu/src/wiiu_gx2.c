@@ -31,6 +31,7 @@ Not run on a console.
 #include "wiiu_stream_queue.h"
 #include "wiiu_update.h"
 #include "wiiu_keyboard.h"
+#include "wiiu_social_view.h"
 #include "wiiu_gpu_offload.h"
 
 /* d3d8_gx2.c: the queue of streams and its buffers (halo/gx2_thread.txt 7) */
@@ -274,6 +275,8 @@ static struct
 	GX2Texture keyboard_texture;
 	GX2Sampler keyboard_sampler;
 	int keyboard_made, keyboard_failed, keyboard_count;
+	/* the GamePad's social view (wiiu_social_view.h): its quads this frame (0: not shown, the TV's picture is) */
+	int social_count;
 	/* the GPU's own time for a frame's draws (gpu_frame_begin, gpu_frame_end, gpu_poll): the slot of samples in use, each slot's state (0 free, 1 begun,
 	2 ended and not yet read) and when it ended; the frame now drawn is measured (1) or not (2: no free slot); the five seconds' sum and longest */
 	unsigned gpu_slot;
@@ -3955,6 +3958,42 @@ static int keyboard_make(const struct wk_atlas *atlas)
 /* the keyboard's quads for this frame: its view as the game's thread last published it. Each present (it costs nothing while the keyboard is closed or off). */
 static struct wk_quad keyboard_quads[WK_MAXIMUM_QUADS];
 
+/* the glyphs' texture, made once from the atlas (the keyboard's and the social view's are the same); 0 if there is no memory for it */
+static int keyboard_texture_ready(const struct wk_atlas *atlas)
+{
+	if (gx.keyboard_failed)
+		return 0;
+	if (!gx.keyboard_made)
+	{
+		gx.keyboard_made = keyboard_make(atlas);
+		if (!gx.keyboard_made)
+		{
+			gx.keyboard_failed = 1;
+			wiiu_log("GX2: no memory for the GamePad keyboard's glyphs: it is not drawn (the TV's keyboard is)");
+			return 0;
+		}
+		wiiu_log("GX2: the GamePad keyboard's texture is made (%d x %d)", WK_ATLAS_WIDTH, WK_ATLAS_HEIGHT);
+	}
+	return 1;
+}
+
+static struct wk_quad social_quads[WSV_MAXIMUM_QUADS];
+
+/* the social view's quads for this frame: the view as the game's thread last published it (nothing while it is off or not active) */
+static void social_update(void)
+{
+	const struct wk_atlas *atlas;
+	struct halo_social_view view;
+
+	gx.social_count = 0;
+	if (gx.keyboard_failed || !wiiu_social_view_enabled() || !(atlas = wiiu_keyboard_atlas()))
+		return;
+	wiiu_social_view_snapshot(&view);
+	if (!view.active || !keyboard_texture_ready(atlas))
+		return;
+	gx.social_count = wiiu_social_view_build(&view, atlas, social_quads, WSV_MAXIMUM_QUADS);
+}
+
 static void keyboard_update(void)
 {
 	const struct wk_atlas *atlas;
@@ -3966,22 +4005,13 @@ static void keyboard_update(void)
 	wiiu_keyboard_snapshot(&view);
 	if (!view.open)
 		return;
-	if (!gx.keyboard_made)
-	{
-		gx.keyboard_made = keyboard_make(atlas);
-		if (!gx.keyboard_made)
-		{
-			gx.keyboard_failed = 1;
-			wiiu_log("GX2: no memory for the GamePad keyboard's glyphs: it is not drawn (the TV's keyboard is)");
-			return;
-		}
-		wiiu_log("GX2: the GamePad keyboard's texture is made (%d x %d)", WK_ATLAS_WIDTH, WK_ATLAS_HEIGHT);
-	}
+	if (!keyboard_texture_ready(atlas))
+		return;
 	gx.keyboard_count = wiiu_keyboard_build(&view, atlas, (unsigned long)OSTicksToMilliseconds(OSGetSystemTime()), keyboard_quads, WK_MAXIMUM_QUADS);
 }
 
 /* the keyboard over the GamePad's picture (the pixels of the 854 x 480 GamePad are the quads' units: the screen's own, which its surface is) */
-static void keyboard_draw(GX2ColorBuffer *screen, GX2ContextState *context)
+static void quads_draw(GX2ColorBuffer *screen, GX2ContextState *context, const struct wk_quad *quads, int count)
 {
 	static const unsigned corner_x[6] = { 0, 1, 0, 1, 1, 0 };
 	static const unsigned corner_y[6] = { 0, 0, 1, 0, 1, 1 };
@@ -3990,14 +4020,14 @@ static void keyboard_draw(GX2ColorBuffer *screen, GX2ContextState *context)
 	int quad;
 	unsigned i;
 
-	if (gx.keyboard_count <= 0)
+	if (count <= 0)
 		return;
-	vertices = ring_reserve((uint32_t)gx.keyboard_count * 6 * sizeof(struct blit_vertex));
+	vertices = ring_reserve((uint32_t)count * 6 * sizeof(struct blit_vertex));
 	if (!vertices)
 		return;
-	for (quad = 0; quad < gx.keyboard_count; quad++)
+	for (quad = 0; quad < count; quad++)
 	{
-		const struct wk_quad *q = &keyboard_quads[quad];
+		const struct wk_quad *q = &quads[quad];
 
 		for (i = 0; i < 6; i++)
 		{
@@ -4013,7 +4043,7 @@ static void keyboard_draw(GX2ColorBuffer *screen, GX2ContextState *context)
 			v->a = q->a;
 		}
 	}
-	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER, vertices, (uint32_t)gx.keyboard_count * 6 * sizeof(struct blit_vertex));
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER, vertices, (uint32_t)count * 6 * sizeof(struct blit_vertex));
 	GX2SetContextState(context);
 	GX2SetColorBuffer(screen, GX2_RENDER_TARGET_0);
 	GX2SetViewport(0.0f, 0.0f, screen_width, screen_height, 0.0f, 1.0f);
@@ -4026,10 +4056,15 @@ static void keyboard_draw(GX2ColorBuffer *screen, GX2ContextState *context)
 	GX2SetVertexShader(gx.blit.vertexShader);
 	GX2SetPixelShader(gx.blit.pixelShader);
 	GX2SetShaderMode(GX2_SHADER_MODE_UNIFORM_REGISTER);
-	GX2SetAttribBuffer(0, (uint32_t)gx.keyboard_count * 6 * sizeof(struct blit_vertex), sizeof(struct blit_vertex), vertices);
+	GX2SetAttribBuffer(0, (uint32_t)count * 6 * sizeof(struct blit_vertex), sizeof(struct blit_vertex), vertices);
 	GX2SetPixelTexture(&gx.keyboard_texture, gx.sampler_location);
 	GX2SetPixelSampler(&gx.keyboard_sampler, gx.sampler_location);
-	GX2DrawEx(GX2_PRIMITIVE_MODE_TRIANGLES, (uint32_t)gx.keyboard_count * 6, 0, 1);
+	GX2DrawEx(GX2_PRIMITIVE_MODE_TRIANGLES, (uint32_t)count * 6, 0, 1);
+}
+
+static void keyboard_draw(GX2ColorBuffer *screen, GX2ContextState *context)
+{
+	quads_draw(screen, context, keyboard_quads, gx.keyboard_count);
 }
 
 /* the hold-to-skip bar (xinput_wiiu.c says how far the hold is, 0 to 1): a grey frame and a white fill growing from the left, at the bottom middle of each screen, as games
@@ -4690,6 +4725,7 @@ static void present(const struct dk_command_present *command)
 	}
 	panel_update();
 	keyboard_update();
+	social_update();
 	if (gx.test_armed == 2)
 	{
 		gx.test_armed = 3;
@@ -4716,7 +4752,11 @@ static void present(const struct dk_command_present *command)
 	GX2CopyColorBufferToScanBuffer(WHBGfxGetTVColourBuffer(), GX2_SCAN_TARGET_TV);
 	if (back)
 	{
-		blit_to(back, gamepad, blit_quad(), WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState());
+		/* (the social view, when it is shown, is the GamePad's whole picture: the TV's is not blitted under it, which saves the GamePad's blit as well) */
+		if (gx.social_count > 0)
+			quads_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState(), social_quads, gx.social_count);
+		else
+			blit_to(back, gamepad, blit_quad(), WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState());
 		if (gx.overlay_mode != OVERLAY_MODE_OFF)
 			overlay_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState(), 2, gx.overlay_mode == OVERLAY_MODE_DETAIL ? OVERLAY_DETAIL_HEIGHT : OVERLAY_HEIGHT); /* (512 of the GamePad's 854) */
 		if (skip_progress > 0.0f)

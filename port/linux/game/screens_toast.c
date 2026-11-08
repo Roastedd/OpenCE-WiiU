@@ -31,13 +31,16 @@ returns at once and nothing is polled, kept or drawn.
 unsigned long system_milliseconds(void);
 unsigned char network_chat_keyboard_open(void);
 void draw_quad(rectangle2d *rectangle, pixel32 color);
+/* screens_social.c's, menu_functions.c's (the game's roster provider for screens.enable 2) */
+void screens_social_frame(struct screens_toast_state *state, unsigned long now);
+void menu_screens_provider_prepare(void);
 
 enum
 {
 	/* the provider is asked for toasts this often (milliseconds) */
 	POLL_MILLISECONDS = 250,
 	/* the band, as a share of the window: its width, and its top (the title-safe frame's, 36 of 480 lines, and a little) */
-	BAND_WIDTH_PERCENT = 40,
+	BAND_WIDTH_PERCENT = 50,
 	BAND_TOP_PERCENT = 9,
 	BAND_COLOR = 0xB0000000,
 };
@@ -112,8 +115,10 @@ void screens_toast_frame(void)
 	if (!screens_enabled())
 		return;
 	now = system_milliseconds();
+	menu_screens_provider_prepare();
 	toasts_poll(now);
 	toasts_pad(now);
+	screens_social_frame(&toasts.state, now);
 	if (!toasts.state.shown || cinematic_in_progress() || (hud_scripted_globals && !hud_scripted_globals->show_hud && game_in_progress()))
 		return;
 	alpha = screens_toast_alpha(&toasts.state, now);

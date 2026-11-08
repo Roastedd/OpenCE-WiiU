@@ -534,7 +534,7 @@ enum
 };
 
 /* the x and the width of the button n of count on the buttons' line: up to four 128 wide, the right-most at 510, going left by 130 (the Xbox's bar: DEFAULTS at the left, OK 380, CANCEL
-510); five 120 wide at 8, 130, 252, 374 and 496 (the lobby's bar with a fifth button) */
+510); five 126 wide (the pill's picture is 128: two units of its end are cut) at 4, 131, 258, 385 and 512 */
 int screens_button_left(int index, int count);
 int screens_button_width(int count);
 

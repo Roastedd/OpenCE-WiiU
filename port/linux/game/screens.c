@@ -748,12 +748,12 @@ void screens_empty_text(int screen, int tab, struct screens_friends_summary cons
 
 int screens_button_left(int index, int count)
 {
-	return count >= 5 ? 8 + index * 122 : 510 - (count - 1 - index) * 130;
+	return count >= 5 ? 4 + index * 127 : 510 - (count - 1 - index) * 130;
 }
 
 int screens_button_width(int count)
 {
-	return count >= 5 ? 120 : 128;
+	return count >= 5 ? 126 : 128;
 }
 
 void screens_nav_begin(struct screens_nav *nav, int screen, int rows_visible, int tab_count, int button_count)

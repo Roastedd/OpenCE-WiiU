@@ -1052,6 +1052,13 @@ static wchar_t const *scr_lobby_help(wchar_t const *text)
 
 /* ---------- the dispatch: the function names the XML runs */
 
+/* the provider made (screens.enable 2: the game's roster with the backend's rest) before the first screen needs it: screens_toast.c asks every frame */
+void menu_screens_provider_prepare(void)
+{
+	if (screens_enabled() == 2 && !screens_provider())
+		scr_provider();
+}
+
 static boolean scr_event(char const *name, struct widget_instance *widget, boolean *widget_deleted, boolean *mine)
 {
 	*mine = TRUE;

@@ -2642,12 +2642,12 @@ def _social_row(name: str, columns: list, prefix: str, handlers: list, width: in
 
 
 def _social_buttons(base: str, bar: str, buttons: list, five: bool = False) -> list:
-    """the bar of buttons at the bottom: (key, caption, handlers); four at 120, 250, 380, 510 (128 wide), five at 8, 130, 252, 374, 496 (120 wide)"""
+    """the bar of buttons at the bottom: (key, caption, handlers); four at 120, 250, 380, 510 (128 wide), five at 4, 131, 258, 385, 512 (126 wide)"""
     lines, children = [], []
     for index, (key, caption, handlers) in enumerate(buttons):
-        x = 8 + 122 * index if five else 510 - (len(buttons) - 1 - index) * 130
+        x = 4 + 127 * index if five else 510 - (len(buttons) - 1 - index) * 130
         children.append(f'<child widget="{base}/{key}" x="{x}" y="1"/>')
-        lines += _widget(f"{base}/{key}", [("type", "text"), ("width", 120 if five else 128), ("height", 24), ("bitmap", "bitmaps/text_button_background"),
+        lines += _widget(f"{base}/{key}", [("type", "text"), ("width", 126 if five else 128), ("height", 24), ("bitmap", "bitmaps/text_button_background"),
                                           ("text", caption), ("font", "ui\\small_ui"), ("color", "#FFFFFFFF"), ("align", "center"), ("text_y", 2)],
                          handlers + ['<on event="left_mouse" run="mouse emit accept event"/>'])
     return _widget(bar, [("type", "column_list"), ("width", 640), ("height", 28),

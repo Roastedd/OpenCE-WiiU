@@ -59,6 +59,7 @@ GamePad's gyro, which it replaces while the first player has such a Remote), as 
 #include "wiiu_input.h"
 #include "wiiu_chat_input.h"
 #include "wiiu_keyboard.h"
+#include "wiiu_social_view.h"
 #include "wiiu_pad_players.h"
 #include "wiiu_virtual_pads.h"
 #include "wiiu_update.h"
@@ -709,6 +710,21 @@ ticks). The tap is the keyboard's alone: d3d8_gx2.c's pointer leaves the screen'
 #define FIELD_PRESS_POLLS 6
 static int field_press_a, field_press_b;
 
+/* A tap while the GamePad shows the social view (wiiu_social_view.h) and nothing else has the touch (the chat's keyboard, a menu's text field): the view says what it touched and the game
+is told, as an event it takes from halo_social_event_next (screens_social.c). */
+static void social_apply(void)
+{
+	float x, y;
+	struct halo_social_view view;
+	struct halo_social_event event;
+
+	if (!wiiu_social_view_shown() || wiiu_keyboard_shown() || wiiu_keyboard_field_active() || !wiiu_chat_tap_take_pixels(&chat_tap, &x, &y))
+		return;
+	wiiu_social_view_snapshot(&view);
+	if (wiiu_social_view_hit(&view, x, y, &event) != HALO_SOCIAL_EVENT_NONE)
+		wiiu_social_event_push(&event);
+}
+
 static void field_apply(XINPUT_GAMEPAD *state)
 {
 	float x, y;
@@ -795,6 +811,8 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 	virtual_pad_apply((unsigned int)port, &state->Gamepad);
 	if (port == 0)
 		field_apply(&state->Gamepad);
+	if (port == 0)
+		social_apply();
 	if (port == 0)
 		test_input_gamepad(&state->Gamepad);
 	hold_to_skip((unsigned int)port, &state->Gamepad);
