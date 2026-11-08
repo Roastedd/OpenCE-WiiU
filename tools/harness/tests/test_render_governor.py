@@ -90,6 +90,26 @@ static void run(double seconds, double base, double jitter)
 	}
 }
 
+/* frames whose work cycles through pattern (at step 0, ms; the steps' savings come off each), vsynced as run() */
+static void run_pattern(double seconds, const double *pattern, int count)
+{
+	const double end = now_ms + seconds * 1000.0;
+	int index = 0;
+
+	while (now_ms < end)
+	{
+		double work = pattern[index++ % count] - saved_up_to[render_governor_step()] * saved_scale;
+
+		render_governor_frame(work, work * 0.4, work * 0.6, now_ms);
+		now_ms += work > 16.7 ? work : 16.7;
+		if (render_governor_step() != last_step)
+		{
+			printf("T %.0f %d %d\n", now_ms - 1000.0, last_step, render_governor_step());
+			last_step = render_governor_step();
+		}
+	}
+}
+
 /* smooth_defaults.c's calls (a map start decides) */
 long render_governor_card(void);
 void render_governor_decide(int map_ok, int on);
@@ -223,6 +243,76 @@ int main(int argc, char **argv)
 			run(0.1, 15, 0);
 		}
 		run(10, 15, 0);
+		printf("RESULT step %d\n", render_governor_step());
+	}
+	else if (!strcmp(scenario, "late_halves"))
+	{
+		/* frames of 12 and 24 ms in turn: a mean of 18, under the target of 22 (the mean rule never acts), and half of them late */
+		static const double pattern[2] = { 12, 24 };
+
+		config_on = 1;
+		settings_text = argc > 2 ? argv[2] : "late_ms 16";
+		run_pattern(40, pattern, 2);
+		printf("RESULT step %d\n", render_governor_step());
+	}
+	else if (!strcmp(scenario, "late_few"))
+	{
+		/* nine frames of 12 ms and one of 20: a tenth late, under the 20% limit; each step takes 1.0, 3.2 or 4.4 ms off */
+		static const double pattern[10] = { 12, 12, 12, 12, 20, 12, 12, 12, 12, 12 };
+
+		config_on = 1;
+		settings_text = argc > 2 ? argv[2] : "late_ms 16";
+		run_pattern(40, pattern, 10);
+		printf("RESULT step %d\n", render_governor_step());
+	}
+	else if (!strcmp(scenario, "late_steady"))
+	{
+		/* every frame 20 ms: down to the step where it is under 16 (3: 15.6) and no further, no step up while the step's 1.2 ms put back would make them late (16.8) */
+		config_on = 1;
+		settings_text = argc > 2 ? argv[2] : "late_ms 16; probe 1000000";
+		run(60, 20, 0);
+		printf("RESULT step %d\n", render_governor_step());
+	}
+	else if (!strcmp(scenario, "late_back_up"))
+	{
+		/* a heavy scene and then a light one: the steps come back one at a time, slowly, when the frames would be on time with the step's drawing put back */
+		config_on = 1;
+		settings_text = argc > 2 ? argv[2] : "late_ms 16; probe 1000000";
+		run(20, 20, 0);
+		printf("RESULT heavy %d\n", render_governor_step());
+		run(80, 12, 0);
+		printf("RESULT light %d\n", render_governor_step());
+	}
+	else if (!strcmp(scenario, "late_tick_bound"))
+	{
+		/* frames of 24 ms that wait 14 ms of it for the tick thread: the frame is the tick thread's, and shedding detail shortens nothing: late, and no step */
+		int index;
+
+		config_on = 1;
+		settings_text = "late_ms 16";
+		for (index = 0; index < 1500; index++)
+		{
+			wait_total += 14.0;
+			render_governor_frame(24, 20, 10, now_ms);
+			now_ms += 24;
+		}
+		printf("RESULT step %d\n", render_governor_step());
+	}
+	else if (!strcmp(scenario, "late_log"))
+	{
+		static const double pattern[4] = { 12, 12, 12, 24 };
+
+		config_on = 1;
+		settings_text = "late_ms 16";
+		run_pattern(12, pattern, 4);
+		printf("RESULT step %d\n", render_governor_step());
+	}
+	else if (!strcmp(scenario, "late_settings"))
+	{
+		/* a late_ms under 12 is not a setting, 0 is off, late_share and late_up_share want a share */
+		config_on = 1;
+		settings_text = argc > 2 ? argv[2] : "late_ms 5; late_share 2";
+		run(1, 14, 0);
 		printf("RESULT step %d\n", render_governor_step());
 	}
 	else if (!strcmp(scenario, "severe"))
@@ -459,6 +549,60 @@ def run_scenario(tmp_path, scenario, source=None, extra=()):
     return transitions, results, logs
 
 
+def test_the_late_frame_rule_is_off_unless_the_file_asks(tmp_path):
+    # (frames of 12 and 24 ms: a mean of 18, half of them late. Today's rule, the mean against 22, does nothing; the rule of the share does)
+    transitions, results, logs = run_scenario(tmp_path, "late_halves", extra=["max_step 3"])
+    assert transitions == [] and results["step"] == 0
+    assert not any("late-frame rule" in line for line in logs)
+    transitions, results, logs = run_scenario(tmp_path, "late_halves")
+    assert results["step"] == 3 and len(transitions) == 3 and all(t[2] > t[1] for t in transitions)
+    assert any("late-frame rule" in line and "16.0 ms" in line for line in logs)
+    assert any("50% of the frames over 16.0 ms" in line for line in logs)
+
+
+def test_a_few_late_frames_are_not_shed_for_and_a_lower_limit_sheds(tmp_path):
+    transitions, results, _ = run_scenario(tmp_path, "late_few")
+    assert transitions == [] and results["step"] == 0
+    # (a limit of 5%: the tenth is over it; the 20 ms frame is 19 at step 1, 16.8 at step 2 and 15.6, on time, at step 3; no step back is tried: probe)
+    transitions, results, _ = run_scenario(tmp_path, "late_few", extra=["late_ms 16; late_share 0.05; probe 1000000"])
+    assert results["step"] == 3 and len(transitions) == 3
+
+
+def test_the_late_frame_rule_settles_where_the_frames_are_on_time_and_waits_for_headroom(tmp_path):
+    transitions, results, _ = run_scenario(tmp_path, "late_steady")
+    assert results["step"] == 3 and len(transitions) == 3 and all(t[2] > t[1] for t in transitions)
+    # (the mean rule's idea of headroom, 15.6 and 1.2 more under 88% of 22, would go up here: the frame would be 16.8 ms, late)
+    transitions, results, _ = run_scenario(tmp_path, "late_steady", extra=["probe 1000000"])
+    assert results["step"] == 0 and transitions == []      # (the mean is 20, under the target: nothing sheds)
+
+
+def test_the_late_frame_rule_brings_the_steps_back_when_the_frames_would_be_on_time(tmp_path):
+    transitions, results, _ = run_scenario(tmp_path, "late_back_up")
+    assert results["heavy"] == 3 and results["light"] == 0
+    ups = [t for t in transitions if t[2] < t[1]]
+    assert len(ups) == 3 and all(b[0] - a[0] >= 8000 for a, b in zip(ups, ups[1:]))
+
+
+def test_the_late_frame_rule_leaves_a_frame_the_tick_thread_holds_alone(tmp_path):
+    transitions, results, _ = run_scenario(tmp_path, "late_tick_bound")
+    assert transitions == [] and results["step"] == 0
+
+
+def test_the_log_says_the_late_frames_in_every_rule(tmp_path):
+    # (the share of frames whose work was over a refresh and a little, 17.5 ms, whether or not the late rule decides: a quarter of these frames are 24 ms, and the steps take the 24 down)
+    _, _, logs = run_scenario(tmp_path, "late_log")
+    steps = [line for line in logs if line.startswith("governor: step") and "late frames" in line]
+    assert steps and "late frames (work over 17.5 ms) 0 = 0.0%" not in steps[0]
+    assert any("= 25.0%" in line for line in steps)
+
+
+def test_late_settings_out_of_range_are_not_settings(tmp_path):
+    _, results, logs = run_scenario(tmp_path, "late_settings")
+    assert results["step"] == 0 and sum("not a setting: late_" in line for line in logs) == 2
+    _, results, logs = run_scenario(tmp_path, "late_settings", extra=["late_ms 0; late_share 0.5; late_up_share 0.1"])
+    assert results["step"] == 0 and not any("not a setting" in line for line in logs) and not any("late-frame rule" in line for line in logs)
+
+
 def test_off_changes_nothing(tmp_path):
     transitions, results, logs = run_scenario(tmp_path, "off")
     assert transitions == [] and results["step"] == 0 and results["cull"] == 0 and results["lod"] == 1 and results["active"] == 0
@@ -620,7 +764,7 @@ def test_negative_controls(tmp_path, fault):
     source = (ROOT / "port/linux/game/render_governor.c").read_text(encoding="latin-1")
     changes = {
         # (up as soon as the frame is under the target, without the step's saving)
-        "no_hysteresis": [("governor.step > 0 && predicted < target * settings.up_margin ?", "governor.step > 0 && mean + 0 * predicted < target ?"),
+        "no_hysteresis": [("predicted < target * settings.up_margin) ?", "mean + 0 * predicted < target) ?"),
                           ("governor.probe_windows >= (int)(settings.probe_ms / settings.window_ms)", "0")],
         # (a load's frame counts, and a window of one frame is a window)
         "no_hitch_filter": [("if (work_ms > 250.0)", "if (work_ms > 2.5e9)"), ("if (governor.frames >= 8)", "if (governor.frames >= 1)"),
@@ -642,6 +786,25 @@ def test_negative_controls(tmp_path, fault):
         downs = [t for t in transitions if t[2] > t[1] and t[0] > ups[0][0]]
         later = [t for t in ups if t[0] > downs[0][0]]
         assert later[0][0] - downs[0][0] < 16000
+
+
+@pytest.mark.parametrize("fault", ["mean_decides", "up_ignores_the_save"])
+def test_the_late_frame_rule_negative_controls(tmp_path, fault):
+    source = (ROOT / "port/linux/game/render_governor.c").read_text(encoding="latin-1")
+    changes = {
+        # (the rule of the share replaced by today's: half the frames late, a mean of 18 under 22, nothing sheds)
+        "mean_decides": ("(late_rule ? late_share > settings.late_share : mean > target)", "(mean > target)"),
+        # (a step up as soon as the frames now are on time, whatever the step's drawing would make of them)
+        "up_ignores_the_save": ("late_rule ? late_share_up <= settings.late_up_share :", "late_rule ? late_share <= settings.late_up_share :"),
+    }
+    before, after = changes[fault]
+    assert source.count(before) == 1
+    scenario = "late_halves" if fault == "mean_decides" else "late_steady"
+    transitions, results, _ = run_scenario(tmp_path, scenario, source.replace(before, after, 1))
+    if fault == "mean_decides":
+        assert transitions == [] and results["step"] == 0
+    else:
+        assert any(t[2] < t[1] for t in transitions)
 
 
 def test_a_map_the_smooth_defaults_are_for_has_the_governor_on_without_a_card_file(tmp_path):

@@ -23,8 +23,15 @@ separated by semicolons, "name value": target (ms), step (hold this step, for a 
 up_dwell (ms), blend (ms a step change glides over, 1500; 0 is all at once), down_windows, up_windows, up_margin (the share of the target the frame must be under, with the step's saving added), min_render (ms of drawing a frame
 under which the governor does not step down: the frame is the ticks', 4), tick_bound (ms a frame waited for the tick thread, 3, and tick_bound_share, 0.35 of the
 frame: over both, the frame is the tick thread's and the governor does not step down), quiet (ms after a map starts that decide nothing, 20000), probe (ms under
-the target before a step up is tried whatever the estimate, 20000), worst (a window with a frame over this many ms decides nothing, 80), log (ms between lines; 0 for none) and sN.name for N the step (0 to 7) and name one of cull_scenery, cull_item, cull_unit, lod, shadow, decal_radius, decal_keep, particle_lod,
+the target before a step up is tried whatever the estimate, 20000), worst (a window with a frame over this many ms decides nothing, 80), log (ms between lines; 0 for none) and late_ms, late_share and late_up_share (below), and sN.name for N the step (0 to 7) and name one of cull_scenery, cull_item, cull_unit, lod, shadow, decal_radius, decal_keep, particle_lod,
 particle_keep, decal_max, particle_max, grass, lens_flares, specular, contrails, save (the ms the step is estimated to save, for the step-up test).
+
+The late-frame rule (late_ms, off by default: the rule above is what runs). A window's mean hides what a display that shows a frame for one refresh or two feels: frames of 12 and 24 ms
+mean 18 and are half late. With "late_ms 16" the governor counts, in each window, the share of frames whose work was over 16 ms (a frame under that is on time at 60 a second) and decides
+on the share: it goes down when the share is over late_share (0.20 by default) in as many windows as before, with the same dwells, drawing and tick-thread conditions, and goes up when the
+share of frames that would still be on time with the step's drawing put back (each frame's work plus the step's save, against late_ms) is at most late_up_share (0.08 by default) for as many
+windows as before, or, for the slow probe, when the share is at most a quarter of that for as long. late_ms 0 is the rule above; target does not matter to it except that a window whose mean
+is 40% over the target is still "severe", and the hitch rules are the same. The share is said in the governor's log line (late frames, whichever rule decides).
 */
 
 #include "render_governor.h"
@@ -82,6 +89,8 @@ static struct
 	double blend_ms;
 	double target_ms, window_ms, down_dwell_ms, up_dwell_ms, up_margin, log_ms, min_render_ms, tick_bound_ms, tick_bound_share, quiet_ms, probe_ms, worst_ms;
 	int down_windows, up_windows;
+	/* the late-frame rule: a frame is late over late_ms (0: the rule is off); the share of late frames that takes a step down, and the share with the step put back that allows a step up */
+	double late_ms, late_share, late_up_share;
 } settings;
 
 static struct
@@ -101,6 +110,8 @@ static struct
 	unsigned long frames_in_log;
 	double log_work, log_tick, log_render;
 	double log_worst;
+	/* frames of the window over late_ms, and over it with the current step's save added (late_ms 0: not counted); of the log's interval, the frames whose work was over a refresh (17.5 ms) */
+	unsigned long late, late_with_step_up, log_late;
 } governor;
 
 static void settings_defaults(void)
@@ -125,6 +136,9 @@ static void settings_defaults(void)
 	settings.worst_ms = 80.0;
 	settings.down_windows = 2;
 	settings.up_windows = 6;
+	settings.late_ms = 0.0;
+	settings.late_share = 0.20;
+	settings.late_up_share = 0.08;
 	settings.card_on = settings.card_off = 0;
 }
 
@@ -138,6 +152,12 @@ static int settings_value(char const *name, double number)
 		if (number < 20.0)
 			platform_log("governor: target %.1f ms is under 20 (a refresh is 16.7): using 20", number);
 	}
+	else if (!strcmp(name, "late_ms") && (number == 0.0 || (number >= 12.0 && number <= 100.0)))
+		settings.late_ms = number;
+	else if (!strcmp(name, "late_share") && number > 0.0 && number <= 1.0)
+		settings.late_share = number;
+	else if (!strcmp(name, "late_up_share") && number > 0.0 && number <= 1.0)
+		settings.late_up_share = number;
 	else if (!strcmp(name, "step"))
 		settings.forced = number >= 0.0 && number < STEPS ? (int)number : -1;
 	else if (!strcmp(name, "max_step"))
@@ -284,6 +304,9 @@ static void governor_say_on(void)
 	platform_log("governor: on (%s), target %.1f ms, steps 0 to %d, window %.0f ms, dwell %.0f down %.0f up",
 		smooth_on == 1 ? (settings.card_on ? "halo/governor.txt, this map is one for it" : "the smooth defaults") : settings.card_on ? "halo/governor.txt" : "display.dynamic_quality",
 		settings.target_ms, governor_max_step(), settings.window_ms, settings.down_dwell_ms, settings.up_dwell_ms);
+	if (settings.late_ms > 0.0)
+		platform_log("governor: the late-frame rule (halo/governor.txt): down when over %.0f%% of a window's frames take over %.1f ms, up when at most %.0f%% would with the step put back",
+			settings.late_share * 100.0, settings.late_ms, settings.late_up_share * 100.0);
 	if (settings.forced >= 0)
 		platform_log("governor: held at step %d by halo/governor.txt (a test)", settings.forced);
 }
@@ -522,9 +545,11 @@ static void governor_log(double now_ms)
 		delta[index] = render_governor_counts[index] - governor.counts_at[index];
 		governor.counts_at[index] = render_governor_counts[index];
 	}
-	platform_log("governor: step %d (%s)%s: frame work %.1f ms (ticks %.1f, rendering %.1f, worst %.0f), target %.1f, %lu frames, steps down %lu up %lu",
+	platform_log("governor: step %d (%s)%s: frame work %.1f ms (ticks %.1f, rendering %.1f, worst %.0f), target %.1f, %lu frames, steps down %lu up %lu, late frames (work over 17.5 ms) %lu = %.1f%%",
 		governor.step, values[governor.step].name, settings.forced >= 0 ? " held" : "", governor.log_work / frames, governor.log_tick / frames,
-		governor.log_render / frames, governor.log_worst, settings.target_ms, governor.frames_in_log, governor.downs, governor.ups);
+		governor.log_render / frames, governor.log_worst, settings.target_ms, governor.frames_in_log, governor.downs, governor.ups, governor.log_late,
+		100.0 * (double)governor.log_late / frames);
+	governor.log_late = 0;
 	if (windows)
 		platform_log("governor: passes, ms a window (%lu): visibility %.2f sky %.2f objects %.2f lightmaps %.2f shadows %.2f decals %.2f specular %.2f "
 			"transparent %.2f effects %.2f detail %.2f hud %.2f", windows, passes[0], passes[2], passes[3], passes[4], passes[5], passes[6], passes[7],
@@ -567,6 +592,7 @@ static void governor_set_step(int step, double now_ms, char const *why)
 	governor.over_windows = governor.under_windows = governor.probe_windows = 0;
 	governor.sum_work = governor.sum_tick = governor.sum_render = governor.sum_wait = 0.0;
 	governor.frames = 0;
+	governor.late = governor.late_with_step_up = 0;
 	governor.window_worst = 0.0;
 	governor.window_start = now_ms;
 	governor_publish();
@@ -628,6 +654,7 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 			governor.over_windows = governor.under_windows = governor.probe_windows = 0;
 			governor.sum_work = governor.sum_tick = governor.sum_render = governor.sum_wait = 0.0;
 			governor.frames = 0;
+			governor.late = governor.late_with_step_up = 0;
 			governor.window_worst = 0.0;
 		}
 		/* a hitch (a load, a save, a first use) is not detail's to shed; the rest counts at most three targets */
@@ -645,6 +672,12 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 			governor.sum_render += render_ms;
 			governor.sum_wait += waited;
 			governor.frames++;
+			if (settings.late_ms > 0.0)
+			{
+				governor.late += work_ms > settings.late_ms;
+				governor.late_with_step_up += work_ms + (double)save_ms[governor.step] > settings.late_ms;
+			}
+			governor.log_late += work_ms > 17.5;
 			if (work_ms > governor.window_worst)
 				governor.window_worst = work_ms;
 			governor.log_work += work_ms;
@@ -672,24 +705,34 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 			const int tick_bound = wait > settings.tick_bound_ms && wait > settings.tick_bound_share * governor.sum_work / (double)governor.frames;
 			double predicted;
 
+			const int late_rule = settings.late_ms > 0.0;
+			const double late_share = (double)governor.late / (double)governor.frames;
+			const double late_share_up = (double)(tick_bound ? governor.late : governor.late_with_step_up) / (double)governor.frames;
+
 			mean = governor.sum_work / (double)governor.frames;
-			severe = mean > target * 1.4;
+			/* (the late-frame rule: more than half the frames late is as severe as a mean 40% over) */
+			severe = mean > target * 1.4 || (late_rule && late_share >= 0.6);
 			/* over the target, with the drawing at least 4 ms of it, and not waiting for the tick thread: drawing less shortens a frame only if the drawing is
-			what it waits for (a frame that is mostly ticks, or the tick thread's, is not drawing's to shed) */
-			governor.over_windows = mean > target && governor.sum_render / (double)governor.frames >= settings.min_render_ms && !tick_bound ?
-				governor.over_windows + 1 : 0;
-			/* the frame with the step's drawing put back: the drawing adds to the work, less what it takes from the wait for the tick thread */
+			what it waits for (a frame that is mostly ticks, or the tick thread's, is not drawing's to shed). The late-frame rule: the share of late frames is over its limit */
+			governor.over_windows = (late_rule ? late_share > settings.late_share : mean > target) && governor.sum_render / (double)governor.frames >= settings.min_render_ms &&
+				!tick_bound ? governor.over_windows + 1 : 0;
+			/* the frame with the step's drawing put back: the drawing adds to the work, less what it takes from the wait for the tick thread. The late-frame rule: the share of
+			frames still on time with the step's save added back (when the frame is the tick thread's, the save is not counted) is at most the limit */
 			predicted = tick_bound ? (mean - wait + saving > mean ? mean - wait + saving : mean) : mean + saving;
-			governor.under_windows = governor.step > 0 && predicted < target * settings.up_margin ? governor.under_windows + 1 : 0;
+			governor.under_windows = governor.step > 0 && (late_rule ? late_share_up <= settings.late_up_share : predicted < target * settings.up_margin) ? governor.under_windows + 1 : 0;
 			/* and a step up tried when the frame has been comfortably under the target a long time, whatever the estimate says: it is taken back (and the
-			next try waits longer) if it was wrong */
-			governor.probe_windows = governor.step > 0 && mean < target * 0.93 ? governor.probe_windows + 1 : 0;
+			next try waits longer) if it was wrong. The late-frame rule: a quarter of the share the step up allows are late */
+			governor.probe_windows = governor.step > 0 && (late_rule ? late_share <= settings.late_up_share * 0.25 : mean < target * 0.93) ? governor.probe_windows + 1 : 0;
 			if (governor.over_windows >= (severe ? 1 : settings.down_windows) && governor.step < governor_max_step() &&
 				now_ms - governor.last_change >= settings.down_dwell_ms)
 			{
 				char why[64];
 
-				snprintf(why, sizeof(why), "%.1f ms over %.1f%s", mean, target, severe ? " by 40%" : "");
+				if (late_rule)
+					snprintf(why, sizeof(why), "%.0f%% of the frames over %.1f ms (limit %.0f%%), mean %.1f%s", late_share * 100.0, settings.late_ms, settings.late_share * 100.0, mean,
+						severe ? ", severe" : "");
+				else
+					snprintf(why, sizeof(why), "%.1f ms over %.1f%s", mean, target, severe ? " by 40%" : "");
 				governor_set_step(governor.step + 1, now_ms, why);
 			}
 			else if (governor.under_windows >= settings.up_windows && governor.step > 0 &&
@@ -697,7 +740,11 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 			{
 				char why[64];
 
-				snprintf(why, sizeof(why), "%.1f ms and %.1f more is under %.1f", mean, saving, target * settings.up_margin);
+				if (late_rule)
+					snprintf(why, sizeof(why), "%.0f%% of the frames would be over %.1f ms with %.1f ms more (limit %.0f%%)", late_share_up * 100.0, settings.late_ms, saving,
+						settings.late_up_share * 100.0);
+				else
+					snprintf(why, sizeof(why), "%.1f ms and %.1f more is under %.1f", mean, saving, target * settings.up_margin);
 				governor_set_step(governor.step - 1, now_ms, why);
 			}
 			else if (governor.probe_windows >= (int)(settings.probe_ms / settings.window_ms) && governor.step > 0 &&
@@ -705,7 +752,10 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 			{
 				char why[64];
 
-				snprintf(why, sizeof(why), "a try after %.0f s under %.1f (%.1f ms)", settings.probe_ms / 1000.0, target * 0.93, mean);
+				if (late_rule)
+					snprintf(why, sizeof(why), "a try after %.0f s with %.1f%% of the frames over %.1f ms (%.1f ms)", settings.probe_ms / 1000.0, late_share * 100.0, settings.late_ms, mean);
+				else
+					snprintf(why, sizeof(why), "a try after %.0f s under %.1f (%.1f ms)", settings.probe_ms / 1000.0, target * 0.93, mean);
 				governor_set_step(governor.step - 1, now_ms, why);
 			}
 			else if (now_ms - governor.last_change > 60000.0 && governor.up_backoff > 1)
@@ -714,6 +764,7 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 		governor.window_start = now_ms;
 		governor.sum_work = governor.sum_tick = governor.sum_render = governor.sum_wait = 0.0;
 		governor.frames = 0;
+		governor.late = governor.late_with_step_up = 0;
 		governor.window_worst = 0.0;
 	}
 	governor_publish();
