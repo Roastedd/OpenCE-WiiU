@@ -298,6 +298,7 @@ double tick_overlap_wait_ms_total(void);
 stamp's number for the frame), and, once a frame, the frame's CPU time in ms and the time */
 void (*d3d8_pacing_present_hook)(unsigned *flags, unsigned *stamp_sequence);
 void (*d3d8_pacing_frame_hook)(double cpu_ms, double now_ms);
+static int pacing_locked; /* the last present command held the swap for two refreshes */
 /* wiiu_render_passes.c's: the part of the rendering the game thread stayed longest in since the last call, and for how long (NULL if none) */
 const char *wiiu_render_pass_longest(double *milliseconds);
 
@@ -4472,18 +4473,22 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 				platform_log("hitch: frame %lu: its longest part of the rendering was %s, %.1f ms of the %.1f", device.frame, longest_name, longest_ms, frame_render_ms);
 		}
 		/* dynamic quality (render_governor.c): the frame's work, and how it divides */
-		render_governor_frame(work, frame_tick_ms, frame_render_ms, start);
 		if (d3d8_pacing_frame_hook)
 		{
 			/* the locked 30's rule (halo/pacing_lock.txt, wiiu_pacing.h) is given the frame's CPU time: its work less the waits for the GX2 thread's streams and slots, for the renderer
 			to be idle and for the tick thread (a locked 30 holds the game thread in them for half of each frame) */
 			static double tick_wait_before;
 			const double tick_wait = tick_overlap_wait_ms_total();
-			const double cpu = work - (slot_wait_ms_total() - slot_before) - (waits_ms - waits_before) - (idle_ms - idle_before) - (tick_wait - tick_wait_before);
+			double cpu = work - (slot_wait_ms_total() - slot_before) - (waits_ms - waits_before) - (idle_ms - idle_before) - (tick_wait - tick_wait_before);
 
 			tick_wait_before = tick_wait;
-			d3d8_pacing_frame_hook(cpu > 0.0 ? cpu : 0.0, start);
+			cpu = cpu > 0.0 ? cpu : 0.0;
+			/* (and the dynamic quality is given it too while the frames are locked: their work is half waiting for the display, which drawing less would not shorten) */
+			render_governor_frame(pacing_locked ? cpu : work, frame_tick_ms, frame_render_ms, start);
+			d3d8_pacing_frame_hook(cpu, start);
 		}
+		else
+			render_governor_frame(work, frame_tick_ms, frame_render_ms, start);
 		sum_tick_ms += frame_tick_ms;
 		sum_render_ms += frame_render_ms;
 		sum_ticks += frame_ticks;
@@ -4558,6 +4563,7 @@ static void D3DDevice_Present_inner(CONST RECT *source_rectangle, CONST RECT *de
 
 			d3d8_pacing_present_hook(&pacing_flags, &command->stamp_sequence);
 			command->flags |= pacing_flags;
+			pacing_locked = (pacing_flags & DK_PRESENT_LOCK30) != 0;
 		}
 		if (screenshot_every > 0 && device.frame % (unsigned long)screenshot_every == 0 && command->back_buffer.width &&
 			*config_string("debug.screenshot_directory"))
