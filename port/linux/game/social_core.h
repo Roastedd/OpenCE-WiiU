@@ -17,6 +17,7 @@ Text that arrives from outside is cleaned once, here (text_safe.h) before anythi
 #define __HALO_LINUX_SOCIAL_CORE_H
 
 #include "social_codec.h"
+#include "social.h"
 
 enum
 {
@@ -73,6 +74,8 @@ enum
 	SOCIAL_INVITE_LIFE = 60000,
 	SOCIAL_INVITE_SPACING = 10000,
 	SOCIAL_REQUEST_REPEAT = 300000,
+	/* a request nobody answered goes after this, so that a wave of them does not keep the list full for good */
+	SOCIAL_REQUEST_LIFE = 1800000,
 	SOCIAL_HELLO_FIRST = 20000,
 	SOCIAL_HELLO_LATER = 300000,
 	SOCIAL_HELLO_TRIES = 10,
@@ -647,25 +650,6 @@ const struct social_member *social_party_member_by_id(const struct social_engine
 
 /* a party call's result noted for the snapshot */
 void social_engine_party_result(struct social_engine *engine, int result);
-/* what a member reports of following the leader (STATE's follow_result) */
-enum
-{
-	SOCIAL_FOLLOW_NONE,
-	SOCIAL_FOLLOW_JOINING,
-	SOCIAL_FOLLOW_JOINED,
-	SOCIAL_FOLLOW_FULL,
-	SOCIAL_FOLLOW_CLOSED,
-	SOCIAL_FOLLOW_VERSION,
-	SOCIAL_FOLLOW_MAP_MISSING,
-	SOCIAL_FOLLOW_NO_ROUTE,
-	SOCIAL_FOLLOW_NO_ANSWER,
-	SOCIAL_FOLLOW_BUSY,
-	SOCIAL_FOLLOW_OPTED_OUT,
-	SOCIAL_FOLLOW_BANNED,
-	SOCIAL_FOLLOW_REPLACED,
-	NUMBER_OF_SOCIAL_FOLLOWS,
-};
-
 /* ---------- the file (social_store.c) */
 
 /* whether a save is wanted now: something changed, and the debounce and the interval are over; foreground says the game has the screen (the card is not

@@ -5,6 +5,7 @@ Joining a friend's game (social_join.h).
 */
 
 #include "social_join.h"
+#include "social_front.h"
 #include "../src/p2p.h"
 
 #include <stdio.h>

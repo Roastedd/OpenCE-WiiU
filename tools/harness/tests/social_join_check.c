@@ -27,7 +27,19 @@ line (test_social_join.py). */
 #include "social_front.c"
 #include "social.c"
 #include "social_join.c"
+#include "social_command.c"
 #include "social_fake.h"
+
+#include <time.h>
+
+/* (p2p.c's, which is not linked: the monotonic milliseconds, for `social timing`) */
+unsigned long p2p_now(void)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (unsigned long)(now.tv_sec * 1000UL + now.tv_nsec / 1000000UL);
+}
 
 static unsigned long long test_state = 0x77ULL;
 
@@ -766,6 +778,96 @@ static void case_join_through_the_network(void)
 	CHECK(status.state == SOCIAL_JOIN_FAILED && status.reason == SOCIAL_JOIN_REASON_LEFT && script.cancelled == 1, "the friend's game ended while it was asked for: %d", status.reason);
 }
 
+/* ---------- the commands */
+
+static const char *say_line(const char *line)
+{
+	static char reply[2048];
+
+	social_command(line, reply, sizeof(reply));
+	return reply;
+}
+
+static void case_commands(void)
+{
+	static struct fake_net net;
+	struct fake_node *a, *b;
+	struct script script;
+	struct social_join_machine machine;
+	char code_b[32];
+	char line[128];
+	int round;
+
+	fake_start(&net, 45);
+	a = fake_add(&net, 0, 1);
+	b = fake_add(&net, 0, 1);
+	script_start(&script, &machine);
+	social_join_set_backend(&machine.backend);
+	social_global_front = a->front;
+	fake_run(&net, 500);
+	CHECK(strstr(say_line("code"), a->engine->identity.code), "code: %s", say_line("code"));
+	CHECK(strstr(say_line("help"), "party") && strstr(say_line("nonsense"), "no such command"), "help");
+	CHECK(strstr(say_line("status"), "4 brokers"), "status: %s", say_line("status"));
+	snprintf(code_b, sizeof(code_b), "%s", b->engine->identity.code);
+	snprintf(line, sizeof(line), "add %s", code_b);
+	CHECK(strstr(say_line(line), "Request sent"), "add");
+	CHECK(strstr(say_line("add 1234"), "not a friend code") && strstr(say_line("add AAAA-AAAA-AAAA-A"), "mistake"), "bad codes");
+	fake_run(&net, 2000);
+	CHECK(strstr(say_line("sent"), code_b), "waiting");
+	social_front_accept(b->front, snap(b, 0)->requests[0].id);
+	fake_run(&net, 15000);
+	CHECK(strstr(say_line("list"), "1 friends") && strstr(say_line("list"), "Node1") && strstr(say_line("list"), "online"), "list: %s", say_line("list"));
+	CHECK(strstr(say_line("nick 1 Bee"), "done"), "nick");
+	fake_run(&net, 300);
+	CHECK(strstr(say_line("list"), "aka Bee"), "the nickname");
+	CHECK(strstr(say_line("invite 1"), "asked") && strstr(say_line("activity game"), "done"), "invite");
+	fake_run(&net, 500);
+	CHECK(strstr(say_line("last"), "You are not hosting"), "last: %s", say_line("last"));
+	CHECK(strstr(say_line("party make"), "asked") && strstr(say_line("party"), "no party"), "party");
+	fake_run(&net, 300);
+	CHECK(strstr(say_line("party"), "party of 1, you lead"), "party: %s", say_line("party"));
+	CHECK(strstr(say_line("party chat hi there"), "asked"), "chat");
+	fake_run(&net, 300);
+	CHECK(strstr(say_line("party"), "chat Node0: hi there"), "chat shown");
+	CHECK(strstr(say_line("joinstatus"), "idle") && strstr(say_line("join 9"), "no such command"), "join");
+	CHECK(strstr(say_line("timing"), "ed25519 verify"), "timing");
+	CHECK(strstr(say_line("details none"), "done") && strstr(say_line("share offline"), "done") && strstr(say_line("requests off"), "done"), "settings");
+	fake_run(&net, 300);
+	CHECK(strstr(say_line("status"), "appearing offline") && strstr(say_line("status"), "details none") && strstr(say_line("status"), "requests refused"), "and they took");
+	CHECK(strstr(say_line("remove 1"), "removed"), "remove");
+	fake_run(&net, 300);
+	CHECK(strstr(say_line("block 1"), "no such command"), "and then there is no first friend");
+	CHECK(strstr(say_line("list"), "0 friends"), "removed");
+	/* nonsense of every kind: no crash, an answer each time */
+	for (round = 0; round < 4000; round++)
+	{
+		char noise[120];
+		int length = (int)(fake_random(&test_state) % 100), i;
+		static const char *const words[] = { "add", "accept", "ignore", "cancel", "remove", "block", "unblock", "nick", "invite", "join", "joininvite", "party", "name", "share", "details",
+			"requests", "activity", "kick", "chat", "transfer", "leave", "99", "-1", "0", "x" };
+
+		noise[0] = 0;
+		if (round & 1)
+			snprintf(noise, sizeof(noise), "%s %s %s", words[fake_random(&test_state) % 25], words[fake_random(&test_state) % 25], words[fake_random(&test_state) % 25]);
+		else
+		{
+			for (i = 0; i < length; i++)
+				noise[i] = (char)(1 + fake_random(&test_state) % 254);
+			noise[length] = 0;
+		}
+		CHECK(say_line(noise) != NULL, "reply");
+		if (round % 50 == 0)
+			fake_run(&net, 50);
+	}
+	{
+		char tiny[8];
+
+		CHECK(social_command("help", tiny, sizeof(tiny)) == 1 && strlen(tiny) < sizeof(tiny), "a small buffer is not overrun");
+		CHECK(social_command("help", tiny, 0) == 1, "no buffer");
+	}
+	social_global_front = NULL;
+}
+
 int main(int argc, char **argv)
 {
 	const char *name = argc > 1 ? argv[1] : "";
@@ -784,6 +886,8 @@ int main(int argc, char **argv)
 		case_join_checks();
 	else if (!strcmp(name, "join-left"))
 		case_join_left();
+	else if (!strcmp(name, "commands"))
+		case_commands();
 	else if (!strcmp(name, "join-through-the-network"))
 		case_join_through_the_network();
 	else

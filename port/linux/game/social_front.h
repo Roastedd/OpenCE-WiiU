@@ -16,6 +16,11 @@ The harness makes one of these for each simulated machine; social_p2p.c makes th
 
 struct social_front;
 
+/* the one friends layer of the process (social.c), set by social_p2p.inc before any of social.h's calls can reach it; NULL while it is off */
+extern struct social_front *social_global_front;
+/* what the game last said it is doing (social_set_activity), 0 if nothing yet */
+int social_activity_get(void);
+
 struct social_front_options
 {
 	/* whether the game has the screen (the card is written only then); NULL: always */
@@ -60,6 +65,7 @@ void social_front_party_token(struct social_front *front, const unsigned char *t
 /* whether the game thread is to join the party leader's game now (cheap: no snapshot copied), the target and its order; and what became of it */
 int social_front_follow(struct social_front *front, struct social_join_target *target, unsigned int *order);
 void social_front_follow_report(struct social_front *front, unsigned int order, int result);
+void social_front_set_share_part(struct social_front *front, int which, int value);
 void social_front_set_enabled(struct social_front *front, int enabled);
 void social_front_set_place(struct social_front *front, const struct social_place *place);
 /* whether it is on, and this machine's code: a few bytes under the lock, without copying the snapshot */

@@ -16,8 +16,8 @@ HARNESS_INCLUDE = Path(__file__).resolve().parent / "include"
 
 # the engine's units, in the folder they are included from by the drivers
 SOURCES = ("social_codec.c", "social_core.c", "social_friends.c", "social_party.c", "social_codec.h", "social_core.h", "social.h", "social.c", "social_store.c",
-           "social_store.h", "social_front.c", "social_front.h", "social_invite.c")
-EXTRA_SOURCES = ("social_join.c", "social_join.h", "social_command.c", "social_command.h")
+           "social_store.h", "social_front.c", "social_front.h", "social_invite.c", "social_join.c", "social_join.h", "social_command.c", "social_command.h")
+EXTRA_SOURCES = ()
 CRYPTO = ("port/linux/src/p2p_crypto.c", "port/third_party/monocypher/monocypher.c", "port/third_party/monocypher/monocypher-ed25519.c",
           "port/linux/game/text_safe.c")
 
@@ -28,12 +28,15 @@ class CheckFailed(Exception):
     pass
 
 
+_override = []
+
+
 def target():
-    return os.environ.get("HALO_HARNESS_TARGET", "-m32").split()
+    return _override[0] if _override else os.environ.get("HALO_HARNESS_TARGET", "-m32").split()
 
 
 def runner():
-    return os.environ.get("HALO_HARNESS_RUNNER", "").split()
+    return _override[1] if _override else os.environ.get("HALO_HARNESS_RUNNER", "").split()
 
 
 def big_endian():
@@ -117,11 +120,15 @@ def sources_folder(mutations=()):
     return folder
 
 
-@functools.lru_cache(maxsize=None)
 def build(driver, mutations=(), defines=()):
     """tests/<driver>.c with the engine's sources (mutated copies if mutations are given) and the crypto, as an executable"""
+    return _build(driver, mutations, defines, tuple(target()), sanitized())
+
+
+@functools.lru_cache(maxsize=None)
+def _build(driver, mutations, defines, flags, sanitize):
     folder = sources_folder(mutations)
-    tag = hashlib.sha256(repr((driver, mutations, defines)).encode()).hexdigest()[:12]
+    tag = hashlib.sha256(repr((driver, mutations, defines, flags, sanitize)).encode()).hexdigest()[:12]
     executable = Path(_directory.name) / f"{driver}-{tag}"
     object_file = Path(_directory.name) / f"{driver}-{tag}.o"
     _compile(TESTS / f"{driver}.c", object_file, extra_include=[f"-I{folder / 'game'}", *[f"-D{d}" for d in defines]])
@@ -130,6 +137,24 @@ def build(driver, mutations=(), defines=()):
     if result.returncode:
         raise RuntimeError(f"{driver} does not link:\n{result.stderr[-4000:]}")
     return executable
+
+
+class Leg:
+    """a target to build for and run on, other than the environment's (the mixed test builds one program twice): the compiler's flags and what runs it"""
+
+    def __init__(self, flags, runner_command, environment=None):
+        self.flags = flags
+        self.runner = runner_command
+        self.environment = environment or {}
+
+    def __enter__(self):
+        _override[:] = [self.flags, self.runner]
+        crypto_objects.cache_clear()
+        return self
+
+    def __exit__(self, *arguments):
+        _override.clear()
+        crypto_objects.cache_clear()
 
 
 def run(executable, *arguments, timeout=300):

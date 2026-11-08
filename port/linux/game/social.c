@@ -123,6 +123,19 @@ const char *social_follow_text(int follow_result)
 	return "";
 }
 
+/* what the game last said it is doing: one int, written by any thread and read by the engine's */
+static volatile int social_activity;
+
+void social_set_activity(int activity)
+{
+	social_activity = activity;
+}
+
+int social_activity_get(void)
+{
+	return social_activity;
+}
+
 int social_is_enabled(void)
 {
 	return social_global_front && social_front_enabled(social_global_front);
@@ -198,6 +211,10 @@ void social_party_join_invite(unsigned int invite_id)
 		}
 	}
 }
+
+void social_set_show_status(int show) { if (social_global_front) social_front_set_share_part(social_global_front, 0, show); }
+void social_set_details(int details) { if (social_global_front) social_front_set_share_part(social_global_front, 1, details); }
+void social_set_accept_requests(int accept) { if (social_global_front) social_front_set_share_part(social_global_front, 2, accept); }
 
 int social_event_next(struct social_api_event *event)
 {

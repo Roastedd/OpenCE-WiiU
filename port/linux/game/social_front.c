@@ -37,6 +37,7 @@ enum
 	_command_party,
 	_command_party_token,
 	_command_follow_report,
+	_command_share_part,
 };
 
 struct command
@@ -679,6 +680,17 @@ void social_front_set_share(struct social_front *front, int show_status, int det
 	post(front, &command);
 }
 
+void social_front_set_share_part(struct social_front *front, int which, int value)
+{
+	struct command command;
+
+	memset(&command, 0, sizeof(command));
+	command.type = _command_share_part;
+	command.a = which;
+	command.b = value;
+	post(front, &command);
+}
+
 void social_front_set_enabled(struct social_front *front, int enabled)
 {
 	struct command command;
@@ -734,6 +746,10 @@ static void run_command(struct social_front *front, const struct command *comman
 		break;
 	case _command_share:
 		social_engine_set_share(engine, command->a, command->b, command->c);
+		break;
+	case _command_share_part:
+		social_engine_set_share(engine, command->a == 0 ? command->b : engine->share_status, command->a == 1 ? command->b : engine->details,
+			command->a == 2 ? command->b : engine->accept_requests);
 		break;
 	case _command_enable:
 		social_set_enabled(engine, command->a);

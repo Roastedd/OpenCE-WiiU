@@ -36,8 +36,6 @@ static struct
 	struct social_files files;
 	struct social_posix_folder folder;
 	int quit_registered;
-	/* what the game last said it is doing (social_set_activity) */
-	volatile int activity;
 } social;
 
 /* ---------- the environment */
@@ -359,7 +357,7 @@ void social_p2p_heard(const char *topic, const unsigned char *payload, int size)
 static void social_place_make(struct social_place *place)
 {
 	memset(place, 0, sizeof(*place));
-	place->activity = (unsigned char)(social.activity ? social.activity : SOCIAL_MENUS);
+	place->activity = (unsigned char)(social_activity_get() ? social_activity_get() : SOCIAL_MENUS);
 	if (p2p.hosting && p2p.has_token && place->activity != SOCIAL_SOLO)
 	{
 		int count, maximum, engine_type, open, in_progress, has_password;
@@ -409,7 +407,3 @@ static void social_atexit(void)
 	pthread_mutex_unlock(&p2p_lock);
 }
 
-void social_set_activity(int activity)
-{
-	social.activity = activity;
-}

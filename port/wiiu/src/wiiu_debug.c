@@ -503,6 +503,8 @@ static void do_quit(void)
 	}
 }
 
+int social_command(const char *line, char *reply, int size);
+
 /* console: a script the server took, run by the game's thread at its next frame (wiiu_debug_console_run, from main.c where the telnet console's
 are), as its console runs one. The server takes no password, so it runs scripts only with config.toml's debug.wiiu_console (off unless set). One
 script waits at a time: the state goes 0 (none) -> 1 (waiting, its text written) -> 0 (taken), each step published with release ordering. */
@@ -528,6 +530,26 @@ void wiiu_debug_console_run(void)
 	memcpy(script, console_script, sizeof(script));
 	__atomic_store_n(&console_state, 0, __ATOMIC_RELEASE);
 	wiiu_log("Debug console: %s", script);
+	/* the friends layer's commands (port/linux/game/social_command.h): "social list", "social add <code>" ...; their answers go to the log, a line each */
+	if (!strncmp(script, "social", 6) && (script[6] == ' ' || !script[6]))
+	{
+		char reply[1536];
+		char *line = reply;
+
+		social_command(script + 6, reply, (int)sizeof(reply));
+		while (*line)
+		{
+			char *end = strchr(line, '\n');
+
+			if (end)
+				*end = 0;
+			wiiu_log("social: %s", line);
+			if (!end)
+				break;
+			line = end + 1;
+		}
+		return;
+	}
 	hs_compile_and_evaluate_queued(script, console_done, 0);
 }
 

@@ -255,6 +255,25 @@ enum
 	SOCIAL_PARTY_RESULT_BAD_TEXT,
 };
 
+/* what a member reports of following the leader's game (a party member's follow_result) */
+enum
+{
+	SOCIAL_FOLLOW_NONE,
+	SOCIAL_FOLLOW_JOINING,
+	SOCIAL_FOLLOW_JOINED,
+	SOCIAL_FOLLOW_FULL,
+	SOCIAL_FOLLOW_CLOSED,
+	SOCIAL_FOLLOW_VERSION,
+	SOCIAL_FOLLOW_MAP_MISSING,
+	SOCIAL_FOLLOW_NO_ROUTE,
+	SOCIAL_FOLLOW_NO_ANSWER,
+	SOCIAL_FOLLOW_BUSY,
+	SOCIAL_FOLLOW_OPTED_OUT,
+	SOCIAL_FOLLOW_BANNED,
+	SOCIAL_FOLLOW_REPLACED,
+	NUMBER_OF_SOCIAL_FOLLOWS,
+};
+
 const char *social_party_result_text(int result);
 /* what a member reports of following the leader's game (SOCIAL_FOLLOW_*) in words; "" for none */
 const char *social_follow_text(int follow_result);
@@ -281,6 +300,10 @@ void social_party_chat(const char *text);
 them), how much (SOCIAL_DETAILS_NONE 0, BASIC 1, FULL 2: basic is where it is, and the game too when it can be joined), and whether requests are taken */
 void social_set_name(const char *name);
 void social_set_share(int show_status, int details, int accept_requests);
+/* ... and one of the three alone (the others are left as they are, whatever calls came before it): */
+void social_set_show_status(int show);
+void social_set_details(int details);
+void social_set_accept_requests(int accept);
 
 /* what the game is doing, for friends to see: SOCIAL_ACTIVITY_MENUS, _LOBBY, _GAME (a multiplayer game), _SOLO (a campaign or a game alone: never joinable), _BUSY.
 internet play adds where the game is hosted and how to join it. Cheap: call it when it changes. */

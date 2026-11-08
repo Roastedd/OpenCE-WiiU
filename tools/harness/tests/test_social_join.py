@@ -9,7 +9,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import social
 
-CASES = ["invite", "invite-abuse", "joinable-presence", "join-ok", "join-failures", "join-checks", "join-left", "join-through-the-network"]
+CASES = ["invite", "invite-abuse", "joinable-presence", "join-ok", "join-failures", "join-checks", "join-left", "join-through-the-network", "commands"]
 
 
 @pytest.fixture(scope="module")
@@ -56,6 +56,10 @@ FAULTS = [
     ("join-ok", "social_join.c", "		if (!backend->game_ready || backend->game_ready(backend->user, machine->target.host_hash))", "		if (1)"),
     # the host's game of the friend not looked at in the network case
     ("join-through-the-network", "social_join.c", "		if (shown && !memcmp(again.token, machine->target.token, SOCIAL_TOKEN_SIZE))\n			return;", "		if (1)\n			return;"),
+    # a number beyond the list is taken for a friend
+    ("commands", "social_command.c", "	return value >= 1 && value <= limit ? value : 0;", "	return value;"),
+    # a setting changed by one command undone by the next (the others taken from a snapshot the first was not in yet)
+    ("commands", "social_command.c", "		social_set_show_status(!strcmp(rest, \"online\"));", "		social_set_share(!strcmp(rest, \"online\"), snapshot.share_details, snapshot.accept_requests);"),
 ]
 
 
