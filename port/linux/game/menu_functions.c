@@ -89,6 +89,9 @@ their handlers open opens.
 #include "game_modes.h"
 #include "graphics_quality.h"
 #include "network_voice.h"
+#include "bots.h"
+#include "screens.h"
+#include "text_safe.h"
 #include "network_map_vote.h"
 #include "text/draw_string.h"
 /* (internet play's server browser: the platform layer's) */
@@ -3005,6 +3008,13 @@ Xbox's networking, run by the engine's port entry points
 has the focus (lobby_browser_source) */
 #define TAB_UNFOCUSED_ALPHA 0.45f
 #define LOBBY_ROWS 11
+
+/* the social screens' (menu_screens.inl, screens.enable): the lobby's tags and keys, the cells' colours and speaker icons */
+static boolean scr_text_color(struct widget_instance *widget, real_argb_color *color);
+static boolean scr_text_box_drawn(struct widget_instance *widget, rectangle2d const *bounds);
+static void scr_lobby_update(struct widget_instance *list, short first, short count, boolean teams);
+static wchar_t const *scr_lobby_help(wchar_t const *text);
+static boolean scr_enabled(void);
 #define TEXT_FIELD_LENGTH 128
 #define PLAYLIST_READ_ONLY_BIT 0x40000000UL
 /* (a key stroke's modifier, as input_xbox.c has them: shift, control) */
@@ -4122,6 +4132,9 @@ boolean pc_menu_text_color(struct widget_instance *widget, real_argb_color *colo
 	short row = widget->parent ? browser_row_index(widget->parent) : NONE;
 	short ping;
 	unsigned long rgba;
+
+	if (scr_text_color(widget, color))
+		return TRUE;
 
 	if (row < 0 || row >= BROWSER_ROWS || strncmp(widget->name, "server_item_", 12))
 		return FALSE;
@@ -6098,7 +6111,7 @@ static void lobby_join_help(struct widget_instance *list)
 			text = L"Another controller: ADD PLAYER.";
 #endif
 	}
-	text_set(help, text);
+	text_set(help, scr_lobby_help(text));
 }
 
 static void lobby_row_text(short row, wchar_t *text)
@@ -6109,7 +6122,8 @@ static void lobby_row_text(short row, wchar_t *text)
 
 	ustrncpy(name, player->name, NUMBEROF(player->name));
 	name[NUMBEROF(player->name)] = 0;
-	if (game && game->variant.universal_variant.teams)
+	/* (the social screens, when on, show the team in a tag of their own: scr_lobby_update) */
+	if (game && game->variant.universal_variant.teams && !scr_enabled())
 		usnprintf(text, ROW_TEXT_LENGTH - 1, L"%s  (%s)", name, player->team_index ? L"BLUE" : L"RED");
 	else
 		usnprintf(text, ROW_TEXT_LENGTH - 1, L"%s", name);
@@ -6176,6 +6190,9 @@ voice chat (or muted) has a speaker just left of their name
 void menu_functions_text_box_drawn(struct widget_instance *widget, rectangle2d const *bounds)
 {
 	short row;
+
+	if (scr_text_box_drawn(widget, bounds))
+		return;
 
 	/* (the Mods screen's texts: the fonts and widths their lines are
 	measured in, mods_text_fits) */
@@ -6262,12 +6279,13 @@ static void lobby_update(struct widget_instance *list)
 		{
 			if (strncmp(row->name, "list_item_", 10))
 				break;
-			lobby_icons.texts[index] = named(row, "list_item_text", 0);
+			lobby_icons.texts[index] = named(row, scr_enabled() ? "scr_lobby_name" : "list_item_text", 0);
 			lobby_icons.machines[index] = lobby_players[multiplayer.lobby_first + index]->machine_index;
 			lobby_icons.count = (short)(index + 1);
 		}
 		lobby_icons.updated_at = system_milliseconds();
 	}
+	scr_lobby_update(list, multiplayer.lobby_first, (short)MIN(lobby_player_count, LOBBY_ROWS), game && game->variant.universal_variant.teams);
 	lobby_join_help(list);
 	map_vote_lobby_check();
 	visible_set(named(list, "lobby_button_team", 0), game && game->variant.universal_variant.teams);
@@ -7820,6 +7838,8 @@ static void gametype_engine_name(struct widget_instance *text_box)
 		text_box->parameters.text_box.string_list_index = strings[PIN(variant->game_engine_index, 0, 5)];
 }
 
+#include "menu_screens.inl"
+
 /* ---------- public code */
 
 boolean pc_menu_event_function_invoke(
@@ -7845,6 +7865,13 @@ boolean pc_menu_event_function_invoke(
 
 		if (!name)
 			return FALSE;
+		{
+			/* (the social screens' functions: menu_screens.inl) */
+			boolean mine, result = scr_event(name, widget, widget_deleted, &mine);
+
+			if (mine)
+				return result;
+		}
 		if (!strncmp(name, "port controller ", 16))
 			return pad_editor_event(widget, name);
 		if (!strcmp(name, "main menu quit game"))
@@ -8301,6 +8328,8 @@ void pc_menu_game_data_function_invoke(
 	/* (a text field whose screen has gone: let go of) */
 	if (text_field.row && system_milliseconds() - text_field_shown_time > 500)
 		text_field_end(FALSE);
+	if (scr_data(name, widget))
+		return;
 	if (!strcmp(name, "solo map list update"))
 		level_list_update(widget);
 	else if (!strcmp(name, "mp map list update"))
