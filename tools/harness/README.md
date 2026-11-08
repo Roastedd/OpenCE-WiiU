@@ -47,3 +47,20 @@ to the golden files in `tests/xplay_golden`:
   without an entry.
 - Each test has deliberate faults (negative controls) that the big-endian run must catch.
 - `xplay_two_machines.sh`: a host and a client, each x86 or PowerPC, in one container on the loopback (needs the retail maps).
+
+## The friends layer
+
+`tests/test_social*.py` run the friends layer (`port/linux/game/social_*.c`) whole, not cut into functions: `social.py` compiles a driver (`tests/social_*_check.c`) that includes the sources, `p2p_crypto.c`
+and Monocypher, against a network of fake MQTT brokers (`tests/social_fake.h`: loss, repeats, reordering, a limit of publishes a second, a cap on subscriptions, brokers that go down, machines whose wall clocks
+are hours out). A negative control copies the sources to a folder of its own, makes one deliberate fault there and builds the driver from that copy (`social.build(driver, mutations=...)`).
+
+    HALO_HARNESS_TARGET=-fsigned-char python -m pytest -q tools/harness/tests/test_social*.py        # the Mac
+    docker run --rm -v "$PWD:/src" -e HALO_HARNESS_TARGET="--target=powerpc-linux-gnu -fsigned-char -fuse-ld=lld -no-pie" \
+        -e HALO_HARNESS_RUNNER=qemu-ppc opence-ppc-be python3 -m pytest -q tools/harness/tests/test_social*.py   # big-endian PowerPC
+    ... -e QEMU_LD_PREFIX=/usr/i686-linux-gnu -e HALO_HARNESS_TARGET="--target=i686-linux-gnu -m32 -fuse-ld=lld -no-pie" -e HALO_HARNESS_RUNNER=qemu-i386    # 32-bit x86
+
+- `SOCIAL_SANITIZE=1` builds with the address and undefined-behaviour sanitisers (`SOCIAL_FUZZ=200000` sets the fuzz's length).
+- `HALO_SOCIAL_UPDATE=1` rewrites `tests/social_golden/wire.txt` and `engine.txt` (from a little-endian run only; the big-endian run is held to them).
+- `test_social_mixed.py` runs a 32-bit x86 and a big-endian PowerPC build of `social_peer.c` against each other (needs the `opence-ppc-be` image; skipped elsewhere).
+- `test_social_units.py` compiles each unit alone, as the game's build does.
+
