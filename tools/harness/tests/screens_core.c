@@ -5,6 +5,7 @@ and signs, fits its column), the cells of every row in every state, the order th
 mock provider's actions. */
 #include "text_safe.h"
 #include "screens.h"
+#include "screens_view.h"
 
 static long enable_setting = 1;
 
@@ -17,6 +18,7 @@ long config_integer(const char *name)
 #include "text_safe_code.inc"
 #include "screens_code.inc"
 #include "screens_mock_code.inc"
+#include "screens_view_code.inc"
 
 static int ascii_clean(char const *text)
 {
@@ -698,6 +700,94 @@ static void mock_text(void)
 	}
 }
 
+static void view_make_case(void)
+{
+	static struct screens_model model_data;
+	struct screens_view_input input;
+	struct halo_social_view view;
+	struct screens_toast_state toasts;
+	struct screens_toast toast;
+	long keys[HALO_SOCIAL_ROWS];
+	char const *tiles[4] = { "Enemy here!", "Need backup!", "Cover me!", "Fall back!" };
+	int index;
+	long id;
+
+	screens_mock_reset();
+	screens_model_update(&model_data, 1);
+	screens_toast_reset(&toasts);
+	memset(&input, 0, sizeof(input));
+	input.model = &model_data;
+	input.toasts = &toasts;
+	input.now = 1000;
+	input.has_friends = input.can_friend_action = input.can_bots = 1;
+	input.page_name = "CALLS";
+	for (index = 0; index < 4; index++)
+		input.tiles[index] = tiles[index];
+	screens_view_make(&view, &input, keys);
+	CHECK(view.active && view.tab == HALO_SOCIAL_TAB_FRIENDS && view.row_count == HALO_SOCIAL_ROWS, "friends: %d rows", view.row_count);
+	CHECK(!strcmp(view.head, "bloodgulch  Slayer  12 OF 16   BOTS 6") && !strcmp(view.party, "PARTY 5/8"), "head '%s' party '%s'", view.head, view.party);
+	CHECK(!strcmp(view.tabs[0], "FRIENDS 11") && !strcmp(view.tabs[1], "PARTY 5") && !strcmp(view.tabs[2], "BOTS 6"), "tabs");
+	CHECK(!strcmp(view.rows[0].name, "ALICE") && view.rows[0].action == HALO_SOCIAL_ACTION_JOIN && !strcmp(view.rows[0].status, "PLAYING 6/16"), "the first friend, joinable, without the map: '%s'", view.rows[0].status);
+	for (index = 0; index < view.row_count; index++)
+	{
+		CHECK(strcmp(view.rows[index].name, "FRAN"), "an offline friend is not in the view");
+		CHECK(ascii_clean(view.rows[index].name) && ascii_clean(view.rows[index].status) && keys[index] > 0, "row %d clean", index);
+	}
+	CHECK(view.rows[4].action == HALO_SOCIAL_ACTION_INVITE && strstr(view.rows[4].status, "FULL"), "a full game: invite, not join: '%s' %d", view.rows[4].status, view.rows[4].action);
+	CHECK(!strcmp(view.tiles[1], "Need backup!") && !strcmp(view.page, "CALLS"), "the quick chat page");
+	/* a friend who went offline since is not shown */
+	model_data.friends[SCREENS_TAB_FRIENDS][0].presence = SCREENS_PRESENCE_OFFLINE;
+	screens_view_make(&view, &input, keys);
+	CHECK(strcmp(view.rows[0].name, "ALICE"), "an offline friend is skipped: '%s'", view.rows[0].name);
+	model_data.friends[SCREENS_TAB_FRIENDS][0].presence = SCREENS_PRESENCE_PLAYING;
+	/* no friend action: no buttons */
+	input.can_friend_action = 0;
+	screens_view_make(&view, &input, keys);
+	CHECK(view.rows[0].action == HALO_SOCIAL_ACTION_NONE, "a provider that cannot act: no buttons");
+	input.can_friend_action = 1;
+	/* the party */
+	input.tab = HALO_SOCIAL_TAB_PARTY;
+	screens_view_make(&view, &input, keys);
+	CHECK(view.row_count == 5 && !strcmp(view.rows[0].mark, "L") && !strcmp(view.rows[1].status, "JOINING 40%") && view.rows[1].action == HALO_SOCIAL_ACTION_NONE, "party rows");
+	model_data.party_count = 0;
+	screens_view_make(&view, &input, keys);
+	CHECK(view.row_count == 0 && strstr(view.empty, "NO PARTY"), "an empty party says so: '%s'", view.empty);
+	/* the bots */
+	input.tab = HALO_SOCIAL_TAB_BOTS;
+	screens_view_make(&view, &input, keys);
+	CHECK(!strcmp(view.bots[0], "BOTS: 6") && !strcmp(view.bots[1], "SKILL: HEROIC") && view.bots_host, "bots tab for the host");
+	model_data.roster_summary.host = 0;
+	screens_view_make(&view, &input, keys);
+	CHECK(!view.bots_host, "not for a client");
+	input.can_bots = 0;
+	model_data.roster_summary.host = 1;
+	screens_view_make(&view, &input, keys);
+	CHECK(!view.bots_host, "not without a provider that adds bots");
+	/* no friend service */
+	input.tab = HALO_SOCIAL_TAB_FRIENDS;
+	input.has_friends = 0;
+	memset(model_data.friends_count, 0, sizeof(model_data.friends_count));
+	screens_view_make(&view, &input, keys);
+	CHECK(view.row_count == 0 && strstr(view.empty, "NO FRIEND SERVICE"), "'%s'", view.empty);
+	/* the toast */
+	memset(&toast, 0, sizeof(toast));
+	toast.kind = SCREENS_TOAST_INVITE;
+	toast.id = 5;
+	snprintf(toast.text, sizeof(toast.text), "ALICE INVITES YOU");
+	snprintf(toast.detail, sizeof(toast.detail), "bloodgulch");
+	screens_toast_push(&toasts, &toast, 1000);
+	screens_toast_tick(&toasts, 1000);
+	input.now = 2000;
+	screens_view_make(&view, &input, keys);
+	CHECK(view.toast_alpha == 255 && view.toast_invite && !strcmp(view.toast, "ALICE INVITES YOU") && !strcmp(view.toast_detail, "bloodgulch"), "the toast");
+	screens_toast_answer(&toasts, 1, 1, 2000, &id);
+	screens_view_make(&view, &input, keys);
+	CHECK(strstr(view.toast_detail, "LEAVE THIS GAME"), "asking again from a game: '%s'", view.toast_detail);
+	screens_toast_answer(&toasts, 0, 1, 2100, &id);
+	screens_view_make(&view, &input, keys);
+	CHECK(view.toast_alpha == 0 && !view.toast[0], "no toast once answered");
+}
+
 static void empty_text(void)
 {
 	char text[SCREENS_LINE_SIZE];
@@ -889,14 +979,14 @@ static void nav_tap(void)
 	}
 	screens_nav_tap(&nav, 120 + 128 + 1, (float)(SCREENS_BUTTONS_TOP + 3));
 	CHECK(nav.result == SCREENS_NAV_NOTHING, "between two buttons");
-	/* five buttons of 120 at 8, 130, 252, 374, 496 (the lobby's bar with a fifth) */
+	/* five buttons of 126 at 4, 131, 258, 385, 512 */
 	nav.button_count = 5;
 	for (index = 0; index < 5; index++)
 	{
-		CHECK(screens_button_left(index, 5) == 8 + 122 * index && screens_button_width(5) == 120, "five: button %d", index);
-		screens_nav_tap(&nav, (float)(8 + 122 * index + 119), (float)(SCREENS_BUTTONS_TOP + 3));
+		CHECK(screens_button_left(index, 5) == 4 + 127 * index && screens_button_width(5) == 126, "five: button %d", index);
+		screens_nav_tap(&nav, (float)(4 + 127 * index + 125), (float)(SCREENS_BUTTONS_TOP + 3));
 		CHECK(nav.result == SCREENS_NAV_BUTTON && nav.button == index, "five: button %d's far edge", index);
-		screens_nav_tap(&nav, (float)(8 + 122 * index + 121), (float)(SCREENS_BUTTONS_TOP + 3));
+		screens_nav_tap(&nav, (float)(4 + 127 * index + 126), (float)(SCREENS_BUTTONS_TOP + 3));
 		CHECK(nav.result == SCREENS_NAV_NOTHING, "five: the gap after button %d", index);
 	}
 	nav.button_count = 4;
@@ -1109,6 +1199,8 @@ int main(int argc, char **argv)
 		mock_actions();
 	else if (!strcmp(name, "mock-text"))
 		mock_text();
+	else if (!strcmp(name, "view"))
+		view_make_case();
 	else if (!strcmp(name, "empty-text"))
 		empty_text();
 	else if (!strcmp(name, "nav-players"))

@@ -11,11 +11,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import ROOT, build, mutated, read, run
 
-CASES = ["words", "fit-names", "fit-columns", "fit-cut", "player-cells", "friend-cells", "party-cells", "empty-text", "tabs", "sorting", "actions", "model", "mock-actions", "mock-text",
+CASES = ["words", "fit-names", "fit-columns", "fit-cut", "player-cells", "friend-cells", "party-cells", "view", "empty-text", "tabs", "sorting", "actions", "model", "mock-actions", "mock-text",
          "nav-players", "nav-friends", "nav-tap", "toast-queue", "toast-time", "disabled", "level-1", "level-2", "level-clamped"]
 
 
-def generated(code_fault=None, mock_fault=None, header_fault=None):
+def generated(code_fault=None, mock_fault=None, header_fault=None, view_fault=None):
     code = read("port/linux/game/screens.c")
     mock = read("port/linux/game/screens_mock.c")
     header = read("port/linux/game/screens.h")
@@ -25,7 +25,9 @@ def generated(code_fault=None, mock_fault=None, header_fault=None):
         mock = mutated(mock, *mock_fault)
     if header_fault:
         header = mutated(header, *header_fault)
-    return (("screens.h", header), ("screens_metrics.inc", read("port/linux/game/screens_metrics.inc")), ("text_safe.h", read("port/linux/game/text_safe.h")),
+    return (("halo_social.h", read("port/linux/include/halo_social.h")), ("screens_view.h", read("port/linux/game/screens_view.h")),
+            ("screens_view_code.inc", (mutated(read("port/linux/game/screens_view.c"), *view_fault) if view_fault else read("port/linux/game/screens_view.c")).replace('#include "screens.h"', "").replace('#include "screens_view.h"', "")),
+            ("screens.h", header), ("screens_metrics.inc", read("port/linux/game/screens_metrics.inc")), ("text_safe.h", read("port/linux/game/text_safe.h")),
             ("text_safe_code.inc", read("port/linux/game/text_safe.c").replace('#include "text_safe.h"', "")),
             ("screens_code.inc", code.replace('#include "screens.h"', "").replace('#include "screens_metrics.inc"', '#include "screens_metrics.inc"')),
             ("screens_mock_code.inc", mock.replace('#include "screens.h"', "").replace('#include "text_safe.h"', "")))
@@ -100,7 +102,7 @@ def test_metrics_are_current():
     # the buttons' places moved
     (("510 - (count - 1 - index) * 130;", "510 - (count - 1 - index) * 128;"), None, None, "nav-tap"),
     # the five buttons narrower than they are
-    (("return count >= 5 ? 120 : 128;", "return 128;"), None, None, "nav-tap"),
+    (("return count >= 5 ? 126 : 128;", "return 128;"), None, None, "nav-tap"),
     # an invitation does not jump the queue
     (("if (toast_is_invite(toast))\n\t{\n\t\t/* (an invitation jumps", "if (0)\n\t{\n\t\t/* (an invitation jumps"), None, None, "toast-queue"),
     # the same toast not dropped
@@ -137,3 +139,26 @@ def test_negative_control(code_fault, mock_fault, header_fault, case):
     status, output = run(build("screens_core", generated(code_fault, mock_fault, header_fault)), case)
     assert status != 0, f"the fault was not caught by {case}"
     assert "check failed" in output or status == 1, output
+
+
+@pytest.mark.parametrize("view_fault", [
+    # offline friends in the view
+    ("\t\tif (friend_row->presence == SCREENS_PRESENCE_OFFLINE)\n\t\t\tcontinue;", ""),
+    # the map left in a narrow row's status
+    ("\t\tshown.map[0] = 0;\n", ""),
+    # a full game offered as joinable
+    ("(row->join == SCREENS_JOIN_OPEN || row->join == SCREENS_JOIN_DOWNLOAD);\n}", "1;\n}"),
+    # buttons shown with no provider to act
+    ("input->can_friend_action ? (joinable", "1 ? (joinable"),
+    # the bots' buttons for a client
+    ("view->bots_host = summary->host && input->can_bots;", "view->bots_host = input->can_bots;"),
+    # the question for a second tap never shown
+    ("toasts->confirming ? \"LEAVE THIS GAME? TAP JOIN AGAIN.\" : toasts->current.detail", "toasts->current.detail"),
+    # no word for an empty friends list
+    ("\t\tscreens_empty_text(1, SCREENS_TAB_FRIENDS, &model->friends_summary, input->has_friends, view->empty, (int)sizeof(view->empty));", "\t\t;"),
+    # an invitation not marked
+    ("view->toast_invite = toasts->current.kind == SCREENS_TOAST_INVITE;", "view->toast_invite = 0;"),
+])
+def test_view_negative_control(view_fault):
+    status, output = run(build("screens_core", generated(view_fault=view_fault)), "view")
+    assert status != 0, "the fault was not caught by the view case"
