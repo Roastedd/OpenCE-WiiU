@@ -36,6 +36,8 @@ for arm in A B; do
 	else
 		( CLIENT_ENV="$base_client $arm_env" "$root/tools/harness/netoverlap_two_machines.sh" "$host_spec" "$client_spec" "$seconds" "$out" > "$out.run.txt" 2>&1 ) &
 	fi
+	# (SEQUENTIAL=1: one arm at a time, for a scenario that is too much for the emulated client when two play at once: the Colima machine has 6 CPUs)
+	[ "${SEQUENTIAL:-0}" = 1 ] && wait
 done
 wait
 echo "$scenario rep $rep done"

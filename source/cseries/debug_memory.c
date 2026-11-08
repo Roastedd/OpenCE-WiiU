@@ -102,6 +102,43 @@ symbols in this file:
 #include "math/real_math.h"
 #include "memory/crc.h"
 
+/* port: the list of the pointers and the totals (debug_memory_globals) are changed by whichever thread allocates. With the ticks on a thread of their own (tick_overlap.h) that is
+two: the tick thread (the tick snapshot's copies of objects it has not met, a tick's own) and the drawing thread (the blends' buffers), and the list lost a pointer: "previous" (the
+unlink of a free) halted a joined game's client on the host's first run of the network overlap, in a capture of the tick thread (2026-11-07). One thread at a time in each of the
+functions that read or change the list, the same thread again allowed. The Wii U only: the other ports have one thread allocating. */
+#ifdef HALO_WIIU
+#include <sched.h>
+static volatile int debug_memory_lock_flag;
+static __thread long debug_memory_lock_depth;
+
+static void debug_memory_lock(
+	void)
+{
+	if (debug_memory_lock_depth++ == 0)
+	{
+		long spins = 0;
+
+		while (__sync_lock_test_and_set(&debug_memory_lock_flag, 1))
+		{
+			if (++spins > 64)
+				sched_yield();
+		}
+	}
+}
+
+static void debug_memory_unlock(
+	void)
+{
+	if (--debug_memory_lock_depth == 0)
+		__sync_lock_release(&debug_memory_lock_flag);
+}
+#define DEBUG_MEMORY_LOCK() debug_memory_lock()
+#define DEBUG_MEMORY_UNLOCK() debug_memory_unlock()
+#else
+#define DEBUG_MEMORY_LOCK()
+#define DEBUG_MEMORY_UNLOCK()
+#endif
+
 /* ---------- constants */
 
 enum
@@ -424,6 +461,7 @@ void debug_check_memory(
 {
 	struct debug_memory_header *header;
 
+	DEBUG_MEMORY_LOCK();
 	debug_check_memory_globals(file, line);
 	header = debug_memory_globals.first_pointer;
 	while (header != NULL)
@@ -444,6 +482,7 @@ void debug_check_memory(
 				line));
 		header = header->next;
 	}
+	DEBUG_MEMORY_UNLOCK();
 
 	return;
 }
@@ -463,6 +502,7 @@ void *debug_malloc(
 		"c:\\halo\\SOURCE\\cseries\\debug_memory.c",
 		214,
 		size>=0 && size<MAXIMUM_POINTER_SIZE);
+	DEBUG_MEMORY_LOCK();
 	debug_check_memory_globals(file, line);
 
 	header = system_malloc(allocation_size);
@@ -496,6 +536,7 @@ void *debug_malloc(
 			debug_memory_globals.maximum_pointer_size = debug_memory_globals.current_heap_size;
 		}
 	}
+	DEBUG_MEMORY_UNLOCK();
 
 	return pointer;
 }
@@ -508,6 +549,7 @@ void debug_free(
 	struct debug_memory_header *header =
 		(struct debug_memory_header *)pointer - 1;
 
+	DEBUG_MEMORY_LOCK();
 	debug_check_memory_globals(file, line);
 	debug_check_pointer_header(header, file, line);
 	debug_check_pointer_overrun(pointer, file, line);
@@ -516,6 +558,7 @@ void debug_free(
 	debug_memory_remove_pointer(header, file, line);
 	header->signature = debug_memory_disposed_signature;
 	system_free(header);
+	DEBUG_MEMORY_UNLOCK();
 
 	return;
 }
@@ -540,6 +583,7 @@ void *debug_realloc(
 		"c:\\halo\\SOURCE\\cseries\\debug_memory.c",
 		338,
 		size>=0 && size<MAXIMUM_POINTER_SIZE);
+	DEBUG_MEMORY_LOCK();
 	debug_check_memory_globals(file, line);
 
 	if (pointer != NULL)
@@ -588,6 +632,7 @@ void *debug_realloc(
 			debug_memory_globals.maximum_pointer_size = debug_memory_globals.current_heap_size;
 		}
 	}
+	DEBUG_MEMORY_UNLOCK();
 
 	return result;
 }
