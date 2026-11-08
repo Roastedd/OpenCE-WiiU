@@ -69,18 +69,39 @@ def frames_of(out):
     return len([line for line in (out / "frames.txt").read_text().splitlines() if line.strip()])
 
 
+SOCIAL = "main_menu/multiplayer_type_select/screens"
+
+
+def smoke(head, arguments, results):
+    """screens.enable 2 with the friends layer on, in the real game: the Friends screen, the Players page and ADD FRIEND opened by debug.menu_open (the menus' own way to start on one
+    screen), the D-pad and A pressed on the game's own test input; the log's `screens:` lines say what each screen opened with, and which provider (the game's roster with the
+    social backend). There is no network (the run has none), so the layer is up with no broker: the service reads CONNECTING and the lists are empty."""
+    for name, screen, buttons in (("friends", f"{SOCIAL}/friends_screen", "wait,wait,right,right,a,wait,down,down,a,b,b"), ("players", f"{SOCIAL}/players_screen", "wait,wait,down,a,b,b"),
+                                  ("add", f"{SOCIAL}/add/friend_add_screen", "wait,wait,a,b")):
+        extra = dict(OFF, HALO_SCREENS="2", HALO_MENU_OPEN=screen, HALO_TEST_INPUT=f"menu:{buttons}")
+        run = start(head, f"wire-smoke-{name}", "menu", arguments.frames, extra, {})
+        digest.finish(*run)
+        results[f"smoke-{name}"] = logged(run[1], r"screens:|social:|menus: .*(error|not|problem|unresolved)|there is no widget")[:40]
+        print(f"smoke {name}:", *results[f"smoke-{name}"], sep="\n  ", flush=True)
+    (arguments.out / "wire-smoke.json").write_text(json.dumps(results, indent=1, default=str))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="1b3e0dcb")
     parser.add_argument("--ticks", type=int, default=300)
     parser.add_argument("--frames", type=int, default=200)
     parser.add_argument("--controls", action="store_true")
+    parser.add_argument("--smoke", action="store_true", help="only the screens-on smoke runs (screens.enable 2 with the friends layer on: each screen opened by debug.menu_open)")
     parser.add_argument("--only", action="append", help="a scenario's name (several): the others are left out")
     parser.add_argument("out", type=Path)
     arguments = parser.parse_args()
     arguments.out.mkdir(parents=True, exist_ok=True)
     results = {"base": arguments.base, "head_environment": OFF}
     head = digest.build()
+    if arguments.smoke:
+        smoke(head, arguments, results)
+        return 0
     base = digest.build("base", rev=arguments.base)
     for name, mode, count, extra, own in SCENARIOS:
         if arguments.only and name not in arguments.only:

@@ -1273,6 +1273,7 @@ void menu_screens_social_frame(void)
 	static boolean started;
 	static int told_activity = -1;
 	static unsigned long name_checked, ready_since, failed_since;
+	static long told_profile = NONE;
 	static char told_name[SCREENS_NAME_SIZE];
 	struct social_join_status status;
 	unsigned long now;
@@ -1303,22 +1304,28 @@ void menu_screens_social_frame(void)
 		told_activity = activity;
 		social_set_activity(activity);
 	}
-	/* (the first profile's name, unless social.name says another; a profile is read twice a second at most) */
-	if (now - name_checked >= 2000 && !config_string("social.name")[0])
+	/* (the first profile's name, unless social.name says another. The profile is read from the card: when the player's profile is another one than last time, else every half minute in
+	the menus, and never in a game once it has been read, so that no frame waits for the card) */
+	if (!config_string("social.name")[0])
 	{
 		long profile_index = player_ui_get_active_player_profile_index(0);
-		struct player_profile profile;
 
-		name_checked = now;
-		if (profile_index != NONE && player_profile_get(profile_index, &profile))
+		if (profile_index != NONE && (profile_index != told_profile || (!game_in_progress() && now - name_checked >= 30000) || !name_checked))
 		{
-			char name[SCREENS_NAME_SIZE];
+			struct player_profile profile;
 
-			text_safe_name(name, (short)sizeof(name), profile.player_name, NUMBEROF(profile.player_name), "PLAYER");
-			if (strcmp(name, told_name))
+			name_checked = now ? now : 1;
+			told_profile = profile_index;
+			if (player_profile_get(profile_index, &profile))
 			{
-				snprintf(told_name, sizeof(told_name), "%s", name);
-				social_set_name(name);
+				char name[SCREENS_NAME_SIZE];
+
+				text_safe_name(name, (short)sizeof(name), profile.player_name, NUMBEROF(profile.player_name), "PLAYER");
+				if (strcmp(name, told_name))
+				{
+					snprintf(told_name, sizeof(told_name), "%s", name);
+					social_set_name(name);
+				}
 			}
 		}
 	}
