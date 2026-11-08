@@ -363,7 +363,7 @@ static void test_frames(long frames)
 	long frame;
 	long drawn = 0, primed = 0, serial = 0, held = 0, mid_frame_applied = 0;
 	long applied_at_sync = 0;
-	long barriers_done = 0, posted_frames = 0;
+	long barriers_done = 0, posted_frames = 0, on_time_frames = 0;
 
 	game_thread = pthread_self();
 	tick_overlap_note_render_thread();
@@ -394,7 +394,20 @@ static void test_frames(long frames)
 		request.kind = 0;
 		request.expected_job = (long)o.posted_jobs;
 		tick_queue_push(&to_tick_queue, &request);
-		posted = tick_overlap_post_frame(0.033f);
+		{
+			const unsigned long long age_before = o.net_age_clean_sum;
+			const unsigned long age_frames_before = o.net_age_clean_frames;
+
+			posted = tick_overlap_post_frame(0.033f);
+			/* (a network game's frame whose pair was the one wanted: the picture is two ticks behind the clock after the frame's ticks, whatever the fraction: one for the pair's blend, one for the delay) */
+			if (network_run && o.net_age_clean_frames == age_frames_before + 1)
+			{
+				const long age = (long)(o.net_age_clean_sum - age_before);
+
+				CHECK(age >= 1997 && age <= 2003);
+				on_time_frames++;
+			}
+		}
 		posted_frames += posted;
 		/* (a network game: the barrier is armed for a frame whose job is in flight, and for no other) */
 		CHECK(!tick_overlap_net_pending || (network_run && posted && tick_overlap_job_in_flight()));
@@ -496,6 +509,7 @@ static void test_frames(long frames)
 		CHECK(net_hook_calls == posted_frames);
 		CHECK(net_hook_busy == 0);
 		CHECK(barriers_done > frames / 2);
+		CHECK(on_time_frames > frames / 4);
 		printf("network: %ld end-of-frame calls, %ld barriers, %ld waited, none with the tick thread busy\n", net_hook_calls, barriers_done, (long)o.net_barrier_waits);
 	}
 	else

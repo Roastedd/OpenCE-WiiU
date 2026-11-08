@@ -15,7 +15,7 @@ scenario="$1"; rep="$2"; seconds="$3"; extra="${4:-}"
 R="$(cd "$root/../.." && pwd)"
 export MAPS_PPC="${MAPS_PPC:-$R/data-be/maps}" MAPS_X86="${MAPS_X86:-$R/data/maps}" X86_TREE="${X86_TREE:-$R/scratch/opence-xplay}"
 export HALO_TEST_INPUT="${HALO_TEST_INPUT:-bot:7}" HALO_RANDOM_SEED="${HALO_RANDOM_SEED:-11}" HALO_NETWORK_TEST_START="${HALO_NETWORK_TEST_START:-15}"
-digest="$root/build/game-digest/trees/${DIGEST_TREE:-net5}/build/game-digest"
+digest="$root/build/game-digest/trees/${DIGEST_TREE:-net6}/build/game-digest"
 host_spec="${HOST_SPEC:-x86}"
 client_spec="${CLIENT_SPEC:-digest:$digest}"
 case "$scenario" in

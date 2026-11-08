@@ -97,6 +97,11 @@ class TickOverlapTests(unittest.TestCase):
                                                 '\t\ttick_overlap_net_pending = o.net_frame;\n\t\ttick_overlap_post(tick_overlap_job_work, job);\n\t\tif (o.net_frame) main_overlap_net_end_frame();'))
         self.assertNotEqual(result.returncode, 0)
 
+    def test_a_picture_age_that_is_not_two_ticks_for_an_on_time_pair_is_detected(self):
+        # (the age counted from the pair's later tick instead of its earlier: one tick short, which would say the overlap costs nothing)
+        result = self.fixture('network', fault=('tick_overlap.c', '((double)(tick - 1) + (double)fraction)', '((double)(tick) + (double)fraction)'))
+        self.assertNotEqual(result.returncode, 0)
+
 
 if __name__ == '__main__':
     unittest.main()
