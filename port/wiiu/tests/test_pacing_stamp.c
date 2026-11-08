@@ -10,6 +10,7 @@ exits 1 if a check fails. */
 #include "../src/wiiu_pacing.h"
 
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -28,7 +29,7 @@ static int failures;
 #define REFRESH (1000.0 / 60.0)
 #define GPU_MS 4.0
 
-static unsigned long random_state = 88172645463325252UL;
+static uint64_t random_state = 88172645463325252ULL;
 
 static double uniform(void)
 {
