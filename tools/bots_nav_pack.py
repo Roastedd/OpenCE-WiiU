@@ -185,6 +185,13 @@ def main(argv=None):
     m.add_argument("sources", nargs="+")
     v = sub.add_parser("verify")
     v.add_argument("pack")
+    w = sub.add_parser("show", help="the areas within RADIUS of a point, with their links (for finding why two places do not join)")
+    w.add_argument("pack")
+    w.add_argument("map")
+    w.add_argument("x", type=float)
+    w.add_argument("y", type=float)
+    w.add_argument("z", type=float)
+    w.add_argument("--radius", type=float, default=6.0)
     i = sub.add_parser("info")
     i.add_argument("pack")
     i.add_argument("--reach", action="store_true")
@@ -201,6 +208,20 @@ def main(argv=None):
             for entry in pack["entries"]:
                 parse_record(data[entry["offset"]:entry["offset"] + entry["size"]])
             print(f"{args.pack}: {len(data)} bytes, crc {pack['crc']:08x}, {len(pack['entries'])} maps, all records parse")
+            return 0
+        if args.command == "show":
+            entry = next(e for e in pack["entries"] if e["name"] == args.map)
+            record = parse_record(data[entry["offset"]:entry["offset"] + entry["size"]])
+            for index, area in enumerate(record["areas"]):
+                dx, dy, dz = area["p"][0] - args.x, area["p"][1] - args.y, area["p"][2] - args.z
+                if (dx * dx + dy * dy) ** 0.5 > args.radius or abs(dz) > 3.0:
+                    continue
+                print(f"area {index} at ({area['p'][0]:.1f} {area['p'][1]:.1f} {area['p'][2]:.1f}) radius {area['radius']:.1f}, {area['count']} links:")
+                for k in range(area["count"]):
+                    link = record["links"][area["first"] + k]
+                    target = record["areas"][link["to"]]["p"]
+                    print(f"    {LINK_TYPES[link['type']]:8s} to {link['to']} ({target[0]:.1f} {target[1]:.1f} {target[2]:.1f}) cost {link['cost']:.1f}s "
+                          f"exit ({link['exit'][0]+area['p'][0]:.1f} {link['exit'][1]+area['p'][1]:.1f} {link['exit'][2]+area['p'][2]:.1f})")
             return 0
         print(f"{args.pack}: {len(data)} bytes, crc {pack['crc']:08x}")
         for entry in pack["entries"]:
