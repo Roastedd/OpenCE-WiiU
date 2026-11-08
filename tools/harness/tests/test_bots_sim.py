@@ -47,6 +47,19 @@ def test_the_block_is_read():
     assert parsed["log_players"][1] == {"kills": 2, "deaths": 1, "machine": 113}
 
 
+def test_the_navigation_objective_and_tour_lines_are_read():
+    text = block().replace("halo-linux: bots-sim: tick_us", "halo-linux: bots-sim: nav bloodgulch searches 144 failed 0 short 17 off_graph 0 shortcuts 623 links_done jump 4 "
+                           "drop 15 bad 10\nhalo-linux: bots-sim: objectives enabled 1 goals none 0 grab 3 capture 1\nhalo-linux: bots-sim: tour players 2/0 flags 3/1 "
+                           "starts 3/0 items 2/0 reached/given_up\nhalo-linux: bots-sim: tick_us")
+    parsed = bots_sim.parse(text)
+    assert parsed["extra"]["nav"]["searches"] == 144 and parsed["extra"]["nav"]["shortcuts"] == 623 and parsed["extra"]["nav"]["links_done_jump"] == 4
+    assert parsed["extra"]["nav"]["links_done_drop"] == 15 and parsed["extra"]["nav"]["links_done_bad"] == 10 and parsed["extra"]["nav"]["name"] == "bloodgulch"
+    assert parsed["extra"]["objectives"]["goals_grab"] == 3 and parsed["extra"]["objectives"]["goals_capture"] == 1
+    assert parsed["extra"]["tour"]["line"].endswith("reached/given_up")
+    # (a build without them has no extra)
+    assert "extra" not in bots_sim.parse(block())
+
+
 def test_the_summary_has_the_baseline_numbers():
     summary = bots_sim.summary(bots_sim.parse(log()), wall_seconds=19.04)
     assert summary["frags"] == 3 and summary["deaths"] == 2 and summary["stuck_s"] == 1

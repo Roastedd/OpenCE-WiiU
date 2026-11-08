@@ -90,6 +90,27 @@ def parse(text):
             fields = match.groupdict()
             index, skill = int(fields.pop("bot")), fields.pop("skill")
             result["bots"][index] = {"skill": skill, **{name: int(value) for name, value in fields.items()}}
+    # (the navigation, objective and tour lines of a build that has them: "bots-sim: nav bloodgulch searches 144 failed 0 ...", the words and numbers as pairs)
+    for line in block:
+        for key in ("nav", "objectives", "tour"):
+            if line.startswith(f"bots-sim: {key} "):
+                words = line[len(f"bots-sim: {key} "):].split()
+                if key == "tour":
+                    result.setdefault("extra", {})[key] = {"line": line}
+                    continue
+                # (a word followed by a number is a count; one followed by a word names the counts after it: links_done jump 4 -> links_done_jump)
+                found, section, index = {}, "", 0
+                while index < len(words):
+                    if index + 1 < len(words) and re.fullmatch(r"-?\d+(?:\.\d+)?", words[index + 1]):
+                        found[(section + "_" if section else "") + words[index]] = number(words[index + 1])
+                        index += 2
+                    else:
+                        if re.fullmatch(r"[a-z_]+", words[index]) and index + 1 < len(words) and not re.fullmatch(r"-?\d+", words[index + 1]) and index > 0:
+                            section = words[index]
+                        else:
+                            found.setdefault("name", words[index])
+                        index += 1
+                result.setdefault("extra", {})[key] = found
     for key in ("begin", "total", "tick_us"):
         if key not in result:
             raise ValueError(f"the bots-sim block has no {key} line")
@@ -301,6 +322,7 @@ def main(arguments=None):
     play.add_argument("--no-block", action="store_true",
                       help="a build without bots.sim_ticks: play --timeout seconds, keep the log (to compare with compare --prefix)")
     play.add_argument("--timeout", type=int, help="seconds the game may take (with --no-block: how long it plays)")
+    play.add_argument("--env", action="append", default=[], metavar="NAME=VALUE", help="more environment for the game (bots.nav = HALO_BOTS_NAV, ...)")
     play.add_argument("--out", required=True)
     compare = commands.add_parser("compare", help="two runs of the same input: do they match?")
     compare.add_argument("first")
@@ -310,7 +332,7 @@ def main(arguments=None):
     if given.command == "run":
         result, _ = run(given.map_name, given.variant, given.bots, given.skill, given.ticks, given.seed, given.runner,
                         given.out, given.tree, given.maps, given.log_ticks, given.teams, given.timeout,
-                        block=not given.no_block)
+                        environment=dict(item.split("=", 1) for item in given.env), block=not given.no_block)
         print(json.dumps(result, indent=1) if result else f"played {given.timeout} seconds: {given.out}/game.log")
         return 0
     first = (Path(given.first) / "game.log").read_text(errors="replace")

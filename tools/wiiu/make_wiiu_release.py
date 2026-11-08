@@ -35,6 +35,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 BUNDLE = "halo.wuhb"
 FILES = ["shaders.pack", "brokers.txt", BUNDLE]
+# (a pack that is in the folder is in the release without being asked for: the bots' navigation pack, tools/bots_nav_pack.py)
+OPTIONAL_FILES = ["navs.pack"]
 MANIFEST = "halo-wiiu-manifest.txt"
 SIGNATURE = MANIFEST + ".sig"
 # the console's bounds (wiiu_update_core.h)
@@ -194,7 +196,12 @@ def verify(key: Path, manifest: Path, signature: Path):
 
 def make_release(folder: Path, build: int, key: Path, expected_key: str = "", repository: str = "", names=None, maps: str = "",
                  check_bundle: bool = True) -> str:
-    names = list(names or FILES)
+    if not names:
+        names = list(FILES)
+        # (signed with the shaders: the manifest holds its size and SHA-256, and the console checks the manifest's signature)
+        for extra in OPTIONAL_FILES:
+            if (folder / extra).is_file():
+                names.insert(names.index("shaders.pack") + 1 if "shaders.pack" in names else 0, extra)
     maps = maps or maps_format()
     if not 1 <= build <= BUILD_MOST:
         raise Refused(f"the build number {build} is not 1 to {BUILD_MOST}")
@@ -251,7 +258,7 @@ def main() -> int:
     parser.add_argument("--key", type=Path, help="the owner's Ed25519 private key (PEM)")
     parser.add_argument("--public-key", default="", help="the key the builds trust (HALO_UPDATE_PUBLIC_KEY), checked against --key")
     parser.add_argument("--repository", default="", help="the releases' repository (HALO_UPDATE_REPOSITORY), checked against the bundle")
-    parser.add_argument("--files", nargs="+", default=FILES, help=f"the release's files (default: {' '.join(FILES)})")
+    parser.add_argument("--files", nargs="+", default=None, help=f"the release's files (default: {' '.join(FILES)}, and {' '.join(OPTIONAL_FILES)} if the folder has it)")
     parser.add_argument("--print-public-key", type=Path, metavar="KEY", help="print the public key of a private key and stop")
     args = parser.parse_args()
     try:
@@ -266,7 +273,8 @@ def main() -> int:
         return 1
     print(f"{args.folder / MANIFEST} and {SIGNATURE}: build {args.build}, signed and checked.")
     print(f"Publish a release tagged wiiu-{args.build} in {repository} with these assets:")
-    for name in [MANIFEST, SIGNATURE, *args.files]:
+    names = args.files or [name for name in [*FILES, *OPTIONAL_FILES] if (args.folder / name).is_file()]
+    for name in [MANIFEST, SIGNATURE, *names]:
         print(f"  {args.folder / name}")
     return 0
 

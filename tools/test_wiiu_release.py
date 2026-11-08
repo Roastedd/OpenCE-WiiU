@@ -95,6 +95,18 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(built.returncode, 0, built.stderr)
         return executable
 
+    def test_the_bots_navigation_pack_is_in_the_release_when_it_is_in_the_folder(self):
+        (self.files / "navs.pack").write_bytes(b"HALOBOTN" + bytes(range(200)))
+        self.make()
+        lines = (self.files / release.MANIFEST).read_bytes().decode().splitlines()
+        self.assertEqual([line.split()[1] for line in lines[4:]], ["shaders.pack", "navs.pack", "brokers.txt", "halo.wuhb"])
+        _, name, size, digest = lines[5].split()
+        data = (self.files / "navs.pack").read_bytes()
+        self.assertEqual((int(size), digest), (len(data), hashlib.sha256(data).hexdigest()))
+        # (and asked for by name, as any pack is; one that is not there is refused)
+        (self.files / "navs.pack").unlink()
+        self.refused("is not there", names=["shaders.pack", "navs.pack", "halo.wuhb"])
+
     def test_a_release_is_made_signed_and_checked_three_ways(self):
         self.assertEqual(self.make(expected_key=self.public, repository="owner/halo-wiiu-releases"), "owner/halo-wiiu-releases")
         manifest = (self.files / release.MANIFEST).read_bytes()

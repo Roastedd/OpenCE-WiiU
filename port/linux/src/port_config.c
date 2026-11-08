@@ -715,6 +715,47 @@ static const struct config_setting config_settings[] =
 		"Each bot's own skill level, by its place in the list (\"legendary,recruit,,normal\": the first bot\n"
 		"legendary, the second recruit, the third bots.skill, the fourth normal); for tests. Empty: all follow\n"
 		"bots.skill." },
+	{ "bots.online", _config_integer, "0", "HALO_BOTS_ONLINE", _environment_value, _platform_all,
+		"1: a game this machine hosts for others (system link or internet, with this machine's own players) may have bots: the\n"
+		"host decides their controls, and the other machines see them as players. 0: no bots in hosted games, as before (a local\n"
+		"split screen game's bots are bots.count's either way). Never on a dedicated server. Not yet run on the console." },
+	{ "bots.mode", _config_string, "\"fill\"", "HALO_BOTS_MODE", _environment_value, _platform_all,
+		"For a hosted game (bots.online): \"fill\" makes the players up to bots.fill_to with bots, the humans pushing them out as they\n"
+		"join and the bots coming back when they leave; \"fixed\" has bots.count of them; \"off\" none." },
+	{ "bots.fill_to", _config_integer, "8", "HALO_BOTS_FILL_TO", _environment_value, _platform_all,
+		"bots.mode fill: the players in the game in all, humans and bots." },
+	{ "bots.reserve_slots", _config_integer, "1", "HALO_BOTS_RESERVE_SLOTS", _environment_value, _platform_all,
+		"Places the bots leave free in a hosted game, for a human to join." },
+	{ "bots.objectives", _config_integer, "0", "HALO_BOTS_OBJECTIVES", _environment_value, _platform_all,
+		"1: the bots play the game's objective (capture the flag, oddball, king of the hill: the lobby takes bots in those games too) and\n"
+		"set out for the power weapons and powerups that spawn on a timer (normal skill and up). 0: bots in slayer games only, which roam\n"
+		"and fight as they did." },
+	{ "bots.nav", _config_integer, "1", "HALO_BOTS_NAV", _environment_value, _platform_all,
+		"1: the bots walk a map by its navigation graph (navs.pack: bots_nav.h) when the pack has one for the map; the\n"
+		"graph is read on a thread of its own and used from the tick it is ready. 0: always by the engine's walkable\n"
+		"surfaces, as they did before the graph. A map with no record is walked by the surfaces either way." },
+	{ "bots.nav_pack", _config_string, "\"\"", "HALO_BOTS_NAV_PACK", _environment_value, _platform_all,
+		"The navigation pack's path (a real path: the console's card, or a folder on the host). Empty: navs.pack in the\n"
+		"Wii U's app folder, or beside the data folder's maps on the host." },
+	{ "bots.nav_sync", _config_integer, "0", "HALO_BOTS_NAV_SYNC", _environment_value, _platform_all,
+		"For tests: 1 reads the navigation record on the game thread at the map's start, so that the graph is in use from\n"
+		"the first tick (the thread's read ends at a time of its own, which no two runs share)." },
+	{ "debug.bots_tour", _config_integer, "0", "HALO_BOTS_TOUR", _environment_value, _platform_all,
+		"For the headless runs: 1 makes the bots meet nobody and go from place to place (each other, the flag stands, the\n"
+		"starting locations, the items); what they reach is in the bots-sim block." },
+	{ "debug.bots_bake_nav", _config_string, "\"\"", "HALO_BOTS_BAKE_NAV", _environment_value, _platform_all,
+		"For the navigation bake (tools/harness/bots_nav.py): the file the running map's navigation pack is written to by the\n"
+		"first bot with a unit, after which the game ends. Empty: no bake. Never on the console." },
+	{ "debug.bots_bake_probe", _config_string, "\"\"", "HALO_BOTS_BAKE_PROBE", _environment_value, _platform_all,
+		"For the navigation bake: \"x0 y0 x1 y1\", the floors under the points of that line are logged." },
+	{ "debug.bots_bake_path", _config_string, "\"\"", "HALO_BOTS_BAKE_PATH", _environment_value, _platform_all,
+		"For the navigation bake: \"x y z x y z\", the engine's walkable surfaces' way between the two floors is logged." },
+	{ "debug.bots_bake_cell", _config_integer, "50", "HALO_BOTS_BAKE_CELL", _environment_value, _platform_all,
+		"The bake's floor grid, in hundredths of a world unit (50: half a unit)." },
+	{ "debug.bots_bake_reach", _config_integer, "60", "HALO_BOTS_BAKE_REACH", _environment_value, _platform_all,
+		"The bake's reach of an area from its anchor, in tenths of a world unit (60: six units)." },
+	{ "debug.bots_bake_stride", _config_integer, "1", "HALO_BOTS_BAKE_STRIDE", _environment_value, _platform_all,
+		"The bake tries flights from every this-th edge node of the floor (1: all of them; more is faster and finds fewer)." },
 	{ "bots.sim_ticks", _config_integer, "0", "HALO_BOTS_SIM_TICKS", _environment_value, _platform_all,
 		"For automated runs (tools/harness/bots_sim.py): this many game ticks after the bots first play, the game\n"
 		"says the bots-sim block (each bot's frags, deaths, time stuck, path failures and think time) and ends the\n"
