@@ -91,6 +91,9 @@ their handlers open opens.
 #include "network_voice.h"
 #include "bots.h"
 #include "screens.h"
+#include "screens_social_backend.h"
+#include "social.h"
+#include "social_join.h"
 #include "text_safe.h"
 #include "network_map_vote.h"
 #include "text/draw_string.h"
@@ -3015,6 +3018,7 @@ static boolean scr_text_box_drawn(struct widget_instance *widget, rectangle2d co
 static void scr_lobby_update(struct widget_instance *list, short first, short count, boolean teams);
 static wchar_t const *scr_lobby_help(wchar_t const *text);
 static boolean scr_enabled(void);
+static boolean scr_join_ticker(wchar_t *text, int size);
 #define TEXT_FIELD_LENGTH 128
 #define PLAYLIST_READ_ONLY_BIT 0x40000000UL
 /* (a key stroke's modifier, as input_xbox.c has them: shift, control) */
@@ -5683,6 +5687,10 @@ static void browser_update(struct widget_instance *list)
 
 		if (multiplayer.mode == _multiplayer_mode_server_browser)
 			text[0] = 0;
+		else if (!multiplayer.game_count && multiplayer.mode == _multiplayer_mode_direct_link && scr_join_ticker(text, NUMBEROF(text)))
+		{
+			/* (port: a friend's game being reached: the social screens' words) */
+		}
 		else if (!multiplayer.game_count)
 		{
 			usnprintf(text, NUMBEROF(text) - 1, L"%s", multiplayer.mode == _multiplayer_mode_direct_link ?

@@ -16,7 +16,8 @@ HARNESS_INCLUDE = Path(__file__).resolve().parent / "include"
 
 # the engine's units, in the folder they are included from by the drivers
 SOURCES = ("social_codec.c", "social_core.c", "social_friends.c", "social_party.c", "social_codec.h", "social_core.h", "social.h", "social.c", "social_store.c",
-           "social_store.h", "social_front.c", "social_front.h", "social_invite.c", "social_join.c", "social_join.h", "social_command.c", "social_command.h")
+           "social_store.h", "social_front.c", "social_front.h", "social_invite.c", "social_join.c", "social_join.h", "social_command.c", "social_command.h",
+           "screens.h", "screens.c", "screens_mock.c", "screens_metrics.inc", "screens_social_backend.c", "screens_social_backend.h")
 EXTRA_SOURCES = ()
 CRYPTO = ("port/linux/src/p2p_crypto.c", "port/third_party/monocypher/monocypher.c", "port/third_party/monocypher/monocypher-ed25519.c",
           "port/linux/game/text_safe.c")

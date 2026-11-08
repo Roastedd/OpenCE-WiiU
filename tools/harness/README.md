@@ -64,3 +64,10 @@ are hours out). A negative control copies the sources to a folder of its own, ma
 - `test_social_mixed.py` runs a 32-bit x86 and a big-endian PowerPC build of `social_peer.c` against each other (needs the `opence-ppc-be` image; skipped elsewhere).
 - `test_social_units.py` compiles each unit alone, as the game's build does.
 
+## The friends layer as the social screens' backend
+
+`tests/test_screens_social.py` (`screens_social_check.c`) builds `port/linux/game/screens_social_backend.c` with the screens' model (`screens.c`) and the friends layer, on the same fake brokers: a friend added by its typed code, seen in
+the FRIENDS tab's model, invited, and the invitation a toast on the other machine; the join and its refusals in plain words (the join's stand-in for internet play is in the driver); the requests, blocked and party tabs and the actions on
+their rows; the roster's friend and party flags; the hold of the "online" toasts; and the screens with the layer off. The process has one friends layer, so a case points `social_global_front` at one node or another (`use`).
+
+    HALO_HARNESS_TARGET=-fsigned-char python -m pytest -q tools/harness/tests/test_screens_social.py

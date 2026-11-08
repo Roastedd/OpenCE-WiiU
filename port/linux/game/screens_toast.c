@@ -6,8 +6,9 @@ online, someone joined or left the party, a request came, an invitation, a join 
 frame, black at 70 percent with white text, fading in and out. An invitation stays thirty seconds and is answered with the D-pad (right joins, left later; from a game right asks
 again with LEAVE THIS GAME, so that a match is not lost to one stray press).
 
-The queue and its timing are screens.c's (the harness tests them); this file has the provider's polling, the D-pad and the drawing. With screens.enable 0 the one function here
-returns at once and nothing is polled, kept or drawn.
+The queue and its timing are screens.c's (the harness tests them); this file has the provider's polling, the D-pad and the drawing. With screens.enable 0 nothing here is polled, kept or
+drawn: the one function calls the friends layer's once-a-frame (menu_functions.c, which does nothing unless social.enabled is on: the game's name and what it is doing for the friends'
+presence) and returns.
 */
 
 #include "cseries.h"
@@ -34,6 +35,8 @@ void draw_quad(rectangle2d *rectangle, pixel32 color);
 /* screens_social.c's, menu_functions.c's (the game's roster provider for screens.enable 2) */
 void screens_social_frame(struct screens_toast_state *state, unsigned long now);
 void menu_screens_provider_prepare(void);
+/* menu_functions.c's (the friends layer once a frame: the game's name, what it is doing, a join; nothing unless the layer is on) */
+void menu_screens_social_frame(void);
 
 enum
 {
@@ -112,6 +115,7 @@ void screens_toast_frame(void)
 	struct screens_toast const *toast;
 	int alpha;
 
+	menu_screens_social_frame();
 	if (!screens_enabled())
 		return;
 	now = system_milliseconds();

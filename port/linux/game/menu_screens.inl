@@ -5,6 +5,9 @@ The social screens' menu functions (tools/port_settings.py's social_files, inclu
 ADD FRIEND, and the lobby's tags and keys. They fill the rows' texts and colours from screens.h's provider (through the model, rebuilt only when the provider says it changed), run
 the provider's actions, and say what it answered in plain words. With screens.enable 0 none of these functions does anything and the lobby is as it was.
 
+The friends layer once a frame (menu_screens_social_frame: presence, the join's hooks and its upkeep) and the Direct Link list a friend's JOIN opens are here too. The friends backend
+itself is screens_social_backend.c.
+
 Not here: the toasts (screens_toast.c), the pause menu's PLAYERS button (menu_tags.c), the GamePad's social view (port/wiiu/src/wiiu_social_view.c).
 */
 
@@ -151,6 +154,10 @@ static void scr_log(char const *format, ...)
 backend's if it set one (screens_backend), else it says so. The mock for 1 is screens_mock.c's. */
 
 static struct screens_provider scr_game_table;
+/* the backend the table was last made from (a friends service that comes up after the first screen is taken in then) */
+static struct screens_provider const *scr_table_backend;
+/* the map of the game the players are of (the friends' presence names it: a friend in another map is not the player of the same name here) */
+static char scr_map_name[SCREENS_WORD_SIZE];
 
 static boolean scr_game_players(struct network_game **game, short *state)
 {
@@ -159,6 +166,8 @@ static boolean scr_game_players(struct network_game **game, short *state)
 
 	*game = client ? network_game_client_get_game(client) : NULL;
 	*state = client ? network_game_client_get_state(client, &data) : NONE;
+	if (*game)
+		snprintf(scr_map_name, sizeof(scr_map_name), "%s", tag_name_strip_path((*game)->map.name));
 	return *game != NULL && *state >= _client_state_pregame;
 }
 
@@ -169,10 +178,14 @@ static void scr_game_row(struct network_player const *player, int me_machine, st
 	memset(row, 0, sizeof(*row));
 	text_safe_name(row->name, (short)sizeof(row->name), player->name, NUMBEROF(player->name), "PLAYER");
 	row->team = (signed char)((player->team_index == 0 || player->team_index == 1) ? player->team_index : SCREENS_TEAM_NONE);
-	row->skill = (signed char)(bot ? bots_skill() : -1);
+	/* (each bot's own level: bots_machine_skill is NONE for a person) */
+	row->skill = (signed char)(bot ? (bots_machine_skill(player->machine_index) >= 0 ? bots_machine_skill(player->machine_index) : bots_skill()) : -1);
 	row->flags = (unsigned short)((bot ? SCREENS_ROW_BOT : 0) | (player->machine_index == me_machine && !bot ? SCREENS_ROW_ME : 0) |
 		(network_voice_machine_speaking(player->machine_index) ? SCREENS_ROW_SPEAKING : 0) |
 		(network_voice_machine_muted(player->machine_index) ? SCREENS_ROW_MUTED : 0));
+	/* (a friend or a party member of the same name, when the friends layer is on: a hint by name, the game does not know a player's code) */
+	if (!bot && player->machine_index != me_machine && social_is_enabled())
+		row->flags |= screens_social_roster_flags(row->name, scr_map_name);
 	row->ping = -1;
 	row->score = -1;
 	row->machine = player->machine_index;
@@ -182,6 +195,14 @@ static unsigned long scr_game_generation(void)
 {
 	/* (the game's players change without a counter of ours: four looks a second) */
 	return system_milliseconds() / 250;
+}
+
+/* ... and with a friends backend, its changes too (it counts them) */
+static unsigned long scr_game_generation_with_backend(void)
+{
+	struct screens_provider const *backend = screens_backend();
+
+	return scr_game_generation() * 2654435761ul + (backend && backend->generation ? backend->generation() : 0);
 }
 
 static int scr_game_roster(struct screens_roster_row *rows, int maximum, struct screens_roster_summary *summary)
@@ -230,15 +251,62 @@ static void scr_answer(char *answer, int size, char const *text)
 		snprintf(answer, (size_t)size, "%s", text);
 }
 
-/* the bots are the setting's (bots.count: the lobby of a local Slayer game makes as many as it says, network_server_manager.c): ADD BOT and DROP BOT change it by one */
-static int scr_game_bots_change(int delta, char *answer, int size)
+/* A bot is added or dropped where the game's own rule lets it: in the pregame lobby of a game on this machine the setting is changed (bots.count: the lobby of a local Slayer
+game makes as many as it says, network_server_manager.c), and in a game this machine hosts for others (bots.online on: the bots stream's host calls, which the lobby code does at
+its next idle). A game someone else hosts, or a hosted one with bots.online off, answers in words. skill NONE: bots.skill's; team NONE: the smaller. */
+static boolean scr_game_bots_hosted(void)
+{
+	return bots_online_enabled() && global_network_game_server_get() && !network_game_is_splitscreen_local();
+}
+
+static int scr_game_bots_change(int delta, int team, int skill, long machine, char *answer, int size)
 {
 	long wanted = bots_wanted_count(), maximum = config_integer("bots.max");
 	struct network_game *game;
-	short state;
+	short state, index;
 	char value[16];
 
-	if (!scr_game_players(&game, &state) || state != _client_state_pregame || !global_network_game_server_get() || !network_game_is_splitscreen_local())
+	if (!scr_game_players(&game, &state) || !global_network_game_server_get())
+	{
+		scr_answer(answer, size, "BOTS CAN BE CHANGED BY THE HOST OF THE GAME.");
+		return 0;
+	}
+	if (scr_game_bots_hosted() && state >= _client_state_pregame)
+	{
+		long present = 0, humans = 0, newest = NONE;
+
+		for (index = 0; index < HALO_PORT_MAXIMUM_NETWORK_PLAYERS; index++)
+		{
+			if (!network_player_is_valid(&game->players[index]))
+				continue;
+			if (bots_machine_is_bot(game->players[index].machine_index))
+			{
+				present++;
+				newest = MAX(newest, game->players[index].machine_index);
+			}
+			else
+				humans++;
+		}
+		/* (no bot named: the newest, the one with the highest machine) */
+		if (delta < 0 && machine < 0)
+			machine = newest;
+		if (delta > 0)
+		{
+			if (humans + present >= game->maximum_players || present >= MIN(BOTS_MAXIMUM, maximum))
+			{
+				scr_answer(answer, size, "THE GAME HAS NO ROOM FOR ANOTHER BOT.");
+				return 0;
+			}
+			return bots_host_add(team == SCREENS_TEAM_NONE ? NONE : team, (short)(skill < 0 ? NONE : skill)) ? 1 : 0;
+		}
+		if (present == 0 || machine < 0 || !bots_host_drop(machine))
+		{
+			scr_answer(answer, size, "THERE IS NO BOT TO DROP.");
+			return 0;
+		}
+		return 1;
+	}
+	if (state != _client_state_pregame || !network_game_is_splitscreen_local())
 	{
 		scr_answer(answer, size, "BOTS CAN BE CHANGED IN THE LOBBY OF A GAME ON THIS MACHINE.");
 		return 0;
@@ -248,21 +316,56 @@ static int scr_game_bots_change(int delta, char *answer, int size)
 		scr_answer(answer, size, delta > 0 ? "THAT IS THE MOST BOTS THERE MAY BE." : "THERE IS NO BOT TO DROP.");
 		return 0;
 	}
+	/* (the new bot's level: the next bot to be made is the one after those wanted now) */
+	if (delta > 0 && skill >= 0)
+		bots_set_skill(wanted, (short)skill);
 	snprintf(value, sizeof(value), "%ld", wanted + delta);
 	return config_write("bots.count", value) ? 1 : 0;
 }
 
 static int scr_game_bot_add(int team, int skill, char *answer, int size)
 {
-	(void)team;
-	(void)skill;
-	return scr_game_bots_change(1, answer, size);
+	return scr_game_bots_change(1, team, skill, NONE, answer, size);
 }
 
 static int scr_game_bot_drop(long machine, char *answer, int size)
 {
-	(void)machine;
-	return scr_game_bots_change(-1, answer, size);
+	return scr_game_bots_change(-1, SCREENS_TEAM_NONE, -1, machine, answer, size);
+}
+
+/* RAISE SKILL and LOWER SKILL: one step of the bot's own level, now (the host's) */
+static int scr_game_bot_skill(struct screens_roster_row const *row, int delta, char *answer, int size)
+{
+	int skill = (int)row->skill + delta;
+
+	if (!(row->flags & SCREENS_ROW_BOT) || !global_network_game_server_get())
+	{
+		scr_answer(answer, size, "ONLY THE HOST CAN CHANGE A BOT.");
+		return 0;
+	}
+	if (skill < 0 || skill >= SCREENS_SKILLS)
+	{
+		scr_answer(answer, size, delta > 0 ? "THAT BOT IS AT THE HIGHEST SKILL." : "THAT BOT IS AT THE LOWEST SKILL.");
+		return 0;
+	}
+	bots_set_skill(row->machine - BOTS_FIRST_MACHINE, (short)skill);
+	return 1;
+}
+
+/* KICK and BAN: the host's, a person who is not this machine's (the scoreboard's own call) */
+static int scr_game_kick(struct screens_roster_row const *row, boolean ban, char *answer, int size)
+{
+	if (!global_network_game_server_get() || (row->flags & (SCREENS_ROW_BOT | SCREENS_ROW_ME | SCREENS_ROW_LOCAL)))
+	{
+		scr_answer(answer, size, "ONLY THE HOST CAN DO THAT, TO ANOTHER MACHINE'S PLAYER.");
+		return 0;
+	}
+	if (!network_game_server_kick_machine_of_player(row->machine, ban))
+	{
+		scr_answer(answer, size, "THAT DID NOT WORK.");
+		return 0;
+	}
+	return 1;
 }
 
 static int scr_game_roster_action(int action, struct screens_roster_row const *row, char *answer, int size)
@@ -276,7 +379,13 @@ static int scr_game_roster_action(int action, struct screens_roster_row const *r
 		network_voice_mute_machine(row->machine, action == SCREENS_ACTION_MUTE);
 		return 1;
 	case SCREENS_ACTION_DROP_BOT:
-		return scr_game_bots_change(-1, answer, size);
+		return scr_game_bots_change(-1, SCREENS_TEAM_NONE, -1, row->machine, answer, size);
+	case SCREENS_ACTION_BOT_SKILL_UP:
+	case SCREENS_ACTION_BOT_SKILL_DOWN:
+		return scr_game_bot_skill(row, action == SCREENS_ACTION_BOT_SKILL_UP ? 1 : -1, answer, size);
+	case SCREENS_ACTION_KICK:
+	case SCREENS_ACTION_BAN:
+		return scr_game_kick(row, action == SCREENS_ACTION_BAN, answer, size);
 	default:
 		if (backend && backend->roster_action)
 			return backend->roster_action(action, row, answer, size);
@@ -285,7 +394,7 @@ static int scr_game_roster_action(int action, struct screens_roster_row const *r
 	}
 }
 
-/* what A on a row offers here: what works (mute, drop a bot), and what the friends backend does */
+/* what A on a row offers here: what works (mute, a bot's drop and skill, a person's kick and ban, the party invitation of a friend), and the backend's own list if it has one */
 static void scr_game_roster_actions(struct screens_roster_row const *row, struct screens_roster_summary const *summary, int *actions)
 {
 	struct screens_provider const *backend = screens_backend();
@@ -299,10 +408,14 @@ static void scr_game_roster_actions(struct screens_roster_row const *row, struct
 	screens_default_roster_actions(row, summary, all);
 	for (index = 0; all[index] != SCREENS_ACTION_NONE; index++)
 	{
-		if (all[index] == SCREENS_ACTION_MUTE || all[index] == SCREENS_ACTION_UNMUTE || all[index] == SCREENS_ACTION_CANCEL || all[index] == SCREENS_ACTION_BOT_SETTINGS ||
-			(all[index] == SCREENS_ACTION_DROP_BOT && summary->host))
+		int action = all[index];
+
+		if (action == SCREENS_ACTION_MUTE || action == SCREENS_ACTION_UNMUTE || action == SCREENS_ACTION_CANCEL || action == SCREENS_ACTION_BOT_SETTINGS ||
+			((action == SCREENS_ACTION_DROP_BOT || action == SCREENS_ACTION_BOT_SKILL_UP || action == SCREENS_ACTION_BOT_SKILL_DOWN) && summary->host) ||
+			((action == SCREENS_ACTION_KICK || action == SCREENS_ACTION_BAN) && summary->host && !(row->flags & (SCREENS_ROW_BOT | SCREENS_ROW_ME | SCREENS_ROW_LOCAL))) ||
+			(action == SCREENS_ACTION_INVITE_PARTY && (row->flags & SCREENS_ROW_FRIEND) && backend && backend->roster_action))
 		{
-			actions[count++] = all[index];
+			actions[count++] = action;
 		}
 	}
 	actions[count] = SCREENS_ACTION_NONE;
@@ -315,13 +428,16 @@ static struct screens_provider const *scr_provider(void)
 
 	if (screens_enabled() != 2)
 		return screens_provider();
-	if (!scr_game_table.name)
+	backend = screens_backend();
+	/* (made once, and again if a friends service is set after the first screen asked: the layer comes up on its own thread) */
+	if (!scr_game_table.name || backend != scr_table_backend)
 	{
-		backend = screens_backend();
+		memset(&scr_game_table, 0, sizeof(scr_game_table));
 		if (backend)
 			scr_game_table = *backend;
+		scr_table_backend = backend;
 		scr_game_table.name = "game";
-		scr_game_table.generation = scr_game_generation;
+		scr_game_table.generation = backend && backend->generation ? scr_game_generation_with_backend : scr_game_generation;
 		scr_game_table.roster = scr_game_roster;
 		scr_game_table.roster_action = scr_game_roster_action;
 		scr_game_table.bot_add = scr_game_bot_add;
@@ -507,6 +623,8 @@ static void scr_say(char const *text)
 	display_error_text_deferred(wide, NONE);
 }
 
+static boolean scr_join_screen_open(struct widget_instance *widget, boolean *widget_deleted);
+
 /* "port screens action run" (an action row's A): the provider does it; with nothing to say the screen goes back, else it stays with the answer */
 static boolean scr_action_run(struct widget_instance *row, boolean *widget_deleted)
 {
@@ -550,6 +668,8 @@ static boolean scr_action_run(struct widget_instance *row, boolean *widget_delet
 			snprintf(scr.actions_answer, sizeof(scr.actions_answer), "%s", answer[0] ? answer : "THAT DID NOT WORK.");
 		return campaign_fail();
 	}
+	if (action == SCREENS_ACTION_JOIN_GAME && scr.actions_kind == 1)
+		return scr_join_screen_open(row, widget_deleted);
 	if (answer[0])
 	{
 		snprintf(scr.actions_answer, sizeof(scr.actions_answer), "%s", answer);
@@ -804,6 +924,13 @@ static void scr_friends_update(struct widget_instance *list)
 		screens_friend_detail(tab, &scr.model.friends[tab][scr.friends_first[tab] + item], summary, text, (int)sizeof(text));
 	else
 		text[0] = 0;
+	/* (a join the player asked for: its progress, or why it failed, in the place of the row's details) */
+	{
+		char join_line[SCR_LONG];
+
+		if (scr_enabled() && screens_social_join_line(join_line, (int)sizeof(join_line)))
+			snprintf(text, sizeof(text), "%s", join_line);
+	}
 	scr_text(screen, "friends_detail", text);
 	if (item != scr.friends_last_focus)
 	{
@@ -850,8 +977,32 @@ static boolean scr_friends_row(struct widget_instance *row)
 	return scr.actions_count > 1 ? TRUE : campaign_fail();
 }
 
+/* A friend's game is joined by the game's own way for a game that is found by its invitation: the Direct Link list (the browser's, with the games reached through the tunnel). The
+friends layer has the host reached (social_join_friend); the player presses A on the game when it is in the list. The menus' own join (ui_widget_port_join) is theirs alone. */
+#define SCR_JOIN_NAME "pc\\main_menu\\multiplayer_type_select\\join_game\\join_game_screen"
+
+static boolean scr_join_screen_open(struct widget_instance *widget, boolean *widget_deleted)
+{
+	multiplayer.mode = _multiplayer_mode_direct_link;
+	scr_log("a friend's game is joining: the Direct Link list opens");
+	if (!ui_widget_port_open(widget, SCR_JOIN_NAME, widget_deleted))
+		return campaign_fail();
+	return TRUE;
+}
+
+/* the Direct Link list's line while the game is not in it yet (lobby_browser_update's ticker): what the join is doing */
+static boolean scr_join_ticker(wchar_t *text, int size)
+{
+	char line[SCR_LONG];
+
+	if (!scr_enabled() || !screens_social_join_line(line, (int)sizeof(line)))
+		return FALSE;
+	text_to_wide(line, text, size);
+	return TRUE;
+}
+
 /* "port friends join" and "port friends invite" (the buttons): the row chosen's action without the list */
-static boolean scr_friends_button(struct widget_instance *button, int action)
+static boolean scr_friends_button(struct widget_instance *button, int action, boolean *widget_deleted)
 {
 	struct widget_instance *list = named(screen_of(button), "friends_list", 0);
 	struct screens_provider const *provider = scr_provider();
@@ -870,9 +1021,17 @@ static boolean scr_friends_button(struct widget_instance *button, int action)
 	done = provider->friend_action(action, &scr.model.friends[scr.friends_tab][at], answer, (int)sizeof(answer));
 	scr_log("%s %s: %s %s", screens_action_word(action), scr.model.friends[scr.friends_tab][at].name, done ? "done" : "refused", answer);
 	scr_model_update(TRUE);
+	if (!done)
+	{
+		if (answer[0])
+			scr_say(answer);
+		return campaign_fail();
+	}
+	if (action == SCREENS_ACTION_JOIN_GAME)
+		return scr_join_screen_open(button, widget_deleted);
 	if (answer[0])
 		scr_say(answer);
-	return done ? TRUE : campaign_fail();
+	return TRUE;
 }
 
 /* ---------- ADD FRIEND */
@@ -1056,12 +1215,152 @@ static wchar_t const *scr_lobby_help(wchar_t const *text)
 	return scr_enabled() && !text[0] ? L"A: PLAYER OPTIONS   L/R: BOTS" : text;
 }
 
+/* ---------- the friends layer, once a frame (screens_toast.c's call: before its own check of screens.enable, so that presence is right with the screens off) */
+
+void p2p_identifier_from_hash(unsigned char const *hash, unsigned char *identifier);
+
+/* this machine is in a game of any kind, or hosts or has joined a lobby: a join is not started over it */
+static int scr_game_busy(void)
+{
+	void *client = global_network_game_client_get();
+	short data;
+
+	return game_in_progress() || global_network_game_server_get() != NULL || (client && network_game_client_get_state(client, &data) >= _client_state_pregame);
+}
+
+/* the host's game is in the client's list of games found (lobby_browser_joined_game's test, for the host of the key hash) */
+static int scr_game_ready(unsigned char const *host_hash)
+{
+	void *client = global_network_game_client_get();
+	struct advertised_game *games = client ? network_game_client_get_available_games(client) : NULL;
+	unsigned char identifier[6];
+	short index;
+
+	p2p_identifier_from_hash(host_hash, identifier);
+	for (index = 0; games && index < MAXIMUM_ADVERTISED_GAMES; index++)
+	{
+		if (network_game_client_advertised_game_is_valid(&games[index]) && !memcmp(games[index].xnaddr + 2, identifier, sizeof(identifier)))
+			return 1;
+	}
+	return 0;
+}
+
+static unsigned long scr_social_clock(void)
+{
+	return system_milliseconds();
+}
+
+static int scr_social_version(void)
+{
+	return HALO_PORT_NETWORK_VERSION;
+}
+
+/* what friends see this machine doing */
+static int scr_social_activity(void)
+{
+	void *client = global_network_game_client_get();
+	short data;
+
+	if (game_in_progress())
+		return game_connection() == _game_connection_local ? SOCIAL_ACTIVITY_SOLO : SOCIAL_ACTIVITY_GAME;
+	if (global_network_game_server_get() || (client && network_game_client_get_state(client, &data) >= _client_state_pregame))
+		return SOCIAL_ACTIVITY_LOBBY;
+	return SOCIAL_ACTIVITY_MENUS;
+}
+
+void menu_screens_social_frame(void)
+{
+	static boolean started;
+	static int told_activity = -1;
+	static unsigned long name_checked, ready_since, failed_since;
+	static char told_name[SCREENS_NAME_SIZE];
+	struct social_join_status status;
+	unsigned long now;
+	int activity;
+
+	if (!social_is_enabled())
+		return;
+	now = system_milliseconds();
+	if (!started)
+	{
+		struct screens_social_hooks hooks = { scr_social_clock, scr_social_version };
+
+		started = TRUE;
+		/* (what only the game knows: the maps, the list of games found, whether this machine is in a game) */
+		social_join_set_game_hooks(lobby_browser_map_state, scr_game_ready, scr_game_busy);
+		screens_social_backend_hooks(&hooks);
+		if (screens_enabled() == 2)
+		{
+			screens_backend_set(screens_social_backend());
+			scr_log("friends are on: the screens take their friends, party and toasts from the layer");
+		}
+		else
+			scr_log("friends are on (screens.enable %d: no friends screens)", screens_enabled());
+	}
+	activity = scr_social_activity();
+	if (activity != told_activity)
+	{
+		told_activity = activity;
+		social_set_activity(activity);
+	}
+	/* (the first profile's name, unless social.name says another; a profile is read twice a second at most) */
+	if (now - name_checked >= 2000 && !config_string("social.name")[0])
+	{
+		long profile_index = player_ui_get_active_player_profile_index(0);
+		struct player_profile profile;
+
+		name_checked = now;
+		if (profile_index != NONE && player_profile_get(profile_index, &profile))
+		{
+			char name[SCREENS_NAME_SIZE];
+
+			text_safe_name(name, (short)sizeof(name), profile.player_name, NUMBEROF(profile.player_name), "PLAYER");
+			if (strcmp(name, told_name))
+			{
+				snprintf(told_name, sizeof(told_name), "%s", name);
+				social_set_name(name);
+			}
+		}
+	}
+	/* (the join: with no friends screens there is nobody to finish it, so it is not run at all, and neither is the party's following of its leader, which starts in the same call) */
+	if (!screens_enabled())
+		return;
+	social_join_status_get(&status);
+	if (status.state == SOCIAL_JOIN_WORKING)
+	{
+		social_join_update();
+		ready_since = failed_since = 0;
+	}
+	else if (status.state == SOCIAL_JOIN_READY)
+	{
+		/* (the player pressed A on the game: this machine is in it now. Not pressed in two minutes: given up) */
+		if (scr_game_busy() || (ready_since && now - ready_since > 120000))
+		{
+			social_join_done();
+			ready_since = 0;
+		}
+		else if (!ready_since)
+			ready_since = now ? now : 1;
+	}
+	else if (status.state == SOCIAL_JOIN_FAILED)
+	{
+		/* (its words are on the Friends screen and in a toast; then the machine is free for the next) */
+		if (!failed_since)
+			failed_since = now ? now : 1;
+		else if (now - failed_since > 8000)
+		{
+			social_join_done();
+			failed_since = 0;
+		}
+	}
+}
+
 /* ---------- the dispatch: the function names the XML runs */
 
 /* the provider made (screens.enable 2: the game's roster with the backend's rest) before the first screen needs it: screens_toast.c asks every frame */
 void menu_screens_provider_prepare(void)
 {
-	if (screens_enabled() == 2 && !screens_provider())
+	if (screens_enabled() == 2 && (!screens_provider() || screens_backend() != scr_table_backend))
 		scr_provider();
 }
 
@@ -1087,9 +1386,9 @@ static boolean scr_event(char const *name, struct widget_instance *widget, boole
 	if (!strcmp(name, "port friends row"))
 		return scr_friends_row(widget);
 	if (!strcmp(name, "port friends join"))
-		return scr_friends_button(widget, SCREENS_ACTION_JOIN_GAME);
+		return scr_friends_button(widget, SCREENS_ACTION_JOIN_GAME, widget_deleted);
 	if (!strcmp(name, "port friends invite"))
-		return scr_friends_button(widget, SCREENS_ACTION_INVITE_GAME);
+		return scr_friends_button(widget, SCREENS_ACTION_INVITE_GAME, widget_deleted);
 	if (!strcmp(name, "port friend add init"))
 		return scr_add_init(widget);
 	if (!strcmp(name, "port friend add edit"))
