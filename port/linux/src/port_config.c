@@ -750,8 +750,9 @@ static const struct config_setting config_settings[] =
 		"engine's surfaces otherwise)." },
 	{ "bots.nav_tweaks", _config_integer, "7", "HALO_BOTS_NAV_TWEAKS", _environment_value, _platform_all,
 		"The graph's follower's options (bits: 1 a fighting bot that strafes into a wall strafes the other way, 2 a link a bot found bad is bad for\n"
-		"every bot for 20 s, 4 a jump or a drop that failed for a bot is not taken by any bot for the rest of the map). Only where bots.nav is 1 and\n"
-		"the map's graph is in use. 7: all (the default: what the stuck-seconds table of bots3-result.md measures), 0: none." },
+		"every bot for 20 s, 4 a jump or a drop that failed for a bot is not taken by any bot for the rest of the map, 8 a bot hops at a teleporter's\n"
+		"pad and a teleporter that two bots could not trigger is not gone to again). 8 is on whenever bots.objectives is 1. Only where bots.nav is 1\n"
+		"and the map's graph is in use. 7: the first three (the default: what the stuck-seconds table of bots3-result.md measures), 0: none." },
 	{ "bots.nav_sync", _config_integer, "0", "HALO_BOTS_NAV_SYNC", _environment_value, _platform_all,
 		"For tests: 1 reads the navigation record on the game thread at the map's start, so that the graph is in use from\n"
 		"the first tick (the thread's read ends at a time of its own, which no two runs share)." },

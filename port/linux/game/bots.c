@@ -1864,6 +1864,7 @@ enum
 	BOTS_NAV_TWEAK_STRAFE_FLIP = 1,
 	BOTS_NAV_TWEAK_SHARED_BAD = 2,
 	BOTS_NAV_TWEAK_LEARN_FLIGHTS = 4,
+	BOTS_NAV_TWEAK_PAD_HOP = 8,
 };
 
 enum
@@ -1896,6 +1897,12 @@ enum
 static boolean bots_nav_usable(void)
 {
 	return bots_globals.nav && bots_globals.nav_search_ready;
+}
+
+/* a follower's option: its bit of bots.nav_tweaks (the teleporter pad's hop is on whenever the bots play the game's objective: the stands of Blood Gulch's flags are by pads) */
+static boolean bots_nav_tweak(long bit)
+{
+	return (bots_globals.nav_tweaks & bit) != 0 || (bit == BOTS_NAV_TWEAK_PAD_HOP && bots_globals.objectives_enabled);
 }
 
 /* the map's record, once the thread has it: taken on the first tick it is ready (a game of thousands of ticks starts before it, as ever) */
@@ -1981,7 +1988,7 @@ static void bots_nav_mark_bad(struct bots_bot *bot, long link_index, boolean fai
 	if (failed && bots_globals.nav && link_index < bots_globals.nav->link_count)
 		bots_globals.nav_links_failed[bots_globals.nav->links[link_index].type]++;
 	/* a jump or a drop that failed for a bot fails for all: the geometry is the same (a rim, a lip, a run-up too short); no search takes it again this map */
-	if (failed && (bots_globals.nav_tweaks & BOTS_NAV_TWEAK_LEARN_FLIGHTS) && bots_globals.nav && link_index < bots_globals.nav->link_count &&
+	if (failed && bots_nav_tweak(BOTS_NAV_TWEAK_LEARN_FLIGHTS) && bots_globals.nav && link_index < bots_globals.nav->link_count &&
 		bots_globals.nav_search.link_blocked && bots_globals.nav_search.link_blocked[link_index] < 2 &&
 		(bots_globals.nav->links[link_index].type == _bots_nav_link_jump || bots_globals.nav->links[link_index].type == _bots_nav_link_drop))
 	{
@@ -2220,6 +2227,20 @@ static void bots_nav_link_done(struct bots_bot *bot, struct bots_nav_link const 
 	bot->nav_progress_tick = bots_now();
 }
 
+/* a teleporter a bot could not trigger: the link is bad for it, and a teleporter that two bots could not trigger (the pad is where they cannot stand, or
+the pair is not one) is not gone to again this map (when the bots play the game's objective: it is their quick way between the bases) */
+static void bots_nav_teleport_failed(struct bots_bot *bot, long link_index)
+{
+	bots_nav_mark_bad(bot, link_index, TRUE);
+	if (bots_nav_tweak(BOTS_NAV_TWEAK_PAD_HOP) && bots_globals.nav && link_index < bots_globals.nav->link_count && bots_globals.nav_search.link_blocked &&
+		bots_globals.nav_search.link_blocked[link_index] < 2)
+	{
+		bots_globals.nav_search.link_blocked[link_index]++;
+		if (bots_globals.nav_search.link_blocked[link_index] >= 2)
+			bots_globals.nav_learned_bad++;
+	}
+}
+
 /* a link that is not a walk, at its exit point (the path's point number `point_number`): the run-up, the run, the jump and the flight, or the
 teleporter stood on. TRUE with the direction to walk; FALSE when the link is done (the loop goes on) or failed (a new path is asked for) */
 static int bots_nav_execute(struct bots_bot *bot, long unit_index, real_point3d const *position, struct bots_nav_link const *link, long link_index,
@@ -2239,9 +2260,12 @@ static int bots_nav_execute(struct bots_bot *bot, long unit_index, real_point3d 
 			if ((real)sqrt(dx * dx + dy * dy) > 0.4f || fabs(link->exit[2] - position->z) > 1.0f)
 			{
 				*direction = (real)atan2(dy, dx);
+				/* (a pad on a lip a biped does not climb: a hop at it, as a player makes) */
+				if (bots_nav_tweak(BOTS_NAV_TWEAK_PAD_HOP) && (real)sqrt(dx * dx + dy * dy) < 1.6f && now % 18 == 0)
+					bot->nav_jump = TRUE;
 				if (now - bot->nav_progress_tick > TICKS_PER_SECOND * 12)
 				{
-					bots_nav_mark_bad(bot, link_index, TRUE);
+					bots_nav_teleport_failed(bot, link_index);
 					return _bots_nav_exec_failed;
 				}
 				return _bots_nav_exec_moving;
@@ -2261,7 +2285,7 @@ static int bots_nav_execute(struct bots_bot *bot, long unit_index, real_point3d 
 		}
 		if (now - bot->nav_state_tick > TICKS_PER_SECOND * 3)
 		{
-			bots_nav_mark_bad(bot, link_index, TRUE);
+			bots_nav_teleport_failed(bot, link_index);
 			return _bots_nav_exec_failed;
 		}
 		/* (standing on it: the teleporter takes a moment) */
@@ -2499,7 +2523,12 @@ static void bots_nav_progress(struct bots_bot *bot, real_point3d const *position
 			real ex = link->exit[0] - position->x, ey = link->exit[1] - position->y, nx = link->entry[0] - position->x, ny = link->entry[1] - position->y;
 
 			if (ex * ex + ey * ey < 4.0f || nx * nx + ny * ny < 4.0f)
-				bots_nav_mark_bad(bot, bot->nav_path.links[slot], FALSE);
+			{
+				if (link->type == _bots_nav_link_teleport)
+					bots_nav_teleport_failed(bot, bot->nav_path.links[slot]);
+				else
+					bots_nav_mark_bad(bot, bot->nav_path.links[slot], FALSE);
+			}
 		}
 		bot->nav_path.valid = FALSE;
 		bot->nav_state = _bots_nav_state_none;
@@ -4206,6 +4235,11 @@ static void bots_bot_walk(struct bots_bot *bot, struct bots_tick *tick)
 {
 	real direction;
 
+	if (bots_globals.stuck_log_on && bot->goal_kind == _bots_goal_objective && tick->now % 30 == (long)(bot - bots_globals.bots) * 5 % 30)
+		platform_log("bots: obj: tick %ld bot %ld objective %s at (%.1f %.1f %.1f) goal (%.1f %.1f %.1f) %.1f away, nav path %d step %d/%d, action object %ld result %d",
+			tick->now, (long)(bot - bots_globals.bots) + 1, bots_objective_names[bot->objective_kind], tick->position.x, tick->position.y, tick->position.z,
+			bot->goal_point.x, bot->goal_point.y, bot->goal_point.z, (double)bots_distance2d(&tick->position, &bot->goal_point), (int)bot->nav_path.valid,
+			(int)bot->nav_path.step, (int)bots_nav_path_point_count(&bot->nav_path), (long)tick->player->action_object_index, (int)tick->player->action_result);
 	if (bots_follow_path(bot, tick->player->unit_index, &tick->position, &direction))
 	{
 		real turn = 12.0f * BOTS_DEGREES;
