@@ -231,9 +231,10 @@ static int be_join_state(int joinable, int private_game, int players, int maximu
 		return network_version > version ? SCREENS_JOIN_NEWER_BUILD : SCREENS_JOIN_OLDER_BUILD;
 	if (!joinable)
 	{
+		if (private_game)
+			return SCREENS_JOIN_INVITE_ONLY;
 		if (maximum > 0 && players >= maximum)
 			return SCREENS_JOIN_FULL;
-		(void)private_game;
 		return SCREENS_JOIN_CLOSED;
 	}
 	if (map && map[0])

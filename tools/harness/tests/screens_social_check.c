@@ -249,6 +249,7 @@ static void host_place(struct fake_node *node, int joinable, int players)
 	place.hosting = 1;
 	place.has_invite = 1;
 	place.joinable = (unsigned char)joinable;
+	place.private_game = (unsigned char)!joinable;
 	strcpy(place.map, "bloodgulch");
 	strcpy(place.gametype, "Slayer");
 	place.players = (unsigned char)players;
@@ -515,6 +516,19 @@ static void case_join_words(void)
 	/* an invitation that is left: the row is joinable by it, and joining uses it */
 	host_place(a, 0, 3);
 	fake_run(&net, 6000);
+	/* (a private game is not joined by its presence: the row says it is by invitation only, and JOIN is not offered) */
+	use(b);
+	look();
+	CHECK(friend_named("Node0")->join == SCREENS_JOIN_INVITE_ONLY, "a private game: join %d", friend_named("Node0")->join);
+	row = *friend_named("Node0");
+	{
+		int offered[SCREENS_ACTIONS_MAXIMUM + 1], at;
+
+		provider->friend_actions(SCREENS_TAB_FRIENDS, &row, offered);
+		for (at = 0; offered[at] != SCREENS_ACTION_NONE; at++)
+			CHECK(offered[at] != SCREENS_ACTION_JOIN_GAME, "no JOIN for a private game");
+	}
+	CHECK(!strcmp(screens_join_word(SCREENS_JOIN_INVITE_ONLY), "INVITE ONLY"), "its word");
 	social_front_invite(a->front, social_friend_by_key(a->engine, b->engine->identity.key)->id);
 	fake_run(&net, 3000);
 	use(b);

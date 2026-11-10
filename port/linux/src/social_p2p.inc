@@ -373,12 +373,13 @@ static void social_place_make(struct social_place *place)
 		place->players = (unsigned char)(count < 0 ? 0 : count > 255 ? 255 : count);
 		place->maximum_players = (unsigned char)(maximum < 0 ? 0 : maximum > 255 ? 255 : maximum);
 		place->engine_type = (unsigned char)engine_type;
-		place->private_game = (unsigned char)has_password;
+		/* (a game that is not listed in the server browser, or has a password, is private: friends reach it by an invitation, which carries the way in, not by its presence) */
+		place->private_game = (unsigned char)(has_password || !p2p_lobby_listed_locked());
 		place->has_invite = 1;
 		p2p_key_hash(p2p_public_key(), place->invite_hash);
 		memcpy(place->invite_token, p2p.token, SOCIAL_TOKEN_SIZE);
-		/* (friends can join an internet game that takes players, unless the player turned that off) */
-		place->joinable = (unsigned char)(open && maximum > 0 && config_boolean("social.friends_can_join"));
+		/* (friends can join a public internet game that takes players, unless the player turned that off; a private one only when they are invited) */
+		place->joinable = (unsigned char)(open && maximum > 0 && !place->private_game && config_boolean("social.friends_can_join"));
 	}
 }
 

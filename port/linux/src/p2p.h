@@ -199,6 +199,8 @@ void p2p_set_hosting_public(int public);
 /* the game hosted as last told (p2p_set_game_listing), for the friends layer: its map and type (printable ASCII), its engine, whether it takes players
 (open) and is under way, and whether it has a password. Under p2p_lock, on the p2p thread */
 void p2p_lobby_game_details(char *map, int map_size, char *gametype, int gametype_size, int *engine_type, int *open, int *in_progress, int *has_password);
+/* whether the game hosted is listed in the server browser (public, with the lobby on): friends see a game that is not, or that has a password, only by an invitation. Under p2p_lock, on the p2p thread */
+int p2p_lobby_listed_locked(void);
 
 /* whether the game this machine hosts is listed in everyone's server
 browser (PUBLIC, and network.public_lobby): the text chat is off in one a

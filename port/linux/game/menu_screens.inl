@@ -1320,18 +1320,21 @@ static int scr_social_version(void)
 	return HALO_PORT_NETWORK_VERSION;
 }
 
-/* what friends see this machine doing. A split screen game (a game on this machine, with or without bots) has a server and is in "network server" connection as any hosted game is,
-but takes no one else: it is SOLO, in its lobby and in play, never a lobby or a game to join (on the console it was told to friends as a joinable game, "bloodgulch 4/128") */
+/* what friends see this machine doing. The main menu's own scene ticks as a game (game_in_progress is true in the menus, with the connection the last game left, "local"), so a map is
+playing only when that scene is not what ticks (game_time_menu_scene): then it is solo (a campaign, or a split screen game, which has a server but takes no one else and is never a
+lobby or a game to join: on the console it was told as a joinable game, "bloodgulch 4/128") or a game with others. Not playing: a lobby (this machine hosts one, or has joined one), or
+the menus. A split screen game's server that is still there with no lobby of its own is no game (it was told as solo at the main menu after the game ended). */
 static int scr_social_activity(void)
 {
 	void *client = global_network_game_client_get();
 	short data;
+	boolean lobby = client && network_game_client_get_state(client, &data) >= _client_state_pregame;
 
+	if (game_in_progress() && !game_time_menu_scene())
+		return network_game_is_splitscreen_local() || game_connection() == _game_connection_local ? SOCIAL_ACTIVITY_SOLO : SOCIAL_ACTIVITY_GAME;
 	if (network_game_is_splitscreen_local())
-		return SOCIAL_ACTIVITY_SOLO;
-	if (game_in_progress())
-		return game_connection() == _game_connection_local ? SOCIAL_ACTIVITY_SOLO : SOCIAL_ACTIVITY_GAME;
-	if (global_network_game_server_get() || (client && network_game_client_get_state(client, &data) >= _client_state_pregame))
+		return lobby ? SOCIAL_ACTIVITY_SOLO : SOCIAL_ACTIVITY_MENUS;
+	if (global_network_game_server_get() || lobby)
 		return SOCIAL_ACTIVITY_LOBBY;
 	return SOCIAL_ACTIVITY_MENUS;
 }

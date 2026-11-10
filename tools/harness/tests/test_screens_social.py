@@ -40,6 +40,8 @@ FAULTS = [
      "	return 1;"),
     # an action of ours does not move the generation
     ("generation", FILE, "	return (unsigned long)be.version * 1000003ul + (unsigned long)be.changes * 7919ul +", "	return (unsigned long)be.version * 1000003ul +"),
+    # a private game shown as closed
+    ("join-words", FILE, "		if (private_game)\n			return SCREENS_JOIN_INVITE_ONLY;", "		if (0)\n			return SCREENS_JOIN_INVITE_ONLY;"),
     # the friend's game is never joinable
     ("join-words", FILE, "	return SCREENS_JOIN_OPEN;\n}\n\nstatic void be_friend_row", "	return SCREENS_JOIN_CLOSED;\n}\n\nstatic void be_friend_row"),
     # a missing map is not told

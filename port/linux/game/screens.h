@@ -207,6 +207,8 @@ enum
 	/* the map is not here and can be fetched (the DOWNLOAD marker) / cannot */
 	SCREENS_JOIN_DOWNLOAD,
 	SCREENS_JOIN_NEEDS_MAP,
+	/* a private game (not listed, or with a password): a friend gets in by an invitation */
+	SCREENS_JOIN_INVITE_ONLY,
 };
 
 struct screens_friend_row

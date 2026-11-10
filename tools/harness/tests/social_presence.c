@@ -24,7 +24,7 @@ static struct
 } p2p;
 static int configured_friends_can_join = 1;
 static int activity_told;
-static int lobby_open = 1, lobby_in_progress;
+static int lobby_open = 1, lobby_in_progress, lobby_listed = 1, lobby_password;
 
 static int connected_player_count(void)
 {
@@ -45,7 +45,11 @@ static void p2p_lobby_game_details(char *map, int map_size, char *gametype, int 
 	*engine_type = 1;
 	*open = lobby_open;
 	*in_progress = lobby_in_progress;
-	*has_password = 0;
+	*has_password = lobby_password;
+}
+static int p2p_lobby_listed_locked(void)
+{
+	return lobby_listed;
 }
 static int config_boolean(char const *name)
 {
@@ -64,10 +68,11 @@ static void p2p_key_hash(unsigned char const *key, unsigned char *hash)
 }
 
 /* the game's side: what the activity is told from */
-static int in_progress_now, splitscreen_local, server_listening, client_pregame, connection_local;
+static int in_progress_now, splitscreen_local, server_listening, client_pregame, connection_local, menu_scene;
 #define _game_connection_local 0
 #define _client_state_pregame 3
 static int game_in_progress(void) { return in_progress_now; }
+static int game_time_menu_scene(void) { return menu_scene; }
 static int game_connection(void) { return connection_local ? _game_connection_local : 2; }
 static int network_game_is_splitscreen_local(void) { return splitscreen_local; }
 static void *global_network_game_client_get(void) { static int client; return client_pregame ? &client : NULL; }
@@ -88,6 +93,8 @@ static void hosted_game(int players, int maximum)
 	activity_told = SOCIAL_LOBBY;
 	lobby_open = 1;
 	lobby_in_progress = 0;
+	lobby_listed = 1;
+	lobby_password = 0;
 }
 
 int main(int argc, char **argv)
@@ -164,11 +171,73 @@ int main(int argc, char **argv)
 		splitscreen_local = 1;
 		CHECK(scr_social_activity() == SOCIAL_ACTIVITY_SOLO, "a split screen game in play (the server is a network server's, as any hosted game's)");
 		in_progress_now = 0;
+		client_pregame = 1;
 		CHECK(scr_social_activity() == SOCIAL_ACTIVITY_SOLO, "a split screen game's lobby");
+		client_pregame = 0;
 		splitscreen_local = 0;
 		server_listening = 0;
 		client_pregame = 1;
 		CHECK(scr_social_activity() == SOCIAL_ACTIVITY_LOBBY, "a lobby joined");
+	}
+	else CASE("private")
+	{
+		/* a public game takes friends by its presence; a private one (not listed in the server browser) or one with a password only by an invitation, which carries the way in */
+		hosted_game(2, 16);
+		social_place_make(&place);
+		CHECK(place.joinable && !place.private_game && place.has_invite, "public: joinable %d private %d", place.joinable, place.private_game);
+		lobby_listed = 0;
+		social_place_make(&place);
+		CHECK(!place.joinable && place.private_game && place.has_invite && place.hosting && place.players == 2 && place.maximum_players == 16,
+			"private: joinable %d private %d invite %d", place.joinable, place.private_game, place.has_invite);
+		lobby_listed = 1;
+		lobby_password = 1;
+		social_place_make(&place);
+		CHECK(!place.joinable && place.private_game && place.has_invite, "a password: joinable %d private %d", place.joinable, place.private_game);
+		lobby_password = 0;
+		configured_friends_can_join = 0;
+		social_place_make(&place);
+		CHECK(!place.joinable && !place.private_game && place.has_invite, "friends cannot join: joinable %d", place.joinable);
+		configured_friends_can_join = 1;
+		/* a public game with a room left and the lobby open is joinable with the real count and most; a full one is not */
+		hosted_game(16, 16);
+		lobby_open = 0;
+		social_place_make(&place);
+		CHECK(!place.joinable && !place.private_game && place.players == 16 && place.maximum_players == 16, "full public: joinable %d", place.joinable);
+	}
+	else CASE("menus-after-a-game")
+	{
+		/* the main menu's scene ticks as a game, with the connection the last game left ("local"): that is the menus, not solo (the console, 2026-11-10: a friend saw "online solo" at the main menu after a
+		split screen game) */
+		memset(&p2p, 0, sizeof(p2p));
+		in_progress_now = 1;
+		menu_scene = 1;
+		connection_local = 1;
+		CHECK(scr_social_activity() == SOCIAL_ACTIVITY_MENUS, "the main menu's scene with a local connection: %d", scr_social_activity());
+		/* the split screen game's server still there with no lobby of its own: the menus */
+		splitscreen_local = 1;
+		server_listening = 1;
+		CHECK(scr_social_activity() == SOCIAL_ACTIVITY_MENUS, "a leftover split screen server at the main menu: %d", scr_social_activity());
+		/* its lobby: solo (never a lobby to join) */
+		client_pregame = 1;
+		CHECK(scr_social_activity() == SOCIAL_ACTIVITY_SOLO, "its lobby: %d", scr_social_activity());
+		client_pregame = 0;
+		splitscreen_local = 0;
+		server_listening = 0;
+		/* a campaign, a map playing alone: solo */
+		menu_scene = 0;
+		CHECK(scr_social_activity() == SOCIAL_ACTIVITY_SOLO, "a campaign: %d", scr_social_activity());
+		/* a game of this machine's with others: a game; hosted or joined; and a lobby before it */
+		connection_local = 0;
+		CHECK(scr_social_activity() == SOCIAL_ACTIVITY_GAME, "a game with others: %d", scr_social_activity());
+		in_progress_now = 0;
+		menu_scene = 1;
+		server_listening = 1;
+		CHECK(scr_social_activity() == SOCIAL_ACTIVITY_LOBBY, "hosting its lobby: %d", scr_social_activity());
+		server_listening = 0;
+		client_pregame = 1;
+		CHECK(scr_social_activity() == SOCIAL_ACTIVITY_LOBBY, "a friend's lobby joined: %d", scr_social_activity());
+		client_pregame = 0;
+		CHECK(scr_social_activity() == SOCIAL_ACTIVITY_MENUS, "and out of it: %d", scr_social_activity());
 	}
 	else
 		return 2;
