@@ -149,7 +149,11 @@ goes to its focused child: a screen needs it for its list to get events),
 `left_right_tabs_children`, `no_focused_child`, `pause_game`, `flash_bitmap`,
 `render_any_controller`, `main_menu_if_no_history`, `tag_controller_index`,
 `nifty_fx`, `no_history`, and the PC version's `force_handle_mouse` and
-`no_widescreen_fill`, which this engine has no use for.
+`no_widescreen_fill`, which this engine has no use for. This port adds
+`fit_bitmap_width`: the widget's bitmap is drawn whole across, scaled to the
+widget's width (its height as before). Without it a bitmap is drawn one unit to a texel from its top left and
+cut at the widget's right and bottom edge (a wider widget stretches it), so a
+button narrower than its 128 unit art loses its right end.
 
 A widget takes the focus if it has an `<on>` or is a list; a screen gives it
 to its first such child.

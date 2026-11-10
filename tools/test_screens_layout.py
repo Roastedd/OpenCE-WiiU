@@ -148,6 +148,10 @@ CONTROLS = [
     ("two rows overlapping", "friends", shift_child("friends_list", "friend_item_2", "y", 90), {"overlap"}),
     ("the footer on top of the detail line", "friends", shift("friends_code", "top", 346), {"gap", "overlap"}),
     ("the text of a row not on its pill's middle", "friends", shift("scr_friend_name", "text_y", 14), {"pill"}),
+    ("the tabs' art cut at their widget (the old tab: the flag fit_bitmap_width gone, the 116 wide widget cut 12 units off the 128 wide art's rounded end, 2026-11-10)", "friends",
+     lambda menus: [widget(menus, f"friends_tab_{index}").attrib.pop("flags") for index in range(4)], {"crop"}),
+    ("the five buttons' art cut at their 126 wide widgets", "players",
+     lambda menus: [widget(menus, f"players_button_{key}").attrib.pop("flags") for key in ("bots", "add", "drop", "friends", "back")], {"crop"}),
     ("the tabs touching the title", "friends", shift_child("friends_list", "friends_tab_bar", "y", 36), {"gap", "overlap"}),
     # the mod store (the same rules: it was written before the system and used its own numbers)
     ("the store's detail line moved up into the rows", "store", shift("store_detail", "top", 300), {"gap", "overlap"}),

@@ -5,6 +5,7 @@ mock (and the stress states: 16 players, 50 friends, the widest names, the empty
 The rules (the numbers are the spacing system's: port_settings.py, "THE SPACING SYSTEM"):
   safe      no text above y 24 or below 456, none outside the 640 wide block
   box       a text is inside its own widget (the engine clips at the widget's right and bottom edge)
+  crop      the widget shows the whole of its bitmap's drawn part: a button or tab narrower than its art has fit_bitmap_width (the engine cuts at the widget's edge otherwise)
   pill      a text in a row, a tab or a button is inside its pill, 12 from the pill's ends (8 for a tab or a button), and centred on it (capitals' middle within 2.5 of the pill's)
   overlap   no two texts of different widgets touch (4 apart), the cells of a row are 8 apart; no text touches a pill that is not its own; the rows' pills do not overlap
   gap       the title is 6 or more above the tabs, the tabs 3 above the panel's line, the first row 4 below it, the detail 8 below the last row, the footer 8 below the detail
@@ -98,6 +99,11 @@ def evaluate(canvas, data=None, scale=None):
             say("box", f"{record['name']} {record['text']!r}: ink x {x0 - BLOCK_LEFT:.1f} to {x1 - BLOCK_LEFT:.1f} is outside its box {box[0] - BLOCK_LEFT:.0f} to {box[2] - BLOCK_LEFT:.0f}")
         if y0 < box[1] - TOLERANCE or y1 > box[3] + TOLERANCE:
             say("box", f"{record['name']} {record['text']!r}: ink y {y0:.1f} to {y1:.1f} is outside its box {box[1]:.0f} to {box[3]:.0f}")
+    # -- crop: a button or tab whose art is wider or taller than its widget (the engine cuts a bitmap at the widget's right and bottom edge: a rounded end goes square)
+    for pill in block_pills:
+        across, down = pill.get("cropped", (0.0, 0.0))
+        if across > TOLERANCE or down > TOLERANCE:
+            say("crop", f"{pill['name']}: the widget cuts {across:.1f} units off the art's right end and {down:.1f} off its bottom (width and height are the art's, or flag fit_bitmap_width)")
     # -- pill: a text in a pill
     for record in records:
         pill = record["owner"]

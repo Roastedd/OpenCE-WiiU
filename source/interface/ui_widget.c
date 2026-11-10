@@ -826,7 +826,10 @@ enum
 	_widget_return_to_main_menu_if_no_history_bit = 11,
 	_widget_always_use_tag_controller_index_bit = 12,
 	_widget_always_render_with_nifty_fx_bit = 13,
-	_widget_dont_push_history_data_bit = 14
+	_widget_dont_push_history_data_bit = 14,
+	/* port: bits 15 and 16 are the PC version's (menu_tags.c); this one is the
+	menus' own, a bitmap's whole width scaled to its widget's */
+	_widget_fit_bitmap_width_bit = 17
 };
 
 enum
@@ -7328,6 +7331,19 @@ static void widget_instance_render_recursive(
 			boolean shown = TRUE;
 			boolean stretched = custom_edition_picture &&
 				custom_edition_maps_campaign_level(widget->animation.current_frame_index) == NONE;
+
+			/* port: a widget with fit_bitmap_width (a menu file's flag: the
+			social screens' tabs, narrower than the 128 of the button art)
+			shows the whole width of its bitmap, scaled to the widget's
+			width; the height is as it was, one unit to a texel from the top.
+			Without it a bitmap is drawn texel for texel and cut at the
+			widget's edge, which took the right end off a button narrower
+			than its art (and a wider widget stretches it) */
+			if (TEST_FLAG(definition->flags, _widget_fit_bitmap_width_bit) && !stretched)
+			{
+				texels.x0 = 0;
+				texels.x1 = bitmap->width;
+			}
 
 			if (pc_menu_frame_placement(bitmap, &frame_x, &frame_y, &frame_width, &frame_height))
 			{

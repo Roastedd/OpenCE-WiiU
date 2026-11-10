@@ -640,7 +640,9 @@ CONTROL_ROWS = 7
 
 # the settings whose rows have the wider spinner (a device's name)
 WIDE_SETTINGS = {"audio.output_device", "audio.input_device", "streamer.slurs", "streamer.swearing",
-                 "streamer.insults", "network.listings", "network.browser_maps", "network.browser_sort"}
+                 "streamer.insults", "network.listings", "network.browser_maps", "network.browser_sort",
+                 # (the gamepad layouts' names, 'LEGACY SOUTHPAW' and 'SWAP B, L TRIGGER', are 175 wide in the large font: the 147 of the plain spinner cut them off at the arrows)
+                 "profile.button_preset", "profile.joystick_preset"}
 
 # Teamplay Options' rows of the port's (_teamplay_options_extras): the
 # gametype's FORCE TEAM SPAWNS, then the host's voice chat and vote kicks;
@@ -1492,7 +1494,8 @@ TITLE_COLOR = (0x29, 0x95, 0xFD, 255)
 
 
 def _header(name: str, bitmap: str, platform=None) -> list:
-    return _widget(name, [("controller", 1), ("left", 35), ("top", 11), ("width", 363), ("height", 59),
+    # (368, not 363: the title art of SERVER BROWSER, with its soft backdrop, is drawn to 367)
+    return _widget(name, [("controller", 1), ("left", 35), ("top", 11), ("width", 368), ("height", 59),
                           ("bitmap", bitmap), ("platform", platform)], [])
 
 
@@ -1981,7 +1984,7 @@ def _lobby() -> list:
         # (the social screens' (screens.enable): A opens the player's actions, and the row's name and its tag of the team and a bot's skill replace the
         # centred text; hidden and empty with the setting off: port/linux/game/menu_screens.inl)
         lines += _widget(f"{base}/list_item_{index}",
-                         [("width", 390), ("height", 28),
+                         [("width", 402 if index == 0 else 390), ("height", 28),
                           ("bitmap", "bitmaps/sel_list_item_bkd_top" if index == 0 else "bitmaps/sel_list_item_bkd"),
                           ("font", "ui\\large_ui"), ("color", "#FF2896FF"), ("align", "center"), ("text_y", 3)],
                          ['<on event="left right" run="swap player team"/>',
@@ -2063,7 +2066,7 @@ def _lobby() -> list:
                       f'<child widget="{vote}/map_vote_button_bar" y="414"/>'])
     for index in range(8):
         lines += _widget(f"{vote}/list_item_{index}",
-                         [("width", 390), ("height", 28),
+                         [("width", 402 if index == 0 else 390), ("height", 28),
                           ("bitmap", "bitmaps/sel_list_item_bkd_top" if index == 0 else "bitmaps/sel_list_item_bkd"),
                           ("font", "ui\\large_ui"), ("color", "#FF2896FF"), ("align", "center"), ("text_y", 3)],
                          ['<on event="a" run="port map vote choose"/>',
@@ -2269,7 +2272,7 @@ def _coop() -> list:
                       *rows, f'<child widget="{base}/player_2_button_bar" y="414"/>'])
     for index in range(11):
         lines += _widget(f"{base}/list_item_{index}",
-                         [("width", 390), ("height", 28),
+                         [("width", 402 if index == 0 else 390), ("height", 28),
                           ("bitmap", "bitmaps/sel_list_item_bkd_top" if index == 0 else "bitmaps/sel_list_item_bkd"),
                           ("font", "ui\\large_ui"), ("color", "#FF2896FF"), ("align", "center"), ("text_y", 3)],
                          ['<on event="a" run="single prev cl item activated"/>',
@@ -2524,8 +2527,9 @@ def mod_status_frames(icons: Path, size: int = 24) -> list:
 
 def _text_button(name: str, text: str, handlers: list, width: int = 128) -> list:
     """a button of the button bar with its own words"""
+    # (a button narrower than the art's 128 has the flag that scales the whole art to it: else the engine cuts the art's rounded right end off)
     pairs = [("type", "text"), ("width", width), ("height", 24), ("bitmap", "bitmaps/text_button_background"),
-             ("text", text), ("font", "ui\\small_ui"), ("color", "#FFFFFFFF"), ("align", "center"), ("text_y", 2)]
+             ("flags", "fit_bitmap_width" if width < 128 else None), ("text", text), ("font", "ui\\small_ui"), ("color", "#FFFFFFFF"), ("align", "center"), ("text_y", 2)]
     return _widget(name, pairs, handlers + ['<on event="left_mouse" run="mouse emit accept event"/>'])
 
 
@@ -2563,7 +2567,7 @@ def _mods() -> list:
                       f'<child widget="{base}/button_bar" y="414"/>'])
     for index in range(MOD_ROWS):
         lines += _widget(f"{base}/op_mod_{index + 1}",
-                         [("width", 390), ("height", 28), ("flags", "pass_unhandled_to_focused_child"),
+                         [("width", 402 if index == 0 else 390), ("height", 28), ("flags", "pass_unhandled_to_focused_child"),
                           ("bitmap", "bitmaps/sel_list_item_bkd_top" if index == 0 else "bitmaps/sel_list_item_bkd"),
                           ("color", "#FF2896FF")],
                          ['<on event="a" run="port mods toggle"/>', '<on event="start" run="port mods toggle"/>',
@@ -2700,7 +2704,9 @@ UNIT = 4
 SAFE_TOP, SAFE_BOTTOM = 24, 456
 PANEL_LINE, PANEL_BOTTOM_LINE = 70, 409
 SOCIAL_ROWS_LEFT, SOCIAL_ROWS_TOP, SOCIAL_ROW_PITCH, SOCIAL_ROW_WIDTH, SOCIAL_ROW_HEIGHT = 54, 76, 28, 512, 28
-# (the tabs, 4 of 116 and 4 apart, are centred on the rows' 54 to 566: 72 to 548, clear by 8 of the HUD's bars at the top corners of a game under the pause menu: they end at x 64 and begin at 556)
+# (the tab's art, text_button_background, is 128 units across and the engine cuts a bitmap at its widget's edge, which took the tabs' right ends off: the tabs have the flag
+# fit_bitmap_width, which draws the art's whole width scaled to the widget's 116 -- 0.91 of its width, the height as it is; tools/menus_clip_check.py checks every menu for the
+# defect. The tabs, 4 of 116 and 4 apart, are centred on the rows' 54 to 566: 72 to 548, clear by 8 of the HUD's bars at the top corners of a game under the pause menu: they end at x 64 and begin at 556)
 SOCIAL_TAB_LEFT, SOCIAL_TAB_TOP, SOCIAL_TAB_PITCH, SOCIAL_TAB_WIDTH, SOCIAL_TAB_HEIGHT = 72, 44, 120, 116, 26
 # nine rows on the Players page too (it had ten: the footer and a two line detail need the room), the actions' eight
 SOCIAL_PLAYER_ROWS, SOCIAL_FRIEND_ROWS, SOCIAL_ACTION_ROWS = 9, 9, 8
@@ -2768,7 +2774,7 @@ def _social_buttons(base: str, bar: str, buttons: list, five: bool = False) -> l
         x = 4 + 127 * index if five else 510 - (len(buttons) - 1 - index) * 130
         children.append(f'<child widget="{base}/{key}" x="{x}" y="1"/>')
         lines += _widget(f"{base}/{key}", [("type", "text"), ("width", 126 if five else 128), ("height", 24), ("bitmap", "bitmaps/text_button_background"),
-                                          ("text", caption), ("font", "ui\\small_ui"), ("color", "#FFFFFFFF"), ("align", "center"), ("text_y", 2)],
+                                          ("flags", "fit_bitmap_width" if five else None), ("text", caption), ("font", "ui\\small_ui"), ("color", "#FFFFFFFF"), ("align", "center"), ("text_y", 2)],
                          handlers + ['<on event="left_mouse" run="mouse emit accept event"/>'])
     return _widget(bar, [("type", "column_list"), ("width", 640), ("height", 28),
                          ("flags", "pass_unhandled_to_focused_child left_right_tabs_items")], children) + lines
@@ -2915,7 +2921,7 @@ def _social_friends() -> list:
         # (a tab is a button's pill, 22 high: its text at the buttons' own text_y 2 is centred on it)
         lines += _widget(f"{base}/friends_tab_{index}",
                          [("type", "text"), ("width", SOCIAL_TAB_WIDTH), ("height", SOCIAL_TAB_HEIGHT), ("bitmap", "bitmaps/text_button_background"),
-                          ("font", "ui\\small_ui"), ("color", "#FFFFFFFF"), ("align", "center"), ("text_y", 2)],
+                          ("flags", "fit_bitmap_width"), ("font", "ui\\small_ui"), ("color", "#FFFFFFFF"), ("align", "center"), ("text_y", 2)],
                          [f'<on event="a" run="port friends tab {index}"/>', f'<on event="start" run="port friends tab {index}"/>',
                           '<on event="left_mouse" run="mouse emit accept event"/>'])
     for index in range(SOCIAL_FRIEND_ROWS):

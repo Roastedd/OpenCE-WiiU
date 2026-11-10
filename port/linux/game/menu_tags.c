@@ -299,6 +299,8 @@ static char const *const widget_flag_names[] =
 	"main_menu_if_no_history", "tag_controller_index", "nifty_fx", "no_history",
 	/* (the PC version's, which this engine has no use for) */
 	"force_handle_mouse", "no_widescreen_fill",
+	/* (this port's: the widget's bitmap is drawn whole across, scaled to the widget's width, not cut to it: ui_widget.c) */
+	"fit_bitmap_width",
 };
 
 static char const *const widget_type_names[] = { "container", "text", "spinner", "column_list" };

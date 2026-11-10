@@ -119,10 +119,13 @@ class Canvas:
         self.image = backdrop(size, seed)
         self.draw = ImageDraw.Draw(self.image, "RGBA")
 
-    def paste_frame(self, bitmap, index, x, y, width, height):
+    def paste_frame(self, bitmap, index, x, y, width, height, fit_width=False):
         frame = self.menus.frame(bitmap, index, width, height, self.scale)
         if frame is None:
             return
+        if fit_width:
+            # (the widget's fit_bitmap_width flag: the whole width of the art scaled to the widget's, the height as it is: ui_widget.c)
+            frame = frame.resize((max(1, round(width * self.scale)), frame.height), Image.LANCZOS)
         # (from its top left, cut to the widget's size)
         cut = frame.crop((0, 0, min(frame.width, round(width * self.scale)), min(frame.height, round(height * self.scale))))
         self.image.paste(cut, (round(x * self.scale), round(y * self.scale)), cut)
@@ -223,12 +226,24 @@ class Drawer:
             self.canvas.image.paste(column, (round(x0 * scale), round(top * scale)), column)
             self.pills.append({"name": short, "bitmap": bitmap, "rect": (x0, top, x1, top + rows / scale), "kind": "panel"})
             return None
-        self.canvas.paste_frame(bitmap, index, left, top, width, height)
+        fit_width = "fit_bitmap_width" in (element.get("flags") or "").split()
+        self.canvas.paste_frame(bitmap, index, left, top, width, height, fit_width)
         extent = self.menus.extents(bitmap, index)
         if extent is None:
             return None
+        if fit_width:
+            # (scaled across: the art's 128 units are the widget's width)
+            ratio = width / max(1, self.menus.bitmaps[bitmap][min(index, len(self.menus.bitmaps[bitmap]) - 1)][1])
+            extent = (extent[0] * ratio, extent[1], extent[2] * ratio, extent[3])
         rect = (left + extent[0], top + extent[1], min(left + extent[2], left + width), min(top + extent[3], top + height))
-        pill = {"name": short, "bitmap": bitmap, "rect": rect, "kind": "pill", "focused": index == 1}
+        # (what of the art's drawn part the widget's size cuts off: units; the engine draws a bitmap cut at the widget's right and bottom edge, which took the right end off the tabs)
+        # (over both frames: the focused one is the larger)
+        worst = [extent] + [e for e in (self.menus.extents(bitmap, other) for other in range(len(self.menus.bitmaps[bitmap]))) if e]
+        if fit_width:
+            ratio = width / max(1, self.menus.bitmaps[bitmap][0][1])
+            worst = [(e[0] * ratio, e[1], e[2] * ratio, e[3]) if e is not extent else e for e in worst]
+        cropped = (max(0.0, max(e[2] for e in worst) - width), max(0.0, max(e[3] for e in worst) - height))
+        pill = {"name": short, "bitmap": bitmap, "rect": rect, "kind": "pill", "focused": index == 1, "cropped": cropped}
         self.pills.append(pill)
         return pill
 
@@ -270,13 +285,13 @@ class Drawer:
         elif kind == "spinner":
             self.spinner(element, short, left, top, width)
         for child in element.findall("child"):
-            self.widget(child.get("widget"), left + float(child.get("x", 0)), top + float(child.get("y", 0)), [*path, short])
+            self.widget(child.get("widget"), x + float(child.get("x", 0)), y + float(child.get("y", 0)), [*path, short])
         if pill:
             self.stack.pop()
         # (a list's description, which the engine draws with it: the help line, the lobby's panel)
         if element.get("description") and element.get("description") not in self.drawn_descriptions:
             self.drawn_descriptions.add(element.get("description"))
-            self.widget(element.get("description"), left, top, [*path, short])
+            self.widget(element.get("description"), x, y, [*path, short])
 
     def spinner(self, element, short, left, top, width):
         strings = (element.get("strings") or "").split("|")
