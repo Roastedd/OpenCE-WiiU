@@ -4,6 +4,9 @@
    screens_dump SCENARIO [FOCUS [FIRST]]
    players | players-client | players-empty | players16 | actions-person | actions-bot | actions-me | friends | party | requests | blocked | friends50 | friends-empty | friends-offline
    | friends-disabled | friends-nofriendservice | requests-empty | party-empty | blocked-empty | add-friend TEXT | lobby | toasts
+   | store | store-off | store-loading | store-offline | store-error | store-empty | store-1 | store-50 | store-longest | store-downloading | store-update | store-failed-job | store-removing
+
+   the store scenarios are made up here (the mod store's texts are screens.c's screens_store_*, which menu_store.inl calls; the mods are this file's)
 
    players16 and friends50 are made up here (the widest names, every flag and every state of a friend's game, the longest maps), not the mock's: the layout checks (tools/test_screens_layout.py) run
    them at both sizes. */
@@ -155,6 +158,149 @@ static void json_scroll(char const *prefix, int focus, int first, int shown, int
 	printf(", \"%s_count\": ", prefix);
 	json_string(text);
 	printf(", \"%s_up\": %d, \"%s_down\": %d", prefix, first > 0, prefix, first + shown < count);
+}
+
+/* ---------- the mod store: a catalog of made-up mods, and the state of the store for a scenario */
+
+struct store_mod
+{
+	char name[80], author[80];
+	unsigned long size;
+	int state;
+};
+
+static int make_store(struct store_mod *mods, char const *scenario)
+{
+	static char const *const names[] = { "High-Res Audio", "Warthog Skins", "Classic Strings", "Hog Model Pack", "Night Vision Plus", "Blood Gulch Sounds", "Plasma Pistol Tweaks",
+		"Menu Music", "Pistol Sounds", "Red Team Armour", "Cyborg Voices", "Banshee Textures" };
+	static char const *const authors[] = { "Ann", "Bob K", "Carl Jr", "D", "Erin O'Neil", "Sterling", "Dubbo" };
+	static int const states[] = { SCREENS_STORE_AVAILABLE, SCREENS_STORE_INSTALLED, SCREENS_STORE_UPDATE, SCREENS_STORE_AVAILABLE, SCREENS_STORE_LOCAL, SCREENS_STORE_UNPLAYABLE };
+	static unsigned long const sizes[] = { 12UL * 1024, 999UL * 1024, 1100UL * 1024, 9990UL * 1024, 25UL * 1048576, 128UL * 1048576, 2621440UL };
+	int count = !strcmp(scenario, "store-empty") ? 0 : !strcmp(scenario, "store-1") ? 1 : !strcmp(scenario, "store-50") ? 50 : !strcmp(scenario, "store-longest") ? 12 : 12;
+	int index;
+
+	if (!strncmp(scenario, "store-off", 9) || !strcmp(scenario, "store-loading") || !strcmp(scenario, "store-offline") || !strcmp(scenario, "store-error"))
+		return 0;
+	for (index = 0; index < count; index++)
+	{
+		struct store_mod *mod = &mods[index];
+
+		snprintf(mod->name, sizeof(mod->name), "%s", names[index % 12]);
+		snprintf(mod->author, sizeof(mod->author), "%s", authors[index % 7]);
+		mod->size = sizes[index % 7];
+		mod->state = states[index % 6];
+		if (count == 50)
+			snprintf(mod->name, sizeof(mod->name), "%s %d", names[index % 12], index + 1);
+		if (!strcmp(scenario, "store-longest"))
+		{
+			/* the widest letters, and a name that is only long */
+			snprintf(mod->name, sizeof(mod->name), index % 2 ? "WWWWWWWWWWWWWWWWWWWWWWWWWWW" : "A VERY LONG NAME FOR A MOD THAT GOES ON AND ON AND ON");
+			snprintf(mod->author, sizeof(mod->author), index % 2 ? "WWWWWWWWWWWWWWWW" : "AN AUTHOR WITH A VERY LONG NAME INDEED");
+			mod->size = index % 3 ? 128UL * 1048576 : 9990UL * 1024;
+		}
+		if (!strcmp(scenario, "store-1"))
+			mod->state = SCREENS_STORE_AVAILABLE;
+	}
+	if (!strcmp(scenario, "store-update") && count > 2)
+		mods[0].state = SCREENS_STORE_UPDATE;
+	return count;
+}
+
+static void dump_store(char const *scenario, int focus, int first)
+{
+	static struct store_mod mods[50];
+	int phase = SCREENS_STORE_READY, count, shown, busy = 0, working = -1, percent = -1, state = -1, buttons, index, job_remove = 0;
+	char const *said = "";
+	char const *note = "";
+	char text[SCREENS_LINE_SIZE * 3], detail[SCREENS_WRAP_SOURCE], source[SCREENS_WRAP_SOURCE];
+	struct screens_cell cells[SCREENS_STORE_CELLS];
+
+	if (!strcmp(scenario, "store-off"))
+		phase = SCREENS_STORE_OFF;
+	else if (!strcmp(scenario, "store-loading"))
+		phase = SCREENS_STORE_LOADING;
+	else if (!strcmp(scenario, "store-offline"))
+	{
+		phase = SCREENS_STORE_FAILED;
+		said = "COULD NOT REACH THE STORE (THE ANSWER FROM STORE.EXAMPLE-MODS.ORG BROKE OFF, OR IS LARGER THAN 1048576 BYTES)";
+	}
+	else if (!strcmp(scenario, "store-error"))
+	{
+		phase = SCREENS_STORE_FAILED;
+		said = "THE CATALOG IS NOT SIGNED BY THE STORE'S KEY, SO NOTHING WAS TAKEN FROM IT";
+	}
+	count = make_store(mods, scenario);
+	shown = count < 9 ? count : 9;
+	if (first > count - shown)
+		first = count - shown > 0 ? count - shown : 0;
+	if (focus >= shown)
+		focus = shown ? shown - 1 : 0;
+	if (!strcmp(scenario, "store-downloading"))
+	{
+		busy = 1;
+		working = first + focus;
+		percent = 42;
+		mods[working].state = SCREENS_STORE_AVAILABLE;
+		note = "DOWNLOADING HIGH-RES AUDIO: FILE 3 OF 4";
+	}
+	else if (!strcmp(scenario, "store-removing"))
+	{
+		busy = 1;
+		job_remove = 1;
+		working = first + focus;
+		mods[working].state = SCREENS_STORE_INSTALLED;
+		note = "REMOVING WARTHOG SKINS";
+	}
+	else if (!strcmp(scenario, "store-failed-job"))
+		note = "THE FILE TAGS/VEHICLES/WARTHOG/WARTHOG_SKIN_HIGH_RESOLUTION.BITMAP IS NOT THE FILE THE CATALOG NAMES (ITS HASH IS WRONG)";
+	if (phase == SCREENS_STORE_READY && count && working < 0)
+		working = -1;
+	printf(", \"phase\": %d, \"count\": %d, \"shown\": %d, \"focus\": %d, \"first\": %d, \"rows\": [", phase, count, shown, focus, first);
+	for (index = 0; index < shown; index++)
+	{
+		struct store_mod const *mod = &mods[first + index];
+
+		screens_store_cells(mod->name, mod->author, mod->size, mod->state, first + index == working ? (job_remove ? 2 : 1) : 0, first + index == working ? percent : -1, cells);
+		printf("%s{\"cells\": ", index ? ", " : "");
+		json_cells(cells, SCREENS_STORE_CELLS);
+		printf("}");
+	}
+	printf("]");
+	snprintf(text, sizeof(text), "%d MOD%s", count, count == 1 ? "" : "S");
+	printf(", \"head\": ");
+	json_string(phase == SCREENS_STORE_READY ? text : "");
+	json_scroll("store", focus, first, shown, count);
+	screens_store_empty(phase, count, said, text, sizeof(text));
+	printf(", \"empty\": ");
+	json_string(text);
+	state = phase == SCREENS_STORE_READY && count ? mods[first + focus].state : -1;
+	detail[0] = 0;
+	text[0] = 0;
+	if (phase == SCREENS_STORE_READY && count)
+	{
+		struct store_mod const *mod = &mods[first + focus];
+
+		if (note[0])
+		{
+			snprintf(source, sizeof(source), "%s", note);
+			screens_store_job_line(source, busy && !job_remove ? percent : -1, detail, sizeof(detail));
+		}
+		else if (state == SCREENS_STORE_LOCAL)
+			snprintf(detail, sizeof(detail), "A MOD OF THAT NAME IS IN YOUR MODS FOLDER ALREADY: THE STORE WILL NOT REPLACE IT.");
+		else if (state == SCREENS_STORE_UNPLAYABLE)
+			snprintf(detail, sizeof(detail), "THIS MOD NEEDS A LATER VERSION OF THE GAME THAN THIS ONE.");
+		else
+			snprintf(detail, sizeof(detail), "%s", strstr(scenario, "longest") ? "REPLACES THE PISTOL, RIFLE AND PLASMA SOUNDS WITH CLEAN RECORDINGS. IT CHANGES NOTHING ANOTHER PLAYER SEES OR HEARS, WHATEVER GAME YOU PLAY, SO IT IS TOO LONG FOR TWO LINES." : "REPLACES THE PISTOL AND RIFLE SOUNDS WITH CLEAN RECORDINGS. NOTHING ANOTHER PLAYER SEES OR HEARS CHANGES.");
+		snprintf(source, sizeof(source), "%s", detail);
+		screens_wrap(SCREENS_FONT_LARGE, (float)SCREENS_LINE_BOX_WIDTH, SCREENS_LINE_BOX_LINES, source, detail, sizeof(detail));
+		screens_store_footer(mod->author, "SOUNDS", "CC-BY-4.0", "1.10", state == SCREENS_STORE_UPDATE ? "0.9" : "", state, text, sizeof(text));
+	}
+	printf(", \"detail\": ");
+	json_string(detail);
+	printf(", \"footer\": ");
+	json_string(text);
+	buttons = screens_store_buttons(phase, busy, state);
+	printf(", \"buttons\": %d", buttons);
 }
 
 int main(int argc, char **argv)
@@ -325,6 +471,8 @@ int main(int argc, char **argv)
 			printf(", \"join\": %d, \"invite\": %d, \"add\": %d", joinable, online, have);
 		}
 	}
+	else if (!strncmp(scenario, "store", 5))
+		dump_store(scenario, focus, first);
 	else if (!strcmp(scenario, "add-friend"))
 	{
 		printf(", \"own\": ");

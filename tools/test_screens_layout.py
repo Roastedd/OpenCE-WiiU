@@ -36,8 +36,14 @@ def drawn(name, size="tv", mutate=None, state_change=None, game=False):
     return canvas, screens_layout.evaluate(canvas, data)
 
 
+ST = port_settings.STORE
+STORE_SCENES = [name for name in SCENES if name.startswith("store")]
+
+
 def widget(menus, name):
-    return menus.widgets[f"{S}/{name}"]
+    """a widget of the social screens, or (no such name there) of the mod store"""
+    found = menus.widgets.get(f"{S}/{name}")
+    return found if found is not None else menus.widgets[f"{ST}/{name}"]
 
 
 def rules(violations):
@@ -143,6 +149,21 @@ CONTROLS = [
     ("the footer on top of the detail line", "friends", shift("friends_code", "top", 346), {"gap", "overlap"}),
     ("the text of a row not on its pill's middle", "friends", shift("scr_friend_name", "text_y", 14), {"pill"}),
     ("the tabs touching the title", "friends", shift_child("friends_list", "friends_tab_bar", "y", 36), {"gap", "overlap"}),
+    # the mod store (the same rules: it was written before the system and used its own numbers)
+    ("the store's detail line moved up into the rows", "store", shift("store_detail", "top", 300), {"gap", "overlap"}),
+    ("the store's detail box too low for its two lines", "store-failed-job", shift("store_detail", "height", 20), {"box"}),
+    ("the store's title above the safe margin (the old 14 with text_y 3 is 3 too low: this is the margin's own fault)", "store", shift("store_title", "top", 8), {"safe"}),
+    ("the store's footer below the bottom margin", "store", shift("store_footer", "top", 450), {"safe", "overlap", "gap"}),
+    ("the store's footer on the detail line", "store", shift("store_footer", "top", 346), {"gap", "overlap"}),
+    ("the store's counter gone from a long list's footer: moved onto the footer's note", "store-50", shift("store_count", "left", 54), {"overlap"}),
+    ("the store's status column too narrow for DOWNLOADING 42%", "store-downloading", shift("store_cell_status", "width", 100), {"box"}),
+    ("the store's name column too narrow for its longest name", "store-longest", shift("store_cell_name", "width", 80), {"box"}),
+    ("a store row's text 3 too low on its pill (the old y 3 of the cells)", "store", lambda menus: [child.set("y", "3") for child in widget(menus, "store_item_1").findall("child")], {"pill"}),
+    ("a store row's author cell moved: the column no longer lines up", "store", shift_child("store_item_1", "store_cell_author", "x", 196), {"columns", "overlap"}),
+    ("two store rows overlapping", "store", shift_child("store_list", "store_item_2", "y", 90), {"overlap"}),
+    ("the store's button bar pulled up into the panel", "store", shift_child("store_list", "store_button_bar", "y", 396), {"gap", "overlap"}),
+    ("the store's empty words moved down onto the buttons", "store-off", shift("store_empty", "top", 380), {"empty"}),
+    ("the store's count of mods on the HUD's bar (title row pulled left and down)", "store", lambda menus: [widget(menus, "store_head").set(key, value) for key, value in (("left", "20"), ("top", "40"), ("width", "100"), ("align", "left"))], {"hud"}),
 ]
 
 
@@ -258,3 +279,166 @@ def test_the_lobbys_added_texts_are_in_their_places():
         menus.widgets["main_menu/multiplayer_type_select/lobby/lobby_join_help"].set("top", "446")
     _, old = drawn("lobby", mutate=old_help)
     assert any(rule == "safe" and "lobby_join_help" in message for rule, message in old), "the help line where it was (y 446) is outside the margin"
+
+
+# ---------- the mod store's states
+
+STORE_STATES = {"store": "12 mods, every state of a mod", "store-off": "no store set up", "store-loading": "looking for mods", "store-offline": "the store could not be reached",
+                "store-error": "the catalog is not signed by the key", "store-empty": "no mods", "store-1": "one mod", "store-50-top": "50 mods, the first", "store-50": "50 mods, the middle",
+                "store-50-end": "50 mods, the last", "store-longest": "the longest names, authors and sizes", "store-longest-end": "the longest names, the end",
+                "store-downloading": "a download with its percent", "store-update": "an update is available", "store-failed-job": "a job that failed, in words",
+                "store-removing": "a removal", "store-local": "a mod of the player's own", "store-unplayable": "a mod that needs a later game", "store-installed": "an installed mod"}
+
+
+def test_the_store_states_the_owner_listed_are_drawn():
+    assert set(STORE_STATES) == set(STORE_SCENES), sorted(set(STORE_SCENES) ^ set(STORE_STATES))
+    assert screens_preview.dump("store-1", 0, 0)["count"] == 1
+    assert screens_preview.dump("store-50", 0, 0)["count"] == 50
+    assert screens_preview.dump("store-empty", 0, 0)["count"] == 0
+    longest = screens_preview.dump("store-longest", 0, 0)
+    assert any("..." in cell["text"] for row in longest["rows"] for cell in row["cells"]), "the longest names are cut, and the cut is drawn"
+
+
+@pytest.mark.parametrize("size", sorted(SIZES))
+def test_every_store_state_is_clean(size):
+    problems = []
+    for name in STORE_SCENES:
+        canvas, violations = drawn(name, size)
+        problems += [f"{name} {size}: {rule}: {message}" for rule, message in dict.fromkeys(violations)]
+        assert any(record["name"] == "store_title" and record["text"] == "MOD STORE" for record in canvas.records), name
+    assert not problems, "\n".join(problems[:40])
+
+
+def test_the_store_has_the_system_s_places():
+    """title at the margin, nine rows from y 76 on the same pills, the detail 8 under the last, the footer, the arrows 8 right of the list: the numbers of Friends and Players"""
+    canvas, _ = drawn("store-50")
+    rows = [pill for pill in canvas.pills if pill["name"].startswith("store_item_")]
+    assert len(rows) == port_settings.SOCIAL_FRIEND_ROWS == 9
+    friends, _ = drawn("friends-50")
+    friend_rows = [pill for pill in friends.pills if pill["name"].startswith("friend_item_")]
+    assert [screens_layout.block(pill["rect"]) for pill in rows] == [screens_layout.block(pill["rect"]) for pill in friend_rows], "the store's rows are the Friends rows' places"
+    title = next(record for record in canvas.records if record["name"] == "store_title")
+    assert abs(screens_layout.block(title["ink"])[1] - port_settings.SAFE_TOP) <= 1.0
+    for name in ("store_detail", "store_footer", "store_count", "store_head", "store_empty"):
+        assert f"{ST}/{name}" in set(screens_preview.Menus().widgets)
+    menus = screens_preview.Menus()
+    for name, friends in (("store_detail", "friends_detail"), ("store_footer", "friends_code"), ("store_count", "friends_count"), ("store_title", "friends_title"), ("store_empty", "friends_empty")):
+        for attribute in ("left", "top", "width", "height", "text_x", "text_y", "font"):
+            if attribute == "width" and name == "store_title":
+                continue
+            assert widget(menus, name).get(attribute) == widget(menus, friends).get(attribute), f"{name} {attribute} is not {friends}'s"
+    # (the rows are the Friends rows' own: size, pill, handlers' shape, the cells at the row's top)
+    item, friend = widget(menus, "store_item_1"), widget(menus, "friend_item_1")
+    assert (item.get("width"), item.get("height"), item.get("bitmap")) == (friend.get("width"), friend.get("height"), friend.get("bitmap"))
+    assert all(child.get("y") == "0" for child in item.findall("child"))
+    assert [child.get("y") for child in widget(menus, "store_list").findall("child") if "store_item_" in child.get("widget")] == [str(76 + 28 * index) for index in range(9)]
+
+
+def test_the_store_has_its_counter_and_arrows_where_there_are_more_rows():
+    top, middle, end = (screens_preview.dump("store-50", focus, first) for focus, first in ((0, 0), (3, 20), (8, 41)))
+    assert (top["store_count"], top["store_up"], top["store_down"]) == ("1 OF 50", 0, 1)
+    assert (middle["store_count"], middle["store_up"], middle["store_down"]) == ("24 OF 50", 1, 1)
+    assert (end["store_count"], end["store_up"], end["store_down"]) == ("50 OF 50", 1, 0)
+    for scenario in ("store-1", "store-empty", "store-off"):
+        short = screens_preview.dump(scenario, 0, 0)
+        assert short["store_count"] == "" and short["store_up"] == 0 and short["store_down"] == 0, scenario
+    twelve = screens_preview.dump("store", 1, 0)
+    assert twelve["shown"] == 9 and twelve["store_count"] == "2 OF 12"
+    canvas, _ = drawn("store-50-top")
+    assert [pill["name"] for pill in canvas.pills if pill["name"].startswith("store_more_")] == ["store_more_down"]
+    canvas, _ = drawn("store-50-end")
+    assert [pill["name"] for pill in canvas.pills if pill["name"].startswith("store_more_")] == ["store_more_up"]
+    canvas, _ = drawn("store-1")
+    assert not [pill for pill in canvas.pills if pill["name"].startswith("store_more_")]
+
+
+def test_the_stores_empty_states_have_words_in_the_lists_middle_and_no_rows():
+    for name in ("store-off", "store-loading", "store-offline", "store-error", "store-empty"):
+        canvas, violations = drawn(name)
+        words = [record["text"] for record in canvas.records if record["name"] == "store_empty"]
+        assert words and all(word.strip() for word in words), name
+        assert not violations, name
+        assert not [pill for pill in canvas.pills if pill["name"].startswith("store_item_")], f"{name} has rows"
+        assert not [record for record in canvas.records if record["name"] in ("store_detail", "store_footer", "store_count")], name
+
+
+def test_a_failed_store_always_says_how_to_try_again_whole():
+    """what the store said is cut to two lines; the way out stays whole on the third, however long the reason"""
+    for scenario in ("store-offline", "store-error"):
+        lines = screens_preview.dump(scenario, 0, 0)["empty"].split("\n")
+        assert 2 <= len(lines) <= 3 and lines[-1] == "PRESS Y TO TRY AGAIN.", lines
+    assert "..." in screens_preview.dump("store-offline", 0, 0)["empty"], "the long reason is cut, not the way out"
+    assert "..." not in screens_preview.dump("store-error", 0, 0)["empty"]
+
+
+def test_the_store_s_buttons_per_state():
+    """the buttons that apply (screens_store_buttons): drawn in the social bar's slots, one of DOWNLOAD / UPDATE / STOP at the first, never two"""
+    expected = {"store-off": {"BACK"}, "store-loading": {"BACK"}, "store-offline": {"REFRESH", "BACK"}, "store-error": {"REFRESH", "BACK"}, "store-empty": {"REFRESH", "BACK"},
+                "store-downloading": {"STOP", "BACK"}, "store-removing": {"STOP", "BACK"}, "store-update": {"UPDATE", "REMOVE", "REFRESH", "BACK"},
+                "store-installed": {"REMOVE", "REFRESH", "BACK"}, "store-local": {"REFRESH", "BACK"}, "store-unplayable": {"REFRESH", "BACK"}}
+    for name, captions in expected.items():
+        canvas, _ = drawn(name)
+        drawn_captions = {record["text"] for record in canvas.records if "store_button_" in record["name"]}
+        assert drawn_captions == captions, f"{name}: {sorted(drawn_captions)}"
+        slots = [round(screens_layout.block(pill["rect"])[0]) for pill in canvas.pills if "button" in pill["name"]]
+        assert len(slots) == len(set(slots)), f"{name}: two buttons at one place"
+    canvas, _ = drawn("store")
+    assert {record["text"] for record in canvas.records if "store_button_" in record["name"]} == {"DOWNLOAD", "REFRESH", "BACK"}
+
+
+def test_the_stores_states_say_what_is_going_on_in_words():
+    """downloading shows the percent in the row and the job's line (with its percent) under the rows; a failed job is in words, whole or cut with ..."""
+    downloading = screens_preview.dump("store-downloading", 2, 0)
+    assert downloading["rows"][2]["cells"][3]["text"] == "DOWNLOADING 42%"
+    assert downloading["detail"].replace("\n", " ").endswith("(42%)") and downloading["buttons"] == 4 | 0 or downloading["buttons"] & 4
+    update = screens_preview.dump("store-update", 0, 0)
+    assert update["rows"][0]["cells"][3]["text"] == "UPDATE" and "(YOURS: 0.9)" in update["footer"]
+    failed = screens_preview.dump("store-failed-job", 1, 0)
+    assert failed["detail"].count("\n") <= 1 and "HASH" in failed["detail"] or failed["detail"].endswith("...")
+    assert screens_preview.dump("store-removing", 1, 0)["rows"][1]["cells"][3]["text"] == "REMOVING"
+
+
+def test_negative_control_the_old_store_layout_fails_the_rules_it_broke():
+    """the numbers the store had before the system (title at 35, 14 with text_y 3; the cells 3 below the row's top; the footer 512 wide at 388 in the sky colour at text_y 4; the
+    azure of the small cells): the checks see them"""
+    def old(menus):
+        title = widget(menus, "store_title")
+        for key, value in (("left", "35"), ("top", "8"), ("text_y", "3")):
+            title.set(key, value)
+        for index in range(1, 10):
+            for child in widget(menus, f"store_item_{index}").findall("child"):
+                child.set("y", "3")
+
+    def azure(state):
+        for index in range(1, 10):
+            state["colors"][(f"store_item_{index}", "store_cell_author")] = (0x28, 0x96, 0xFF)
+    for size in sorted(SIZES):
+        _, violations = drawn("store", size, old, azure)
+        assert {"safe", "pill", "contrast"} <= rules(violations), (size, sorted(rules(violations)))
+
+
+def test_negative_control_the_stores_words_and_empty_rules():
+    def pipe(state):
+        state["texts"][("store_item_1", "store_cell_name")] = "AL|CE"
+
+    def accent(state):
+        state["texts"][("", "store_detail")] = "SOUNDS FROM CAF\u00c9"
+    assert "words" in rules(drawn("store", "tv", state_change=pipe)[1])
+    assert "words" in rules(drawn("store", "tv", state_change=accent)[1])
+
+    def no_words(state):
+        state["texts"][("", "store_empty")] = ""
+    assert "empty" in rules(drawn("store-off", "tv", state_change=no_words)[1])
+    assert "empty" in rules(drawn("store-offline", "tv", state_change=no_words)[1])
+
+    def no_counter(state):
+        state["texts"][("", "store_count")] = ""
+    assert "empty" in rules(drawn("store-50", "tv", state_change=no_counter)[1])
+
+    def words_with_rows(state):
+        state["texts"][("", "store_empty")] = "THE STORE HAS NO MODS YET."
+    assert "empty" in rules(drawn("store", "tv", state_change=words_with_rows)[1])
+
+    def counter_on_empty(state):
+        state["texts"][("", "store_count")] = "1 OF 1"
+    assert "empty" in rules(drawn("store-empty", "tv", state_change=counter_on_empty)[1])
