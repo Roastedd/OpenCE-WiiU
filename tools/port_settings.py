@@ -1146,6 +1146,9 @@ STRING_OVERRIDES.update({
         "Host a game on your LAN\\nonly.",
         "Play the campaign with a\\nfriend in split screen:\\nplayer 2 on a gamepad.",
         "Set all the attributes for your \\nmultiplayer gametypes and\\nkeep them for future use.",
+        # (the bar of buttons at the bottom: FRIENDS, then BACK, which the PC version's list has no description for: it showed <missing string>)
+        "See your friends, requests and\\nparty. Add a friend by code,\\njoin a game or invite one.",
+        "Go back to the main menu.",
     ],
     # (and the port's OPENCE: OpenCE's gametypes, port/linux/game/game_modes.c)
     "main_menu/gametype_select/var_gametype_banks": ["STANDARD", "OPENCE", "CUSTOM"],
@@ -1195,7 +1198,7 @@ STRING_OVERRIDES.update({
 OVERRIDE_ORIGINALS = {
     f"{PE}/profile_edit_descriptions": [0, None, None, None, None, None, None, 7, None],
     f"{MT}/multiplayer_options": [0, 1, 2, 3, None, 5, None, None],
-    f"{MT}/multiplayer_option_descriptions": [0, 1, None, None, 4, None, 5],
+    f"{MT}/multiplayer_option_descriptions": [0, 1, None, None, 4, None, 5, None, None],
     "main_menu/gametype_select/var_gametype_banks": [0, None, 2],
     "main_menu/settings_select/multiplayer_setup/item_options_edit/item_options_labels": [0, 1, 2, 3, 4] + [None] * 4,
     # (the first's note that infinite grenades work only with 4 players or

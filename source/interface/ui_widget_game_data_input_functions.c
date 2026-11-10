@@ -881,10 +881,23 @@ static void multiplayer_type_menu_update_extended_description(
 
 	if (index != NONE)
 	{
+		short text_index = index;
+		struct widget_instance *bar = list_widget->focused_child;
+
+		/* port: the bar of buttons at the bottom is one item of the list (the
+		PC version's BACK, and the port's FRIENDS before it): each button has
+		a description of its own, after the seven items' in the strings, its
+		position in the bar added (the button is not named: a hidden FRIENDS
+		keeps its place) */
+		if (bar && bar->type == _ui_widget_type_column_list && bar->focused_child)
+		{
+			for (child = bar->child; child && child != bar->focused_child; child = child->next)
+				text_index++;
+		}
 		list_widget->parameters.list.extended_description->child->
 			animation.current_frame_index = index;
 		list_widget->parameters.list.extended_description->child->next->
-			parameters.text_box.string_list_index = index;
+			parameters.text_box.string_list_index = text_index;
 	}
 	return;
 }
