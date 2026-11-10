@@ -11,7 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import ROOT, build, mutated, read, run
 
-CASES = ["words", "fit-names", "fit-columns", "fit-cut", "wrap", "wrap-sentences", "player-cells", "friend-cells", "party-cells", "view", "empty-text", "tabs", "sorting", "actions", "model", "mock-actions", "mock-text",
+CASES = ["words", "fit-names", "fit-columns", "fit-cut", "wrap", "wrap-sentences", "layout-words", "player-cells", "friend-cells", "party-cells", "view", "empty-text", "tabs", "sorting", "actions", "model", "mock-actions", "mock-text",
          "nav-players", "nav-friends", "nav-tap", "toast-queue", "toast-time", "disabled", "level-1", "level-2", "level-clamped"]
 
 
@@ -55,11 +55,11 @@ def test_metrics_are_current():
     # the dots not counted
     (("if (next + dots > width)", "if (next > width)"), None, None, "fit-cut"),
     # the lobby's name column narrower than the widest name
-    (None, None, ("SCREENS_LOBBY_NAME_WIDTH = 190,", "SCREENS_LOBBY_NAME_WIDTH = 150,"), "fit-names"),
+    (None, None, ("SCREENS_LOBBY_NAME_WIDTH = 196,", "SCREENS_LOBBY_NAME_WIDTH = 150,"), "fit-names"),
     # the friends' name column narrower than the widest name
-    (None, None, ("SCREENS_FRIEND_NAME_WIDTH = 190,", "SCREENS_FRIEND_NAME_WIDTH = 120,"), "fit-names"),
+    (None, None, ("SCREENS_FRIEND_NAME_WIDTH = 196,", "SCREENS_FRIEND_NAME_WIDTH = 120,"), "fit-names"),
     # the status column narrower than its words
-    (None, None, ("SCREENS_FRIEND_STATUS_WIDTH = 282,", "SCREENS_FRIEND_STATUS_WIDTH = 160,"), "fit-columns"),
+    (None, None, ("SCREENS_FRIEND_STATUS_WIDTH = 254,", "SCREENS_FRIEND_STATUS_WIDTH = 160,"), "fit-columns"),
     # the join word cut with the map
     (("snprintf(suffix + strlen(suffix), sizeof(suffix) - strlen(suffix), \" %s\", join);", ""), None, None, "fit-columns"),
     # a detail line cut with dots instead of broken at its spaces (the console's "THE MAP IS DOW...")
@@ -69,8 +69,16 @@ def test_metrics_are_current():
     (("snprintf(line + strlen(line), sizeof(line) - strlen(line), \"  %d MS\", row->ping > 999 ? 999 : row->ping);\n\tscreens_wrap(SCREENS_FONT_LARGE, (float)SCREENS_LINE_BOX_WIDTH, SCREENS_LINE_BOX_LINES, line, text, size);",
       "snprintf(line + strlen(line), sizeof(line) - strlen(line), \"  %d MS\", row->ping > 999 ? 999 : row->ping);\n\tscreens_fit(SCREENS_FONT_LARGE, 360.0f, line, text, size);"), None, None, "wrap-sentences"),
     # the empty lists' words not wrapped
-    (("screens_wrap(SCREENS_FONT_LARGE, (float)SCREENS_LINE_BOX_WIDTH, SCREENS_LINE_BOX_LINES, line, text, size);\n}\n\n/* ---------- navigation */",
-      "screens_fit(SCREENS_FONT_LARGE, 300.0f, line, text, size);\n}\n\n/* ---------- navigation */"), None, None, "wrap-sentences"),
+    (("screens_wrap(SCREENS_FONT_LARGE, (float)SCREENS_LINE_BOX_WIDTH, SCREENS_LINE_BOX_LINES, line, text, size);\n}\n\nvoid screens_empty_block(",
+      "screens_fit(SCREENS_FONT_LARGE, 300.0f, line, text, size);\n}\n\nvoid screens_empty_block("), None, None, "wrap-sentences"),
+    # the spacing and wording work: a map shown by its file's name; a cut in the middle of a word; a counter that is never shown, or off by one; the empty words not broken for their box;
+    # the small font's azure not lightened
+    (("screens_map_title(row->map, title, (int)sizeof(title));", "snprintf(title, sizeof(title), \"%s\", row->map);"), None, None, "layout-words"),
+    (("if (text[length + 1] == ' ' || !text[length + 1])\n\t\t\tlast_space = length + 1;", "last_space = length + 1;"), None, None, "layout-words"),
+    (("if (count <= shown || shown <= 0)\n\t\treturn;", "if (1)\n\t\treturn;"), None, None, "layout-words"),
+    (("snprintf(text, (size_t)size, \"%d OF %d\", first + focus + 1, count);", "snprintf(text, (size_t)size, \"%d OF %d\", first + focus, count);"), None, None, "layout-words"),
+    (("screens_wrap(SCREENS_FONT_LARGE, (float)SCREENS_EMPTY_BOX_WIDTH, SCREENS_EMPTY_BOX_LINES, line, text, size);", "screens_wrap(SCREENS_FONT_LARGE, 2000.0f, 1, line, text, size);"), None, None, "layout-words"),
+    (("\t\tcolor = SCREENS_COLOR_SKY;", "\t\tcolor = SCREENS_COLOR_AZURE;"), None, None, "layout-words"),
     # a line wider than the box accepted
     (("if (end != start && measure(context, start, (int)(word_end - start)) > width)", "if (end != start && measure(context, start, (int)(word_end - start)) > width * 2.0f)"), None, None, "wrap"),
     # a cut not said

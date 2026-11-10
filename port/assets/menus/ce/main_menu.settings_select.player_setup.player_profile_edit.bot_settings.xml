@@ -4,18 +4,21 @@
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/bot_settings_screen" width="640" height="480" flags="pass_unhandled_to_focused_child pause_game" bitmap="bitmaps/gradient">
 		<on event="b" back="true"/>
 		<on event="back" back="true"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/header_band" y="-170"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/header_bot_settings"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/options_menu"/>
 	</widget>
-	<widget name="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/header_bot_settings" type="text" controller="1" left="35" top="14" width="560" height="30" font="ui\large_ui" color="#FF2995FD" text="BOT SETTINGS" text_y="3" text_flags="no_focus_test">
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/header_band" controller="1" left="0" top="0" width="640" height="240" bitmap="bitmaps/semi_transparent_grey">
 	</widget>
-	<widget name="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/help" type="text" controller="1" left="68" top="350" width="482" height="60" string_list="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/help_strings" font="ui\large_ui" color="#FFFFFFFF">
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/header_bot_settings" type="text" controller="1" left="54" top="21" width="560" height="22" font="ui\large_ui" color="#FF2995FD" text="BOT SETTINGS" text_x="12" text_y="0" text_flags="no_focus_test">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/help" type="text" controller="1" left="66" top="336" width="500" height="48" string_list="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/help_strings" font="ui\large_ui" color="#FFFFFFFF">
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/options_menu" type="column_list" width="640" height="480" flags="pass_unhandled_to_focused_child up_down_tabs_children" description="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/help">
 		<data input="port settings help"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/op_count" x="54" y="73"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/op_skill" x="54" y="103"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/op_teams" x="54" y="133"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/op_count" x="54" y="76"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/op_skill" x="54" y="104"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/op_teams" x="54" y="132"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/button_bar" y="414"/>
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/button_bar" type="column_list" width="640" height="28" flags="pass_unhandled_to_focused_child left_right_tabs_items">

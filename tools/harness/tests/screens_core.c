@@ -423,7 +423,7 @@ static void player_cells(void)
 	CHECK(!strcmp(cells[SCREENS_PLAYER_TEAM].text, "BLUE") && cells[SCREENS_PLAYER_TEAM].color == SCREENS_COLOR_BLUE_TEAM, "blue team");
 	CHECK(!strcmp(cells[SCREENS_PLAYER_PING].text, "--"), "a bot has no ping");
 	screens_player_cells(&rows[1], &summary, cells);
-	CHECK(!strcmp(cells[SCREENS_PLAYER_TAG].text, "PARTY") && cells[SCREENS_PLAYER_TAG].color == SCREENS_COLOR_AZURE, "a party member: '%s'", cells[SCREENS_PLAYER_TAG].text);
+	CHECK(!strcmp(cells[SCREENS_PLAYER_TAG].text, "PARTY") && cells[SCREENS_PLAYER_TAG].color == SCREENS_COLOR_SKY, "a party member (the small font's lighter azure): '%s'", cells[SCREENS_PLAYER_TAG].text);
 	CHECK(!strcmp(cells[SCREENS_PLAYER_PING].text, "32 MS") && cells[SCREENS_PLAYER_PING].color == SCREENS_COLOR_GREEN, "a good ping in green");
 	screens_player_cells(&rows[4], &summary, cells);
 	CHECK(!strcmp(cells[SCREENS_PLAYER_TAG].text, "FRIEND") && cells[SCREENS_PLAYER_TAG].color == SCREENS_COLOR_GREEN, "a friend");
@@ -468,8 +468,8 @@ static void friend_cells(void)
 	count = screens_mock_provider()->friends(SCREENS_TAB_FRIENDS, rows, SCREENS_FRIENDS_MAXIMUM, &summary);
 	CHECK(count == 12 && summary.service == SCREENS_SERVICE_CONNECTED && !strcmp(summary.own_code, "7F3K-9QXA-2M4D-R"), "mock friends: %d", count);
 	screens_friend_cells(SCREENS_TAB_FRIENDS, &rows[0], cells);
-	CHECK(!strcmp(cells[SCREENS_FRIEND_STATUS].text, "PLAYING bloodgulch 6/16"), "'%s'", cells[SCREENS_FRIEND_STATUS].text);
-	CHECK(cells[SCREENS_FRIEND_MARK].text[0] == '+' && cells[SCREENS_FRIEND_STATUS].color == SCREENS_COLOR_AZURE, "a party member's mark in the accent: '%s'", cells[0].text);
+	CHECK(!strcmp(cells[SCREENS_FRIEND_STATUS].text, "PLAYING Blood Gulch 6/16"), "the map as the game names it: '%s'", cells[SCREENS_FRIEND_STATUS].text);
+	CHECK(cells[SCREENS_FRIEND_MARK].text[0] == '+' && cells[SCREENS_FRIEND_STATUS].color == SCREENS_COLOR_SKY, "a party member's mark in the accent: '%s'", cells[0].text);
 	screens_friend_cells(SCREENS_TAB_FRIENDS, &rows[1], cells);
 	CHECK(!strcmp(cells[SCREENS_FRIEND_STATUS].text, "IN LOBBY Infinity 3/8") && cells[SCREENS_FRIEND_STATUS].color == SCREENS_COLOR_GREEN && cells[0].text[0] == '*', "'%s'",
 		cells[SCREENS_FRIEND_STATUS].text);
@@ -481,7 +481,7 @@ static void friend_cells(void)
 	CHECK(!strcmp(cells[SCREENS_FRIEND_STATUS].text, "OFFLINE") && cells[SCREENS_FRIEND_STATUS].color == SCREENS_COLOR_GREY && cells[SCREENS_FRIEND_NAME].color == SCREENS_COLOR_GREY,
 		"offline is grey");
 	screens_friend_cells(SCREENS_TAB_FRIENDS, &rows[5], cells);
-	CHECK(!strcmp(cells[SCREENS_FRIEND_STATUS].text, "PLAYING chillout 16/16 FULL") && cells[SCREENS_FRIEND_STATUS].color == SCREENS_COLOR_AMBER, "a full game in amber: '%s'",
+	CHECK(!strcmp(cells[SCREENS_FRIEND_STATUS].text, "PLAYING Chill Out 16/16 FULL") && cells[SCREENS_FRIEND_STATUS].color == SCREENS_COLOR_AMBER, "a full game in amber: '%s'",
 		cells[SCREENS_FRIEND_STATUS].text);
 	screens_friend_cells(SCREENS_TAB_FRIENDS, &rows[6], cells);
 	CHECK(strstr(cells[SCREENS_FRIEND_STATUS].text, "NEEDS MAP") && strstr(cells[SCREENS_FRIEND_STATUS].text, "4/12") && strstr(cells[SCREENS_FRIEND_STATUS].text, "..."),
@@ -1008,12 +1008,13 @@ static void nav_players(void)
 	screens_nav_key(&nav, SCREENS_KEY_A);
 	CHECK(nav.result == SCREENS_NAV_BUTTON && nav.button == 1, "A on a button");
 	screens_nav_key(&nav, SCREENS_KEY_UP);
-	CHECK(nav.area == SCREENS_AREA_ROWS && nav.row == 9, "up from the buttons: the last row shown");
-	/* down through the rows scrolls the two that are past the ten shown */
+	CHECK(nav.area == SCREENS_AREA_ROWS && nav.row == SCREENS_PLAYER_ROWS - 1, "up from the buttons: the last row shown");
+	/* down through the rows scrolls the three that are past the nine shown */
 	screens_nav_key(&nav, SCREENS_KEY_DOWN);
-	CHECK(nav.first == 1 && nav.row == 9, "down at the last row shown scrolls");
+	CHECK(nav.first == 1 && nav.row == SCREENS_PLAYER_ROWS - 1, "down at the last row shown scrolls");
 	screens_nav_key(&nav, SCREENS_KEY_DOWN);
-	CHECK(nav.first == 2, "scrolled to the end");
+	screens_nav_key(&nav, SCREENS_KEY_DOWN);
+	CHECK(nav.first == 12 - SCREENS_PLAYER_ROWS, "scrolled to the end");
 	screens_nav_key(&nav, SCREENS_KEY_DOWN);
 	CHECK(nav.area == SCREENS_AREA_BUTTONS, "down at the end: the buttons");
 	screens_nav_key(&nav, SCREENS_KEY_DOWN);
@@ -1027,7 +1028,7 @@ static void nav_players(void)
 	/* scroll back up from the end */
 	nav.area = SCREENS_AREA_ROWS;
 	nav.row = 0;
-	for (index = 0; index < 2; index++)
+	for (index = 0; index < 12 - SCREENS_PLAYER_ROWS; index++)
 		screens_nav_key(&nav, SCREENS_KEY_UP);
 	CHECK(nav.first == 0, "up at the first row scrolls back: %d", nav.first);
 	/* few rows: no scrolling, the focus stays within them */
@@ -1318,6 +1319,108 @@ static void disabled(void)
 	screens_provider_set(NULL);
 }
 
+
+/* the spacing and wording work (2026-11-10): a map's name as the game shows it, a cut between words, the scroll counter, the empty list's words in the middle of its place, the small
+font's lighter azure */
+static void layout_words(void)
+{
+	char text[SCREENS_LINE_SIZE], title[SCREENS_LINE_SIZE];
+	struct screens_friends_summary summary;
+	struct screens_friend_row row;
+	struct screens_cell cells[SCREENS_FRIEND_CELLS];
+	int screen, tab, service, lines, index, length;
+	char const *const stock[][2] = { { "bloodgulch", "Blood Gulch" }, { "hangemhigh", "Hang 'Em High" }, { "putput", "Chiron TL-34" }, { "carousel", "Derelict" }, { "BloodGulch", "Blood Gulch" },
+		{ "Danger_Canyon_X", "Danger Canyon X" }, { "", "" } };
+
+	for (index = 0; index < (int)(sizeof(stock) / sizeof(stock[0])); index++)
+	{
+		screens_map_title(stock[index][0], title, (int)sizeof(title));
+		CHECK(!strcmp(title, stock[index][1]), "the map %s is called '%s', not '%s'", stock[index][0], stock[index][1], title);
+	}
+	screens_map_title("BLOODGULCH", title, (int)sizeof(title));
+	CHECK(!strcmp(title, "Blood Gulch"), "a stock map's file name in capitals: '%s'", title);
+	/* a cut falls between words, with the dots, and never leaves a space before them; a text that fits is whole; a first word wider than the room is cut where it is */
+	length = screens_fit_words(SCREENS_FONT_SMALL, screens_text_width(SCREENS_FONT_SMALL, "Danger Canyon...") + 1.0f, "Danger Canyon Remastered", text, (int)sizeof(text));
+	CHECK(!strcmp(text, "Danger Canyon...") && length == 16, "cut between words: '%s'", text);
+	length = screens_fit_words(SCREENS_FONT_SMALL, 40.0f, "Danger Canyon Remastered", text, (int)sizeof(text));
+	CHECK(!strcmp(text, "Dang...") || !strcmp(text, "Dange...") || !strcmp(text, "Dan..."), "a first word wider than the room is cut where it is: '%s'", text);
+	length = screens_fit_words(SCREENS_FONT_SMALL, 400.0f, "Danger Canyon", text, (int)sizeof(text));
+	CHECK(!strcmp(text, "Danger Canyon") && length == 13, "a text that fits is whole");
+	/* the status of a friend in a game: the title, whole or cut between words, the count and the reason whole */
+	memset(&row, 0, sizeof(row));
+	snprintf(row.name, sizeof(row.name), "ALICE");
+	row.presence = SCREENS_PRESENCE_PLAYING;
+	row.join = SCREENS_JOIN_NEWER_BUILD;
+	row.players = 16;
+	row.maximum = 16;
+	snprintf(row.map, sizeof(row.map), "Danger_Canyon_Remastered_XL_2000");
+	screens_friend_cells(SCREENS_TAB_FRIENDS, &row, cells);
+	CHECK(!strcmp(cells[SCREENS_FRIEND_STATUS].text, "PLAYING 16/16 NEWER BUILD"), "no room for more than a few letters of the map: it is left out, the count and the reason whole: '%s'",
+		cells[SCREENS_FRIEND_STATUS].text);
+	row.join = SCREENS_JOIN_OPEN;
+	screens_friend_cells(SCREENS_TAB_FRIENDS, &row, cells);
+	CHECK(!strcmp(cells[SCREENS_FRIEND_STATUS].text, "PLAYING Danger Canyon... 16/16") || !strcmp(cells[SCREENS_FRIEND_STATUS].text, "PLAYING Danger... 16/16"), "a long map cut between words: '%s'",
+		cells[SCREENS_FRIEND_STATUS].text);
+	CHECK(screens_text_width(SCREENS_FONT_SMALL, cells[SCREENS_FRIEND_STATUS].text) <= SCREENS_FRIEND_STATUS_WIDTH - SCREENS_TEXT_INSET, "and it fits its column less the engine's inset");
+	/* the scroll counter: the row chosen's place in the whole list, or the rows in view; nothing when everything is shown */
+	screens_scroll_text(3, 20, 9, 50, text, (int)sizeof(text));
+	CHECK(!strcmp(text, "24 OF 50"), "the row chosen: '%s'", text);
+	screens_scroll_text(-1, 0, 9, 12, text, (int)sizeof(text));
+	CHECK(!strcmp(text, "1 TO 9 OF 12"), "no row chosen: '%s'", text);
+	screens_scroll_text(2, 0, 9, 9, text, (int)sizeof(text));
+	CHECK(!text[0], "nothing when all the rows are shown: '%s'", text);
+	screens_scroll_text(2, 0, 0, 0, text, (int)sizeof(text));
+	CHECK(!text[0], "nothing for no rows");
+	/* the empty lists' words: every screen, tab and state of the service has some, in three lines at most of the empty box's width, no word cut */
+	memset(&summary, 0, sizeof(summary));
+	for (screen = 0; screen < 2; screen++)
+		for (tab = 0; tab < SCREENS_TABS; tab++)
+			for (service = SCREENS_SERVICE_OFF; service <= SCREENS_SERVICE_DISABLED; service++)
+			{
+				int have;
+
+				for (have = 0; have < 2; have++)
+				{
+					char const *scan;
+
+					summary.service = (unsigned char)service;
+					screens_empty_block(screen, tab, &summary, have, text, (int)sizeof(text));
+					CHECK(text[0], "words for the empty list: screen %d tab %d service %d have %d", screen, tab, service, have);
+					lines = 1;
+					for (scan = text; *scan; scan++)
+					{
+						CHECK(*scan == '\r' || (*scan >= 0x20 && *scan <= 0x7E && *scan != '|'), "a clean character in the empty words");
+						if (*scan == '\r')
+							lines++;
+					}
+					CHECK(lines <= SCREENS_EMPTY_BOX_LINES && !strstr(text, "..."), "the empty words fit their box whole: '%s'", text);
+					/* (every line within the box's width) */
+					{
+						char line[SCREENS_LINE_SIZE];
+						int at = 0, start = 0;
+
+						for (;; at++)
+						{
+							if (text[at] == '\r' || !text[at])
+							{
+								memcpy(line, text + start, (size_t)(at - start));
+								line[at - start] = 0;
+								CHECK(screens_text_width(SCREENS_FONT_LARGE, line) <= (float)SCREENS_EMPTY_BOX_WIDTH, "a line of the empty words is wider than its box: '%s'", line);
+								start = at + 1;
+								if (!text[at])
+									break;
+							}
+						}
+					}
+				}
+			}
+	/* the small font's azure is the lighter sky blue (on the moving background), the large font's the menus' own */
+	CHECK(screens_color_rgb(SCREENS_COLOR_SKY) != screens_color_rgb(SCREENS_COLOR_AZURE), "sky is not azure");
+	row.presence = SCREENS_PRESENCE_REQUEST_GOT;
+	screens_friend_cells(SCREENS_TAB_REQUESTS, &row, cells);
+	CHECK(cells[SCREENS_FRIEND_STATUS].color == SCREENS_COLOR_SKY && cells[SCREENS_FRIEND_NAME].color == SCREENS_COLOR_AZURE, "a request: the status (small) in sky, the name (large) in azure");
+}
+
 static void enabled_levels(void)
 {
 	CHECK(screens_enabled() == (int)enable_setting, "level read once: %d", screens_enabled());
@@ -1344,6 +1447,8 @@ int main(int argc, char **argv)
 		wrap_unit();
 	else if (!strcmp(name, "wrap-sentences"))
 		sentences();
+	else if (!strcmp(name, "layout-words"))
+		layout_words();
 	else if (!strcmp(name, "fit-cut"))
 		fit_cut();
 	else if (!strcmp(name, "player-cells"))

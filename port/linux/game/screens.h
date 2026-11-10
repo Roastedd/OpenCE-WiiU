@@ -61,6 +61,8 @@ enum
 	/* the teams' colours as the chat has them: red (0.86, 0.32, 0.28), blue (0.34, 0.51, 0.86) */
 	SCREENS_COLOR_RED_TEAM,
 	SCREENS_COLOR_BLUE_TEAM,
+	/* the menus' azure, lighter, for the small font */
+	SCREENS_COLOR_SKY,
 	SCREENS_COLORS
 };
 
@@ -354,6 +356,14 @@ void screens_default_party_actions(struct screens_party_member const *member, st
 void screens_empty_text(int screen, int tab, struct screens_friends_summary const *summary, int have_provider, char *text, int size);
 /* the same words, broken into the two lines of the TV screens' detail line (screens_wrap) */
 void screens_empty_wrapped(int screen, int tab, struct screens_friends_summary const *summary, int have_provider, char *text, int size);
+/* the same words broken for the middle of an empty list (SCREENS_EMPTY_BOX_*): what the screen says in place of rows */
+void screens_empty_block(int screen, int tab, struct screens_friends_summary const *summary, int have_provider, char *text, int size);
+/* the scroll counter of a list longer than its rows: "4 OF 14" for the row chosen (focus from 0 among the shown), "1 TO 9 OF 14" with none chosen; empty when everything is shown */
+void screens_scroll_text(int focus, int first, int shown, int count, char *text, int size);
+/* a map's name as the game shows it ("bloodgulch" is "Blood Gulch"; another map's is its file's name with spaces for underscores), and a text cut between its words to a width,
+with "..." (a first word wider than the width is cut where it is) */
+void screens_map_title(char const *map, char *title, int size);
+int screens_fit_words(int font, float width, char const *text, char *destination, int size);
 /* the provider in use: NULL if none is set (a screen with none shows itself empty, with a word for why) */
 struct screens_provider const *screens_provider(void);
 void screens_provider_set(struct screens_provider const *provider);
@@ -403,10 +413,13 @@ enum
 {
 	SCREENS_WRAP_LINES = 6,
 	SCREENS_WRAP_SOURCE = 200,
-	SCREENS_LINE_BOX_WIDTH = 496,
+	SCREENS_LINE_BOX_WIDTH = 488,
 	SCREENS_LINE_BOX_LINES = 2,
 	SCREENS_MESSAGE_BOX_WIDTH = 244,
 	SCREENS_MESSAGE_BOX_LINES = 4,
+	/* the words of an empty list, in the middle of its place: 440 wide, three lines of the large font */
+	SCREENS_EMPTY_BOX_WIDTH = 440,
+	SCREENS_EMPTY_BOX_LINES = 3,
 };
 
 /* ---------- the cells of a row: what each column of a row says, and in which colour (the menus fill their text widgets from these, the previews draw them) */
@@ -444,15 +457,17 @@ enum
 /* the column widths the cells are cut to (units): the XML (tools/port_settings.py) uses the same numbers, and a test reads both */
 enum
 {
-	SCREENS_PLAYER_NAME_WIDTH = 190,
-	SCREENS_PLAYER_TAG_WIDTH = 150,
-	SCREENS_PLAYER_TEAM_WIDTH = 56,
-	SCREENS_PLAYER_PING_WIDTH = 58,
-	SCREENS_LOBBY_NAME_WIDTH = 190,
-	SCREENS_LOBBY_TAG_WIDTH = 162,
-	SCREENS_FRIEND_NAME_WIDTH = 190,
-	SCREENS_FRIEND_STATUS_WIDTH = 282,
-	SCREENS_MEMBER_STATE_WIDTH = 282,
+	SCREENS_PLAYER_NAME_WIDTH = 200,
+	SCREENS_PLAYER_TAG_WIDTH = 138,
+	SCREENS_PLAYER_TEAM_WIDTH = 52,
+	SCREENS_PLAYER_PING_WIDTH = 68,
+	SCREENS_LOBBY_NAME_WIDTH = 196,
+	SCREENS_LOBBY_TAG_WIDTH = 164,
+	SCREENS_FRIEND_NAME_WIDTH = 196,
+	SCREENS_FRIEND_STATUS_WIDTH = 254,
+	SCREENS_MEMBER_STATE_WIDTH = 254,
+	/* the engine starts a text about 4 units in from its widget's left and clips it at the right edge: a cell is cut to its column less this (inset and a margin) */
+	SCREENS_TEXT_INSET = 6,
 };
 
 void screens_player_cells(struct screens_roster_row const *row, struct screens_roster_summary const *summary, struct screens_cell *cells);
@@ -545,13 +560,23 @@ enum
 	SCREENS_ROW_HEIGHT = 28,
 	SCREENS_TAB_TOP = 44,
 	SCREENS_TAB_HEIGHT = 26,
-	SCREENS_TAB_LEFT = 54,
-	SCREENS_TAB_PITCH = 128,
-	SCREENS_TAB_WIDTH = 124,
+	SCREENS_TAB_LEFT = 72,
+	SCREENS_TAB_PITCH = 120,
+	SCREENS_TAB_WIDTH = 116,
 	SCREENS_BUTTONS_TOP = 414,
 	SCREENS_BUTTON_HEIGHT = 24,
-	SCREENS_PLAYER_ROWS = 10,
+	SCREENS_PLAYER_ROWS = 9,
 	SCREENS_FRIEND_ROWS = 9,
+	/* the spacing system (tools/port_settings.py has it written out): the base unit, the safe margin above and below, the title's, the detail line's and the footer's tops, the
+	gap between the list and what is under it */
+	SCREENS_UNIT = 4,
+	SCREENS_SAFE_MARGIN = 24,
+	SCREENS_TITLE_TOP = 21,
+	SCREENS_GAP = 8,
+	SCREENS_DETAIL_TOP = 336,
+	SCREENS_DETAIL_HEIGHT = 48,
+	SCREENS_FOOTER_TOP = 384,
+	SCREENS_FOOTER_HEIGHT = 20,
 };
 
 /* the x and the width of the button n of count on the buttons' line: up to four 128 wide, the right-most at 510, going left by 130 (the Xbox's bar: DEFAULTS at the left, OK 380, CANCEL

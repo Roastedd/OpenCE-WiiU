@@ -7,19 +7,32 @@
 		<on event="back" back="true"/>
 		<on event="white" run="port players drop bot"/>
 		<on event="black" run="port players add bot"/>
+		<child widget="main_menu/multiplayer_type_select/screens/header_band" y="-170"/>
 		<child widget="main_menu/multiplayer_type_select/screens/players_list"/>
 		<child widget="main_menu/multiplayer_type_select/screens/players_title"/>
 		<child widget="main_menu/multiplayer_type_select/screens/players_head"/>
 		<child widget="main_menu/multiplayer_type_select/screens/players_banner"/>
+		<child widget="main_menu/multiplayer_type_select/screens/players_count"/>
 		<child widget="main_menu/multiplayer_type_select/screens/players_detail"/>
+		<child widget="main_menu/multiplayer_type_select/screens/players_empty"/>
+		<child widget="main_menu/multiplayer_type_select/screens/players_more_up"/>
+		<child widget="main_menu/multiplayer_type_select/screens/players_more_down"/>
 	</widget>
-	<widget name="main_menu/multiplayer_type_select/screens/players_title" type="text" controller="1" left="35" top="14" width="360" height="30" font="ui\large_ui" color="#FF2995FD" text="PLAYERS" text_y="3" text_flags="no_focus_test">
+	<widget name="main_menu/multiplayer_type_select/screens/players_title" type="text" controller="1" left="54" top="21" width="360" height="22" font="ui\large_ui" color="#FF2995FD" text="PLAYERS" text_x="12" text_y="0" text_flags="no_focus_test">
 	</widget>
-	<widget name="main_menu/multiplayer_type_select/screens/players_head" type="text" controller="1" left="340" top="16" width="226" height="26" font="ui\large_ui" color="#FFFFFFFF" align="right" text_y="3" text_flags="no_focus_test">
+	<widget name="main_menu/multiplayer_type_select/screens/players_head" type="text" controller="1" left="340" top="21" width="214" height="22" font="ui\large_ui" color="#FFFFFFFF" align="right" text_y="0" text_flags="no_focus_test">
 	</widget>
-	<widget name="main_menu/multiplayer_type_select/screens/players_banner" type="text" controller="1" left="54" top="48" width="512" height="22" font="ui\small_ui" color="#FFFFB020" text_y="4" text_flags="no_focus_test">
+	<widget name="main_menu/multiplayer_type_select/screens/players_banner" type="text" controller="1" left="54" top="384" width="380" height="20" font="ui\small_ui" color="#FFFFB020" text_x="13" text_y="0" text_flags="no_focus_test">
 	</widget>
-	<widget name="main_menu/multiplayer_type_select/screens/players_detail" type="text" controller="1" left="54" top="362" width="512" height="48" font="ui\large_ui" color="#FFFFFFFF" text_y="4" text_flags="no_focus_test">
+	<widget name="main_menu/multiplayer_type_select/screens/players_count" type="text" controller="1" left="438" top="384" width="116" height="20" font="ui\small_ui" color="#FF8CC8FF" align="right" text_y="0" text_flags="no_focus_test">
+	</widget>
+	<widget name="main_menu/multiplayer_type_select/screens/players_detail" type="text" controller="1" left="54" top="336" width="512" height="48" font="ui\large_ui" color="#FFFFFFFF" text_x="12" text_y="0" text_flags="no_focus_test">
+	</widget>
+	<widget name="main_menu/multiplayer_type_select/screens/players_empty" type="text" controller="1" left="90" top="176" width="440" height="66" font="ui\large_ui" color="#FFFFFFFF" align="center" text_y="0" text_flags="no_focus_test">
+	</widget>
+	<widget name="main_menu/multiplayer_type_select/screens/players_more_up" controller="1" left="574" top="82" width="16" height="16" bitmap="bitmaps/arrow_sm_up">
+	</widget>
+	<widget name="main_menu/multiplayer_type_select/screens/players_more_down" controller="1" left="574" top="306" width="16" height="16" bitmap="bitmaps/arrow_sm_down">
 	</widget>
 	<widget name="main_menu/multiplayer_type_select/screens/players_list" type="column_list" width="640" height="480" flags="pass_unhandled_to_focused_child up_down_tabs_children">
 		<data input="port players update"/>
@@ -32,106 +45,96 @@
 		<child widget="main_menu/multiplayer_type_select/screens/player_item_7" x="54" y="244"/>
 		<child widget="main_menu/multiplayer_type_select/screens/player_item_8" x="54" y="272"/>
 		<child widget="main_menu/multiplayer_type_select/screens/player_item_9" x="54" y="300"/>
-		<child widget="main_menu/multiplayer_type_select/screens/player_item_10" x="54" y="328"/>
 		<child widget="main_menu/multiplayer_type_select/screens/players_button_bar" y="414"/>
 	</widget>
 	<widget name="main_menu/multiplayer_type_select/screens/player_item_1" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<on event="a" run="port players row" open="main_menu/multiplayer_type_select/screens/actions_screen" branch="true"/>
 		<on event="start" run="port players row" open="main_menu/multiplayer_type_select/screens/actions_screen" branch="true"/>
 		<on event="left_mouse" run="mouse emit accept event"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_name" x="26" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_tag" x="220" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_team" x="374" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_ping" x="434" y="3"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_name" x="12" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_tag" x="220" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_team" x="366" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_ping" x="428" y="0"/>
 	</widget>
 	<widget name="main_menu/multiplayer_type_select/screens/player_item_2" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<on event="a" run="port players row" open="main_menu/multiplayer_type_select/screens/actions_screen" branch="true"/>
 		<on event="start" run="port players row" open="main_menu/multiplayer_type_select/screens/actions_screen" branch="true"/>
 		<on event="left_mouse" run="mouse emit accept event"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_name" x="26" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_tag" x="220" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_team" x="374" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_ping" x="434" y="3"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_name" x="12" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_tag" x="220" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_team" x="366" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_ping" x="428" y="0"/>
 	</widget>
 	<widget name="main_menu/multiplayer_type_select/screens/player_item_3" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<on event="a" run="port players row" open="main_menu/multiplayer_type_select/screens/actions_screen" branch="true"/>
 		<on event="start" run="port players row" open="main_menu/multiplayer_type_select/screens/actions_screen" branch="true"/>
 		<on event="left_mouse" run="mouse emit accept event"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_name" x="26" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_tag" x="220" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_team" x="374" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_ping" x="434" y="3"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_name" x="12" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_tag" x="220" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_team" x="366" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_ping" x="428" y="0"/>
 	</widget>
 	<widget name="main_menu/multiplayer_type_select/screens/player_item_4" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<on event="a" run="port players row" open="main_menu/multiplayer_type_select/screens/actions_screen" branch="true"/>
 		<on event="start" run="port players row" open="main_menu/multiplayer_type_select/screens/actions_screen" branch="true"/>
 		<on event="left_mouse" run="mouse emit accept event"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_name" x="26" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_tag" x="220" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_team" x="374" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_ping" x="434" y="3"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_name" x="12" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_tag" x="220" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_team" x="366" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_ping" x="428" y="0"/>
 	</widget>
 	<widget name="main_menu/multiplayer_type_select/screens/player_item_5" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<on event="a" run="port players row" open="main_menu/multiplayer_type_select/screens/actions_screen" branch="true"/>
 		<on event="start" run="port players row" open="main_menu/multiplayer_type_select/screens/actions_screen" branch="true"/>
 		<on event="left_mouse" run="mouse emit accept event"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_name" x="26" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_tag" x="220" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_team" x="374" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_ping" x="434" y="3"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_name" x="12" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_tag" x="220" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_team" x="366" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_ping" x="428" y="0"/>
 	</widget>
 	<widget name="main_menu/multiplayer_type_select/screens/player_item_6" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<on event="a" run="port players row" open="main_menu/multiplayer_type_select/screens/actions_screen" branch="true"/>
 		<on event="start" run="port players row" open="main_menu/multiplayer_type_select/screens/actions_screen" branch="true"/>
 		<on event="left_mouse" run="mouse emit accept event"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_name" x="26" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_tag" x="220" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_team" x="374" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_ping" x="434" y="3"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_name" x="12" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_tag" x="220" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_team" x="366" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_ping" x="428" y="0"/>
 	</widget>
 	<widget name="main_menu/multiplayer_type_select/screens/player_item_7" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<on event="a" run="port players row" open="main_menu/multiplayer_type_select/screens/actions_screen" branch="true"/>
 		<on event="start" run="port players row" open="main_menu/multiplayer_type_select/screens/actions_screen" branch="true"/>
 		<on event="left_mouse" run="mouse emit accept event"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_name" x="26" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_tag" x="220" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_team" x="374" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_ping" x="434" y="3"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_name" x="12" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_tag" x="220" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_team" x="366" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_ping" x="428" y="0"/>
 	</widget>
 	<widget name="main_menu/multiplayer_type_select/screens/player_item_8" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<on event="a" run="port players row" open="main_menu/multiplayer_type_select/screens/actions_screen" branch="true"/>
 		<on event="start" run="port players row" open="main_menu/multiplayer_type_select/screens/actions_screen" branch="true"/>
 		<on event="left_mouse" run="mouse emit accept event"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_name" x="26" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_tag" x="220" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_team" x="374" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_ping" x="434" y="3"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_name" x="12" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_tag" x="220" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_team" x="366" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_ping" x="428" y="0"/>
 	</widget>
 	<widget name="main_menu/multiplayer_type_select/screens/player_item_9" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<on event="a" run="port players row" open="main_menu/multiplayer_type_select/screens/actions_screen" branch="true"/>
 		<on event="start" run="port players row" open="main_menu/multiplayer_type_select/screens/actions_screen" branch="true"/>
 		<on event="left_mouse" run="mouse emit accept event"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_name" x="26" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_tag" x="220" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_team" x="374" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_ping" x="434" y="3"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_name" x="12" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_tag" x="220" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_team" x="366" y="0"/>
+		<child widget="main_menu/multiplayer_type_select/screens/scr_player_ping" x="428" y="0"/>
 	</widget>
-	<widget name="main_menu/multiplayer_type_select/screens/player_item_10" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
-		<on event="a" run="port players row" open="main_menu/multiplayer_type_select/screens/actions_screen" branch="true"/>
-		<on event="start" run="port players row" open="main_menu/multiplayer_type_select/screens/actions_screen" branch="true"/>
-		<on event="left_mouse" run="mouse emit accept event"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_name" x="26" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_tag" x="220" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_team" x="374" y="3"/>
-		<child widget="main_menu/multiplayer_type_select/screens/scr_player_ping" x="434" y="3"/>
+	<widget name="main_menu/multiplayer_type_select/screens/scr_player_name" type="text" width="200" height="28" font="ui\large_ui" color="#FF2896FF" text_y="4" text_flags="no_focus_test">
 	</widget>
-	<widget name="main_menu/multiplayer_type_select/screens/scr_player_name" type="text" width="190" height="22" font="ui\large_ui" color="#FF2896FF" text_y="4" text_flags="no_focus_test">
+	<widget name="main_menu/multiplayer_type_select/screens/scr_player_tag" type="text" width="138" height="28" font="ui\small_ui" color="#FF2896FF" text_y="6" text_flags="no_focus_test">
 	</widget>
-	<widget name="main_menu/multiplayer_type_select/screens/scr_player_tag" type="text" width="150" height="22" font="ui\small_ui" color="#FF2896FF" text_y="5" text_flags="no_focus_test">
+	<widget name="main_menu/multiplayer_type_select/screens/scr_player_team" type="text" width="52" height="28" font="ui\small_ui" color="#FF2896FF" text_y="6" text_flags="no_focus_test">
 	</widget>
-	<widget name="main_menu/multiplayer_type_select/screens/scr_player_team" type="text" width="56" height="22" font="ui\small_ui" color="#FF2896FF" text_y="5" text_flags="no_focus_test">
-	</widget>
-	<widget name="main_menu/multiplayer_type_select/screens/scr_player_ping" type="text" width="58" height="22" font="ui\small_ui" color="#FF2896FF" text_y="5" text_flags="no_focus_test">
+	<widget name="main_menu/multiplayer_type_select/screens/scr_player_ping" type="text" width="68" height="28" font="ui\small_ui" color="#FF2896FF" text_y="6" text_flags="no_focus_test">
 	</widget>
 	<widget name="main_menu/multiplayer_type_select/screens/players_button_bar" type="column_list" width="640" height="28" flags="pass_unhandled_to_focused_child left_right_tabs_items">
 		<child widget="main_menu/multiplayer_type_select/screens/players_button_bots" x="4" y="1"/>
@@ -164,6 +167,8 @@
 		<on event="a" run="mouse emit back event"/>
 		<on event="start" run="mouse emit back event"/>
 		<on event="left_mouse" run="mouse emit accept event"/>
+	</widget>
+	<widget name="main_menu/multiplayer_type_select/screens/header_band" controller="1" left="0" top="0" width="640" height="240" bitmap="bitmaps/semi_transparent_grey">
 	</widget>
 	<widget name="main_menu/multiplayer_type_select/screens/menu_friends_button" type="text" width="128" height="24" bitmap="bitmaps/text_button_background" text="FRIENDS" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
 		<on event="a" open="main_menu/multiplayer_type_select/screens/friends_screen"/>

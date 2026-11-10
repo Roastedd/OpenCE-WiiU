@@ -104,6 +104,11 @@ def test_layout_numbers_are_screens_h():
     assert numbers["SCREENS_TAB_PITCH"] == port_settings.SOCIAL_TAB_PITCH
     assert numbers["SCREENS_TAB_WIDTH"] == port_settings.SOCIAL_TAB_WIDTH
     assert numbers["SCREENS_TAB_HEIGHT"] == port_settings.SOCIAL_TAB_HEIGHT
+    # the spacing system (port_settings.py's "THE SPACING SYSTEM")
+    assert numbers["SCREENS_UNIT"] == port_settings.UNIT and numbers["SCREENS_SAFE_MARGIN"] == port_settings.SAFE_TOP
+    assert numbers["SCREENS_TITLE_TOP"] == port_settings.SOCIAL_TITLE_TOP and numbers["SCREENS_GAP"] == port_settings.SOCIAL_GAP
+    assert numbers["SCREENS_DETAIL_TOP"] == port_settings.SOCIAL_DETAIL_TOP and numbers["SCREENS_DETAIL_HEIGHT"] == port_settings.SOCIAL_DETAIL_HEIGHT
+    assert numbers["SCREENS_FOOTER_TOP"] == port_settings.SOCIAL_FOOTER_TOP and numbers["SCREENS_FOOTER_HEIGHT"] == port_settings.SOCIAL_FOOTER_HEIGHT
     assert numbers["SCREENS_PLAYER_ROWS"] == port_settings.SOCIAL_PLAYER_ROWS
     assert numbers["SCREENS_FRIEND_ROWS"] == port_settings.SOCIAL_FRIEND_ROWS
     # the columns' widths, and the lobby's
@@ -210,9 +215,9 @@ def test_focus_order_is_the_navigation_model():
     buttons (screens_nav_*)"""
     widgets, _, _ = all_widgets()
     players = [child.get("widget").rsplit("/", 1)[1] for child in widgets[f"{SOCIAL}/players_list"].findall("child")]
-    assert players == [f"player_item_{n}" for n in range(1, 11)] + ["players_button_bar"]
+    assert players == [f"player_item_{n}" for n in range(1, port_settings.SOCIAL_PLAYER_ROWS + 1)] + ["players_button_bar"]
     friends = [child.get("widget").rsplit("/", 1)[1] for child in widgets[f"{SOCIAL}/friends_list"].findall("child")]
-    assert friends == ["friends_tab_bar"] + [f"friend_item_{n}" for n in range(1, 10)] + ["friends_button_bar"]
+    assert friends == ["friends_tab_bar"] + [f"friend_item_{n}" for n in range(1, port_settings.SOCIAL_FRIEND_ROWS + 1)] + ["friends_button_bar"]
     for name in ("players_list", "friends_list", "actions_list"):
         assert "up_down_tabs_children" in widgets[f"{SOCIAL}/{name}"].get("flags")
     for name in ("players_button_bar", "friends_button_bar", "friends_tab_bar"):
@@ -312,14 +317,18 @@ def test_every_function_the_menus_run_is_in_menu_tags_tables():
         assert name in functions or name in inputs, f"{name} has a handler and is not in the tables"
 
 
-def test_the_friends_screens_top_right_is_clear_of_the_tab_row():
-    """the service word and this machine's code (top right) end a margin above the tab row: on the console 'YOUR CODE: ...' touched the tabs (it ended at 40 against the tabs' 44)"""
+def test_the_friends_screens_header_is_clear_of_the_tab_row():
+    """the service word (top right) ends a margin above the tab row (on the console 'YOUR CODE: ...' touched the tabs: it ended at 40 against the tabs' 44), and this machine's code
+    is in the footer now, under the detail line, not in the header at all"""
     widgets, _, _ = all_widgets()
     tabs = int(next(child for child in widgets[f"{SOCIAL}/friends_list"].findall("child") if child.get("widget") == f"{SOCIAL}/friends_tab_bar").get("y"))
     assert tabs == port_settings.SOCIAL_TAB_TOP
-    for name in ("friends_service", "friends_code"):
+    for name in ("friends_title", "friends_service"):
         element = widgets[f"{SOCIAL}/{name}"]
-        assert int(element.get("top")) + int(element.get("height")) + 8 <= tabs, f"{name} runs down to {int(element.get('top')) + int(element.get('height'))}, the tabs start at {tabs}"
-    service, code = widgets[f"{SOCIAL}/friends_service"], widgets[f"{SOCIAL}/friends_code"]
-    # (the two lines do not overlap each other's text: the service's text ends before the code's starts)
-    assert int(service.get("top")) + int(service.get("text_y")) + 12 <= int(code.get("top")) + int(code.get("text_y"))
+        assert int(element.get("top")) + int(element.get("height")) <= tabs, f"{name}'s box runs into the tab row"
+        # (its capitals end a gap above the tabs: top + text_y + the engine's 3.5 or 3.7 + the capitals' 13 or 10)
+        font = "large" if "large" in element.get("font") else "small"
+        capitals_bottom = int(element.get("top")) + int(element.get("text_y")) + port_settings.SOCIAL_CAP_OFFSET[font] + port_settings.SOCIAL_CAP_HEIGHT[font]
+        assert capitals_bottom + 6 <= tabs, f"{name}'s capitals end at {capitals_bottom}, the tabs start at {tabs}"
+    code = widgets[f"{SOCIAL}/friends_code"]
+    assert int(code.get("top")) == port_settings.SOCIAL_FOOTER_TOP

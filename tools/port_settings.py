@@ -481,7 +481,8 @@ SEED_UPLOADS = (64, 128, 256, 512, 1024, 2048, 4096, 8192, 10240)
 # settings the build honours (bots.count, bots.skill, bots.teams), a row each, the settings screens' own grammar with a text header
 SCREENS["bot_settings"] = {
     "screen": "bot_settings_screen", "header": ("header_bot_settings", f"{PE}/bot_settings/header_bot_settings"), "header_text": "BOT SETTINGS",
-    "spacing": 30, "help_top": 350,
+    # (the social screens' places: the rows from 76, 28 apart; the help where the detail line is, starting where the rows' text does: a 512 wide box from x 66)
+    "spacing": 28, "top": 76, "help_top": 336, "help_left": 66, "help_width": 500, "help_height": 48,
     "rows": [
         ("BOTS:", "bots.count", [("OFF", "0")] + [(str(count), str(count)) for count in range(1, 16)],
          "Bots only play in a game on this machine for now:\nnot in a hosted or online game.", None),
@@ -733,28 +734,32 @@ def _screen(folder: str, spec: dict, rows: list, list_inputs: list, list_handler
     base = folder if folder.startswith("main_menu/") else f"{PE}/{folder}"
     header, header_bitmap = spec["header"]
     lines = []
+    # (a text header's screen has the social screens' header band behind it: tools/port_settings.py's _social_band)
+    band = [f'<child widget="{base}/header_band" y="{PANEL_LINE - SOCIAL_BAND_HEIGHT}"/>'] if spec.get("header_text") else []
     lines += _widget(f"{base}/{spec['screen']}",
                      [("width", 640), ("height", 480), ("flags", "pass_unhandled_to_focused_child pause_game"),
                       ("bitmap", "bitmaps/gradient")],
-                     ['<on event="b" back="true"/>', '<on event="back" back="true"/>',
+                     ['<on event="b" back="true"/>', '<on event="back" back="true"/>', *band,
                       f'<child{attributes([("widget", f"{base}/{header}")])}/>',
                       f'<child{attributes([("widget", f"{base}/options_menu")])}/>'])
     if spec.get("header_text"):
-        # (a text in the large font, as the map vote's: no picture of 2048 x 256 for a page the pause menu reaches in a game)
-        lines += _widget(f"{base}/{header}", [("type", "text"), ("controller", 1), ("left", 35), ("top", 14), ("width", 560), ("height", 30),
-                                              ("font", "ui\\large_ui"), ("color", "#FF2995FD"), ("text", spec["header_text"]), ("text_y", 3),
+        # (a text in the large font, as the map vote's: no picture of 2048 x 256 for a page the pause menu reaches in a game. Placed as the social screens' titles: the
+        # capitals' top at the safe margin, 24, at the rows' left edge)
+        lines += _social_band(base)
+        lines += _widget(f"{base}/{header}", [("type", "text"), ("controller", 1), ("left", 54), ("top", SOCIAL_TITLE_TOP), ("width", 560), ("height", 22),
+                                              ("font", "ui\\large_ui"), ("color", "#FF2995FD"), ("text", spec["header_text"]), ("text_x", 12), ("text_y", 0),
                                               ("text_flags", "no_focus_test")], [])
     else:
         lines += _widget(f"{base}/{header}", [("controller", 1), ("left", 35), ("top", 11), ("width", 605), ("height", 59),
                                               ("bitmap", header_bitmap)], [])
-    lines += _widget(f"{base}/help", [("type", "text"), ("controller", 1), ("left", 68),
-                                      ("top", spec.get("help_top", 350)), ("width", 482),
+    lines += _widget(f"{base}/help", [("type", "text"), ("controller", 1), ("left", spec.get("help_left", 68)),
+                                      ("top", spec.get("help_top", 350)), ("width", spec.get("help_width", 482)),
                                       ("height", spec.get("help_height", 60)), ("string_list", None if spec.get("dynamic_help") else f"{base}/help_strings"),
                                       ("font", "ui\\large_ui"), ("color", "#FFFFFFFF")], [])
     children = [f'<data input="{name}"/>' for name in list_inputs] + list_handlers
     # (each row: its widget, platform, and the place it is in, else the next)
     for index, (row, platform, *place) in enumerate(rows):
-        y = 73 + (place[0] if place else index) * spec["spacing"]
+        y = spec.get("top", 73) + (place[0] if place else index) * spec["spacing"]
         children.append(f'<child{attributes([("widget", row), ("x", 54), ("y", y), ("platform", platform)])}/>')
     children.append(f'<child{attributes([("widget", f"{base}/button_bar"), ("y", 414)])}/>')
     lines += _widget(f"{base}/options_menu",
@@ -1498,7 +1503,7 @@ FIELD_BACK = ['<on event="b"/>', '<on event="back"/>']
 SCREEN_BACK = ['<on event="b" run="gamespy back handler"/>', '<on event="back" run="gamespy back handler"/>']
 
 
-def _value_row(base: str, key: str, label_index: int, run: str) -> list:
+def _value_row(base: str, key: str, label_index: int, run: str, value_color: str = "#FF2896FF") -> list:
     """a row of a label and a value the player sets (A edits it)"""
     lines = _widget(f"{base}/op_{key}", [("width", 512), ("height", 28), ("flags", "pass_unhandled_to_focused_child"),
                                          ("bitmap", "bitmaps/option_bkds"), ("color", "#FF2896FF")],
@@ -1510,7 +1515,7 @@ def _value_row(base: str, key: str, label_index: int, run: str) -> list:
                                              ("font", "ui\\large_ui"), ("color", "#FF2896FF"), ("text_x", 13),
                                              ("text_y", 4)], [])
     lines += _widget(f"{base}/{key}_value", [("type", "text"), ("controller", 1), ("width", 280), ("height", 22),
-                                             ("font", "ui\\small_ui"), ("color", "#FF2896FF"), ("align", "center"),
+                                             ("font", "ui\\small_ui"), ("color", value_color), ("align", "center"),
                                              ("text_y", 5), ("text_flags", "no_focus_test")], [])
     return lines
 
@@ -1958,9 +1963,10 @@ def _lobby() -> list:
                      f'<child widget="{base}/header_lobby"/>',
                      f'<child widget="{base}/lobby_join_help"/>'])
     lines += _header(f"{base}/header_lobby", f"{base}/header_lobby")
-    lines += _widget(f"{base}/lobby_join_help", [("type", "text"), ("controller", 1), ("left", 355), ("top", 446),
-                                                 ("width", 275), ("height", 24), ("font", "ui\\small_ui"),
-                                                 ("color", "#FF2896FF"), ("align", "right"), ("text_y", 5),
+    # (under the bar's band, whose bottom is 444: the capitals' bottom at 455, inside the safe margin; it was at 446, its capitals ending at 465)
+    lines += _widget(f"{base}/lobby_join_help", [("type", "text"), ("controller", 1), ("left", 355), ("top", 438),
+                                                 ("width", 275), ("height", 18), ("font", "ui\\small_ui"),
+                                                 ("color", SOCIAL_HINT_COLOR), ("align", "right"), ("text_y", 4),
                                                  ("text_flags", "no_focus_test")], [])
     # (its rows: any controller's left and right switch its own player's team,
     # on the rows only, so that they move along the buttons)
@@ -1981,12 +1987,13 @@ def _lobby() -> list:
                          ['<on event="left right" run="swap player team"/>',
                           f'<on event="a" run="port lobby row" open="{SOCIAL}/actions_screen" branch="true"/>',
                           '<child widget="main_menu/new_select/list_item_text" x="25"/>',
-                          f'<child widget="{base}/scr_lobby_name" x="22"/>', f'<child widget="{base}/scr_lobby_tag" x="206"/>',
+                          f'<child widget="{base}/scr_lobby_name" x="{SOCIAL_LOBBY_COLUMNS[0][1]}"/>', f'<child widget="{base}/scr_lobby_tag" x="{SOCIAL_LOBBY_COLUMNS[1][1]}"/>',
                           '<child widget="main_menu/new_select/list_item_arrows"/>'])
-    lines += _widget(f"{base}/scr_lobby_name", [("type", "text"), ("width", 190), ("height", 28), ("font", "ui\\large_ui"), ("color", "#FF2896FF"),
+    lines += _widget(f"{base}/scr_lobby_name", [("type", "text"), ("width", SOCIAL_LOBBY_COLUMNS[0][2]), ("height", 28), ("font", "ui\\large_ui"), ("color", "#FF2896FF"),
                                                 ("text_y", 3), ("text_flags", "no_focus_test")], [])
-    lines += _widget(f"{base}/scr_lobby_tag", [("type", "text"), ("width", 162), ("height", 28), ("font", "ui\\small_ui"), ("color", "#FF2896FF"),
-                                               ("align", "right"), ("text_y", 8), ("text_flags", "no_focus_test")], [])
+    # (the tag's baseline is the name's: text_y 6 in a row whose name has 3)
+    lines += _widget(f"{base}/scr_lobby_tag", [("type", "text"), ("width", SOCIAL_LOBBY_COLUMNS[1][2]), ("height", 28), ("font", "ui\\small_ui"), ("color", "#FF2896FF"),
+                                               ("align", "right"), ("text_y", 6), ("text_flags", "no_focus_test")], [])
     lines += _widget(f"{base}/lobby_desc", [("width", 640), ("height", 480)],
                      ['<child widget="main_menu/current_profile_name"/>',
                       f'<child widget="{base}/lobby_right_item" x="22" y="2"/>'])
@@ -2604,39 +2611,86 @@ def _mods() -> list:
 # actions, the Friends screen with its tabs, the code a friend is added by, and the bot settings. They are built from the settings screens' own
 # grammar (rows of bitmaps/option_bkds at x 54, 28 apart, the button bar at y 414, text headers in the large font as the map vote's), with no new picture;
 # their rows' texts and colours come from the provider's rows (screens.c's cells), so the numbers below are screens.h's (a test reads both)
+#
+# THE SPACING SYSTEM (2026-11-10; reports/research/2026-11-10/ux2-result.md has the drawing). Units of the menus' 640 x 480 screen: 2.2535 pixels each on the TV
+# (1920 x 1080), 1.0023 on the GamePad (854 x 480), centred in a screen 852 units wide. The base unit is 4: every gap, size and place below is a multiple of it, or one
+# of the game's own numbers that the art fixes (a row is 28 high, a button 22, the panel's top line is at 70, its bottom line at 409).
+#
+#   y   0 -  24   the margin: TVs may overscan it; no text, only the header band's backdrop
+#      24 -  38   the title (large font, capitals 24.5 to 37.5) at the left, what belongs with it (a count, the service) at the right on its baseline
+#      44 -  66   the tab row (Friends only); the panel's top line is at 70
+#      76 - 328   the list: 9 rows, 28 apart, the first 5 below the line; the focus pill is the row's 28 and the text is centred on it
+#     336 - 384   the detail line: up to two lines of the large font, 8 below the last row
+#     384 - 404   the footer: one small line at the left (a note, the code), the scroll counter at the right; 5 above the panel's bottom line
+#     414 - 438   the button bar (the game's: the buttons' own 22 high pills at y 415)
+#
+#   x  54 - 566   the list, the detail and the footer: the settings screens' column. Text sits 16 in from a row's ends (4 of them are the engine's own inset), columns are
+#                 8 or more apart, a row's last text ends 16 before the row's end. Nothing but the header band and the panel reaches the block's edge.
+#
+# The engine puts a text's capitals' top 3.5 units (large) or 3.7 (small) below the widget's top plus text_y (measured on the console's pictures of 2026-11-09), and a few
+# units in from the left: the numbers below are written for that, so that a text is centred on its pill and the title's capitals start at the margin.
 SOCIAL = f"{MT}/screens"
+UNIT = 4
+SAFE_TOP, SAFE_BOTTOM = 24, 456
+PANEL_LINE, PANEL_BOTTOM_LINE = 70, 409
 SOCIAL_ROWS_LEFT, SOCIAL_ROWS_TOP, SOCIAL_ROW_PITCH, SOCIAL_ROW_WIDTH, SOCIAL_ROW_HEIGHT = 54, 76, 28, 512, 28
-SOCIAL_TAB_LEFT, SOCIAL_TAB_TOP, SOCIAL_TAB_PITCH, SOCIAL_TAB_WIDTH, SOCIAL_TAB_HEIGHT = 54, 44, 128, 124, 26
-SOCIAL_PLAYER_ROWS, SOCIAL_FRIEND_ROWS, SOCIAL_ACTION_ROWS = 10, 9, 8
-# a column: its x in the row, its width, its font (large or small), its text's y in the row
-SOCIAL_PLAYER_COLUMNS = [("name", 26, 190, "large"), ("tag", 220, 150, "small"), ("team", 374, 56, "small"), ("ping", 434, 58, "small")]
-SOCIAL_FRIEND_COLUMNS = [("mark", 8, 24, "large"), ("name", 32, 190, "large"), ("status", 226, 282, "small")]
-SOCIAL_LOBBY_COLUMNS = [("name", 22, 190, "large"), ("tag", 206, 162, "small")]
+# (the tabs, 4 of 116 and 4 apart, are centred on the rows' 54 to 566: 72 to 548, clear by 8 of the HUD's bars at the top corners of a game under the pause menu: they end at x 64 and begin at 556)
+SOCIAL_TAB_LEFT, SOCIAL_TAB_TOP, SOCIAL_TAB_PITCH, SOCIAL_TAB_WIDTH, SOCIAL_TAB_HEIGHT = 72, 44, 120, 116, 26
+# nine rows on the Players page too (it had ten: the footer and a two line detail need the room), the actions' eight
+SOCIAL_PLAYER_ROWS, SOCIAL_FRIEND_ROWS, SOCIAL_ACTION_ROWS = 9, 9, 8
+SOCIAL_GAP = 8
+# the engine's offset of a text's capitals from the widget's top plus text_y, and their height, by font
+SOCIAL_CAP_OFFSET = {"large": 3.5, "small": 3.7}
+SOCIAL_CAP_HEIGHT = {"large": 13, "small": 10}
+SOCIAL_TITLE_TOP = 21
+SOCIAL_SERVICE_TOP = 24
+SOCIAL_LIST_BOTTOM = SOCIAL_ROWS_TOP + 9 * SOCIAL_ROW_PITCH
+SOCIAL_DETAIL_TOP, SOCIAL_DETAIL_HEIGHT = SOCIAL_LIST_BOTTOM + SOCIAL_GAP, 48
+SOCIAL_FOOTER_TOP, SOCIAL_FOOTER_HEIGHT = 384, 20
+SOCIAL_EMPTY_TOP, SOCIAL_EMPTY_HEIGHT = 176, 66
+SOCIAL_BAND_HEIGHT = 240
+# a column: its x in the row, its width, its font (large or small). A row's pill is 512 wide; the text starts 16 in (the column 12 or 13 in and the engine's inset)
+# and the last column ends 16 before the end; the columns are 8 apart or more
+SOCIAL_PLAYER_COLUMNS = [("name", 12, 200, "large"), ("tag", 220, 138, "small"), ("team", 366, 52, "small"), ("ping", 428, 68, "small")]
+SOCIAL_FRIEND_COLUMNS = [("mark", 10, 24, "large"), ("name", 38, 196, "large"), ("status", 242, 254, "small")]
+SOCIAL_LOBBY_COLUMNS = [("name", 22, 196, "large"), ("tag", 214, 164, "small")]
 SOCIAL_TEXT_COLOR = "#FF2896FF"
 SOCIAL_TITLE_COLOR = "#FF2995FD"
-SOCIAL_FONTS = {"large": ("ui\\large_ui", 4), "small": ("ui\\small_ui", 5)}
+# (the footer's and the hints' colour: a lighter azure than the rows', for the small font on the panel's moving background; amber for a warning)
+SOCIAL_HINT_COLOR = "#FF8CC8FF"
+SOCIAL_WARN_COLOR = "#FFFFB020"
+SOCIAL_FONTS = {"large": ("ui\\large_ui", 4), "small": ("ui\\small_ui", 6)}
+# (the rows' text starts 16 in from their pills: a left aligned text outside a row is shifted to start there; one aligned to the right ends 16 before the pills' right end, so its
+# widget ends at 554, 12 before it)
+SOCIAL_TEXT_X = {"large": 12, "small": 13}
+SOCIAL_TEXT_RIGHT = SOCIAL_ROWS_LEFT + SOCIAL_ROW_WIDTH - 12
 
 
 def _social_text(name: str, left: int, top: int, width: int, height: int, font: str = "large", color: str = SOCIAL_TEXT_COLOR,
-                 align: str = None, text: str = None, text_y: int = None) -> list:
-    """a text the screens' code fills in (or says, with text)"""
+                 align: str = None, text: str = None, text_y: int = None, text_x: int = None) -> list:
+    """a text the screens' code fills in (or says, with text). A left aligned text is shifted by text_x to start where the rows' text does (x 70: the 54 of the pills, 12 in and the
+    engine's 4 of inset; the small font's inset is 1 less, so 13)"""
+    if text_x is None and align in (None, "left"):
+        text_x = SOCIAL_TEXT_X[font]
     pairs = [("type", "text"), ("controller", 1), ("left", left), ("top", top), ("width", width), ("height", height),
              ("font", SOCIAL_FONTS[font][0]), ("color", color), ("align", align),
-             ("text", text), ("text_y", text_y if text_y is not None else SOCIAL_FONTS[font][1]),
+             ("text", text), ("text_x", text_x), ("text_y", text_y if text_y is not None else SOCIAL_FONTS[font][1]),
              ("text_flags", "no_focus_test")]
     return _widget(name, pairs, [])
 
 
 def _social_cell(name: str, width: int, font: str, align: str = None) -> list:
     """a row's cell: a text in the row, set and coloured by the code (pc_menu_text_color) by the cell's name"""
-    pairs = [("type", "text"), ("width", width), ("height", 22), ("font", SOCIAL_FONTS[font][0]), ("color", SOCIAL_TEXT_COLOR),
+    # (as high as the row: a letter with a tail, g or y, is not cut at the bottom by a smaller box)
+    pairs = [("type", "text"), ("width", width), ("height", SOCIAL_ROW_HEIGHT), ("font", SOCIAL_FONTS[font][0]), ("color", SOCIAL_TEXT_COLOR),
              ("align", align), ("text_y", SOCIAL_FONTS[font][1]), ("text_flags", "no_focus_test")]
     return _widget(name, pairs, [])
 
 
 def _social_row(name: str, columns: list, prefix: str, handlers: list, width: int = SOCIAL_ROW_WIDTH, bitmap: str = "bitmaps/option_bkds") -> list:
-    """a row of the list: the focus pill (the settings screens' option_bkds: its second frame has the focus), its cells in their places"""
-    children = [f'<child widget="{SOCIAL}/{prefix}_{column}" x="{x}" y="3"/>' for column, x, _, _ in columns]
+    """a row of the list: the focus pill (the settings screens' option_bkds: its second frame has the focus), its cells in their places. The cells sit at the row's top: their
+    text_y (large 4, small 6, the settings screens' own) puts the capitals on the pill's middle"""
+    children = [f'<child widget="{SOCIAL}/{prefix}_{column}" x="{x}" y="0"/>' for column, x, _, _ in columns]
     return _widget(name, [("width", width), ("height", SOCIAL_ROW_HEIGHT), ("flags", "pass_unhandled_to_focused_child"), ("bitmap", bitmap),
                           ("color", SOCIAL_TEXT_COLOR)], handlers + ['<on event="left_mouse" run="mouse emit accept event"/>'] + children)
 
@@ -2654,25 +2708,70 @@ def _social_buttons(base: str, bar: str, buttons: list, five: bool = False) -> l
                          ("flags", "pass_unhandled_to_focused_child left_right_tabs_items")], children) + lines
 
 
+def _social_title(base: str, name: str, text: str = None, width: int = 360) -> list:
+    """a screen's title: large, azure, its capitals' top at the safe margin (24.5: its round letters' tops overshoot to 24), starting where the rows' text does"""
+    return _social_text(f"{base}/{name}", SOCIAL_ROWS_LEFT, SOCIAL_TITLE_TOP, width, 22, color=SOCIAL_TITLE_COLOR, text=text, text_y=0)
+
+
+def _social_detail(base: str, name: str, top: int = SOCIAL_DETAIL_TOP, height: int = SOCIAL_DETAIL_HEIGHT) -> list:
+    """the line (two at most) under the rows: what the row chosen is, or what a button said"""
+    return _social_text(f"{base}/{name}", SOCIAL_ROWS_LEFT, top, SOCIAL_ROW_WIDTH, height, color="#FFFFFFFF", text_y=0)
+
+
+def _social_footer(base: str, note: str, count: str, color: str = SOCIAL_HINT_COLOR) -> list:
+    """the footer under the detail: a note at the left (small), and the scroll counter ("4 OF 14") at the right, on one baseline"""
+    return (_social_text(f"{base}/{note}", SOCIAL_ROWS_LEFT, SOCIAL_FOOTER_TOP, 380, SOCIAL_FOOTER_HEIGHT, "small", color=color, text_y=0) +
+            _social_text(f"{base}/{count}", SOCIAL_ROWS_LEFT + 384, SOCIAL_FOOTER_TOP, SOCIAL_TEXT_RIGHT - SOCIAL_ROWS_LEFT - 384, SOCIAL_FOOTER_HEIGHT, "small", color=SOCIAL_HINT_COLOR,
+                         align="right", text_y=0))
+
+
+def _social_empty(base: str, name: str) -> list:
+    """the words of an empty list (no friends, no requests, no party, no service), in the middle of the list's place, centred, up to three lines"""
+    return _social_text(f"{base}/{name}", SOCIAL_ROWS_LEFT + 36, SOCIAL_EMPTY_TOP, SOCIAL_ROW_WIDTH - 72, SOCIAL_EMPTY_HEIGHT, color="#FFFFFFFF", align="center", text_y=0)
+
+
+def _social_arrows(base: str, prefix: str) -> tuple:
+    """the two arrows at the list's right edge that say there are more rows above or below (shown by code), and their widgets"""
+    left = SOCIAL_ROWS_LEFT + SOCIAL_ROW_WIDTH + SOCIAL_GAP
+    lines = []
+    for way, top in (("up", SOCIAL_ROWS_TOP + 6), ("down", SOCIAL_LIST_BOTTOM - 22)):
+        lines += _widget(f"{base}/{prefix}_more_{way}", [("controller", 1), ("left", left), ("top", top), ("width", 16), ("height", 16), ("bitmap", f"bitmaps/arrow_sm_{way}")], [])
+    return [f'<child widget="{base}/{prefix}_more_{way}"/>' for way in ("up", "down")], lines
+
+
+def _social_band(base: str) -> list:
+    """the backdrop of the header (above the panel's top line, where the game's own screens leave the picture bare): a dark band of the panel's own darkness, so that the HUD of
+    a game under the pause menu (the shield and health bars at the top corners) does not run through the title and the tabs. It is the engine's full screen dim (a flat bitmap
+    at most 16 texels wide, a widget from 0, 0 over 320 x 240 is drawn across the whole screen: ui_widget.c's widen_to_screen) placed 170 up, so that its lower 70 are on screen."""
+    return _widget(f"{base}/header_band", [("controller", 1), ("left", 0), ("top", 0), ("width", 640), ("height", SOCIAL_BAND_HEIGHT), ("bitmap", "bitmaps/semi_transparent_grey")], [])
+
+
 def _social_screen(name: str, handlers: list, children: list) -> list:
+    base = name.rsplit("/", 1)[0]
+    band = f'<child widget="{base}/header_band" y="{PANEL_LINE - SOCIAL_BAND_HEIGHT}"/>'
     return _widget(name, [("width", 640), ("height", 480), ("flags", "pass_unhandled_to_focused_child pause_game"), ("bitmap", "bitmaps/gradient")],
-                   handlers + children)
+                   handlers + [band] + children)
 
 
 def _social_players() -> list:
     """the Players page: one row for each player (name, BOT <skill> or YOU or HOST or PARTY or FRIEND, team, ping), the line of what the row chosen is under them, and the
-    buttons: BOT SETTINGS, ADD BOT, DROP BOT (the host's), FRIENDS, BACK. A on a row opens its actions, L drops a bot and R adds one (the host's)"""
+    buttons: BOT SETTINGS, ADD BOT, DROP BOT (the host's), FRIENDS, BACK. A on a row opens its actions, L drops a bot and R adds one (the host's). The note that the game keeps
+    running is in the footer, not under the HUD's bars at the top"""
     base = SOCIAL
+    arrows, arrow_lines = _social_arrows(base, "players")
     lines = _social_screen(f"{base}/players_screen",
                            ['<on event="created" run="port players open"/>', '<on event="b" back="true"/>', '<on event="back" back="true"/>',
                             '<on event="white" run="port players drop bot"/>', '<on event="black" run="port players add bot"/>'],
                            [f'<child widget="{base}/players_list"/>', f'<child widget="{base}/players_title"/>', f'<child widget="{base}/players_head"/>',
-                            f'<child widget="{base}/players_banner"/>', f'<child widget="{base}/players_detail"/>'])
-    lines += _social_text(f"{base}/players_title", 35, 14, 360, 30, color=SOCIAL_TITLE_COLOR, text="PLAYERS", text_y=3)
-    lines += _social_text(f"{base}/players_head", 340, 16, 226, 26, align="right", color="#FFFFFFFF", text_y=3)
-    lines += _social_text(f"{base}/players_banner", SOCIAL_ROWS_LEFT, 48, SOCIAL_ROW_WIDTH, 22, "small", color="#FFFFB020", text_y=4)
-    lines += _social_text(f"{base}/players_detail", SOCIAL_ROWS_LEFT, SOCIAL_ROWS_TOP + SOCIAL_PLAYER_ROWS * SOCIAL_ROW_PITCH + 6, SOCIAL_ROW_WIDTH, 48,
-                          color="#FFFFFFFF", text_y=4)
+                            f'<child widget="{base}/players_banner"/>', f'<child widget="{base}/players_count"/>', f'<child widget="{base}/players_detail"/>',
+                            f'<child widget="{base}/players_empty"/>', *arrows])
+    lines += _social_title(base, "players_title", "PLAYERS")
+    # (the count of players at the right, on the title's baseline)
+    lines += _social_text(f"{base}/players_head", 340, SOCIAL_TITLE_TOP, SOCIAL_TEXT_RIGHT - 340, 22, align="right", color="#FFFFFFFF", text_y=0)
+    lines += _social_footer(base, "players_banner", "players_count", SOCIAL_WARN_COLOR)
+    lines += _social_detail(base, "players_detail")
+    lines += _social_empty(base, "players_empty")
+    lines += arrow_lines
     rows = [f'<child widget="{base}/player_item_{index + 1}" x="{SOCIAL_ROWS_LEFT}" y="{SOCIAL_ROWS_TOP + index * SOCIAL_ROW_PITCH}"/>'
             for index in range(SOCIAL_PLAYER_ROWS)]
     lines += _widget(f"{base}/players_list", [("type", "column_list"), ("width", 640), ("height", 480),
@@ -2703,37 +2802,40 @@ def _social_actions() -> list:
                            ['<on event="created" run="port screens actions open"/>', '<on event="b" back="true"/>', '<on event="back" back="true"/>',
                             f'<on event="x" open="{PE}/bot_settings/bot_settings_screen"/>'],
                            [f'<child widget="{base}/actions_list"/>', f'<child widget="{base}/actions_title"/>', f'<child widget="{base}/actions_answer"/>'])
-    lines += _social_text(f"{base}/actions_title", 35, 14, 560, 30, color=SOCIAL_TITLE_COLOR, text_y=3)
-    lines += _social_text(f"{base}/actions_answer", SOCIAL_ROWS_LEFT, SOCIAL_ROWS_TOP + SOCIAL_ACTION_ROWS * SOCIAL_ROW_PITCH + 6, SOCIAL_ROW_WIDTH, 48,
-                          color="#FFFFFFFF", text_y=4)
+    lines += _social_title(base, "actions_title", width=SOCIAL_ROW_WIDTH)
+    lines += _social_detail(base, "actions_answer", SOCIAL_ROWS_TOP + SOCIAL_ACTION_ROWS * SOCIAL_ROW_PITCH + SOCIAL_GAP)
     rows = [f'<child widget="{base}/action_item_{index + 1}" x="{SOCIAL_ROWS_LEFT}" y="{SOCIAL_ROWS_TOP + index * SOCIAL_ROW_PITCH}"/>'
             for index in range(SOCIAL_ACTION_ROWS)]
     lines += _widget(f"{base}/actions_list", [("type", "column_list"), ("width", 640), ("height", 480),
                                               ("flags", "pass_unhandled_to_focused_child up_down_tabs_children")],
                      ['<data input="port screens actions update"/>', *rows])
     for index in range(SOCIAL_ACTION_ROWS):
-        lines += _social_row(f"{base}/action_item_{index + 1}", [("text", 24, 460, "large")], "scr_action",
+        lines += _social_row(f"{base}/action_item_{index + 1}", [("text", 12, 480, "large")], "scr_action",
                              ['<on event="a" run="port screens action run"/>', '<on event="start" run="port screens action run"/>'])
-    lines += _social_cell(f"{base}/scr_action_text", 460, "large")
+    lines += _social_cell(f"{base}/scr_action_text", 480, "large")
     return lines
 
 
 def _social_friends() -> list:
     """the Friends screen: four tabs (FRIENDS, REQUESTS, PARTY, BLOCKED: the shoulders turn them), a row for each, the line of what the row chosen is under them, the
-    service's state and this machine's code at the top, and the buttons ADD FRIEND, JOIN, INVITE, BACK (JOIN and INVITE shown when they apply to the row)"""
+    service's state at the top right, this machine's code and the scroll counter in the footer, and the buttons ADD FRIEND, JOIN, INVITE, BACK (JOIN and INVITE shown when they
+    apply to the row)"""
     base = SOCIAL
+    arrows, arrow_lines = _social_arrows(base, "friends")
     lines = _social_screen(f"{base}/friends_screen",
                            ['<on event="created" run="port friends open"/>', '<on event="b" back="true"/>', '<on event="back" back="true"/>',
                             '<on event="white" run="port friends tab previous"/>', '<on event="black" run="port friends tab next"/>',
                             f'<on event="y" open="{base}/add/friend_add_screen"/>'],
                            [f'<child widget="{base}/friends_list"/>', f'<child widget="{base}/friends_title"/>', f'<child widget="{base}/friends_service"/>',
-                            f'<child widget="{base}/friends_code"/>', f'<child widget="{base}/friends_detail"/>'])
-    lines += _social_text(f"{base}/friends_title", 35, 8, 200, 30, color=SOCIAL_TITLE_COLOR, text="FRIENDS", text_y=3)
-    # (the service word and this machine's code, small, in the top right and clear of the tab row below them: on the console the code touched it at 22 + 18 against the tabs' 44)
-    lines += _social_text(f"{base}/friends_service", 330, 0, 236, 18, "small", color="#FFFFFFFF", align="right", text_y=2)
-    lines += _social_text(f"{base}/friends_code", 250, 14, 316, 18, "small", align="right", text_y=2)
-    lines += _social_text(f"{base}/friends_detail", SOCIAL_ROWS_LEFT, SOCIAL_ROWS_TOP + SOCIAL_FRIEND_ROWS * SOCIAL_ROW_PITCH + 6, SOCIAL_ROW_WIDTH, 52,
-                          color="#FFFFFFFF", text_y=4)
+                            f'<child widget="{base}/friends_code"/>', f'<child widget="{base}/friends_count"/>', f'<child widget="{base}/friends_detail"/>',
+                            f'<child widget="{base}/friends_empty"/>', *arrows])
+    lines += _social_title(base, "friends_title", "FRIENDS", 200)
+    # (the service word at the right, on the title's baseline: the capitals of a small text end where the title's do, 37)
+    lines += _social_text(f"{base}/friends_service", 330, SOCIAL_SERVICE_TOP, SOCIAL_TEXT_RIGHT - 330, 18, "small", color="#FFFFFFFF", align="right", text_y=0)
+    lines += _social_footer(base, "friends_code", "friends_count")
+    lines += _social_detail(base, "friends_detail")
+    lines += _social_empty(base, "friends_empty")
+    lines += arrow_lines
     rows = [f'<child widget="{base}/friend_item_{index + 1}" x="{SOCIAL_ROWS_LEFT}" y="{SOCIAL_ROWS_TOP + index * SOCIAL_ROW_PITCH}"/>'
             for index in range(SOCIAL_FRIEND_ROWS)]
     lines += _widget(f"{base}/friends_list", [("type", "column_list"), ("width", 640), ("height", 480),
@@ -2744,9 +2846,10 @@ def _social_friends() -> list:
     lines += _widget(f"{base}/friends_tab_bar", [("type", "column_list"), ("width", 640), ("height", SOCIAL_TAB_HEIGHT),
                                                  ("flags", "pass_unhandled_to_focused_child left_right_tabs_items")], tabs)
     for index in range(4):
+        # (a tab is a button's pill, 22 high: its text at the buttons' own text_y 2 is centred on it)
         lines += _widget(f"{base}/friends_tab_{index}",
                          [("type", "text"), ("width", SOCIAL_TAB_WIDTH), ("height", SOCIAL_TAB_HEIGHT), ("bitmap", "bitmaps/text_button_background"),
-                          ("font", "ui\\small_ui"), ("color", "#FFFFFFFF"), ("align", "center"), ("text_y", 4)],
+                          ("font", "ui\\small_ui"), ("color", "#FFFFFFFF"), ("align", "center"), ("text_y", 2)],
                          [f'<on event="a" run="port friends tab {index}"/>', f'<on event="start" run="port friends tab {index}"/>',
                           '<on event="left_mouse" run="mouse emit accept event"/>'])
     for index in range(SOCIAL_FRIEND_ROWS):
@@ -2764,6 +2867,10 @@ def _social_friends() -> list:
     return lines
 
 
+# ADD FRIEND's places (units): the label of this machine's code at the first row's place, the code 24 below its top, the field 24 below that, the answer 16 below the field
+SOCIAL_ADD_LABEL_TOP, SOCIAL_ADD_CODE_TOP, SOCIAL_ADD_FIELD_TOP, SOCIAL_ADD_ANSWER_TOP = 76, 100, 148, 192
+
+
 def _social_add() -> list:
     """ADD FRIEND: this machine's code, large, to read out; the code of the friend, typed (on the GamePad's keyboard); the check in words; SEND REQUEST and CANCEL"""
     base = f"{SOCIAL}/add"
@@ -2772,15 +2879,18 @@ def _social_add() -> list:
                             '<on event="back" run="port friend add back"/>'],
                            [f'<child widget="{base}/add_list"/>', f'<child widget="{base}/add_title"/>', f'<child widget="{base}/add_own_label"/>',
                             f'<child widget="{base}/add_own_code"/>', f'<child widget="{base}/add_answer"/>'])
-    lines += _social_text(f"{base}/add_title", 35, 14, 560, 30, color=SOCIAL_TITLE_COLOR, text="ADD FRIEND", text_y=3)
-    lines += _social_text(f"{base}/add_own_label", SOCIAL_ROWS_LEFT, 76, SOCIAL_ROW_WIDTH, 24, color="#FFFFFFFF", text="YOUR CODE (READ IT OUT TO YOUR FRIEND):", text_y=4)
-    lines += _social_text(f"{base}/add_own_code", SOCIAL_ROWS_LEFT, 104, SOCIAL_ROW_WIDTH, 30, color="#FFFFFFFF", align="center", text_y=3)
-    lines += _social_text(f"{base}/add_answer", SOCIAL_ROWS_LEFT, 238, SOCIAL_ROW_WIDTH, 60, color="#FFFFFFFF", text_y=4)
+    lines += _social_band(base)
+    lines += _social_title(base, "add_title", "ADD FRIEND", SOCIAL_ROW_WIDTH)
+    lines += _social_text(f"{base}/add_own_label", SOCIAL_ROWS_LEFT, SOCIAL_ADD_LABEL_TOP, SOCIAL_ROW_WIDTH, 24, color="#FFFFFFFF",
+                          text="YOUR CODE (READ IT OUT TO YOUR FRIEND):", text_y=0)
+    lines += _social_text(f"{base}/add_own_code", SOCIAL_ROWS_LEFT, SOCIAL_ADD_CODE_TOP, SOCIAL_ROW_WIDTH, 24, color="#FFFFFFFF", text_y=0)
+    lines += _social_detail(base, "add_answer", SOCIAL_ADD_ANSWER_TOP)
     lines += _widget(f"{base}/add_list", [("type", "column_list"), ("width", 640), ("height", 480),
                                           ("flags", "pass_unhandled_to_focused_child up_down_tabs_children")],
-                     ['<data input="port friend add update"/>', f'<child widget="{base}/op_code" x="{SOCIAL_ROWS_LEFT}" y="176"/>',
+                     ['<data input="port friend add update"/>', f'<child widget="{base}/op_code" x="{SOCIAL_ROWS_LEFT}" y="{SOCIAL_ADD_FIELD_TOP}"/>',
                       f'<child widget="{base}/add_button_bar" y="414"/>'])
-    lines += _value_row(base, "code", 0, "port friend add edit")
+    # (the code being typed is white: it is what the player reads while keying it in)
+    lines += _value_row(base, "code", 0, "port friend add edit", "#FFFFFFFF")
     lines += _social_buttons(base, f"{base}/add_button_bar", [
         ("add_button_send", "SEND REQUEST", ['<on event="a" run="port friend add send"/>', '<on event="start" run="port friend add send"/>']),
         ("add_button_cancel", "CANCEL", ['<on event="a" run="port friend add back"/>', '<on event="start" run="port friend add back"/>']),
@@ -2796,7 +2906,7 @@ def social_files() -> dict:
                                                        ("text", "FRIENDS"), ("font", "ui\\small_ui"), ("color", "#FFFFFFFF"), ("align", "center"), ("text_y", 2)],
                      [f'<on event="a" open="{SOCIAL}/friends_screen"/>', f'<on event="start" open="{SOCIAL}/friends_screen"/>',
                       '<on event="left_mouse" run="mouse emit accept event"/>'])
-    return {f"{SOCIAL}/players".replace("/", ".") + ".xml": head + _social_players() + button + ["</menus>", ""],
+    return {f"{SOCIAL}/players".replace("/", ".") + ".xml": head + _social_players() + _social_band(SOCIAL) + button + ["</menus>", ""],
             f"{SOCIAL}/actions".replace("/", ".") + ".xml": head + _social_actions() + ["</menus>", ""],
             f"{SOCIAL}/friends".replace("/", ".") + ".xml": head + _social_friends() + _social_add() + ["</menus>", ""]}
 

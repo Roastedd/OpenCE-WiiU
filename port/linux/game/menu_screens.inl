@@ -139,6 +139,23 @@ static void scr_sentence(char *text, int size)
 	screens_wrap(SCREENS_FONT_LARGE, (float)SCREENS_LINE_BOX_WIDTH, SCREENS_LINE_BOX_LINES, whole, text, size);
 }
 
+/* a list's hints (the footer's scroll counter "4 OF 14", the arrows at the list's right edge where there are more rows above or below): the screen's widgets are named
+<prefix>_count, <prefix>_more_up and <prefix>_more_down; the empty list's words (<prefix>_empty) are cleared here and set by the caller if the list is empty */
+static void scr_list_hints(struct widget_instance *screen, char const *prefix, short item, short first, short shown, short count)
+{
+	char name[32], text[SCR_LONG];
+
+	screens_scroll_text(item, first, shown, count, text, (int)sizeof(text));
+	snprintf(name, sizeof(name), "%s_count", prefix);
+	scr_text(screen, name, text);
+	snprintf(name, sizeof(name), "%s_empty", prefix);
+	scr_text(screen, name, "");
+	snprintf(name, sizeof(name), "%s_more_up", prefix);
+	visible_set(named(screen, name, 0), first > 0);
+	snprintf(name, sizeof(name), "%s_more_down", prefix);
+	visible_set(named(screen, name, 0), first + shown < count);
+}
+
 static boolean scr_enabled(void)
 {
 	return screens_enabled() != 0;
@@ -767,8 +784,14 @@ static void scr_players_update(struct widget_instance *list)
 	scr_text(screen, "players_head", text);
 	scr_text(screen, "players_banner", summary->running ? "THE GAME KEEPS RUNNING WHILE THIS IS OPEN." : "");
 	item = scr_focused(list, SCR_PLAYER_PREFIX);
+	/* (an empty list says why in the middle of its place; a long one says which row it is at in the footer and shows an arrow where there are more) */
+	scr_list_hints(screen, "players", item, scr.players_first, shown, count);
 	if (!provider || !count)
-		screens_empty_wrapped(0, 0, NULL, provider != NULL, text, (int)sizeof(text));
+	{
+		screens_empty_block(0, 0, NULL, provider != NULL, text, (int)sizeof(text));
+		scr_text(screen, "players_empty", text);
+		text[0] = 0;
+	}
 	else if (item != NONE && scr.players_first + item < count)
 		screens_player_detail(&scr.model.roster[scr.players_first + item], summary, text, (int)sizeof(text));
 	else
@@ -977,8 +1000,14 @@ static void scr_friends_update(struct widget_instance *list)
 		text[0] = 0;
 	scr_text(screen, "friends_code", text);
 	item = scr_focused(list, SCR_FRIEND_PREFIX);
+	scr_list_hints(screen, "friends", item, scr.friends_first[tab], shown, count);
 	if (!provider || !provider->friends || !count)
-		screens_empty_wrapped(1, tab, summary, provider && provider->friends, text, (int)sizeof(text));
+	{
+		/* (an empty list says why in the middle of its place, not in the detail line) */
+		screens_empty_block(1, tab, summary, provider && provider->friends, text, (int)sizeof(text));
+		scr_text(screen, "friends_empty", text);
+		text[0] = 0;
+	}
 	else if (tab == SCREENS_TAB_PARTY)
 		screens_party_head(&scr.model.party_summary, text, (int)sizeof(text));
 	else if (item != NONE && scr.friends_first[tab] + item < count)

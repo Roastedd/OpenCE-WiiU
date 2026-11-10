@@ -64,7 +64,7 @@ unsigned long screens_color_rgb(int color)
 {
 	static const unsigned long table[SCREENS_COLORS] =
 	{
-		0x2896FF, 0xFFFFFF, 0xFFB020, 0x40D050, 0x708090, 0xFF4040, 0xDB5247, 0x5782DB,
+		0x2896FF, 0xFFFFFF, 0xFFB020, 0x40D050, 0x9CABBA, 0xFF8078, 0xF8847A, 0x86AAF8, 0x6CBAFF,
 	};
 
 	return color >= 0 && color < SCREENS_COLORS ? table[color] : table[SCREENS_COLOR_AZURE];
@@ -340,7 +340,11 @@ int screens_wrap(int font, float width, int max_lines, char const *text, char *d
 
 static void cell_set(struct screens_cell *cell, int font, float width, int color, char const *text)
 {
-	screens_fit(font, width, text, cell->text, (int)sizeof(cell->text));
+	/* (the engine starts a text a few units in from its widget's left and clips at the right edge: a text is cut to the column less that inset and a margin) */
+	screens_fit(font, width - SCREENS_TEXT_INSET, text, cell->text, (int)sizeof(cell->text));
+	/* (the small font on the panel's moving background: the menus' azure, 3.3 to 1 against its brightest places, is its lighter sky blue, 4.9) */
+	if (font == SCREENS_FONT_SMALL && color == SCREENS_COLOR_AZURE)
+		color = SCREENS_COLOR_SKY;
 	cell->color = (unsigned char)color;
 }
 
@@ -462,10 +466,82 @@ static int friend_mark(struct screens_friend_row const *row, int *color)
 	}
 }
 
-/* "PLAYING <map> 6/16 DOWNLOAD": the words and numbers kept whole, the map cut to what is left of the column */
+/* the multiplayer maps' names as the game shows them (the lobby's list, ui\shell\main_menu\mp_map_list: the Xbox's and Halo PC's own); another map's is its file's name */
+static struct
+{
+	char const *file;
+	char const *title;
+} const map_titles[] =
+{
+	{ "beavercreek", "Battle Creek" }, { "bloodgulch", "Blood Gulch" }, { "boardingaction", "Boarding Action" }, { "carousel", "Derelict" }, { "chillout", "Chill Out" },
+	{ "damnation", "Damnation" }, { "dangercanyon", "Danger Canyon" }, { "deathisland", "Death Island" }, { "gephyrophobia", "Gephyrophobia" },
+	{ "hangemhigh", "Hang 'Em High" }, { "icefields", "Ice Fields" }, { "infinity", "Infinity" }, { "longest", "Longest" }, { "prisoner", "Prisoner" },
+	{ "putput", "Chiron TL-34" }, { "ratrace", "Rat Race" }, { "sidewinder", "Sidewinder" }, { "timberland", "Timberland" }, { "wizard", "Wizard" },
+};
+
+void screens_map_title(char const *map, char *title, int size)
+{
+	int index, length;
+
+	if (size <= 0)
+		return;
+	title[0] = 0;
+	if (!map)
+		return;
+	for (index = 0; index < (int)(sizeof(map_titles) / sizeof(map_titles[0])); index++)
+	{
+		/* (a map file's name is compared as it is, in lower case: Custom Edition maps of a stock map's name are the stock map's) */
+		char lower[SCREENS_WORD_SIZE];
+		int at;
+
+		for (at = 0; map[at] && at < (int)sizeof(lower) - 1; at++)
+			lower[at] = map[at] >= 'A' && map[at] <= 'Z' ? (char)(map[at] + 32) : map[at];
+		lower[at] = 0;
+		if (!strcmp(lower, map_titles[index].file))
+		{
+			snprintf(title, (size_t)size, "%s", map_titles[index].title);
+			return;
+		}
+	}
+	/* (another map's: the file's name with its underscores as spaces, so that a cut falls between words) */
+	for (length = 0; map[length] && length < size - 1; length++)
+		title[length] = map[length] == '_' ? ' ' : map[length];
+	title[length] = 0;
+}
+
+int screens_fit_words(int font, float width, char const *text, char *destination, int size)
+{
+	int length, last_space = -1;
+	float dots = screens_text_width(font, "...");
+
+	if (size <= 0)
+		return 0;
+	destination[0] = 0;
+	if (!text)
+		return 0;
+	if (screens_text_width(font, text) <= width)
+		return screens_fit(font, width, text, destination, size);
+	/* (the most whole words that fit with the dots; a first word wider than that is cut where it is) */
+	for (length = 0; text[length] && length < size - 4; length++)
+	{
+		if (range_width(font, text, length + 1) + dots > width)
+			break;
+		if (text[length + 1] == ' ' || !text[length + 1])
+			last_space = length + 1;
+	}
+	if (last_space <= 0)
+		return screens_fit(font, width, text, destination, size);
+	memcpy(destination, text, (size_t)last_space);
+	while (last_space > 0 && destination[last_space - 1] == ' ')
+		last_space--;
+	memcpy(destination + last_space, "...", 4);
+	return last_space + 3;
+}
+
+/* "PLAYING <map> 6/16 DOWNLOAD": the words and numbers kept whole, the map's name (as the game shows it) cut between its words to what is left of the column */
 static void game_status(struct screens_friend_row const *row, char const *word, int font, float width, char *text, int size)
 {
-	char prefix[SCREENS_LINE_SIZE], suffix[SCREENS_LINE_SIZE], map[SCREENS_LINE_SIZE];
+	char prefix[SCREENS_LINE_SIZE], suffix[SCREENS_LINE_SIZE], map[SCREENS_LINE_SIZE], title[SCREENS_LINE_SIZE];
 	char const *join = screens_join_word(row->join);
 	float room;
 
@@ -475,10 +551,17 @@ static void game_status(struct screens_friend_row const *row, char const *word, 
 		snprintf(suffix, sizeof(suffix), " %d/%d", row->players, row->maximum);
 	if (join[0])
 		snprintf(suffix + strlen(suffix), sizeof(suffix) - strlen(suffix), " %s", join);
-	room = width - screens_text_width(font, prefix) - screens_text_width(font, suffix) - screens_text_width(font, " ");
+	/* (half a unit under: a text that fits to the last digit is cut by the float's rounding) */
+	room = width - SCREENS_TEXT_INSET - 0.5f - screens_text_width(font, prefix) - screens_text_width(font, suffix) - screens_text_width(font, " ");
 	map[0] = 0;
-	if (row->map[0] && room > 24.0f)
-		screens_fit(font, room, row->map, map, (int)sizeof(map));
+	screens_map_title(row->map, title, (int)sizeof(title));
+	if (title[0] && room > 24.0f)
+	{
+		screens_fit_words(font, room, title, map, (int)sizeof(map));
+		/* (a name cut to fewer than five letters says nothing: "Da...", "Dange...": the status goes without it) */
+		if (strcmp(map, title) && strlen(map) < 8)
+			map[0] = 0;
+	}
 	snprintf(text, (size_t)size, "%s%s%s%s", prefix, map[0] ? " " : "", map, suffix);
 }
 
@@ -874,6 +957,29 @@ void screens_empty_wrapped(int screen, int tab, struct screens_friends_summary c
 
 	empty_line(screen, tab, summary, have_provider, line, (int)sizeof(line));
 	screens_wrap(SCREENS_FONT_LARGE, (float)SCREENS_LINE_BOX_WIDTH, SCREENS_LINE_BOX_LINES, line, text, size);
+}
+
+void screens_empty_block(int screen, int tab, struct screens_friends_summary const *summary, int have_provider, char *text, int size)
+{
+	char line[SCREENS_LINE_SIZE];
+
+	empty_line(screen, tab, summary, have_provider, line, (int)sizeof(line));
+	/* (in the middle of the list's place: up to three lines of 440, not the detail line's two of 496) */
+	screens_wrap(SCREENS_FONT_LARGE, (float)SCREENS_EMPTY_BOX_WIDTH, SCREENS_EMPTY_BOX_LINES, line, text, size);
+}
+
+void screens_scroll_text(int focus, int first, int shown, int count, char *text, int size)
+{
+	if (size <= 0)
+		return;
+	text[0] = 0;
+	if (count <= shown || shown <= 0)
+		return;
+	/* (the row chosen's place in the whole list; with none chosen, the rows in view) */
+	if (focus >= 0 && focus < shown)
+		snprintf(text, (size_t)size, "%d OF %d", first + focus + 1, count);
+	else
+		snprintf(text, (size_t)size, "%d TO %d OF %d", first + 1, first + shown, count);
 }
 
 /* ---------- navigation */
