@@ -61,16 +61,16 @@ b30 (reports/research/2026-11-03/governor.md has how: 80% of what the host's dra
 static struct render_governor_values const default_values[STEPS] =
 {
 	/* Steps 1 to 3 are the ones played with by default: they leave out only what is small, far or thin, never a unit, a vehicle, a weapon or a projectile.
-	Steps 4 to 7 cull units and items by size and are for the Performance graphics mode, or max_step in the card file. */
+	Steps 4 to 7 cull units and items by size (at about half the sizes the first version used, so that the pop-in happens farther away: a Truth and Reconciliation run spent 61% of its frames at steps 5 to 7) and are for the Performance graphics mode, or max_step in the card file. */
 	/* name           scenery item unit  lod   shadow  decal: radius keep  particle: lod keep  grass flares specular contrails  decal_max particle_max */
 	/* 0 */ { "full",          0.f,  0.f,  0.f, 1.00f,   0.f,   0.f, 16, 1.00f, 16, 1, 1, 1, 1,   0,   0 },
 	/* 1 */ { "far props",    10.f,  0.f,  0.f, 1.00f,  45.f, 120.f, 14, 1.25f, 14, 1, 1, 1, 1, 200, 300 },
 	/* 2 */ { "small things", 16.f,  0.f,  0.f, 0.85f,  60.f,  90.f, 12, 1.50f, 12, 1, 1, 1, 1, 130, 200 },
 	/* 3 */ { "grass, flares", 22.f, 0.f,  0.f, 0.70f,  80.f,  60.f,  9, 2.00f,  8, 0, 0, 1, 1, 100, 140 },
-	/* 4 */ { "shine, units", 36.f, 28.f,  8.f, 0.55f, 110.f,  40.f,  6, 3.00f,  6, 0, 0, 0, 1,  70, 100 },
-	/* 5 */ { "no shadows",   44.f, 40.f, 14.f, 0.45f,  1e9f,  25.f,  4, 4.00f,  4, 0, 0, 0, 0,  50,  70 },
-	/* 6 */ { "minimum",      60.f, 56.f, 22.f, 0.35f,  1e9f,  15.f,  2, 6.00f,  2, 0, 0, 0, 0,  30,  40 },
-	/* 7 */ { "emergency",    80.f, 80.f, 32.f, 0.25f,  1e9f,  10.f,  1, 8.00f,  1, 0, 0, 0, 0,  15,  20 },
+	/* 4 */ { "shine, units", 24.f, 14.f,  3.f, 0.55f, 110.f,  40.f,  6, 3.00f,  6, 0, 0, 0, 1,  70, 100 },
+	/* 5 */ { "no shadows",   28.f, 20.f,  5.f, 0.45f,  1e9f,  25.f,  4, 4.00f,  4, 0, 0, 0, 0,  50,  70 },
+	/* 6 */ { "minimum",      34.f, 26.f,  8.f, 0.35f,  1e9f,  15.f,  2, 6.00f,  2, 0, 0, 0, 0,  30,  40 },
+	/* 7 */ { "emergency",    42.f, 32.f, 12.f, 0.25f,  1e9f,  10.f,  1, 8.00f,  1, 0, 0, 0, 0,  15,  20 },
 };
 static float const default_save_ms[STEPS] = { 0.f, 1.0f, 2.2f, 1.2f, 0.8f, 1.8f, 1.3f, 1.2f };
 /* the most steps the governor goes down by default (the card file's max_step; the Performance mode: all) */
