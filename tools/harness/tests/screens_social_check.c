@@ -240,7 +240,7 @@ static void world_start(void)
 	social_join_set_backend(&backend);
 	social_join_set_game_hooks(world_map_state, world_game_ready, world_busy);
 	{
-		struct social_flow_world flow_world = { NULL, flow_now, flow_busy, flow_menus_up, flow_screen, flow_leave, flow_open_list };
+		struct social_flow_world flow_world = { NULL, flow_now, flow_busy, flow_menus_up, flow_screen, flow_leave, flow_open_list, NULL };
 
 		social_flow_set_world(&flow_world);
 	}
