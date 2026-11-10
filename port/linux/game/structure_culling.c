@@ -21,6 +21,9 @@ Six-plane rejection and conservative facing summaries for structure buckets.
 #include "render/render_debug.h"
 #include "render/render_debug_geometry.h"
 #include "structures/structure_visibility.h"
+#ifdef HALO_WIIU
+#include "cull_exact.h"
+#endif
 #include <float.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -767,6 +770,34 @@ short structure_culling_box_test(real_plane3d const planes[6], real_rectangle3d 
 	short corner_index;
 	boolean partly = FALSE;
 
+#ifdef HALO_WIIU
+	/* port: each plane is tested at the two corners that lie farthest behind it and farthest in front of it, not at all eight (cull_exact.h: the
+	same answer for every finite box and plane; an infinity or a NaN goes the original way below) */
+	{
+		boolean exact = TRUE;
+
+		for (plane_index = 0; plane_index < 6; ++plane_index)
+		{
+			real least, most;
+
+			if (!cull_box_plane_range(&planes[plane_index], box, &least, &most))
+			{
+				exact = FALSE;
+				break;
+			}
+			if (least > 0.0f)
+			{
+				return 0;
+			}
+			partly |= most > 0.0f;
+		}
+		if (exact)
+		{
+			return partly ? 1 : 2;
+		}
+		partly = FALSE;
+	}
+#endif
 	for (plane_index = 0; plane_index < 6; ++plane_index)
 	{
 		short outside = 0;

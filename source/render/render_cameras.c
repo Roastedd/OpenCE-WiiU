@@ -137,6 +137,9 @@ symbols in this file:
 #include "render/render_cameras_internal.h"
 #include "render/render_debug.h"
 #include "structures/structure_visibility.h"
+#ifdef HALO_WIIU
+#include "cull_exact.h"
+#endif
 
 /* ---------- constants */
 
@@ -553,7 +556,46 @@ short render_frustum_cube_visible(
 		word intersection_flags = RENDER_FRUSTUM_POINT_FLAGS_PLANE_MASK;
 		word union_flags = 0;
 		short vertex_index;
+#ifdef HALO_WIIU
+		/* port: each of the four planes is tested at the two corners that lie farthest behind it and farthest in front of it, not at all eight
+		(cull_exact.h: the same flags for every finite box and plane; an infinity or a NaN goes the original way below) */
+		boolean exact = TRUE;
+		{
+			static const word plane_bits[4] =
+			{
+				FLAG(_render_frustum_point_flags_left_bit), FLAG(_render_frustum_point_flags_right_bit),
+				FLAG(_render_frustum_point_flags_bottom_bit), FLAG(_render_frustum_point_flags_top_bit)
+			};
+			short plane_index;
 
+			intersection_flags = 0;
+			for (plane_index = 0; plane_index < 4; plane_index++)
+			{
+				real least, most;
+
+				if (!cull_box_plane_range(&frustum->world_planes[plane_index], bounds, &least, &most))
+				{
+					exact = FALSE;
+					break;
+				}
+				if (most > 0.0f)
+				{
+					union_flags |= plane_bits[plane_index];
+				}
+				if (least > 0.0f)
+				{
+					intersection_flags |= plane_bits[plane_index];
+				}
+			}
+			if (!exact)
+			{
+				intersection_flags = RENDER_FRUSTUM_POINT_FLAGS_PLANE_MASK;
+				union_flags = 0;
+			}
+		}
+		if (!exact)
+		{
+#endif
 		cube_vertices[0].x = cube_vertices[2].x = cube_vertices[4].x = cube_vertices[6].x = bounds->x0;
 		cube_vertices[1].x = cube_vertices[3].x = cube_vertices[5].x = cube_vertices[7].x = bounds->x1;
 		cube_vertices[0].y = cube_vertices[1].y = cube_vertices[4].y = cube_vertices[5].y = bounds->y0;
@@ -581,6 +623,9 @@ short render_frustum_cube_visible(
 			intersection_flags &= flags;
 			union_flags |= flags;
 		}
+#ifdef HALO_WIIU
+		}
+#endif
 
 		if (!union_flags)
 		{
