@@ -42,6 +42,14 @@ FAULTS = [
     ("generation", FILE, "	return (unsigned long)be.version * 1000003ul + (unsigned long)be.changes * 7919ul +", "	return (unsigned long)be.version * 1000003ul +"),
     # a private game shown as closed
     ("join-words", FILE, "		if (private_game)\n			return SCREENS_JOIN_INVITE_ONLY;", "		if (0)\n			return SCREENS_JOIN_INVITE_ONLY;"),
+    # party chat sent as typed (control characters and the separator kept)
+    ("party-whole", FILE, "		if ((unsigned char)*text >= 0x20 && (unsigned char)*text <= 0x7E && *text != '|')", "		if (1)"),
+    # a blank line sent to the party
+    ("party-whole", FILE, "	if (!length)\n	{\n		be_answer_set(answer, size, \"TYPE SOMETHING TO SAY.\");", "	if (0)\n	{\n		be_answer_set(answer, size, \"TYPE SOMETHING TO SAY.\");"),
+    # party chat with no party sent
+    ("party-whole", FILE, "	if (!be.snapshot.party.active)\n	{\n		be_answer_set(answer, size, \"YOU ARE NOT IN A PARTY.\");", "	if (0)\n	{\n		be_answer_set(answer, size, \"YOU ARE NOT IN A PARTY.\");"),
+    # what the party said is not shown
+    ("party-whole", FILE, "		case SOCIAL_API_EVENT_PARTY_CHAT:", "		case 9999:"),
     # the friend's game is never joinable
     ("join-words", FILE, "	return SCREENS_JOIN_OPEN;\n}\n\nstatic void be_friend_row", "	return SCREENS_JOIN_CLOSED;\n}\n\nstatic void be_friend_row"),
     # a missing map is not told
@@ -53,8 +61,8 @@ FAULTS = [
     ("join-words", FILE, "		int reason = invite ? social_join_invite(invite->id) : social_join_friend(id);", "		int reason = social_join_friend(id);"),
     # a join's failure is told every time
     ("join-words", FILE, "		be.join_state_told = 1;\n		be_sentence(text, sizeof(text), status.text[0]", "		be_sentence(text, sizeof(text), status.text[0]"),
-    # an invitation answered in a game is joined over it
-    ("invite-in-game", FILE, "	if (social_join_hook_busy())\n	{", "	if (0)\n	{"),
+    # an invitation answered in a game is joined over it (the game is not left)
+    ("invite-in-game", FILE, "	if (social_join_hook_busy())\n	{\n		int reason = social_flow_leave_and_join_invite(invite->id);", "	if (0)\n	{\n		int reason = social_flow_leave_and_join_invite(invite->id);"),
     # the invitation is dropped when left for later
     ("invite-in-game", FILE, "	if (!accept)\n		return;", "	if (!accept)\n	{\n		social_invite_dismiss(invite->id);\n		return;\n	}"),
     # a request's BLOCK blocks the friend whose id it shares

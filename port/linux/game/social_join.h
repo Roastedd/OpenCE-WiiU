@@ -160,6 +160,59 @@ void social_join_cancel(void);
 void social_join_done(void);
 void social_join_status_get(struct social_join_status *status);
 
+/* ---------- finishing a join in the menus, and leaving a game first
+
+A join ends in the menus' hands (the host's game is in the Direct Link list: the A press that joins it), and an invitation answered in a game starts with leaving that game. The
+flow drives both once a frame, through what only the game can do (struct social_flow_world); the harness runs it against a stand-in. Game thread. */
+
+/* which screen is on top, as the flow needs to know */
+enum
+{
+	/* none, or a game is on */
+	SOCIAL_FLOW_SCREEN_NONE,
+	/* a screen the Direct Link list can be opened over (the main menu, Multiplayer, Friends, Players) */
+	SOCIAL_FLOW_SCREEN_SAFE,
+	/* the Direct Link list itself: its code presses A for the game */
+	SOCIAL_FLOW_SCREEN_LIST,
+	/* any other screen (a setting being edited, a lobby, a dialog): nothing is opened over it */
+	SOCIAL_FLOW_SCREEN_OTHER,
+};
+
+struct social_flow_world
+{
+	void *user;
+	/* milliseconds, any origin */
+	unsigned int (*now)(void *user);
+	/* a game or a lobby is on this machine (what a join is not started over) */
+	int (*busy)(void *user);
+	/* the menus are up and nothing is loading: a screen can be opened over the one on top */
+	int (*menus_up)(void *user);
+	/* the screen on top: SOCIAL_FLOW_SCREEN_* */
+	int (*screen)(void *user);
+	/* leave the game (called every frame while leaving, until it returns 1: the game is on its way out) */
+	int (*leave)(void *user);
+	/* open the Direct Link list over the screen on top; 1 if it was opened */
+	int (*open_list)(void *user);
+};
+
+void social_flow_set_world(const struct social_flow_world *world);
+/* once a frame: leaving a game for an invitation, the join (and the party's following of its leader), the Direct Link list opened when the game is ready, the join given up when
+nothing finishes it. Cheap when idle. */
+void social_flow_update(void);
+/* an invitation answered in a game: this machine leaves it, then joins the game the invitation names. Returns SOCIAL_JOIN_REASON_NONE if it began, else why not. The invitation is used. */
+int social_flow_leave_and_join_invite(unsigned int invite_id);
+/* a game's row in the Direct Link list may be pressed now (at most three presses for a join, three seconds apart): 1 once; after the third the join fails as refused */
+int social_flow_press_allowed(void);
+/* what the flow is waiting for, as a sentence for a screen ("" if nothing): leaving, or a screen that is in the way */
+const char *social_flow_waiting_text(void);
+/* 1 while a leave for an invitation is going on */
+int social_flow_leaving(void);
+
+/* Starts a join at a game's two halves and what is known of it (an invitation's target), as social_join_invite does; returns the reason it did not start. */
+int social_join_start_target(const struct social_join_target *target);
+/* map downloads are on (network.map_download): a missing map then says it cannot be fetched, else where to turn downloads on. NULL: not told */
+void social_join_set_map_download_hook(int (*enabled)(void));
+
 #ifdef __cplusplus
 }
 #endif

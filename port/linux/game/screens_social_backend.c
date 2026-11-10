@@ -732,10 +732,26 @@ static void backend_invite_answer(long id, int accept)
 		social_party_join_invite(invite->id);
 		return;
 	}
-	/* (a game is not left for a join: the invitation stays, and its sender's row in the Friends screen joins it from the menus) */
+	/* (a game this machine is in is left for the join: the game ends, the menus come up, the join begins and the Direct Link list finishes it. A game that cannot be joined (another version,
+	a map that is missing) is not worth leaving this one for: the reason is said and the game goes on) */
 	if (social_join_hook_busy())
 	{
-		be_notice_push(SCREENS_TOAST_JOIN_FAILED, "LEAVE YOUR GAME FIRST.", "Then Friends > JOIN. The invitation waits a minute.", 0);
+		int reason = social_flow_leave_and_join_invite(invite->id);
+
+		if (reason != SOCIAL_JOIN_REASON_NONE)
+		{
+			be_sentence(text, sizeof(text), social_join_reason_text(reason, invite->target.map));
+			be_notice_push(SCREENS_TOAST_JOIN_FAILED, text, "", 0);
+			return;
+		}
+		snprintf(be.join_name, sizeof(be.join_name), "%s", invite->name);
+		{
+			char who[SCREENS_NAME_SIZE];
+
+			screens_social_upper(who, sizeof(who), invite->name[0] ? invite->name : "A FRIEND");
+			snprintf(text, sizeof(text), "LEAVING THE GAME TO JOIN %s", who);
+			be_notice_push(SCREENS_TOAST_NOTICE, text, "", 0);
+		}
 		return;
 	}
 	{
@@ -1111,7 +1127,16 @@ int screens_social_join_line(char *line, int size)
 	}
 	if (status.state == SOCIAL_JOIN_READY)
 	{
-		snprintf(line, (size_t)size, "THE GAME IS HERE. CHOOSE IT IN THE LIST AND PRESS A.");
+		/* (the list presses A for the game; a screen in the way, or the leaving of a game, is said) */
+		if (social_flow_waiting_text()[0])
+			be_sentence(line, size, social_flow_waiting_text());
+		else
+			snprintf(line, (size_t)size, "CONNECTED. JOINING THE GAME...");
+		return 1;
+	}
+	if (social_flow_leaving())
+	{
+		be_sentence(line, size, social_flow_waiting_text()[0] ? social_flow_waiting_text() : "Leaving your game");
 		return 1;
 	}
 	if (status.state == SOCIAL_JOIN_FAILED && status.text[0])

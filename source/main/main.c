@@ -4195,6 +4195,13 @@ static boolean main_loop_iteration(
 			map_share_update();
 			/* port: network games' text chat (port/linux/game/network_chat.c) */
 			network_chat_update();
+			/* port: the friends layer's once-a-frame (port/linux/game/menu_functions.c: what this machine is doing, the join, the party's following of its leader, a game left for an
+			invitation): here, where screens are loaded and games left, not in the frame's drawing; nothing unless social.enabled */
+			{
+				void menu_screens_social_frame(void);
+
+				menu_screens_social_frame();
+			}
 			profile_scope_enter(main_network_start_frame_section)
 			connection = main_globals.connection;
 			/* port: timed for the net: lines (to the end of the frame's start below) */

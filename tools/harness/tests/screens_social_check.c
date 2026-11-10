@@ -67,7 +67,52 @@ static struct
 	int begun;
 	int stage;
 	unsigned int clock;
+	/* the flow's: leaving a game, the menus, the screen on top, the list opened */
+	int leave_calls;
+	int menus_up;
+	int screen;
+	int opened;
 } world;
+
+static unsigned int flow_now(void *user)
+{
+	(void)user;
+	return world.clock;
+}
+
+static int flow_busy(void *user)
+{
+	(void)user;
+	return world.busy;
+}
+
+static int flow_menus_up(void *user)
+{
+	(void)user;
+	return world.menus_up;
+}
+
+static int flow_screen(void *user)
+{
+	(void)user;
+	return world.screen;
+}
+
+static int flow_leave(void *user)
+{
+	(void)user;
+	world.leave_calls++;
+	world.busy = 0;
+	return 1;
+}
+
+static int flow_open_list(void *user)
+{
+	(void)user;
+	world.opened++;
+	world.screen = SOCIAL_FLOW_SCREEN_LIST;
+	return 1;
+}
 
 static int world_map_state(const char *map)
 {
@@ -194,6 +239,11 @@ static void world_start(void)
 	backend.strict_nat = backend_strict;
 	social_join_set_backend(&backend);
 	social_join_set_game_hooks(world_map_state, world_game_ready, world_busy);
+	{
+		struct social_flow_world flow_world = { NULL, flow_now, flow_busy, flow_menus_up, flow_screen, flow_leave, flow_open_list };
+
+		social_flow_set_world(&flow_world);
+	}
 }
 
 /* ---------- helpers */
@@ -446,7 +496,7 @@ static void case_befriend_and_invite(void)
 		social_join_update();
 		social_join_status_get(&status);
 		CHECK(status.state == SOCIAL_JOIN_READY, "the game is in the list: state %d", status.state);
-		CHECK(screens_social_join_line(line, sizeof(line)) && strstr(line, "CHOOSE IT IN THE LIST"), "and the line says what to do: '%s'", line);
+		CHECK(screens_social_join_line(line, sizeof(line)) && strstr(line, "JOINING THE GAME"), "and the line says what is happening: '%s'", line);
 		social_join_done();
 	}
 	use(a);
@@ -545,7 +595,7 @@ static void case_join_words(void)
 	(void)count;
 }
 
-/* an invitation answered in a game is not joined over it; the invitation stays */
+/* an invitation answered in a game leaves it and then joins; one that cannot be joined is said at once and the game goes on; later leaves it alone */
 static void case_invite_in_game(void)
 {
 	struct fake_node *a, *b;
@@ -568,18 +618,50 @@ static void case_invite_in_game(void)
 	index = find_toast(count, SCREENS_TOAST_INVITE);
 	CHECK(index >= 0, "invited");
 	id = last_toast[index].id;
+	/* later: nothing happens to it, in a game or not */
 	world.busy = 1;
-	provider->invite_answer(id, 1);
-	social_join_status_get(&status);
-	CHECK(status.state == SOCIAL_JOIN_IDLE && world.begun == 0, "nothing started in a game");
-	count = drain_toasts();
-	index = find_toast(count, SCREENS_TOAST_JOIN_FAILED);
-	CHECK(index >= 0 && !strcmp(last_toast[index].text, "LEAVE YOUR GAME FIRST."), "told to leave first");
-	CHECK(snap(b)->invite_count == 1, "the invitation stays");
-	/* later: nothing happens to it */
 	provider->invite_answer(id, 0);
 	fake_run(&net, 300);
-	CHECK(snap(b)->invite_count == 1 && world.begun == 0, "later leaves it");
+	CHECK(snap(b)->invite_count == 1 && world.begun == 0 && world.leave_calls == 0, "later leaves it");
+	/* a map that is missing is said, and the game is not left */
+	world.map_state = 2;
+	provider->invite_answer(id, 1);
+	social_join_status_get(&status);
+	CHECK(status.state == SOCIAL_JOIN_IDLE && world.begun == 0 && !social_flow_leaving(), "nothing started for a missing map");
+	count = drain_toasts();
+	index = find_toast(count, SCREENS_TOAST_JOIN_FAILED);
+	CHECK(index >= 0 && !strcmp(last_toast[index].text, "YOU DO NOT HAVE THE MAP BLOODGULCH."), "told: '%s'", index >= 0 ? last_toast[index].text : "");
+	CHECK(snap(b)->invite_count == 1, "the invitation stays");
+	world.map_state = 0;
+	/* a game it can join: it is left, the menus come up, the join begins, the list opens */
+	provider->invite_answer(id, 1);
+	count = drain_toasts();
+	index = find_toast(count, SCREENS_TOAST_NOTICE);
+	CHECK(index >= 0 && !strcmp(last_toast[index].text, "LEAVING THE GAME TO JOIN NODE0") && social_flow_leaving(), "leaving: '%s'", index >= 0 ? last_toast[index].text : "");
+	{
+		char line[SCREENS_LINE_SIZE * 2];
+
+		CHECK(screens_social_join_line(line, sizeof(line)) && strstr(line, "LEAVING YOUR GAME"), "the screen says so: '%s'", line);
+	}
+	world.clock += 100;
+	social_flow_update();
+	CHECK(world.leave_calls == 1 && !world.busy, "the game was told to go");
+	world.clock += 100;
+	social_flow_update();
+	CHECK(world.begun == 0, "the menus are not up yet");
+	world.menus_up = 1;
+	world.screen = SOCIAL_FLOW_SCREEN_SAFE;
+	world.game_ready = 1;
+	world.clock += 100;
+	social_flow_update();
+	world.clock += 100;
+	social_flow_update();
+	social_join_status_get(&status);
+	CHECK(world.begun == 1 && status.state == SOCIAL_JOIN_READY && world.opened == 1, "joined: begun %d state %d opened %d", world.begun, status.state, world.opened);
+	fake_run(&net, 300);
+	CHECK(snap(b)->invite_count == 0, "the invitation was used");
+	social_join_cancel();
+	social_join_done();
 	/* an invitation that is gone */
 	provider->invite_answer(987654, 1);
 	count = drain_toasts();
