@@ -14,6 +14,7 @@ CSERIES.H
 #include <math.h>
 #include <string.h>
 #include <stdarg.h>
+#include "../../port/linux/game/round_exact.h" /* port: halo_rint_long */
 
 /* ---------- constants */
 
@@ -362,7 +363,7 @@ __inline long fast_ftol(
 	long result;
 
 	/* FISTP: round to nearest under the default control word */
-	result = (long)__builtin_rint((double)value);
+	result = halo_rint_long((double)value); /* port: (long)__builtin_rint, without the library call on the Wii U (round_exact.h) */
 
 	return result;
 }

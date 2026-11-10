@@ -844,10 +844,10 @@ pixel32 real_a_rgb_color_to_pixel32(
 			color->blue));
 
 	result = (pixel32)(
-		((long)__builtin_rint((double)color->blue * scale) & 0xff) |
-		(((long)__builtin_rint((double)color->green * scale) & 0xff) << 8) |
-		(((long)__builtin_rint((double)color->red * scale) & 0xff) << 16) |
-		((long)__builtin_rint((double)alpha * scale) << 24));
+		(halo_rint_long((double)color->blue * scale) & 0xff) |
+		((halo_rint_long((double)color->green * scale) & 0xff) << 8) |
+		((halo_rint_long((double)color->red * scale) & 0xff) << 16) |
+		(halo_rint_long((double)alpha * scale) << 24));
 
 	return result;
 }
