@@ -7,7 +7,7 @@ menu lag of 2026-11-09 (reports/research/2026-11-09/menulag-result.md): the cons
 stat calls and could not say which screen's code called them.
 
 Off unless the card's halo/filecount.txt holds a number other than 0 (the host's runs: HALO_FILECOUNT); the number is the least card calls in a frame that
-make it worth a line (1 says every frame that touched the card); a negative number is the same with the first 400 paths the game thread translates said
+make it worth a line (1 says every frame that touched the card); 1001 is the same with the first 400 paths the game thread translates said
 ("files: path d:\\maps\\ui.map"), to see which files a menu function asks for. The lines, in the log:
 
 	files: menu frame 4210: 187 card calls (46 paths, 91 directories opened, 3011 entries read, 46 stats, 4 opens, 0 listed), 213 ms: gt select list update 187 calls 211 ms
@@ -74,10 +74,10 @@ static void settings_read(void)
 {
 	t.read = 1;
 	t.threshold = wiiu_study_number("filecount.txt", 0);
-	/* (below 0: the same with the paths said) */
-	if (t.threshold < 0)
+	/* (1000 and more: the same with the paths said, the number less 1000 the threshold; a negative number is no file, as wiiu_study_number has it) */
+	if (t.threshold >= 1000)
 	{
-		t.threshold = -t.threshold;
+		t.threshold = t.threshold - 1000 > 0 ? t.threshold - 1000 : 1;
 		t.paths = 1;
 	}
 	if (t.threshold > 0)

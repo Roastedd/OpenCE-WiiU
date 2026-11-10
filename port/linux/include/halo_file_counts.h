@@ -4,7 +4,7 @@ HALO_FILE_COUNTS.H
 What the file layer does for the menus, counted: the calls the Xbox file API (port/linux/src/xbox_files.c) turns into the card's (a path's
 translation, the directory scans it makes, the entries read, the stats, the opens), and the report that names the menu functions they came
 from (port/linux/game/file_counts.c). It is off unless the card's halo/filecount.txt holds a number other than 0 (the host's runs:
-HALO_FILECOUNT; a negative number also logs the first paths the game thread translates); with it off each count is one test of a flag and the report macros are one test of another.
+HALO_FILECOUNT; 1000 and more also logs the first paths the game thread translates, the number less 1000 being the threshold); with it off each count is one test of a flag and the report macros are one test of another.
 
 The counts are of the game thread's calls only (the thread that turns the counting on): the other threads' file work is not the menu's.
 */

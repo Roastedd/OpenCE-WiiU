@@ -342,7 +342,7 @@ void platform_translate_path(const char *xbox_path, char *host_path, unsigned lo
 	FILE_COUNT(FILE_COUNT_TRANSLATE, 1);
 	if (file_counting > 1 && pthread_equal(pthread_self(), file_counting_thread))
 	{
-		/* (halo/filecount.txt below 0: the first paths the game thread has translated, to see which files a menu function asks for) */
+		/* (halo/filecount.txt 1000 and more: the first paths the game thread has translated, to see which files a menu function asks for) */
 		static unsigned long said;
 
 		if (said++ < 400)
