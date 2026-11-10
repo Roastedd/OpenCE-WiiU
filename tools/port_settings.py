@@ -2438,7 +2438,7 @@ def multiplayer_files() -> dict:
         TEAMPLAY_EDIT.replace("/", ".") + ".port.xml": head + _teamplay_options_extras() + ["</menus>", ""],
         OPENCE_EDIT.replace("/", ".") + ".port.xml": head + _opence_options() + ["</menus>", ""],
         MODS.replace("/", ".") + ".xml": [head[0], "<!-- The port's Mods screen, in the PC version's style "
-                                          "(tools/port_settings.py) -->", head[2]] + _mods() + ["</menus>", ""],
+                                          "(tools/port_settings.py) -->", head[2]] + _mods() + _mod_store() + ["</menus>", ""],
     }
 
 
@@ -2522,9 +2522,9 @@ def mod_status_frames(icons: Path, size: int = 24) -> list:
         for icon, color in MOD_STATUS_ICONS]
 
 
-def _text_button(name: str, text: str, handlers: list) -> list:
+def _text_button(name: str, text: str, handlers: list, width: int = 128) -> list:
     """a button of the button bar with its own words"""
-    pairs = [("type", "text"), ("width", 128), ("height", 24), ("bitmap", "bitmaps/text_button_background"),
+    pairs = [("type", "text"), ("width", width), ("height", 24), ("bitmap", "bitmaps/text_button_background"),
              ("text", text), ("font", "ui\\small_ui"), ("color", "#FFFFFFFF"), ("align", "center"), ("text_y", 2)]
     return _widget(name, pairs, handlers + ['<on event="left_mouse" run="mouse emit accept event"/>'])
 
@@ -2548,6 +2548,7 @@ def _mods() -> list:
                                              ("flags", "pass_unhandled_to_focused_child pause_game"),
                                              ("bitmap", "bitmaps/gradient")],
                      ['<on event="b" back="true"/>', '<on event="back" back="true"/>',
+                      f'<on event="y" run="port mods store" open="{STORE}/store_screen"/>',
                       '<child widget="main_menu/new_select/sel_list_desc_bkd"/>',
                       f'<child widget="{base}/mods_list"/>',
                       f'<child widget="{base}/header_mods"/>'])
@@ -2595,15 +2596,82 @@ def _mods() -> list:
     lines += _widget(f"{base}/button_bar",
                      [("type", "column_list"), ("width", 640), ("height", 28),
                       ("flags", "pass_unhandled_to_focused_child left_right_tabs_items")],
-                     [f'<child widget="{base}/button_up" y="1"/>', f'<child widget="{base}/button_down" x="130" y="1"/>',
+                     [f'<child widget="{base}/button_up" y="1"/>', f'<child widget="{base}/button_down" x="116" y="1"/>',
+                      f'<child widget="{base}/button_store" x="232" y="1"/>',
                       f'<child widget="{base}/button_ok" x="380" y="1"/>',
                       '<child widget="common_button_cancel" x="510" y="1"/>'])
+    # (three buttons of 112 on the left: MOVE UP, MOVE DOWN and STORE, which keeps the order and opens the mod store)
     lines += _text_button(f"{base}/button_up", "MOVE UP", ['<on event="a" run="port mods move up"/>',
-                                                          '<on event="start" run="port mods move up"/>'])
+                                                          '<on event="start" run="port mods move up"/>'], 112)
     lines += _text_button(f"{base}/button_down", "MOVE DOWN", ['<on event="a" run="port mods move down"/>',
-                                                              '<on event="start" run="port mods move down"/>'])
+                                                              '<on event="start" run="port mods move down"/>'], 112)
+    lines += _text_button(f"{base}/button_store", "STORE",
+                          [f'<on event="a" run="port mods store" open="{STORE}/store_screen"/>',
+                           f'<on event="start" run="port mods store" open="{STORE}/store_screen"/>'], 112)
     lines += _button(f"{base}/button_ok", 1, ['<on event="a" run="port mods save" back="true"/>',
                                               '<on event="start" run="port mods save" back="true"/>'])
+    return lines
+
+
+# ---------- the mod store (port/linux/src/modstore.c, port/linux/game/menu_store.inl): the Mods page's STORE opens a list of the catalog's mods
+# in the social screens' style (rows of bitmaps/option_bkds at x 54, 28 apart, the button bar at y 414, large title), nine rows with the mod's name,
+# its author, its size and its state, the description of the row chosen under them, and DOWNLOAD / UPDATE / STOP, REMOVE, REFRESH and BACK
+STORE = f"{MODS}/store"
+STORE_ROWS = 9
+STORE_ROW_PITCH, STORE_ROWS_TOP, STORE_ROWS_LEFT, STORE_ROW_WIDTH = 28, 76, 54, 512
+# a column: its name, x in the row, width, font (the widths are modstore's, menu_store.inl's STORE_COLUMN_WIDTHS: a test reads both)
+STORE_COLUMNS = [("name", 12, 164, "large"), ("author", 184, 94, "small"), ("size", 282, 58, "small"), ("status", 344, 154, "small")]
+
+
+def _mod_store() -> list:
+    """the mod store's screen: the catalog's mods (name, author, size, state), the row chosen's description (or what the last job said) under them, and
+    the buttons. A on a row downloads or updates the mod, X removes it (the buttons too), Y asks for the catalog again, B goes back (and stops a
+    download, which is kept to go on from)"""
+    base = STORE
+    lines = _social_screen(f"{base}/store_screen",
+                           ['<on event="created" run="port store open"/>', '<on event="deleted" run="port store close"/>',
+                            '<on event="b" back="true"/>', '<on event="back" back="true"/>',
+                            '<on event="x" run="port store remove"/>', '<on event="y" run="port store refresh"/>'],
+                           [f'<child widget="{base}/store_list"/>', f'<child widget="{base}/store_title"/>', f'<child widget="{base}/store_head"/>',
+                            f'<child widget="{base}/store_empty"/>', f'<child widget="{base}/store_detail"/>', f'<child widget="{base}/store_footer"/>'])
+    lines += _social_text(f"{base}/store_title", 35, 14, 360, 30, color=SOCIAL_TITLE_COLOR, text="MOD STORE", text_y=3)
+    lines += _social_text(f"{base}/store_head", 340, 16, 226, 26, align="right", color="#FFFFFFFF", text_y=3)
+    # (the words of a store that is off, loading, failed or empty: in the list's middle)
+    lines += _social_text(f"{base}/store_empty", 100, 176, 440, 70, align="center", color="#FFFFFFFF", text_y=4)
+    lines += _social_text(f"{base}/store_detail", SOCIAL_ROWS_LEFT, STORE_ROWS_TOP + STORE_ROWS * STORE_ROW_PITCH + 8, STORE_ROW_WIDTH, 48,
+                          color="#FFFFFFFF", text_y=4)
+    lines += _social_text(f"{base}/store_footer", SOCIAL_ROWS_LEFT, 388, STORE_ROW_WIDTH, 22, "small", color="#FF6CBAFF", text_y=4)
+    rows = [f'<child widget="{base}/store_item_{index + 1}" x="{STORE_ROWS_LEFT}" y="{STORE_ROWS_TOP + index * STORE_ROW_PITCH}"/>'
+            for index in range(STORE_ROWS)]
+    lines += _widget(f"{base}/store_list", [("type", "column_list"), ("width", 640), ("height", 480),
+                                            ("flags", "pass_unhandled_to_focused_child up_down_tabs_children")],
+                     ['<data input="port store update"/>', *rows, f'<child widget="{base}/store_button_bar" y="414"/>'])
+    for index in range(STORE_ROWS):
+        children = [f'<child widget="{base}/store_cell_{column}" x="{x}" y="3"/>' for column, x, _, _ in STORE_COLUMNS]
+        lines += _widget(f"{base}/store_item_{index + 1}",
+                         [("width", STORE_ROW_WIDTH), ("height", SOCIAL_ROW_HEIGHT), ("flags", "pass_unhandled_to_focused_child"),
+                          ("bitmap", "bitmaps/option_bkds"), ("color", SOCIAL_TEXT_COLOR)],
+                         ['<on event="a" run="port store row"/>', '<on event="start" run="port store row"/>',
+                          '<on event="left_mouse" run="mouse emit accept event"/>', *children])
+    for column, _, width, font in STORE_COLUMNS:
+        lines += _social_cell(f"{base}/store_cell_{column}", width, font, "right" if column == "size" else None)
+    # (four slots of the bar: the first has DOWNLOAD, UPDATE or STOP, whichever applies to the row and the job, one at a time)
+    buttons = [("store_button_get", "DOWNLOAD", "port store get", 120), ("store_button_update", "UPDATE", "port store get", 120),
+               ("store_button_stop", "STOP", "port store stop", 120), ("store_button_remove", "REMOVE", "port store remove", 250),
+               ("store_button_refresh", "REFRESH", "port store refresh", 380)]
+    children, widgets = [], []
+    for key, caption, run, x in buttons:
+        children.append(f'<child widget="{base}/{key}" x="{x}" y="1"/>')
+        widgets += _widget(f"{base}/{key}", [("type", "text"), ("width", 128), ("height", 24), ("bitmap", "bitmaps/text_button_background"),
+                                            ("text", caption), ("font", "ui\\small_ui"), ("color", "#FFFFFFFF"), ("align", "center"), ("text_y", 2)],
+                           [f'<on event="a" run="{run}"/>', f'<on event="start" run="{run}"/>', '<on event="left_mouse" run="mouse emit accept event"/>'])
+    children.append(f'<child widget="{base}/store_button_back" x="510" y="1"/>')
+    widgets += _widget(f"{base}/store_button_back", [("type", "text"), ("width", 128), ("height", 24), ("bitmap", "bitmaps/text_button_background"),
+                                                    ("text", "BACK"), ("font", "ui\\small_ui"), ("color", "#FFFFFFFF"), ("align", "center"), ("text_y", 2)],
+                       ['<on event="a" run="mouse emit back event"/>', '<on event="start" run="mouse emit back event"/>',
+                        '<on event="left_mouse" run="mouse emit accept event"/>'])
+    lines += _widget(f"{base}/store_button_bar", [("type", "column_list"), ("width", 640), ("height", 28),
+                                                  ("flags", "pass_unhandled_to_focused_child left_right_tabs_items")], children) + widgets
     return lines
 
 
