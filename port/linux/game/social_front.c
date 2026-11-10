@@ -778,6 +778,7 @@ static void run_command(struct social_front *front, const struct command *comman
 		case 8: social_engine_party_result(engine, social_engine_party_set_open(engine, command->b)); break;
 		case 9: social_engine_party_result(engine, social_engine_party_set_auto_follow(engine, command->b)); break;
 		case 10: social_engine_party_result(engine, social_engine_party_chat(engine, command->text)); break;
+		case 11: social_engine_party_result(engine, social_engine_party_disband(engine)); break;
 		}
 		break;
 	case _command_invite_dismiss:

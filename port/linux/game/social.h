@@ -286,6 +286,8 @@ void social_party_invite(unsigned int friend_id);
 void social_party_join_invite(unsigned int invite_id);
 void social_party_join_friend(unsigned int friend_id);
 void social_party_leave(void);
+/* the leader ends the party for everyone (a member that is not the leader gets SOCIAL_PARTY_RESULT_NOT_LEADER) */
+void social_party_disband(void);
 /* the leader removes a member (who may not come back), or hands the lead to one */
 void social_party_kick(unsigned int member_id);
 void social_party_transfer(unsigned int member_id);

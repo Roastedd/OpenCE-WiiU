@@ -375,6 +375,38 @@ static void case_kick(void)
 	CHECK(net.nodes[0].engine->statistics.dropped_blocked > 0, "its words were dropped");
 }
 
+/* the leader ends the party: every member hears it, one that is not the leader cannot, and a replay of the old DISBAND does not end a new party */
+static void case_disband(void)
+{
+	static struct fake_net net;
+	struct social_api_event event;
+	int index;
+
+	fake_start(&net, 58);
+	for (index = 0; index < 3; index++)
+		fake_add(&net, 0, 1);
+	form_party(&net, 3);
+	WAIT_FOR(&net, 30000, members_seen(&net.nodes[1]) == 3 && members_seen(&net.nodes[2]) == 3, "three");
+	for (index = 0; index < 3; index++)
+		take_events(&net.nodes[index], SOCIAL_API_EVENT_PARTY_LEFT, NULL);
+	social_front_party(net.nodes[1].front, 11, 0, 0, NULL);
+	fake_run(&net, 500);
+	CHECK(snap(&net.nodes[1], 0)->party.result == SOCIAL_PARTY_RESULT_NOT_LEADER && snap(&net.nodes[0], 0)->party.active && snap(&net.nodes[2], 0)->party.active, "a member cannot disband");
+	social_front_party(net.nodes[0].front, 11, 0, 0, NULL);
+	WAIT_FOR(&net, 3000, !snap(&net.nodes[0], 0)->party.active && !snap(&net.nodes[1], 0)->party.active && !snap(&net.nodes[2], 0)->party.active, "disbanded for everyone");
+	CHECK(take_events(&net.nodes[1], SOCIAL_API_EVENT_PARTY_LEFT, &event) == 1 && strstr(event.text, "disband"), "a left event that says why: '%s'", event.text);
+	CHECK(take_events(&net.nodes[0], SOCIAL_API_EVENT_PARTY_LEFT, &event) == 1, "the leader's own");
+	social_front_party(net.nodes[0].front, 11, 0, 0, NULL);
+	fake_run(&net, 300);
+	CHECK(snap(&net.nodes[0], 0)->party.result == SOCIAL_PARTY_RESULT_NOT_IN_PARTY, "and nothing to disband twice");
+	/* a new party of the same people is not ended by the old party's last words */
+	social_front_party(net.nodes[0].front, 1, 0, 0, NULL);
+	fake_run(&net, 300);
+	CHECK(snap(&net.nodes[0], 0)->party.active, "a new party");
+	fake_run(&net, 20000);
+	CHECK(snap(&net.nodes[0], 0)->party.active && !snap(&net.nodes[1], 0)->party.active, "and it stands");
+}
+
 static void case_chat(void)
 {
 	static struct fake_net net;
@@ -868,6 +900,8 @@ int main(int argc, char **argv)
 		case_leave_transfer();
 	else if (!strcmp(name, "silent-member"))
 		case_silent_member();
+	else if (!strcmp(name, "disband"))
+		case_disband();
 	else if (!strcmp(name, "kick"))
 		case_kick();
 	else if (!strcmp(name, "chat"))

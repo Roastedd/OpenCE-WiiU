@@ -713,7 +713,13 @@ static void case_party(void)
 			CHECK((found & (1 << SCREENS_ACTION_FOLLOW_OFF)) && (found & (1 << SCREENS_ACTION_LEAVE_PARTY)) && !(found & (1 << SCREENS_ACTION_DISBAND_PARTY)), "a member's actions: 0x%x", found);
 		}
 	}
-	/* the leader's: make leader, remove, and no disband either (the layer has no call for it) */
+	/* the leader's: its own row offers disband and leave; a member cannot disband (in words) */
+	use(b);
+	for (index = 0; index < model.party_count; index++)
+	{
+		if (model.party[index].me)
+			CHECK(!provider->party_action(SCREENS_ACTION_DISBAND_PARTY, &model.party[index], answer, sizeof(answer)) && strstr(answer, "ONLY THE LEADER"), "a member cannot disband: %s", answer);
+	}
 	use(a);
 	fake_run(&net, 3000);
 	screens_model_update(&model, 1);
@@ -723,9 +729,10 @@ static void case_party(void)
 		if (model.party[index].me)
 		{
 			provider->party_actions(&model.party[index], &model.party_summary, actions);
+			found = 0;
 			for (count = 0; actions[count] != SCREENS_ACTION_NONE; count++)
-				CHECK(actions[count] != SCREENS_ACTION_DISBAND_PARTY, "no disband offered");
-			CHECK(!provider->party_action(SCREENS_ACTION_DISBAND_PARTY, &model.party[index], answer, sizeof(answer)) && strstr(answer, "LEAVE THE PARTY"), "disband is refused in words: %s", answer);
+				found |= 1 << actions[count];
+			CHECK((found & (1 << SCREENS_ACTION_DISBAND_PARTY)) && (found & (1 << SCREENS_ACTION_LEAVE_PARTY)) && (found & (1 << SCREENS_ACTION_FOLLOW_OFF)), "the leader's actions: 0x%x", found);
 		}
 	}
 	for (index = 0; index < model.party_count; index++)

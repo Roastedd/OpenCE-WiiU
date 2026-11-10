@@ -354,6 +354,8 @@ int social_command(const char *line, char *reply, int size)
 			social_party_join_friend(snapshot.friends[value - 1].id);
 		else if (!strcmp(rest, "leave"))
 			social_party_leave();
+		else if (!strcmp(rest, "disband"))
+			social_party_disband();
 		else if (!strcmp(rest, "kick") && (value = number(argument, snapshot.party.member_count)))
 			social_party_kick(snapshot.party.members[value - 1].id);
 		else if (!strcmp(rest, "transfer") && (value = number(argument, snapshot.party.member_count)))
@@ -366,7 +368,7 @@ int social_command(const char *line, char *reply, int size)
 			social_party_set_auto_follow(!strcmp(rest, "follow"));
 		else
 		{
-			say(&out, "party make|invite n|join n|joinfriend n|leave|kick m|transfer m|chat text|open|close|follow|unfollow\n");
+			say(&out, "party make|invite n|join n|joinfriend n|leave|disband|kick m|transfer m|chat text|open|close|follow|unfollow\n");
 			return 1;
 		}
 		if (*rest)

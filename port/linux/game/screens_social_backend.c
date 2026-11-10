@@ -871,9 +871,14 @@ static int backend_party_action(int action, struct screens_party_member const *m
 		social_party_kick((unsigned int)member->key);
 		return 1;
 	case SCREENS_ACTION_DISBAND_PARTY:
-		/* (the layer reads a disband and sends none: a leader leaves and the next member leads) */
-		be_answer_set(answer, size, "NOT AVAILABLE: LEAVE THE PARTY AND THE NEXT MEMBER LEADS.");
-		return 0;
+		/* (the leader ends it for everyone; a member that is not the leader cannot) */
+		if (!be.snapshot.party.is_leader)
+		{
+			be_answer_set(answer, size, "ONLY THE LEADER CAN END THE PARTY. LEAVE IT INSTEAD.");
+			return 0;
+		}
+		social_party_disband();
+		return 1;
 	default:
 		be_answer_set(answer, size, "THAT IS NOT AVAILABLE IN THIS BUILD YET.");
 		return 0;
@@ -970,18 +975,17 @@ static void backend_friend_actions(int tab, struct screens_friend_row const *row
 	actions[count] = SCREENS_ACTION_NONE;
 }
 
-/* the party's rows: as the defaults, but no DISBAND (the layer has no call for it: LEAVE is what it has) */
+/* the party's rows: as the defaults, and the leader's own row also LEAVES (the next member leads), which the defaults do not offer beside DISBAND */
 static void backend_party_actions(struct screens_party_member const *member, struct screens_party_summary const *summary, int *actions)
 {
 	int all[SCREENS_ACTIONS_MAXIMUM + 1], index, count = 0;
 
 	screens_default_party_actions(member, summary, all);
-	for (index = 0; all[index] != SCREENS_ACTION_NONE; index++)
+	for (index = 0; all[index] != SCREENS_ACTION_NONE && count < SCREENS_ACTIONS_MAXIMUM - 1; index++)
 	{
+		actions[count++] = all[index];
 		if (all[index] == SCREENS_ACTION_DISBAND_PARTY)
 			actions[count++] = SCREENS_ACTION_LEAVE_PARTY;
-		else
-			actions[count++] = all[index];
 	}
 	actions[count] = SCREENS_ACTION_NONE;
 }

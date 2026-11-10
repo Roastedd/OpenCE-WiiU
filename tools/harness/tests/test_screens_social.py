@@ -61,9 +61,8 @@ FAULTS = [
     ("actions", FILE, "		if (row->presence == SCREENS_PRESENCE_REQUEST_GOT)\n			social_ignore(id);\n		else if (be_friend_by_id(id)", "		if (0)\n			social_ignore(id);\n		else if ((1 || be_friend_by_id(id))"),
     # an action on a row of another kind is done
     ("actions", FILE, "		if (row->presence != SCREENS_PRESENCE_REQUEST_GOT)\n			break;\n		social_accept(id);", "		social_accept(id);"),
-    # the party's disband is offered, and sent as a leave
-    ("party", FILE, "		if (all[index] == SCREENS_ACTION_DISBAND_PARTY)\n			actions[count++] = SCREENS_ACTION_LEAVE_PARTY;\n		else\n			actions[count++] = all[index];",
-     "		actions[count++] = all[index];"),
+    # the leader's own row does not offer a disband
+    ("party", FILE, "		if (all[index] == SCREENS_ACTION_DISBAND_PARTY)\n			actions[count++] = SCREENS_ACTION_LEAVE_PARTY;", "		if (0)\n			actions[count++] = SCREENS_ACTION_LEAVE_PARTY;"),
     # the party invitation does not make the party
     ("party", FILE, "		if (!be.snapshot.party.active)\n			social_party_make();\n		social_party_invite(id);", "		social_party_invite(id);"),
     # the friend by name in any game

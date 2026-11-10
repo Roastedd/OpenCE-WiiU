@@ -553,6 +553,20 @@ int social_engine_party_leave(struct social_engine *engine)
 	return SOCIAL_PARTY_OK;
 }
 
+/* the leader ends the party: a signed DISBAND that every member hears (at the term the leader holds), and the party is dropped here at once */
+int social_engine_party_disband(struct social_engine *engine)
+{
+	struct social_party *party = &engine->party;
+
+	if (!party->active)
+		return SOCIAL_PARTY_NOT_IN_PARTY;
+	if (party->joining || !is_leader(engine))
+		return SOCIAL_PARTY_NOT_LEADER;
+	simple_send(engine, SOCIAL_TYPE_PARTY_DISBAND, NULL, 0, party->term, NULL);
+	left(engine, "disbanded");
+	return SOCIAL_PARTY_OK;
+}
+
 int social_engine_party_kick(struct social_engine *engine, unsigned int member_id)
 {
 	struct social_party *party = &engine->party;
