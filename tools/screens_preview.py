@@ -478,6 +478,20 @@ def scene_state(menus, name, *, game=False):
         state = {"texts": {("", "add_own_code"): data["own"], ("", "add_answer"): answer, ("", "code_value"): data["typed"] + "_", ("", "code_label"): "FRIEND'S CODE:"},
                  "focused": {"op_code"}, "white": {"add_own_code", "add_answer"}}
         return f"{S}/add/friend_add_screen", state, data
+    if name == "lobby":
+        lobby = dump("lobby")
+        state = {"texts": {}, "colors": {}, "focused": {"list_item_1"}, "hidden": {"list_item_" + str(i) for i in range(len(lobby["rows"]), 11)} | {"lobby_map_pic", "lobby_map_name"}}
+        for index, row in enumerate(lobby["rows"]):
+            state["texts"][(f"list_item_{index}", "scr_lobby_name")] = row["cells"][0]["text"]
+            state["texts"][(f"list_item_{index}", "list_item_text")] = ""
+            state["texts"][(f"list_item_{index}", "scr_lobby_tag")] = row["cells"][1]["text"]
+            value = row["cells"][1]["rgb"]
+            state["colors"][(f"list_item_{index}", "scr_lobby_tag")] = ((value >> 16) & 255, (value >> 8) & 255, value & 255)
+        state["hidden"] = {f"list_item_{index}" for index in range(len(lobby["rows"]), 11)}
+        state["hidden"].add("list_item_arrows")
+        state["texts"][("", "lobby_join_help")] = "A: PLAYER OPTIONS   L/R: BOTS"
+        state["texts"][("", "lobby_game_data")] = "Slayer\r\nTeam Slayer\r\n12 of 16 players"
+        return "main_menu/multiplayer_type_select/lobby/lobby_screen", state, None
     if name == "bot-settings":
         bot = f"{port_settings.PE}/bot_settings"
         return f"{bot}/bot_settings_screen", {"focused": {"op_count"}, "spinners": {"count_spinner": "6", "skill_spinner": "HEROIC", "teams_spinner": "EVEN"},
@@ -520,19 +534,7 @@ def render_all(out_dir, only=None):
     for name in GAME_SCENES:
         emit(f"{name}-game", lambda size, name=name: scene(menus, name, size, game=True))
     # the lobby (its rows with the tags; the map's panel is a plain frame here)
-    lobby = dump("lobby")
-    lobby_state = {"texts": {}, "colors": {}, "focused": {"list_item_1"}, "hidden": {"list_item_" + str(i) for i in range(len(lobby["rows"]), 11)} | {"lobby_map_pic", "lobby_map_name"}}
-    for index, row in enumerate(lobby["rows"]):
-        lobby_state["texts"][(f"list_item_{index}", "scr_lobby_name")] = row["cells"][0]["text"]
-        lobby_state["texts"][(f"list_item_{index}", "list_item_text")] = ""
-        lobby_state["texts"][(f"list_item_{index}", "scr_lobby_tag")] = row["cells"][1]["text"]
-        value = row["cells"][1]["rgb"]
-        lobby_state["colors"][(f"list_item_{index}", "scr_lobby_tag")] = ((value >> 16) & 255, (value >> 8) & 255, value & 255)
-    lobby_state["hidden"] = {f"list_item_{index}" for index in range(len(lobby["rows"]), 11)}
-    lobby_state["hidden"].add("list_item_arrows")
-    lobby_state["texts"][("", "lobby_join_help")] = "A: PLAYER OPTIONS   L/R: BOTS"
-    lobby_state["texts"][("", "lobby_game_data")] = "Slayer\r\nTeam Slayer\r\n12 of 16 players"
-    emit("lobby", lambda size: render_screen(menus, size, "main_menu/multiplayer_type_select/lobby/lobby_screen", lobby_state))
+    emit("lobby", lambda size: scene(menus, "lobby", size))
     # the pause menu with PLAYERS (host and client), over a darkened frame
     emit("pause-host", lambda size: pause_canvas(menus, size, ["RESUME GAME", "PLAYERS", "SETTINGS", "END GAME", "LEAVE GAME"], 1))
     emit("pause-client", lambda size: pause_canvas(menus, size, ["RESUME GAME", "PLAYERS", "SETTINGS", "LEAVE GAME"], 1))

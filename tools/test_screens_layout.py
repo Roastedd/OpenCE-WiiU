@@ -241,3 +241,20 @@ def test_the_spacing_system_is_on_a_four_unit_grid_where_the_art_allows():
         for (_, x0, w0, _), (_, x1, _, _) in zip(columns, columns[1:]):
             assert x1 - (x0 + w0) >= 4, columns
         assert columns[-1][1] + columns[-1][2] == port_settings.SOCIAL_ROW_WIDTH - 16
+
+
+def test_the_lobbys_added_texts_are_in_their_places():
+    """the lobby is the game's own screen with the social tags added (its map panel and header are the game's): its rows' name and tag and its help line, which was outside the safe
+    margin (its capitals ended at 465), follow the rules that apply to them"""
+    canvas, violations = drawn("lobby")
+    mine = [(rule, message) for rule, message in violations if "scr_lobby" in message or "lobby_join_help" in message or "list_item" in message]
+    assert not mine, mine
+    names = {record["name"] for record in canvas.records}
+    assert {"scr_lobby_name", "scr_lobby_tag", "lobby_join_help"} <= names
+    help_line = next(record for record in canvas.records if record["name"] == "lobby_join_help")
+    assert port_settings.SAFE_BOTTOM - screens_layout.block(help_line["ink"])[3] >= -0.6, "the help line is inside the safe margin"
+
+    def old_help(menus):
+        menus.widgets["main_menu/multiplayer_type_select/lobby/lobby_join_help"].set("top", "446")
+    _, old = drawn("lobby", mutate=old_help)
+    assert any(rule == "safe" and "lobby_join_help" in message for rule, message in old), "the help line where it was (y 446) is outside the margin"

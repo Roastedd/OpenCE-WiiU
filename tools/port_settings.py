@@ -1963,9 +1963,9 @@ def _lobby() -> list:
                      f'<child widget="{base}/header_lobby"/>',
                      f'<child widget="{base}/lobby_join_help"/>'])
     lines += _header(f"{base}/header_lobby", f"{base}/header_lobby")
-    # (under the bar's band, whose bottom is 444: the capitals' bottom at 455, inside the safe margin; it was at 446, its capitals ending at 465)
-    lines += _widget(f"{base}/lobby_join_help", [("type", "text"), ("controller", 1), ("left", 355), ("top", 438),
-                                                 ("width", 275), ("height", 18), ("font", "ui\\small_ui"),
+    # (under the bar's band, whose bottom is 444: the capitals' bottom at 454 and the slash's tail at 456, the safe margin; it was at 446, its capitals ending at 465)
+    lines += _widget(f"{base}/lobby_join_help", [("type", "text"), ("controller", 1), ("left", 355), ("top", 436),
+                                                 ("width", 275), ("height", 20), ("font", "ui\\small_ui"),
                                                  ("color", SOCIAL_HINT_COLOR), ("align", "right"), ("text_y", 4),
                                                  ("text_flags", "no_focus_test")], [])
     # (its rows: any controller's left and right switch its own player's team,
