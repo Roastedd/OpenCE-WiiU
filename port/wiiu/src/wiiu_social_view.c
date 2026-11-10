@@ -423,8 +423,8 @@ int wiiu_social_view_build(const struct halo_social_view *view, const struct wk_
 			}
 		}
 		if (!view->bots_host)
-			text_box(&b, WK_FONT_TEXT, small_scale, (float)WSV_PANE_LEFT + 12.0f, (float)(WSV_PANE_LEFT + WSV_PANE_WIDTH) - 8.0f, (float)(WSV_ROWS_TOP + 2 * WSV_ROW_PITCH + 30),
-				"ONLY THE HOST CHANGES THE BOTS.", ALIGN_LEFT, color_dim);
+			text_box(&b, WK_FONT_TEXT, small_scale, (float)WSV_PANE_LEFT + 12.0f, (float)(WSV_PANE_LEFT + WSV_PANE_WIDTH) - 12.0f, (float)(WSV_ROWS_TOP + 2 * WSV_ROW_PITCH + 30),
+				"ONLY THE HOST CHANGES THE BOTS.", ALIGN_CENTER, color_pale);
 	}
 	else
 	{
@@ -453,9 +453,10 @@ int wiiu_social_view_build(const struct halo_social_view *view, const struct wk_
 				text_in(&b, WK_FONT_LABEL, 16.0f / WK_LABEL_PIXELS, &rectangle, row->action == HALO_SOCIAL_ACTION_JOIN ? "JOIN" : "INVITE", color_white);
 			}
 		}
+		/* (an empty list's words in the middle of the pane, centred, as the TV's are in the middle of their list; they were at its top left) */
 		if (!view->row_count)
-			text_box(&b, WK_FONT_TEXT, small_scale, (float)WSV_PANE_LEFT + 12.0f, (float)(WSV_PANE_LEFT + WSV_PANE_WIDTH) - 8.0f, (float)(WSV_ROWS_TOP + 30), view->empty, ALIGN_LEFT,
-				color_dim);
+			text_box(&b, WK_FONT_TEXT, small_scale, (float)WSV_PANE_LEFT + 12.0f, (float)(WSV_PANE_LEFT + WSV_PANE_WIDTH) - 12.0f, (float)(WSV_ROWS_TOP + 2 * WSV_ROW_PITCH + 30), view->empty,
+				ALIGN_CENTER, color_pale);
 	}
 	/* the quick chat's lines, the keyboard, the page */
 	for (index = 0; index < HALO_SOCIAL_TILES; index++)

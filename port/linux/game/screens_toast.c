@@ -47,6 +47,9 @@ enum
 	/* the widest it grows to for a long sentence */
 	BAND_MAX_WIDTH_PERCENT = 92,
 	BAND_TOP_PERCENT = 9,
+	/* in a game it is lower, under the HUD's shield and health bars at the top corners (they end 73 units down of 480): a wide band over them hid them, and covered the bars of the
+	pause menu's header band as well */
+	BAND_TOP_GAME_PERCENT = 16,
 	BAND_COLOR = 0xB0000000,
 };
 
@@ -237,7 +240,7 @@ void screens_toast_frame(void)
 		band_width = (short)MIN(band_width, window_width * BAND_MAX_WIDTH_PERCENT / 100);
 		band.x0 = (short)(window.x0 + (window_width - band_width) / 2);
 		band.x1 = (short)(band.x0 + band_width);
-		band.y0 = (short)(window.y0 + window_height * BAND_TOP_PERCENT / 100);
+		band.y0 = (short)(window.y0 + window_height * (game_in_progress() ? BAND_TOP_GAME_PERCENT : BAND_TOP_PERCENT) / 100);
 		band.y1 = (short)(band.y0 + line_height * layout.count + line_height / 2);
 		draw_quad(&band, (pixel32)(((unsigned long)(alpha * (BAND_COLOR >> 24) / 255) << 24)));
 		bounds = band;
