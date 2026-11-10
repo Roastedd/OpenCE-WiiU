@@ -357,6 +357,36 @@ def screen_state_friends(data):
     return {"texts": texts, "colors": colors, "focused": focused, "hidden": hidden, "white": {"friends_service"}}
 
 
+def screen_state_store(data):
+    """the mod store's screen: the rows' cells, the counter, the arrows, the words of an empty store, the detail and the footer, the buttons that apply (screens.c's screens_store_*)"""
+    texts, colors, focused, hidden = {}, {}, set(), set()
+    rows = data["rows"]
+    for index in range(port_settings.STORE_ROWS):
+        row = f"store_item_{index + 1}"
+        if index >= len(rows):
+            hidden.add(row)
+            continue
+        for cell, name in zip(rows[index]["cells"], ("store_cell_name", "store_cell_author", "store_cell_size", "store_cell_status")):
+            texts[(row, name)] = cell["text"]
+            value = cell["rgb"]
+            colors[(row, name)] = ((value >> 16) & 255, (value >> 8) & 255, value & 255)
+    if rows:
+        focused.add(f"store_item_{data['focus'] + 1}")
+    texts[("", "store_head")] = data["head"]
+    texts[("", "store_count")] = data["store_count"]
+    texts[("", "store_empty")] = data["empty"].replace("\n", "\r")
+    texts[("", "store_detail")] = data["detail"]
+    texts[("", "store_footer")] = data["footer"]
+    if not data["store_up"]:
+        hidden.add("store_more_up")
+    if not data["store_down"]:
+        hidden.add("store_more_down")
+    for bit, name in ((1, "get"), (2, "update"), (4, "stop"), (8, "remove"), (16, "refresh")):
+        if not data["buttons"] & bit:
+            hidden.add(f"store_button_{name}")
+    return {"texts": texts, "colors": colors, "focused": focused, "hidden": hidden}
+
+
 def dump(*arguments):
     binary = Path("/tmp/screens_dump_preview")
     sources = [ROOT / "tools/screens_preview/screens_dump.c", ROOT / "port/linux/game/screens.c", ROOT / "port/linux/game/screens_mock.c", ROOT / "port/linux/game/text_safe.c"]
@@ -451,10 +481,15 @@ SCENES = [
     ("friends-empty", "friends", "friends-empty", 0, 0), ("friends-offline", "friends", "friends-offline", 0, 0), ("friends-disabled", "friends", "friends-disabled", 0, 0),
     ("friends-no-service", "friends", "friends-nofriendservice", 0, 0), ("friends-requests-empty", "friends", "requests-empty", 0, 0),
     ("friends-party-empty", "friends", "party-empty", 0, 0), ("friends-blocked-empty", "friends", "blocked-empty", 0, 0),
+    ("store", "store", "store", 0, 0), ("store-off", "store", "store-off", 0, 0), ("store-loading", "store", "store-loading", 0, 0), ("store-offline", "store", "store-offline", 0, 0),
+    ("store-error", "store", "store-error", 0, 0), ("store-empty", "store", "store-empty", 0, 0), ("store-1", "store", "store-1", 0, 0), ("store-50-top", "store", "store-50", 0, 0),
+    ("store-50", "store", "store-50", 3, 20), ("store-50-end", "store", "store-50", 8, 41), ("store-longest", "store", "store-longest", 0, 0), ("store-longest-end", "store", "store-longest", 8, 3),
+    ("store-downloading", "store", "store-downloading", 2, 0), ("store-update", "store", "store-update", 0, 0), ("store-failed-job", "store", "store-failed-job", 1, 0),
+    ("store-removing", "store", "store-removing", 1, 0), ("store-local", "store", "store", 4, 0), ("store-unplayable", "store", "store", 5, 0), ("store-installed", "store", "store", 1, 0),
     ("actions-person", "actions", "actions-person", 0, 0), ("actions-bot", "actions", "actions-bot", 0, 0), ("actions-me", "actions", "actions-me", 0, 0),
 ]
 # the same screens over a game (the pause menu's way in): the picture has the HUD's bars at the top corners behind them
-GAME_SCENES = ["players", "players-16", "friends", "friends-50", "friends-empty", "add-friend"]
+GAME_SCENES = ["players", "players-16", "friends", "friends-50", "friends-empty", "add-friend", "store", "store-downloading"]
 
 
 def game_with_hud(size):
@@ -504,6 +539,8 @@ def scene_state(menus, name, *, game=False):
                 return f"{S}/players_screen", screen_state_players(data), data
             if screen == "friends":
                 return f"{S}/friends_screen", screen_state_friends(data), data
+            if screen == "store":
+                return f"{port_settings.STORE}/store_screen", screen_state_store(data), data
             state = actions_state(data)
             state["texts"][("", "actions_answer")] = ""
             return f"{S}/actions_screen", state, data

@@ -30,6 +30,7 @@ PANEL_BACKGROUND_LUMINANCE = 0.053
 CONTRAST_SMALL, CONTRAST_LARGE = 4.0, 3.0
 TOLERANCE = 0.6
 LARGE = "ui\\large_ui"
+ROW_PREFIXES = ("player_item_", "friend_item_", "action_item_", "store_item_")
 
 
 def luminance(rgb):
@@ -57,7 +58,7 @@ def intersects(a, b, margin=0.0):
 def row_of(record):
     """the row a cell is in (its parent's name), or None"""
     for name in reversed(record["path"]):
-        if name.startswith(("player_item_", "friend_item_", "action_item_")):
+        if name.startswith(ROW_PREFIXES):
             return name
     return None
 
@@ -104,7 +105,7 @@ def evaluate(canvas, data=None, scale=None):
             continue
         x0, y0, x1, y1 = record["ink"]
         px0, py0, px1, py1 = pill["rect"]
-        is_row = pill["name"].startswith(("player_item_", "friend_item_", "action_item_"))
+        is_row = pill["name"].startswith(ROW_PREFIXES)
         pad = 12 if is_row else 8
         if record["name"] != "scr_friend_mark" and (x0 < px0 + pad - TOLERANCE or x1 > px1 - pad + TOLERANCE):
             say("pill", f"{record['name']} {record['text']!r}: ink x {x0 - BLOCK_LEFT:.1f} to {x1 - BLOCK_LEFT:.1f} is within {pad} of its pill's ends {px0 - BLOCK_LEFT:.0f} to {px1 - BLOCK_LEFT:.0f}")
@@ -125,7 +126,7 @@ def evaluate(canvas, data=None, scale=None):
                 continue
             if intersects(record["ink"], pill["rect"], -TOLERANCE):
                 say("overlap", f"{record['name']} {record['text']!r} touches the pill {pill['name']}")
-    rows = [pill for pill in block_pills if pill["name"].startswith(("player_item_", "friend_item_", "action_item_"))]
+    rows = [pill for pill in block_pills if pill["name"].startswith(ROW_PREFIXES)]
     for index, a in enumerate(rows):
         for b in rows[index + 1:]:
             if a["rect"][1] < b["rect"][3] - 1.0 and b["rect"][1] < a["rect"][3] - 1.0:
@@ -141,7 +142,7 @@ def evaluate(canvas, data=None, scale=None):
     def ink_top(*names):
         return min((record["ink"][1] for name in names for record in by_name.get(name, ())), default=None)
 
-    title_bottom = ink_bottom("friends_title", "players_title", "actions_title", "add_title")
+    title_bottom = ink_bottom("friends_title", "players_title", "actions_title", "add_title", "store_title")
     tabs = [pill for pill in block_pills if pill["name"].startswith("friends_tab_")]
     if tabs:
         top, bottom = min(pill["rect"][1] for pill in tabs), max(pill["rect"][3] for pill in tabs)
@@ -153,14 +154,14 @@ def evaluate(canvas, data=None, scale=None):
         first, last = min(pill["rect"][1] for pill in rows), max(pill["rect"][3] for pill in rows)
         if first - (port_settings.PANEL_LINE + 1) < 4 - TOLERANCE:
             say("gap", f"the first row begins {first:.1f}, the panel's line ends {port_settings.PANEL_LINE + 1}: under 4")
-        under = ink_top("players_detail", "friends_detail", "actions_answer")
+        under = ink_top("players_detail", "friends_detail", "actions_answer", "store_detail")
         if under is not None and under - last < 8 - TOLERANCE:
             say("gap", f"the last row ends {last:.1f} and the detail begins {under:.1f}: under 8")
     else:
         last = None
-    detail_bottom = ink_bottom("players_detail", "friends_detail")
-    footer_top = ink_top("players_banner", "friends_code", "players_count", "friends_count")
-    footer_bottom = ink_bottom("players_banner", "friends_code", "players_count", "friends_count")
+    detail_bottom = ink_bottom("players_detail", "friends_detail", "store_detail")
+    footer_top = ink_top("players_banner", "friends_code", "players_count", "friends_count", "store_footer", "store_count")
+    footer_bottom = ink_bottom("players_banner", "friends_code", "players_count", "friends_count", "store_footer", "store_count")
     if detail_bottom is not None and footer_top is not None and footer_top - detail_bottom < 8 - TOLERANCE:
         say("gap", f"the detail ends {detail_bottom:.1f} and the footer begins {footer_top:.1f}: under 8")
     if footer_bottom is not None and port_settings.PANEL_BOTTOM_LINE - footer_bottom < 8 - TOLERANCE:
@@ -188,10 +189,11 @@ def evaluate(canvas, data=None, scale=None):
         row = row_of(record)
         if row is None or record["name"] in ("scr_friend_mark", "scr_action_text"):
             continue
-        columns.setdefault((row.rsplit("_", 1)[0], record["name"]), []).append(record["ink"][0])
+        # (a right aligned text lines up on its right end, the others on their left)
+        columns.setdefault((row.rsplit("_", 1)[0], record["name"]), []).append(record["ink"][2] if record.get("align") == "right" else record["ink"][0])
     for key, xs in columns.items():
         if max(xs) - min(xs) > 3.0:
-            say("columns", f"{key[1]} starts at x between {min(xs) - BLOCK_LEFT:.1f} and {max(xs) - BLOCK_LEFT:.1f} in its rows")
+            say("columns", f"{key[1]} lines up at x between {min(xs) - BLOCK_LEFT:.1f} and {max(xs) - BLOCK_LEFT:.1f} in its rows")
     for row in rows:
         cells = [record for record in records if row_of(record) == row["name"] and record["name"] != "scr_friend_mark"]
         if cells and max(record["ink"][2] for record in cells) > row["rect"][2] - 12 + TOLERANCE:
@@ -205,7 +207,7 @@ def evaluate(canvas, data=None, scale=None):
         if record["font"] != LARGE and (record["caps"][1] - record["caps"][0]) * scale < 9.5:
             say("legible", f"{record['name']}: capitals are {(record['caps'][1] - record['caps'][0]) * scale:.1f} pixels high")
     # -- the empty list and the long list
-    if data is not None and "rows" in data and "count" in data and data.get("scenario", "").startswith(("players", "friends", "requests", "party", "blocked")):
+    if data is not None and "rows" in data and "count" in data and data.get("scenario", "").startswith(("players", "friends", "requests", "party", "blocked", "store")):
         empty_texts = [record for record in records if record["name"].endswith("_empty")]
         counters = [record for record in records if record["name"].endswith("_count")]
         if data["count"] == 0 or data.get("empty"):

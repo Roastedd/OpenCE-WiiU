@@ -20,6 +20,8 @@ import test_social_menus as social  # noqa: E402
 CE = ROOT / "port/assets/menus/ce"
 MODS_FILE = CE / (port_settings.MODS.replace("/", ".") + ".xml")
 INL = (ROOT / "port/linux/game/menu_store.inl").read_text()
+SCREENS_H = (ROOT / "port/linux/game/screens.h").read_text()
+SCREENS_C = (ROOT / "port/linux/game/screens.c").read_text()
 HEADER = (ROOT / "port/linux/src/modstore.h").read_text()
 STORE = port_settings.STORE
 
@@ -83,31 +85,33 @@ def test_every_function_is_in_the_tables_and_has_a_handler_and_is_run():
 
 def test_columns_are_as_wide_as_the_xml_and_the_code_say():
     widgets, _, _ = social.all_widgets()
-    constants = {name: int(value) for name, value in re.findall(r"#define (STORE_[A-Z_]+_WIDTH) (\d+)", INL)}
+    constants = {name: int(value) for name, value in re.findall(r"SCREENS_(STORE_[A-Z_]+_WIDTH) = (\d+)", SCREENS_H)}
     for column, x, width, font in port_settings.STORE_COLUMNS:
         widget = widgets[f"{STORE}/store_cell_{column}"]
         assert int(widget.get("width")) == width
         assert widget.get("font") == ("ui\\large_ui" if font == "large" else "ui\\small_ui")
-        assert constants[f"STORE_{column.upper()}_WIDTH"] == width, f"menu_store.inl's STORE_{column.upper()}_WIDTH is not the XML's"
+        assert constants[f"STORE_{column.upper()}_WIDTH"] == width, f"screens.h's SCREENS_STORE_{column.upper()}_WIDTH is not the XML's"
     columns = port_settings.STORE_COLUMNS
-    assert columns[-1][1] + columns[-1][2] <= port_settings.STORE_ROW_WIDTH, "the last column runs off the row"
+    # (the spacing system: the last column ends 16 before the row's end, the text starts 16 in, the columns are 4 apart or more, and the cells are the social rows')
+    assert columns[-1][1] + columns[-1][2] == port_settings.SOCIAL_ROW_WIDTH - 16, "the last column does not end 16 before the row's end"
+    assert columns[0][1] == 12
     for (_, x0, w0, _), (_, x1, _, _) in zip(columns, columns[1:]):
-        assert x0 + w0 <= x1, "a column runs into the next"
+        assert x1 - (x0 + w0) >= 4, "a column is under 4 from the next"
     assert int(re.search(r"#define STORE_ROWS (\d+)", INL).group(1)) == port_settings.STORE_ROWS
     assert len([name for name in widgets if re.fullmatch(rf"{STORE}/store_item_\d+", name)]) == port_settings.STORE_ROWS
 
 
 def test_columns_hold_what_the_rows_put_in_them():
     small = social.advance_table("Overpass-750.ttf", 10)
-    inset = int(re.search(r"#define STORE_TEXT_INSET (\d+)", INL).group(1))
+    inset = int(re.search(r"SCREENS_STORE_INSET = (\d+)", SCREENS_H).group(1))
     by_name = {column: width for column, _, width, _ in port_settings.STORE_COLUMNS}
     # the status words, with the longest percent, and the sizes (a mod is at most 128 MB: "128 MB", and "9.9 MB" below ten, "999 KB" below a thousand KB)
     for word in ("DOWNLOADING 100%", "UPDATING 100%", "NOT PLAYABLE", "INSTALLED", "YOUR OWN", "DOWNLOAD", "REMOVING", "UPDATE"):
         assert small(word) <= by_name["status"] - inset, word
     for word in ("128 MB", "9.9 MB", "999 KB", "10 KB"):
         assert small(word) <= by_name["size"] - inset, word
-    # (the words in the code are the ones tested)
-    words = set(re.findall(r'"((?:DOWNLOADING|UPDATING|NOT PLAYABLE|INSTALLED|YOUR OWN|DOWNLOAD|REMOVING|UPDATE)[A-Z %d]*)"', INL))
+    # (the words in the code are the ones tested: screens.c's screens_store_cells)
+    words = set(re.findall(r'"((?:DOWNLOADING|UPDATING|NOT PLAYABLE|INSTALLED|YOUR OWN|DOWNLOAD|REMOVING|UPDATE)[A-Z %d]*)"', SCREENS_C))
     assert {"INSTALLED", "YOUR OWN", "NOT PLAYABLE", "DOWNLOAD", "REMOVING", "UPDATE"} <= words
 
 
@@ -181,7 +185,7 @@ def test_the_screens_empty_words_fit_their_box():
     """the words of a store that is off, loading, failed or empty, and the longest message of the store's, in the box (3 lines of 430 units and 2 lines of 496, large font)"""
     large = social.advance_table("Overpass-900.ttf", 13)
     messages = [
-        "THERE IS NO MOD STORE SET UP. ITS ADDRESS AND KEY GO IN CONFIG.TOML AS MODS.STORE_URL AND MODS.STORE_KEY.",
+        "NO MOD STORE IS SET UP. ITS ADDRESS AND KEY GO IN CONFIG.TOML.",
         "THE CATALOG IS NOT SIGNED BY THE STORE'S KEY, SO NOTHING WAS TAKEN FROM IT. PRESS Y TO TRY AGAIN.",
         "COULD NOT REACH THE STORE (THE ANSWER FROM 127.0.0.1 BROKE OFF, OR IS LARGER THAN 1048576 BYTES). PRESS Y TO TRY AGAIN.",
         "THE CATALOG IS OLDER THAN ONE SEEN BEFORE, SO IT WAS NOT USED. PRESS Y TO TRY AGAIN.",

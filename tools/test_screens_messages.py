@@ -221,8 +221,8 @@ def vocabulary_problems(words, sentences=()):
                 wrong.append(f"{kind}: {word!r} has a word the player does not know")
             if word != word.upper() and kind != "skills":
                 wrong.append(f"{kind}: {word!r} is not in capitals")
-    wrong += [f"button {caption!r} is not one of the buttons' words" for caption in words["buttons"] if caption not in BUTTON_CAPTIONS]
-    wrong += [f"action {word!r} is not one of the actions' words" for word in words["actions"] if word not in ACTION_WORDS]
+    wrong += [f"button {caption!r} is not one of the buttons' words" for caption in words.get("buttons", []) if caption not in BUTTON_CAPTIONS]
+    wrong += [f"action {word!r} is not one of the actions' words" for word in words.get("actions", []) if word not in ACTION_WORDS]
     for name, number, text in sentences:
         if JARGON.search(text.upper()):
             wrong.append(f"{name}:{number}: {text!r} has a word the player does not know")
@@ -274,3 +274,38 @@ def test_the_maps_are_called_what_the_games_own_list_calls_them():
         assert table[file] == names[index], f"{file} is {table[file]!r} here and {names[index]!r} in the game's list"
     # (the negative control: a title that differs)
     assert dict(table, putput="Chiron TL-34")["putput"] != names[MAP_FILES.index("putput")]
+
+
+# ---------- the mod store's words (2026-11-10): the same vocabulary rules as the other screens
+
+# the captions of the store's buttons and the words of its rows: BACK leaves, STOP stops a job (there is no form to give up, so no CANCEL), DOWNLOAD is the word the Friends screen
+# already uses for fetching what is missing; the states are one word each, in capitals
+STORE_BUTTON_CAPTIONS = {"DOWNLOAD", "UPDATE", "STOP", "REMOVE", "REFRESH", "BACK"}
+STORE_STATE_WORDS = {"DOWNLOAD", "INSTALLED", "UPDATE", "YOUR OWN", "NOT PLAYABLE", "REMOVING", "DOWNLOADING", "UPDATING"}
+
+
+def store_words():
+    text = (GAME / "screens.c").read_text()
+    start = text.index("void screens_store_cells(")
+    section = text[start:text.index("int screens_store_empty(")]
+    states = set(re.findall(r'"([A-Z][A-Z ]+?)(?: %d%%)?"', section))
+    captions = []
+    for element in ElementTree.parse(CE / "main_menu.mods.xml").getroot():
+        if element.tag == "widget" and element.get("name", "").startswith(port_settings.STORE + "/store_button_") and element.get("text"):
+            captions.append(element.get("text"))
+    return captions, states
+
+
+def test_the_stores_words_are_the_one_set_of_words():
+    captions, states = store_words()
+    assert set(captions) == STORE_BUTTON_CAPTIONS and len(captions) == 6
+    assert STORE_STATE_WORDS <= states, sorted(STORE_STATE_WORDS - states)
+    wrong = vocabulary_problems({"store buttons": captions, "store states": sorted(states)})
+    assert not wrong, wrong
+    # (the words that the Friends screen has for the same things are the same: a missing map is DOWNLOAD there too, a version that needs the game's update is NEEDS UPDATE, not UPDATE)
+    assert "DOWNLOAD" in table_words("char const *screens_join_word")
+    # (negative controls: a word the player does not know, an accent, a caption of its own)
+    assert set(captions + ["FETCH"]) != STORE_BUTTON_CAPTIONS
+    assert vocabulary_problems({"store states": ["TUNNEL DOWN"]})
+    assert vocabulary_problems({"store states": ["INSTALLED é"]})
+    assert vocabulary_problems({"store states": ["Installed"]})
