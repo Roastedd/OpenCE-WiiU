@@ -510,7 +510,13 @@ static void be_notice_named(int kind, char const *name, char const *rest, char c
 static void be_game_detail(struct social_join_target const *target, char *detail, int size)
 {
 	if (target->map[0])
-		snprintf(detail, (size_t)size, "%s - %s - %d of %d", target->map, target->gametype[0] ? target->gametype : "game", target->players, target->maximum_players);
+	{
+		/* (the map as the game names it, as the Friends screen's rows say it) */
+		char title[SCREENS_WORD_SIZE];
+
+		screens_map_title(target->map, title, (int)sizeof(title));
+		snprintf(detail, (size_t)size, "%s - %s - %d of %d", title, target->gametype[0] ? target->gametype : "game", target->players, target->maximum_players);
+	}
 	else
 		detail[0] = 0;
 }

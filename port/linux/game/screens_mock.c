@@ -138,7 +138,7 @@ void screens_mock_reset(void)
 	party_add("ERIN", 0, 0, SCREENS_MEMBER_FULL_RETRYING, 14);
 	/* toasts, in the order they come */
 	toast_add(SCREENS_TOAST_FRIEND_ONLINE, "ALICE IS ONLINE", "");
-	toast_add(SCREENS_TOAST_INVITE, "ALICE INVITES YOU", "bloodgulch - Slayer - 6 of 16");
+	toast_add(SCREENS_TOAST_INVITE, "ALICE INVITES YOU", "Blood Gulch - Slayer - 6 of 16");
 	toast_add(SCREENS_TOAST_PARTY_JOINED, "DAN JOINED YOUR PARTY", "");
 	toast_add(SCREENS_TOAST_JOIN_FAILED, "ALICE'S GAME IS FULL.", "16 of 16 players. A retry in 20 s.");
 	toast_add(SCREENS_TOAST_REQUEST, "MALLORY WANTS TO BE YOUR FRIEND", "Friends > Requests");

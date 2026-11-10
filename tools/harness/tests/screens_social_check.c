@@ -426,7 +426,7 @@ static void case_befriend_and_invite(void)
 	}
 	count = drain_toasts();
 	index = find_toast(count, SCREENS_TOAST_INVITE);
-	CHECK(index >= 0 && !strcmp(last_toast[index].text, "NODE0 INVITES YOU") && !strcmp(last_toast[index].detail, "bloodgulch - Slayer - 3 of 16"), "the invitation's toast: '%s' / '%s'",
+	CHECK(index >= 0 && !strcmp(last_toast[index].text, "NODE0 INVITES YOU") && !strcmp(last_toast[index].detail, "Blood Gulch - Slayer - 3 of 16"), "the invitation's toast: '%s' / '%s'",
 		index >= 0 ? last_toast[index].text : "", index >= 0 ? last_toast[index].detail : "");
 	/* b answers it (the D-pad's answer): the join starts and the screen can say what it is doing */
 	{
