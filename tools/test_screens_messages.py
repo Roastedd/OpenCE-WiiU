@@ -174,3 +174,84 @@ def test_the_detail_boxes_hold_two_lines():
         element = widgets[name]
         assert float(element.get("width")) >= BOX_WIDTH
         assert float(element.get("height")) >= float(element.get("text_y", 0)) + BOX_LINES * 22, name
+
+
+# ---------- one set of words (2026-11-10): the buttons, the actions, the states, the sentences
+
+# the captions of the buttons of the social screens, each its place: BACK leaves a list screen and changes nothing, CANCEL gives up a form (and the actions' last row), LEAVE the lobby
+BUTTON_CAPTIONS = {"BOT SETTINGS", "ADD BOT", "DROP BOT", "FRIENDS", "BACK", "ADD FRIEND", "JOIN", "INVITE", "SEND REQUEST", "CANCEL"}
+# the verbs of the actions a row offers, one word for one thing (JOIN a game, INVITE to a game or a party, SWITCH TEAM here and in the lobby's button, FOLLOW THE LEADER)
+ACTION_WORDS = {"MUTE", "UNMUTE", "START A VOTE TO KICK", "KICK", "BAN", "MUTE FOR EVERYONE", "ADD FRIEND", "INVITE TO PARTY", "DROP BOT", "RAISE SKILL", "LOWER SKILL", "SWITCH TEAM",
+                "JOIN GAME", "INVITE TO GAME", "VIEW CODE", "REMOVE FRIEND", "BLOCK", "UNBLOCK", "ACCEPT", "DECLINE", "MAKE LEADER", "REMOVE FROM PARTY", "LEAVE PARTY", "DISBAND PARTY",
+                "FOLLOW THE LEADER", "STOP FOLLOWING", "BOT SETTINGS", "CANCEL"}
+# words the player does not know: the network's and the program's
+JARGON = re.compile(r"\b(BUILD|ROUTE|NAT|TUNNEL|BROKER|PEER|P2P|UDP|TCP|PORT|SOCKET|PACKET|HANDSHAKE|SERVER STATUS|ERROR CODE)\b")
+
+
+def table_words(function):
+    """the string literals of a function of screens.c that returns words"""
+    text = (GAME / "screens.c").read_text()
+    start = text.index(function)
+    end = text.index("\n}\n", start)
+    return [word for word in re.findall(r'"([^"]*)"', text[start:end]) if word]
+
+
+def screen_words():
+    """every word the screens say by a table: actions, tabs, presence, joins, members, services (and the XML's button captions)"""
+    words = {"actions": [w for w in table_words("char const *screens_action_word") if w], "tabs": table_words("char const *screens_tab_word"),
+             "presence": table_words("char const *screens_presence_word"), "joins": table_words("char const *screens_join_word"),
+             "members": table_words("char const *screens_member_word"), "services": table_words("char const *screens_service_word"),
+             "skills": table_words("char const *screens_skill_word")}
+    captions = []
+    for name in port_settings.social_files():
+        for element in ElementTree.parse(CE / name).getroot():
+            if element.tag == "widget" and element.get("bitmap") == "bitmaps/text_button_background" and element.get("text"):
+                captions.append(element.get("text"))
+    words["buttons"] = captions
+    return words
+
+
+def vocabulary_problems(words, sentences=()):
+    wrong = []
+    for kind, items in words.items():
+        for word in items:
+            if not word or any(not (0x20 <= ord(character) <= 0x7E) for character in word) or "|" in word:
+                wrong.append(f"{kind}: {word!r} is not plain ASCII 0x20-0x7E, or has a '|'")
+            if JARGON.search(word.upper()):
+                wrong.append(f"{kind}: {word!r} has a word the player does not know")
+            if word != word.upper() and kind != "skills":
+                wrong.append(f"{kind}: {word!r} is not in capitals")
+    wrong += [f"button {caption!r} is not one of the buttons' words" for caption in words["buttons"] if caption not in BUTTON_CAPTIONS]
+    wrong += [f"action {word!r} is not one of the actions' words" for word in words["actions"] if word not in ACTION_WORDS]
+    for name, number, text in sentences:
+        if JARGON.search(text.upper()):
+            wrong.append(f"{name}:{number}: {text!r} has a word the player does not know")
+        if any(not (0x20 <= ord(character) <= 0x7E) for character in text) or "|" in text:
+            wrong.append(f"{name}:{number}: {text!r} is not plain ASCII")
+    return wrong
+
+
+def test_one_set_of_words_and_no_jargon():
+    words = screen_words()
+    assert set(words["actions"]) == ACTION_WORDS and set(words["buttons"]) <= BUTTON_CAPTIONS and len(words["buttons"]) >= 10
+    # (the lobby's team button and the action are the same words, and the same verbs are used for the same things)
+    assert "SWITCH TEAM" in words["actions"] and "CHANGE TEAM" not in words["actions"]
+    lobby = (CE / "main_menu.multiplayer_type_select.lobby.xml").read_text()
+    assert 'text="SWITCH TEAM"' in lobby
+    # (the player's sentences: not the engine's function names ("port players update") or the separator of a log line)
+    sentences = [item for item in literals() if not item[2].startswith("PORT ") and item[2].strip() != "|"]
+    assert len(sentences) > 100
+    wrong = vocabulary_problems(words, sentences)
+    assert not wrong, "\n".join(wrong)
+
+
+def test_the_vocabulary_check_has_teeth():
+    """negative controls: the old words (a build, a route, CHANGE TEAM, FOLLOW LEADER: ON), an accent, a pipe, a button of its own"""
+    words = screen_words()
+    assert not vocabulary_problems(words)
+    for kind, bad in (("joins", "NEWER BUILD"), ("members", "NO ROUTE"), ("actions", "CHANGE TEAM"), ("actions", "FOLLOW LEADER: ON"), ("presence", "ONLINE é"), ("tabs", "FRIENDS|ALL"),
+                      ("buttons", "OK"), ("services", "tunnel down"), ("members", "NAT STRICT")):
+        changed = {key: list(value) + ([bad] if key == kind else []) for key, value in words.items()}
+        assert vocabulary_problems(changed), f"{bad!r} in {kind} is not found"
+    assert vocabulary_problems(words, [("x.c", 1, "THE HOST RUNS A NEWER BUILD. UPDATE TO JOIN.")])
+    assert vocabulary_problems(words, [("x.c", 1, "NO ROUTE TO THE HOST")])

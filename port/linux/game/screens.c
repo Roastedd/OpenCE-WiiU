@@ -116,9 +116,9 @@ char const *screens_join_word(int join)
 	case SCREENS_JOIN_PASSWORD:
 		return "PASSWORD";
 	case SCREENS_JOIN_NEWER_BUILD:
-		return "NEWER BUILD";
+		return "NEEDS UPDATE";
 	case SCREENS_JOIN_OLDER_BUILD:
-		return "OLDER BUILD";
+		return "OLD VERSION";
 	case SCREENS_JOIN_DOWNLOAD:
 		return "DOWNLOAD";
 	case SCREENS_JOIN_NEEDS_MAP:
@@ -130,7 +130,7 @@ char const *screens_join_word(int join)
 
 char const *screens_member_word(int state)
 {
-	static char const *const words[] = { "READY", "IN MENUS", "JOINING", "DOWNLOADING", "NEEDS MAP", "FULL - RETRYING", "NEWER BUILD", "NO ROUTE", "IN GAME", "OFFLINE",
+	static char const *const words[] = { "READY", "IN THE MENUS", "JOINING", "DOWNLOADING", "NEEDS MAP", "FULL - RETRYING", "NEEDS UPDATE", "CANNOT CONNECT", "IN GAME", "OFFLINE",
 		"STAYING" };
 
 	return state >= 0 && state < (int)(sizeof(words) / sizeof(words[0])) ? words[state] : "";
@@ -163,8 +163,8 @@ char const *screens_action_word(int action)
 	static char const *const words[SCREENS_ACTIONS] =
 	{
 		"", "MUTE", "UNMUTE", "START A VOTE TO KICK", "KICK", "BAN", "MUTE FOR EVERYONE", "ADD FRIEND", "INVITE TO PARTY", "DROP BOT", "RAISE SKILL", "LOWER SKILL",
-		"CHANGE TEAM", "JOIN GAME", "INVITE TO GAME", "VIEW CODE", "REMOVE FRIEND", "BLOCK", "UNBLOCK", "ACCEPT", "DECLINE", "MAKE LEADER", "REMOVE FROM PARTY",
-		"LEAVE PARTY", "DISBAND PARTY", "FOLLOW LEADER: ON", "FOLLOW LEADER: OFF", "BOT SETTINGS", "CANCEL",
+		"SWITCH TEAM", "JOIN GAME", "INVITE TO GAME", "VIEW CODE", "REMOVE FRIEND", "BLOCK", "UNBLOCK", "ACCEPT", "DECLINE", "MAKE LEADER", "REMOVE FROM PARTY",
+		"LEAVE PARTY", "DISBAND PARTY", "FOLLOW THE LEADER", "STOP FOLLOWING", "BOT SETTINGS", "CANCEL",
 	};
 
 	return action > 0 && action < SCREENS_ACTIONS ? words[action] : "";
@@ -700,10 +700,10 @@ void screens_friend_detail(int tab, struct screens_friend_row const *row, struct
 			snprintf(line, sizeof(line), "%s'S GAME NEEDS A PASSWORD.", row->name);
 			break;
 		case SCREENS_JOIN_NEWER_BUILD:
-			snprintf(line, sizeof(line), "%s RUNS A NEWER BUILD. UPDATE TO JOIN.", row->name);
+			snprintf(line, sizeof(line), "%s HAS A NEWER VERSION. UPDATE TO JOIN.", row->name);
 			break;
 		case SCREENS_JOIN_OLDER_BUILD:
-			snprintf(line, sizeof(line), "%s RUNS AN OLDER BUILD.", row->name);
+			snprintf(line, sizeof(line), "%s HAS AN OLDER VERSION AND MUST UPDATE.", row->name);
 			break;
 		case SCREENS_JOIN_NEEDS_MAP:
 			snprintf(line, sizeof(line), "YOU DO NOT HAVE THE MAP AND IT CANNOT BE FETCHED.");
@@ -926,7 +926,7 @@ void screens_default_party_actions(struct screens_party_member const *member, st
 static void empty_line(int screen, int tab, struct screens_friends_summary const *summary, int have_provider, char *line, int line_size)
 {
 	if (!have_provider)
-		snprintf(line, (size_t)line_size, screen == 0 ? "THERE IS NO PLAYER LIST HERE." : "THERE IS NO FRIEND SERVICE IN THIS BUILD.");
+		snprintf(line, (size_t)line_size, screen == 0 ? "THERE IS NO PLAYER LIST HERE." : "THERE IS NO FRIEND SERVICE IN THIS VERSION OF THE GAME.");
 	else if (screen == 0)
 		snprintf(line, (size_t)line_size, "NO PLAYERS YET.");
 	else if (summary && summary->service == SCREENS_SERVICE_DISABLED)

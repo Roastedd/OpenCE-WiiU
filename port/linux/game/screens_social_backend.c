@@ -841,7 +841,7 @@ static int backend_friend_action(int action, struct screens_friend_row const *ro
 		be_answer_set(answer, size, "PARTY INVITATION SENT.");
 		return 1;
 	default:
-		be_answer_set(answer, size, "THAT IS NOT AVAILABLE IN THIS BUILD YET.");
+		be_answer_set(answer, size, "THAT IS NOT AVAILABLE YET.");
 		return 0;
 	}
 }
@@ -874,7 +874,7 @@ static int backend_party_action(int action, struct screens_party_member const *m
 		be_answer_set(answer, size, "NOT AVAILABLE: LEAVE THE PARTY AND THE NEXT MEMBER LEADS.");
 		return 0;
 	default:
-		be_answer_set(answer, size, "THAT IS NOT AVAILABLE IN THIS BUILD YET.");
+		be_answer_set(answer, size, "THAT IS NOT AVAILABLE YET.");
 		return 0;
 	}
 }
@@ -1081,7 +1081,7 @@ static int backend_roster_action(int action, struct screens_roster_row const *ro
 		be_answer_set(answer, size, "PARTY INVITATION SENT.");
 		return 1;
 	default:
-		be_answer_set(answer, size, "THAT IS NOT AVAILABLE IN THIS BUILD YET.");
+		be_answer_set(answer, size, "THAT IS NOT AVAILABLE YET.");
 		return 0;
 	}
 }

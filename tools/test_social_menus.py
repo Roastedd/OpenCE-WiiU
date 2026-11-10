@@ -171,7 +171,7 @@ def test_columns_hold_the_widest_text():
     assert small("BOT LEGENDARY") <= port_settings.SOCIAL_PLAYER_COLUMNS[1][2]
     assert small("YOU - HOST") <= port_settings.SOCIAL_PLAYER_COLUMNS[1][2]
     assert small("999 MS") <= port_settings.SOCIAL_PLAYER_COLUMNS[3][2]
-    assert small("PLAYING") + small(" 128/128 NEWER BUILD") + 24 <= port_settings.SOCIAL_FRIEND_COLUMNS[2][2]
+    assert small("PLAYING") + small(" 128/128 NEEDS UPDATE") + 24 <= port_settings.SOCIAL_FRIEND_COLUMNS[2][2]
     assert small("FULL - RETRYING 99s") <= port_settings.SOCIAL_FRIEND_COLUMNS[2][2]
     # the tabs' labels in the small font
     for label in ("[FRIENDS 50]", "[REQUESTS 50]", "[PARTY 8/8]", "[BLOCKED 50]"):

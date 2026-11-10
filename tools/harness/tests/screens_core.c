@@ -487,7 +487,7 @@ static void friend_cells(void)
 	CHECK(strstr(cells[SCREENS_FRIEND_STATUS].text, "NEEDS MAP") && strstr(cells[SCREENS_FRIEND_STATUS].text, "4/12") && strstr(cells[SCREENS_FRIEND_STATUS].text, "..."),
 		"a long map name is cut, the count and the reason kept: '%s'", cells[SCREENS_FRIEND_STATUS].text);
 	screens_friend_cells(SCREENS_TAB_FRIENDS, &rows[8], cells);
-	CHECK(strstr(cells[SCREENS_FRIEND_STATUS].text, "NEWER BUILD"), "'%s'", cells[SCREENS_FRIEND_STATUS].text);
+	CHECK(strstr(cells[SCREENS_FRIEND_STATUS].text, "NEEDS UPDATE"), "'%s'", cells[SCREENS_FRIEND_STATUS].text);
 	screens_friend_cells(SCREENS_TAB_FRIENDS, &rows[9], cells);
 	CHECK(strstr(cells[SCREENS_FRIEND_STATUS].text, "DOWNLOAD") && cells[SCREENS_FRIEND_STATUS].color == SCREENS_COLOR_GREEN, "the DOWNLOAD marker, joinable: '%s'",
 		cells[SCREENS_FRIEND_STATUS].text);
@@ -1355,7 +1355,7 @@ static void layout_words(void)
 	row.maximum = 16;
 	snprintf(row.map, sizeof(row.map), "Danger_Canyon_Remastered_XL_2000");
 	screens_friend_cells(SCREENS_TAB_FRIENDS, &row, cells);
-	CHECK(!strcmp(cells[SCREENS_FRIEND_STATUS].text, "PLAYING 16/16 NEWER BUILD"), "no room for more than a few letters of the map: it is left out, the count and the reason whole: '%s'",
+	CHECK(!strcmp(cells[SCREENS_FRIEND_STATUS].text, "PLAYING 16/16 NEEDS UPDATE"), "no room for more than a few letters of the map: it is left out, the count and the reason whole: '%s'",
 		cells[SCREENS_FRIEND_STATUS].text);
 	row.join = SCREENS_JOIN_OPEN;
 	screens_friend_cells(SCREENS_TAB_FRIENDS, &row, cells);

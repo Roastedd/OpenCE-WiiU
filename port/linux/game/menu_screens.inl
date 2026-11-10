@@ -426,7 +426,7 @@ static int scr_game_roster_action(int action, struct screens_roster_row const *r
 	default:
 		if (backend && backend->roster_action)
 			return backend->roster_action(action, row, answer, size);
-		scr_answer(answer, size, "THAT IS NOT AVAILABLE IN THIS BUILD YET.");
+		scr_answer(answer, size, "THAT IS NOT AVAILABLE YET.");
 		return 0;
 	}
 }
@@ -696,7 +696,7 @@ static boolean scr_action_run(struct widget_instance *row, boolean *widget_delet
 	else if (scr.actions_kind == 2 && provider->party_action)
 		done = provider->party_action(action, &scr.actions_member, answer, (int)sizeof(answer));
 	else
-		scr_answer(answer, (int)sizeof(answer), "THAT IS NOT AVAILABLE IN THIS BUILD YET.");
+		scr_answer(answer, (int)sizeof(answer), "THAT IS NOT AVAILABLE YET.");
 	scr_log("action %s on %s: %s %s", screens_action_word(action), scr.actions_title, done ? "done" : "refused", answer);
 	scr_model_update(TRUE);
 	if (!done)

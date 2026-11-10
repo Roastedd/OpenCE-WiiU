@@ -18,7 +18,7 @@ struct screens_social_hooks
 {
 	/* milliseconds, any origin (the toasts' holds and spacing); NULL: toasts without holds */
 	unsigned long (*milliseconds)(void);
-	/* the network version this build plays (a friend of another is NEWER BUILD or OLDER BUILD); NULL: not told */
+	/* the network version this build plays (a friend of another is NEEDS UPDATE or OLD VERSION); NULL: not told */
 	int (*network_version)(void);
 };
 
