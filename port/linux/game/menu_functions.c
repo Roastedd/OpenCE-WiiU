@@ -91,6 +91,7 @@ their handlers open opens.
 #include "game_modes.h"
 #include "graphics_quality.h"
 #include "network_voice.h"
+#include "network_votekick.h"
 #include "bots.h"
 #include "screens.h"
 #include "screens_social_backend.h"
@@ -3019,8 +3020,13 @@ static boolean scr_text_color(struct widget_instance *widget, real_argb_color *c
 static boolean scr_text_box_drawn(struct widget_instance *widget, rectangle2d const *bounds);
 static void scr_lobby_update(struct widget_instance *list, short first, short count, boolean teams);
 static wchar_t const *scr_lobby_help(wchar_t const *text);
+static void scr_lobby_bots_text(struct network_game const *game, wchar_t *text, int size);
 static boolean scr_enabled(void);
 static boolean scr_join_ticker(wchar_t *text, int size);
+static void scr_join_auto(struct widget_instance *list);
+static void scr_join_back(void);
+static void scr_join_auto_preview(void const *game);
+static short scr_event_controller;
 #define TEXT_FIELD_LENGTH 128
 #define PLAYLIST_READ_ONLY_BIT 0x40000000UL
 /* (a key stroke's modifier, as input_xbox.c has them: shift, control) */
@@ -3089,6 +3095,12 @@ boolean ui_widget_port_gametype_choose(long profile_index);
 boolean ui_widget_port_host(struct widget_instance *widget, struct event_record *event, boolean *widget_deleted);
 boolean ui_widget_port_browse(struct widget_instance *widget, struct event_record *event, boolean *widget_deleted);
 boolean ui_widget_port_open(struct widget_instance *widget, char const *name, boolean *widget_deleted);
+/* the friends layer's join from the menus (ui_widget.c, ui_widget_event_handler_functions.c) */
+char const *ui_widget_port_top_name(void);
+boolean ui_widget_port_open_over_top(char const *name);
+boolean ui_widget_port_leave_game(unsigned long milliseconds);
+boolean ui_widget_port_swap_team(short controller_index);
+boolean ui_widgets_active(void);
 boolean network_game_client_advertised_game_in_progress(void *client, struct advertised_game *game);
 byte network_game_client_advertised_game_kind(void *client, struct advertised_game *game);
 boolean network_game_client_advertised_game_dedicated(void *client, struct advertised_game *game);
@@ -5811,6 +5823,9 @@ static void browser_update(struct widget_instance *list)
 		return;
 	}
 	browser_games_read();
+	/* (a friend's game that is ready is pressed for: menu_screens.inl) */
+	if (multiplayer.mode == _multiplayer_mode_direct_link)
+		scr_join_auto(list);
 	if (focused != NONE && focused < multiplayer.game_count && !ui_widget_port_hover_focused())
 		multiplayer.game_chosen = focused;
 	for (row = list->child; row; row = row->next)
@@ -6505,6 +6520,8 @@ static void lobby_update(struct widget_instance *list)
 
 			usnprintf(text + length, NUMBEROF(text) - 1 - length, L" %d", seconds);
 		}
+		/* (a game on this machine alone: how many bots, which L and R change: menu_screens.inl) */
+		scr_lobby_bots_text(game, text, NUMBEROF(text));
 		if (global_network_game_server_get() && p2p_invite_link(link, sizeof(link)))
 		{
 			size_t length = ustrlen(text);
@@ -6713,6 +6730,9 @@ static void preview_update(struct widget_instance *list)
 	boolean valid = game != NULL;
 	wchar_t text[LOBBY_TEXT_LENGTH], name[NUMBEROF(game->game_name) + 1];
 
+	/* (a friend's game under way that is ready: its JOIN GAME pressed for, menu_screens.inl) */
+	scr_join_auto_preview(game);
+
 	visible_set(named(description, "lobby_right_item", 0), valid);
 	if (valid)
 	{
@@ -6770,6 +6790,9 @@ backs out for them all (the game is not joined yet: none is kept here) */
 static boolean preview_leave(short controller)
 {
 	short index;
+
+	/* (B on the preview of a friend's game under way gives that join up: menu_screens.inl) */
+	scr_join_back();
 
 	if (!lobby_controller_playing(controller))
 	{
@@ -8057,7 +8080,10 @@ static boolean menu_event_function_invoke(
 			return FALSE;
 		{
 			/* (the social screens' functions: menu_screens.inl) */
-			boolean mine, result = scr_event(name, widget, widget_deleted, &mine);
+			boolean mine, result;
+
+			scr_event_controller = controller;
+			result = scr_event(name, widget, widget_deleted, &mine);
 
 			if (mine)
 				return result;

@@ -191,6 +191,7 @@ void social_party_kick(unsigned int member_id) { if (social_global_front) social
 void social_party_transfer(unsigned int member_id) { if (social_global_front) social_front_party(social_global_front, 7, member_id, 0, NULL); }
 void social_party_set_open(int open) { if (social_global_front) social_front_party(social_global_front, 8, 0, open, NULL); }
 void social_party_set_auto_follow(int on) { if (social_global_front) social_front_party(social_global_front, 9, 0, on, NULL); }
+void social_party_disband(void) { if (social_global_front) social_front_party(social_global_front, 11, 0, 0, NULL); }
 void social_party_chat(const char *text) { if (social_global_front) social_front_party(social_global_front, 10, 0, 0, text); }
 
 void social_party_join_invite(unsigned int invite_id)

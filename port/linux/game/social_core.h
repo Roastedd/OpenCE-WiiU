@@ -634,6 +634,7 @@ int social_engine_party_join(struct social_engine *engine, const unsigned char *
 /* ... a friend's open party */
 int social_engine_party_join_friend(struct social_engine *engine, unsigned int friend_id);
 int social_engine_party_leave(struct social_engine *engine);
+int social_engine_party_disband(struct social_engine *engine);
 /* the leader removes a member (by id), who may not come back; or hands the lead to one */
 int social_engine_party_kick(struct social_engine *engine, unsigned int member_id);
 int social_engine_party_transfer(struct social_engine *engine, unsigned int member_id);

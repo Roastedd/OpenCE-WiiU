@@ -121,7 +121,7 @@ static void sentences(void)
 	{
 		for (presence = 0; presence < 8; presence++)
 		{
-			for (join = 0; join < 9; join++)
+			for (join = 0; join < SCREENS_JOIN_INVITE_ONLY + 1; join++)
 			{
 				for (tab = 0; tab < SCREENS_TABS; tab += 1)
 				{
@@ -333,7 +333,7 @@ static void fit_columns(void)
 	}
 	for (presence = 0; presence < 8; presence++)
 	{
-		for (join = 0; join < 9; join++)
+		for (join = 0; join < SCREENS_JOIN_INVITE_ONLY + 1; join++)
 		{
 			for (map = 0; map < (int)(sizeof(maps) / sizeof(maps[0])); map++)
 			{
@@ -506,7 +506,7 @@ static void friend_cells(void)
 		int join;
 
 		row.presence = (unsigned char)index;
-		for (join = 0; join < 9; join++)
+		for (join = 0; join < SCREENS_JOIN_INVITE_ONLY + 1; join++)
 		{
 			row.join = (unsigned char)join;
 			screens_friend_detail(SCREENS_TAB_FRIENDS, &row, &summary, text, (int)sizeof(text));

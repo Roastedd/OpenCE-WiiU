@@ -111,6 +111,8 @@ struct screens_roster_row
 	short score;
 	/* the game's machine for a row (a backend's key: its actions name the row by it) */
 	long machine;
+	/* the controller of this machine's player (its own rows); -1: not known */
+	signed char controller;
 };
 
 struct screens_roster_summary
@@ -209,6 +211,8 @@ enum
 	/* the map is not here and can be fetched (the DOWNLOAD marker) / cannot */
 	SCREENS_JOIN_DOWNLOAD,
 	SCREENS_JOIN_NEEDS_MAP,
+	/* a private game (not listed, or with a password): a friend gets in by an invitation */
+	SCREENS_JOIN_INVITE_ONLY,
 };
 
 struct screens_friend_row
@@ -344,6 +348,8 @@ struct screens_provider
 	void (*roster_actions)(struct screens_roster_row const *row, struct screens_roster_summary const *summary, int *actions);
 	void (*friend_actions)(int tab, struct screens_friend_row const *row, int *actions);
 	void (*party_actions)(struct screens_party_member const *member, struct screens_party_summary const *summary, int *actions);
+	/* a line of text to the party (typed on the GamePad's keyboard): nonzero sent; a refusal's words in answer. What the others say comes as toasts. */
+	int (*party_chat)(char const *text, char *answer, int size);
 };
 
 /* screens.enable (0 off, 1 mock, 2 the game's roster and the provider set), read once */

@@ -123,6 +123,8 @@ char const *screens_join_word(int join)
 		return "DOWNLOAD";
 	case SCREENS_JOIN_NEEDS_MAP:
 		return "NEEDS MAP";
+	case SCREENS_JOIN_INVITE_ONLY:
+		return "INVITE ONLY";
 	default:
 		return "";
 	}
@@ -707,6 +709,9 @@ void screens_friend_detail(int tab, struct screens_friend_row const *row, struct
 			break;
 		case SCREENS_JOIN_NEEDS_MAP:
 			snprintf(line, sizeof(line), "YOU DO NOT HAVE THE MAP AND IT CANNOT BE FETCHED.");
+			break;
+		case SCREENS_JOIN_INVITE_ONLY:
+			snprintf(line, sizeof(line), "%s'S GAME IS PRIVATE. ASK FOR AN INVITATION.", row->name);
 			break;
 		default:
 			snprintf(line, sizeof(line), "%s IS IN A GAME.", row->name);

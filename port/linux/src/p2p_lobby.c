@@ -1040,6 +1040,13 @@ void p2p_lobby_game_details(char *map, int map_size, char *gametype, int gametyp
 	*has_password = lobby.has_password;
 }
 
+/* whether the game hosted is listed in the server browser (a public game, the lobby on): the platform layer's friends presence makes a game that is not (a private one) or that has a
+password joinable by invitation only. Under p2p_lock, on the p2p thread */
+int p2p_lobby_listed_locked(void)
+{
+	return lobby.public && config_boolean("network.public_lobby");
+}
+
 int p2p_hosting_listed(void)
 {
 	int listed;

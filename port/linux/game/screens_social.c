@@ -6,7 +6,8 @@ view is made from the social model (the rows the menus show) and the chat's line
 JOIN or INVITE, a quick chat line, the page's arrows, the bots' - and +, a toast's JOIN and LATER) and goes to the provider and the chat. With the setting off, or on a platform that
 does not draw the view (halo_social_view_wanted), nothing is made.
 
-Not wired: the KEYBOARD button (the keyboard opens with D-pad Up; a tap opening it needs a way into network_chat.c's update, and says so in the log).
+The KEYBOARD button opens the on-screen keyboard (network_chat_keyboard_request) for the tab shown: the party's chat on PARTY, a friend's code on FRIENDS, the game's chat on BOTS; the line typed comes
+back to screens_social_line.
 */
 
 #include "cseries.h"
@@ -43,6 +44,10 @@ static struct
 	/* the keys of the friends the rows show, for the touch (the model's rows are rebuilt as it changes) */
 	long row_keys[HALO_SOCIAL_ROWS];
 	int was_active;
+	/* the answer to a typed line, for the next frame's toasts (the line is taken in the chat's update, which has no toast queue) */
+	struct screens_toast line_toast;
+	int line_toast_pending;
+	int handler_set;
 } social;
 
 static void copy(char *destination, int size, char const *source)
@@ -85,6 +90,12 @@ static void skill_change(int delta)
 		value[delta] = (char)(word[delta] >= 'A' && word[delta] <= 'Z' ? word[delta] + 32 : word[delta]);
 	value[delta] = 0;
 	config_write("bots.skill", value);
+}
+
+/* where a line typed on the keyboard goes, by the tab shown: the party's chat, a friend's code, else the game's chat */
+static int keyboard_destination(int tab)
+{
+	return tab == HALO_SOCIAL_TAB_PARTY ? NETWORK_CHAT_TO_PARTY : tab == HALO_SOCIAL_TAB_FRIENDS ? NETWORK_CHAT_TO_FRIEND_CODE : NETWORK_CHAT_TO_GAME;
 }
 
 /* what the finger touched */
@@ -137,7 +148,13 @@ static void event_handle(struct halo_social_event const *event, struct screens_t
 		social.page = (social.page + (event->kind == HALO_SOCIAL_EVENT_PAGE_NEXT ? 1 : network_chat_quick_pages() - 1)) % network_chat_quick_pages();
 		break;
 	case HALO_SOCIAL_EVENT_KEYBOARD:
-		platform_log("screens: social view, KEYBOARD (not wired to the chat yet: D-pad Up opens it)");
+		/* (the keyboard opens as D-pad Up opens it; the line typed goes where the tab shows: the party's chat, a friend's code, else the game's chat) */
+		{
+			int destination = keyboard_destination(social.tab);
+
+			platform_log("screens: social view, KEYBOARD for %s", destination == NETWORK_CHAT_TO_PARTY ? "the party's chat" : destination == NETWORK_CHAT_TO_FRIEND_CODE ? "a friend's code" : "the game's chat");
+			network_chat_keyboard_request(destination);
+		}
 		break;
 	case HALO_SOCIAL_EVENT_BOTS_MINUS:
 	case HALO_SOCIAL_EVENT_BOTS_PLUS:
@@ -169,6 +186,34 @@ static void event_handle(struct halo_social_event const *event, struct screens_t
 	}
 }
 
+/* a line typed on the keyboard for the friends layer: the party's chat, or a friend's code sent as a request; what the provider answers is shown as a toast */
+static int screens_social_line(int destination, char const *text)
+{
+	struct screens_provider const *provider = screens_provider();
+	char answer[SCREENS_LINE_SIZE];
+	int done = 0;
+
+	answer[0] = 0;
+	if (provider && destination == NETWORK_CHAT_TO_PARTY && provider->party_chat)
+		done = provider->party_chat(text, answer, (int)sizeof(answer));
+	else if (provider && destination == NETWORK_CHAT_TO_FRIEND_CODE && provider->friend_add)
+		done = provider->friend_add(text, answer, (int)sizeof(answer));
+	else
+		return 0;
+	platform_log("screens: social view, a line for %s: %s %s", destination == NETWORK_CHAT_TO_PARTY ? "the party" : "a friend's code", done ? "done" : "refused", answer);
+	if (answer[0])
+	{
+		struct screens_toast toast;
+
+		memset(&toast, 0, sizeof(toast));
+		toast.kind = done ? SCREENS_TOAST_NOTICE : SCREENS_TOAST_JOIN_FAILED;
+		copy(toast.text, (int)sizeof(toast.text), answer);
+		social.line_toast = toast;
+		social.line_toast_pending = 1;
+	}
+	return 1;
+}
+
 /* once a frame (screens_toast.c's): the view published while a game is on and no menu is up, and the touches taken */
 void screens_social_frame(struct screens_toast_state *toasts, unsigned long now)
 {
@@ -192,6 +237,16 @@ void screens_social_frame(struct screens_toast_state *toasts, unsigned long now)
 		return;
 	}
 	social.was_active = 1;
+	if (!social.handler_set)
+	{
+		social.handler_set = 1;
+		network_chat_set_line_handler(screens_social_line);
+	}
+	if (social.line_toast_pending)
+	{
+		social.line_toast_pending = 0;
+		screens_toast_push(toasts, &social.line_toast, now);
+	}
 	/* (the model four times a second, at most) */
 	if (now - social.updated >= 250 || !social.model.valid)
 	{

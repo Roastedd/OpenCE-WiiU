@@ -4000,6 +4000,41 @@ short ui_widget_port_list_index(
 	return index;
 }
 
+/* port: the name of the screen on top of the first player's stack, NULL if there is none (the friends layer: whether a screen can be opened over it) */
+char const *ui_widget_port_top_name(
+	void)
+{
+	return widget_globals.active_widgets[0] ? widget_globals.active_widgets[0]->name : NULL;
+}
+
+/* port: a screen opened over the one on top, as a button of it would (the back button comes to the screen on top again), for the friends layer's join from the menus when no
+button was pressed. FALSE if there is no screen on top or the screen did not load. */
+boolean ui_widget_port_open_over_top(
+	char const *name)
+{
+	struct widget_instance *top = widget_globals.active_widgets[0];
+	struct widget_instance *widget;
+
+	if (!top || widget_globals.active_widgets[0]->parent)
+		return FALSE;
+	widget = ui_widget_load_by_name_or_tag(name, NONE, NULL, NONE, top->definition_tag_index, NONE, NONE);
+	if (!widget)
+	{
+		error(_error_silent, "failed to open a screen over the one on top");
+		return FALSE;
+	}
+	return TRUE;
+}
+
+/* port: the game's clock paused for good, as a pause screen does (a message to the tick thread on the Wii U), for leaving a game outside the pause menu */
+void ui_widget_port_pause_game(
+	void)
+{
+	if (!game_time_ui_get_paused_port())
+		game_time_post_paused_port(TRUE);
+	game_time_flush_paused_port();
+}
+
 /* port: back to the screen before, for the menus' functions */
 void ui_widget_port_go_back(
 	struct widget_instance *widget)

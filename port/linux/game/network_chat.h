@@ -50,6 +50,19 @@ closes the keyboard. Each does nothing unless the keyboard is up for the first p
 void network_chat_keyboard_press(short row, short column);
 void network_chat_keyboard_channel(short channel);
 void network_chat_keyboard_close(void);
+/* (the GamePad's social view, screens_social.c) where a line typed on the on-screen keyboard goes */
+enum
+{
+	NETWORK_CHAT_TO_GAME,
+	/* the party's chat */
+	NETWORK_CHAT_TO_PARTY,
+	/* a friend's code, sent as a friend request */
+	NETWORK_CHAT_TO_FRIEND_CODE,
+};
+/* the on-screen keyboard opens as D-pad Up opens it (once the first player is in a game, and no keyboard is up), and the line typed goes to the destination: the game's chat is as ever;
+for the others the handler set below is given the destination and the line (nonzero: taken) instead of the game */
+void network_chat_keyboard_request(int destination);
+void network_chat_set_line_handler(int (*handler)(int destination, char const *text));
 /* Physical controller owning the on-screen keyboard, or NONE. */
 short network_chat_controller(void);
 /* (hud_unit.c) where the local player's motion sensor was drawn: its left

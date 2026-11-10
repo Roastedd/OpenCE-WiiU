@@ -286,6 +286,8 @@ void social_party_invite(unsigned int friend_id);
 void social_party_join_invite(unsigned int invite_id);
 void social_party_join_friend(unsigned int friend_id);
 void social_party_leave(void);
+/* the leader ends the party for everyone (a member that is not the leader gets SOCIAL_PARTY_RESULT_NOT_LEADER) */
+void social_party_disband(void);
 /* the leader removes a member (who may not come back), or hands the lead to one */
 void social_party_kick(unsigned int member_id);
 void social_party_transfer(unsigned int member_id);
@@ -308,6 +310,18 @@ void social_set_accept_requests(int accept);
 /* what the game is doing, for friends to see: SOCIAL_ACTIVITY_MENUS, _LOBBY, _GAME (a multiplayer game), _SOLO (a campaign or a game alone: never joinable), _BUSY.
 internet play adds where the game is hosted and how to join it. Cheap: call it when it changes. */
 void social_set_activity(int activity);
+
+/* The public game this machine has joined, as the game knows it (a client's game: its map, type, players, most and whether it still takes players), told every half second while this machine
+is in one and cleared with NULL when it is not. With the way into the game that internet play keeps of a game joined from the server browser, it makes friends' JOIN and the party's leader's
+game (the followers join it). A game joined by an invitation has no such way, and is not told. */
+struct social_joined_game
+{
+	char map[SOCIAL_MAP_SIZE + 1];
+	char gametype[SOCIAL_GAMETYPE_SIZE + 1];
+	unsigned char players, maximum_players, engine_type;
+	int open;
+};
+void social_set_joined_game(const struct social_joined_game *game);
 
 /* ---------- events (toasts) */
 

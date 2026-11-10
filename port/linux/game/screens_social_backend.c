@@ -231,9 +231,10 @@ static int be_join_state(int joinable, int private_game, int players, int maximu
 		return network_version > version ? SCREENS_JOIN_NEWER_BUILD : SCREENS_JOIN_OLDER_BUILD;
 	if (!joinable)
 	{
+		if (private_game)
+			return SCREENS_JOIN_INVITE_ONLY;
 		if (maximum > 0 && players >= maximum)
 			return SCREENS_JOIN_FULL;
-		(void)private_game;
 		return SCREENS_JOIN_CLOSED;
 	}
 	if (map && map[0])
@@ -258,7 +259,7 @@ static void be_friend_row(struct social_friend_info const *info, struct screens_
 	row->presence = (unsigned char)be_presence_of(info);
 	row->party = (unsigned char)(info->in_party != 0);
 	row->key = (long)info->id;
-	if (info->online && info->hosting && (info->activity == SOCIAL_ACTIVITY_LOBBY || info->activity == SOCIAL_ACTIVITY_GAME))
+	if (info->online && (info->hosting || info->joinable) && (info->activity == SOCIAL_ACTIVITY_LOBBY || info->activity == SOCIAL_ACTIVITY_GAME))
 	{
 		row->players = (short)info->players;
 		row->maximum = (short)info->maximum_players;
@@ -650,8 +651,19 @@ static void be_events_collect(void)
 		case SOCIAL_API_EVENT_PARTY_LEADER:
 			be_notice_named(SCREENS_TOAST_NOTICE, event.name, " LEADS THE PARTY", "", 0);
 			break;
+		case SOCIAL_API_EVENT_PARTY_CHAT:
+		{
+			/* (a line the party said: the name and "party" first, the words under it as they were typed, clean ASCII, as much as a line holds) */
+			char who[SCREENS_NAME_SIZE], head[SCREENS_LINE_SIZE];
+
+			screens_social_upper(who, sizeof(who), event.name[0] ? event.name : "SOMEONE");
+			snprintf(head, sizeof(head), "%s (PARTY)", who);
+			snprintf(detail, sizeof(detail), "%s", event.text);
+			be_notice_push(SCREENS_TOAST_NOTICE, head, detail, 0);
+			break;
+		}
 		default:
-			/* (removed by a friend: said nowhere; party chat: the chat's own) */
+			/* (removed by a friend: said nowhere) */
 			break;
 		}
 	}
@@ -737,10 +749,26 @@ static void backend_invite_answer(long id, int accept)
 		social_party_join_invite(invite->id);
 		return;
 	}
-	/* (a game is not left for a join: the invitation stays, and its sender's row in the Friends screen joins it from the menus) */
+	/* (a game this machine is in is left for the join: the game ends, the menus come up, the join begins and the Direct Link list finishes it. A game that cannot be joined (another version,
+	a map that is missing) is not worth leaving this one for: the reason is said and the game goes on) */
 	if (social_join_hook_busy())
 	{
-		be_notice_push(SCREENS_TOAST_JOIN_FAILED, "LEAVE YOUR GAME FIRST.", "Then Friends > JOIN. The invitation waits a minute.", 0);
+		int reason = social_flow_leave_and_join_invite(invite->id);
+
+		if (reason != SOCIAL_JOIN_REASON_NONE)
+		{
+			be_sentence(text, sizeof(text), social_join_reason_text(reason, invite->target.map));
+			be_notice_push(SCREENS_TOAST_JOIN_FAILED, text, "", 0);
+			return;
+		}
+		snprintf(be.join_name, sizeof(be.join_name), "%s", invite->name);
+		{
+			char who[SCREENS_NAME_SIZE];
+
+			screens_social_upper(who, sizeof(who), invite->name[0] ? invite->name : "A FRIEND");
+			snprintf(text, sizeof(text), "LEAVING THE GAME TO JOIN %s", who);
+			be_notice_push(SCREENS_TOAST_NOTICE, text, "", 0);
+		}
 		return;
 	}
 	{
@@ -876,13 +904,61 @@ static int backend_party_action(int action, struct screens_party_member const *m
 		social_party_kick((unsigned int)member->key);
 		return 1;
 	case SCREENS_ACTION_DISBAND_PARTY:
-		/* (the layer reads a disband and sends none: a leader leaves and the next member leads) */
-		be_answer_set(answer, size, "NOT AVAILABLE: LEAVE THE PARTY AND THE NEXT MEMBER LEADS.");
-		return 0;
+		/* (the leader ends it for everyone; a member that is not the leader cannot) */
+		if (!be.snapshot.party.is_leader)
+		{
+			be_answer_set(answer, size, "ONLY THE LEADER CAN END THE PARTY. LEAVE IT INSTEAD.");
+			return 0;
+		}
+		social_party_disband();
+		return 1;
 	default:
 		be_answer_set(answer, size, "THAT IS NOT AVAILABLE YET.");
 		return 0;
 	}
+}
+
+static int backend_party_chat(char const *text, char *answer, int size)
+{
+	char clean[SCREENS_LINE_SIZE];
+	int length = 0;
+
+	if (!be_refresh())
+	{
+		be_answer_set(answer, size, "FRIENDS ARE OFF.");
+		return 0;
+	}
+	if (!be.snapshot.party.active)
+	{
+		be_answer_set(answer, size, "YOU ARE NOT IN A PARTY.");
+		return 0;
+	}
+	/* (only the printable characters a chat line holds; the layer cleans it again) */
+	for (; text && *text && length < (int)sizeof(clean) - 1; text++)
+	{
+		if ((unsigned char)*text >= 0x20 && (unsigned char)*text <= 0x7E && *text != '|')
+			clean[length++] = *text;
+	}
+	clean[length] = 0;
+	while (length > 0 && clean[length - 1] == ' ')
+		clean[--length] = 0;
+	{
+		char *start = clean;
+
+		while (*start == ' ')
+			start++;
+		memmove(clean, start, strlen(start) + 1);
+		length = (int)strlen(clean);
+	}
+	if (!length)
+	{
+		be_answer_set(answer, size, "TYPE SOMETHING TO SAY.");
+		return 0;
+	}
+	be.changes++;
+	social_party_chat(clean);
+	be_answer_set(answer, size, "SENT TO THE PARTY.");
+	return 1;
 }
 
 /* two codes, the same once read as codes */
@@ -975,18 +1051,17 @@ static void backend_friend_actions(int tab, struct screens_friend_row const *row
 	actions[count] = SCREENS_ACTION_NONE;
 }
 
-/* the party's rows: as the defaults, but no DISBAND (the layer has no call for it: LEAVE is what it has) */
+/* the party's rows: as the defaults, and the leader's own row also LEAVES (the next member leads), which the defaults do not offer beside DISBAND */
 static void backend_party_actions(struct screens_party_member const *member, struct screens_party_summary const *summary, int *actions)
 {
 	int all[SCREENS_ACTIONS_MAXIMUM + 1], index, count = 0;
 
 	screens_default_party_actions(member, summary, all);
-	for (index = 0; all[index] != SCREENS_ACTION_NONE; index++)
+	for (index = 0; all[index] != SCREENS_ACTION_NONE && count < SCREENS_ACTIONS_MAXIMUM - 1; index++)
 	{
+		actions[count++] = all[index];
 		if (all[index] == SCREENS_ACTION_DISBAND_PARTY)
 			actions[count++] = SCREENS_ACTION_LEAVE_PARTY;
-		else
-			actions[count++] = all[index];
 	}
 	actions[count] = SCREENS_ACTION_NONE;
 }
@@ -1112,7 +1187,16 @@ int screens_social_join_line(char *line, int size)
 	}
 	if (status.state == SOCIAL_JOIN_READY)
 	{
-		snprintf(line, (size_t)size, "THE GAME IS HERE. CHOOSE IT IN THE LIST AND PRESS A.");
+		/* (the list presses A for the game; a screen in the way, or the leaving of a game, is said) */
+		if (social_flow_waiting_text()[0])
+			be_sentence(line, size, social_flow_waiting_text());
+		else
+			snprintf(line, (size_t)size, "CONNECTED. JOINING THE GAME...");
+		return 1;
+	}
+	if (social_flow_leaving())
+	{
+		be_sentence(line, size, social_flow_waiting_text()[0] ? social_flow_waiting_text() : "Leaving your game");
 		return 1;
 	}
 	if (status.state == SOCIAL_JOIN_FAILED && status.text[0])
@@ -1144,6 +1228,7 @@ static struct screens_provider const be_table =
 	NULL,
 	backend_friend_actions,
 	backend_party_actions,
+	backend_party_chat,
 };
 
 struct screens_provider const *screens_social_backend(void)

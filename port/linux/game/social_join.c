@@ -16,6 +16,13 @@ Joining a friend's game (social_join.h).
 /* how often the friend is looked at again while joining */
 #define JOIN_CHECK_INTERVAL 1000
 
+static int (*hook_map_download)(void);
+
+void social_join_set_map_download_hook(int (*enabled)(void))
+{
+	hook_map_download = enabled;
+}
+
 const char *social_join_reason_word(int reason)
 {
 	static const char *const words[NUMBER_OF_SOCIAL_JOIN_REASONS] = { "none", "offline", "not_joinable", "left", "version", "wrong_map", "full", "closed", "banned",
@@ -41,6 +48,12 @@ const char *social_join_reason_text(int reason, const char *map)
 	case SOCIAL_JOIN_REASON_VERSION:
 		return "Your friend plays another version of the game";
 	case SOCIAL_JOIN_REASON_MAP_MISSING:
+		/* (the map is not on this machine and cannot be fetched: with downloads off, that they are, else the map) */
+		if (map && map[0] && hook_map_download && !hook_map_download())
+		{
+			snprintf(text, sizeof(text), "You do not have the map %s; DOWNLOAD MAPS is off", map);
+			return text;
+		}
 		if (map && map[0])
 		{
 			snprintf(text, sizeof(text), "You do not have the map %s", map);
@@ -434,4 +447,244 @@ void social_join_status_get(struct social_join_status *status)
 		social_join_machine_status(&global_machine, status);
 	else
 		memset(status, 0, sizeof(*status));
+}
+
+/* ---------- finishing a join in the menus, and leaving a game first */
+
+enum
+{
+	FLOW_LEAVE_TIMEOUT = 30000,
+	FLOW_READY_TIMEOUT = 120000,
+	FLOW_FAILED_HOLD = 8000,
+	FLOW_PRESS_SPACING = 3000,
+	FLOW_PRESS_MAXIMUM = 3,
+	/* a join ready with a screen in the way: said so after this long */
+	FLOW_BLOCKED_AFTER = 2000,
+};
+
+static struct
+{
+	struct social_flow_world world;
+	int have;
+	int leaving;
+	unsigned int leave_started;
+	struct social_join_target pending;
+	unsigned int ready_since, failed_since, last_press, blocked_since;
+	int presses;
+	unsigned int press_serial;
+	int opened_for;
+	const char *waiting;
+} flow;
+
+static void flow_log(const char *text)
+{
+	if (flow.have && flow.world.log)
+		flow.world.log(flow.world.user, text);
+}
+
+void social_flow_set_world(const struct social_flow_world *world)
+{
+	memset(&flow, 0, sizeof(flow));
+	if (world)
+	{
+		flow.world = *world;
+		flow.have = 1;
+	}
+	flow.waiting = "";
+}
+
+int social_join_start_target(const struct social_join_target *target)
+{
+	if (!global_ready || !social_is_enabled())
+		return SOCIAL_JOIN_REASON_OFF;
+	return social_join_machine_target(&global_machine, target);
+}
+
+int social_flow_leaving(void)
+{
+	return flow.leaving;
+}
+
+const char *social_flow_waiting_text(void)
+{
+	return flow.waiting ? flow.waiting : "";
+}
+
+int social_flow_leave_and_join_invite(unsigned int invite_id)
+{
+	int index;
+
+	if (!global_ready || !social_is_enabled() || !flow.have)
+		return SOCIAL_JOIN_REASON_OFF;
+	if (flow.leaving)
+		return SOCIAL_JOIN_REASON_BUSY;
+	social_snapshot_get(&global_snapshot);
+	for (index = 0; index < global_snapshot.invite_count; index++)
+	{
+		const struct social_invite_info *invite = &global_snapshot.invites[index];
+
+		if (invite->id == invite_id && invite->kind == 1)
+		{
+			static const unsigned char none[SOCIAL_TOKEN_SIZE];
+
+			/* (the checks that do not need this game gone are made now: a game that cannot be joined is not worth leaving this one for) */
+			if (!memcmp(invite->target.token, none, sizeof(none)))
+				return SOCIAL_JOIN_REASON_BAD_INVITE;
+			if (invite->target.network_version != global_machine.backend.version(global_machine.backend.user))
+				return SOCIAL_JOIN_REASON_VERSION;
+			if (invite->target.map[0] && social_join_hook_map_state(invite->target.map) == 2)
+				return SOCIAL_JOIN_REASON_MAP_MISSING;
+			if (global_machine.backend.in_game_of(global_machine.backend.user, invite->target.host_hash))
+				return SOCIAL_JOIN_REASON_TOGETHER;
+			if (global_machine.state == SOCIAL_JOIN_WORKING)
+				social_join_machine_cancel(&global_machine);
+			flow.pending = invite->target;
+			flow_log("flow: an invitation answered in a game: the game is left first");
+			flow.leaving = 1;
+			flow.leave_started = flow.world.now(flow.world.user);
+			flow.waiting = "Leaving your game...";
+			social_invite_dismiss(invite_id);
+			return SOCIAL_JOIN_REASON_NONE;
+		}
+	}
+	return SOCIAL_JOIN_REASON_BAD_INVITE;
+}
+
+int social_flow_press_allowed(void)
+{
+	unsigned int now;
+
+	if (!flow.have || global_machine.state != SOCIAL_JOIN_READY)
+		return 0;
+	now = flow.world.now(flow.world.user);
+	if (flow.press_serial != global_machine.serial)
+	{
+		flow.press_serial = global_machine.serial;
+		flow.presses = 0;
+		flow.last_press = 0;
+	}
+	if (flow.presses >= FLOW_PRESS_MAXIMUM)
+	{
+		/* (the host's game would not take this machine: the A press three times did nothing) */
+		flow_log("flow: three A presses did nothing: the game would not take this machine");
+		social_join_machine_cancel(&global_machine);
+		global_machine.reason = SOCIAL_JOIN_REASON_REFUSED;
+		return 0;
+	}
+	if (flow.presses && (unsigned int)(now - flow.last_press) < FLOW_PRESS_SPACING)
+		return 0;
+	flow.presses++;
+	flow.last_press = now ? now : 1;
+	flow_log(flow.presses == 1 ? "flow: A pressed for the game" : "flow: A pressed for the game again");
+	return 1;
+}
+
+static void flow_leave_failed(unsigned int now)
+{
+	(void)now;
+	flow_log("flow: the game did not go in thirty seconds: the invitation is given up");
+	flow.leaving = 0;
+	flow.waiting = "";
+	/* (the game would not go: the join machine says why it is not joining) */
+	social_join_machine_done(&global_machine);
+	global_machine.target = flow.pending;
+	global_machine.serial++;
+	global_machine.state = SOCIAL_JOIN_FAILED;
+	global_machine.reason = SOCIAL_JOIN_REASON_BUSY;
+}
+
+void social_flow_update(void)
+{
+	unsigned int now;
+	struct social_join_status status;
+
+	if (!global_ready || !flow.have || !social_is_enabled())
+		return;
+	now = flow.world.now(flow.world.user);
+	flow.waiting = "";
+	if (flow.leaving)
+	{
+		/* (leaving: the game is told to go every frame until it has; then the menus come up; then the join of the invitation) */
+		if ((unsigned int)(now - flow.leave_started) >= FLOW_LEAVE_TIMEOUT)
+		{
+			flow_leave_failed(now);
+			return;
+		}
+		flow.waiting = "Leaving your game...";
+		if (flow.world.busy(flow.world.user))
+		{
+			flow.world.leave(flow.world.user);
+			return;
+		}
+		if (!flow.world.menus_up(flow.world.user))
+		{
+			flow.waiting = "Back to the menus...";
+			return;
+		}
+		flow.leaving = 0;
+		flow.waiting = "";
+		flow_log("flow: the menus are up; the invitation's game is joined");
+		social_join_machine_target(&global_machine, &flow.pending);
+	}
+	/* (advances the join, and starts the party's following of its leader's game when this machine is idle) */
+	social_join_update();
+	social_join_status_get(&status);
+	switch (status.state)
+	{
+	case SOCIAL_JOIN_WORKING:
+		flow.ready_since = flow.failed_since = flow.blocked_since = 0;
+		break;
+	case SOCIAL_JOIN_READY:
+		flow.failed_since = 0;
+		if (flow.world.busy(flow.world.user))
+		{
+			/* (the A press joined it: this machine is in the game now) */
+			flow_log("flow: this machine is in the game: the join is done");
+			social_join_machine_done(&global_machine);
+			flow.ready_since = flow.blocked_since = 0;
+			break;
+		}
+		if (!flow.ready_since)
+			flow.ready_since = now ? now : 1;
+		else if ((unsigned int)(now - flow.ready_since) >= FLOW_READY_TIMEOUT)
+		{
+			flow_log("flow: nobody finished the join in two minutes: given up");
+			social_join_machine_cancel(&global_machine);
+			break;
+		}
+		switch (flow.world.screen(flow.world.user))
+		{
+		case SOCIAL_FLOW_SCREEN_SAFE:
+			flow.blocked_since = 0;
+			if (flow.world.menus_up(flow.world.user) && flow.opened_for != (int)status.serial)
+			{
+				if (flow.world.open_list(flow.world.user))
+					flow.opened_for = (int)status.serial;
+			}
+			break;
+		case SOCIAL_FLOW_SCREEN_LIST:
+			flow.blocked_since = 0;
+			break;
+		default:
+			if (!flow.blocked_since)
+				flow.blocked_since = now ? now : 1;
+			else if ((unsigned int)(now - flow.blocked_since) >= FLOW_BLOCKED_AFTER)
+				flow.waiting = "The game is ready: go back to the main menu to join it";
+			break;
+		}
+		break;
+	case SOCIAL_JOIN_FAILED:
+		if (!flow.failed_since)
+			flow.failed_since = now ? now : 1;
+		else if ((unsigned int)(now - flow.failed_since) >= FLOW_FAILED_HOLD)
+		{
+			social_join_machine_done(&global_machine);
+			flow.failed_since = 0;
+		}
+		flow.ready_since = flow.blocked_since = 0;
+		break;
+	default:
+		flow.ready_since = flow.failed_since = flow.blocked_since = 0;
+		break;
+	}
 }

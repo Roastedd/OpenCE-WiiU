@@ -10,7 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import CHECK_FAILED, build, function, mutated, read, run
 
-CASES = ["hosted-16", "not-said-yet", "local-game", "hosting-wanted", "activity"]
+CASES = ["hosted-16", "not-said-yet", "local-game", "hosting-wanted", "activity", "private", "menus-after-a-game", "joined-public"]
 
 
 def generated(fault=None):
@@ -36,11 +36,27 @@ def test_case(case):
     # the place of a local game made as a hosted one
     ("if (p2p.hosting && p2p.has_token && !p2p.game_local && place->activity != SOCIAL_SOLO)", "if (p2p.hosting && p2p.has_token && place->activity != SOCIAL_SOLO)", "local-game"),
     # a split screen game told as a game (the console's first run)
-    ("\tif (network_game_is_splitscreen_local())\n\t\treturn SOCIAL_ACTIVITY_SOLO;\n", "", "activity"),
+    ("return network_game_is_splitscreen_local() || game_connection() == _game_connection_local ? SOCIAL_ACTIVITY_SOLO : SOCIAL_ACTIVITY_GAME;",
+     "return game_connection() == _game_connection_local ? SOCIAL_ACTIVITY_SOLO : SOCIAL_ACTIVITY_GAME;", "activity"),
     # the tunnel's 128 as the most
     ("maximum = p2p.game_player_maximum > 0 ? p2p.game_player_maximum : 0;", "maximum = p2p.game_player_maximum > 0 ? p2p.game_player_maximum : 128;", "not-said-yet"),
     # joinable with no most known
-    ("open && maximum > 0 && config_boolean(", "open && config_boolean(", "not-said-yet"),
+    ("open && maximum > 0 && !place->private_game && config_boolean(", "open && !place->private_game && config_boolean(", "not-said-yet"),
+    # the main menu's scene counted as a game (the console's "solo" at the main menu after a local game)
+    ("if (game_in_progress() && !game_time_menu_scene())", "if (game_in_progress())", "menus-after-a-game"),
+    # a leftover split screen server taken for a game
+    ("return lobby ? SOCIAL_ACTIVITY_SOLO : SOCIAL_ACTIVITY_MENUS;", "return SOCIAL_ACTIVITY_SOLO;", "menus-after-a-game"),
+    # a private game joinable by its presence
+    ("!place->private_game && config_boolean(", "config_boolean(", "private"),
+    # a game with a password or not listed not private
+    ("place->private_game = (unsigned char)(has_password || !p2p_lobby_listed_locked());", "place->private_game = (unsigned char)has_password;", "private"),
+    ("place->private_game = (unsigned char)(has_password || !p2p_lobby_listed_locked());", "place->private_game = (unsigned char)!p2p_lobby_listed_locked();", "private"),
+    # a joined game's way in told though the host is not reached
+    ("		if (joined_listed_invite_locked(hash, token))", "		if (1 || joined_listed_invite_locked(hash, token))", "joined-public"),
+    # a full joined game told as joinable
+    ("joined.game.players < joined.game.maximum_players &&", "", "joined-public"),
+    # a joined game told from the menus
+    ("place->activity != SOCIAL_SOLO && (place->activity == SOCIAL_GAME || place->activity == SOCIAL_LOBBY))", "place->activity != SOCIAL_SOLO)", "joined-public"),
     # the game's count not used
     ("count = p2p.game_player_maximum > 0 ? p2p.game_player_count : connected_player_count() + 1;", "count = connected_player_count() + 1;", "hosted-16"),
 ])

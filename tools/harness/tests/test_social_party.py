@@ -9,7 +9,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import social
 
-CASES = ["basic", "eight", "leader-dies", "leave-transfer", "silent-member", "kick", "chat", "open-party", "partition", "follow", "abuse"]
+CASES = ["basic", "eight", "leader-dies", "leave-transfer", "silent-member", "kick", "disband", "chat", "open-party", "partition", "follow", "follow-joined", "abuse"]
 
 
 @pytest.fixture(scope="module")
@@ -48,6 +48,12 @@ FAULTS = [
     ("follow", "social_party.c", "		if (!party->follow_final_retry && party->follow_tries + 1 < SOCIAL_PARTY_FOLLOW_TRIES)", "		if (!party->follow_final_retry && 0)"),
     # a machine in a game is moved out of it
     ("follow", "social_party.c", "	if (engine->place.activity != SOCIAL_MENUS && engine->place.activity != SOCIAL_BUSY && engine->place.activity != SOCIAL_LOBBY)\n		return 0;", "	(void)engine->place.activity;"),
+    # the leader's disband is sent to no one
+    ("disband", "social_party.c", "	simple_send(engine, SOCIAL_TYPE_PARTY_DISBAND, NULL, 0, party->term, NULL);\n	left(engine, \"disbanded\");", "	left(engine, \"disbanded\");"),
+    # a member may disband
+    ("disband", "social_party.c", "	if (party->joining || !is_leader(engine))\n		return SOCIAL_PARTY_NOT_LEADER;\n	simple_send(engine, SOCIAL_TYPE_PARTY_DISBAND", "	if (party->joining)\n		return SOCIAL_PARTY_NOT_LEADER;\n	simple_send(engine, SOCIAL_TYPE_PARTY_DISBAND"),
+    # a joined game is not the party's game (the block needs hosting)
+    ("follow-joined", "social_party.c", "		int present = place->has_invite && place->joinable && place->activity != SOCIAL_SOLO;", "		int present = place->hosting && place->has_invite && place->joinable && place->activity != SOCIAL_SOLO;"),
     # the leader invites a ninth
     ("eight", "social_party.c", "	if (member_count(party) >= SOCIAL_MAX_PARTY_MEMBERS)\n		return SOCIAL_PARTY_FULL;", "	if (member_count(party) > 20)\n		return SOCIAL_PARTY_FULL;"),
     # any outsider may claim the lead

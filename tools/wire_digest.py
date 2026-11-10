@@ -110,6 +110,7 @@ def repeated(base, head, name, mode, number, menu, extra, own, times, results):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="1b3e0dcb")
+    parser.add_argument("--social", default="1", choices=("0", "1"), help="the head's friends layer: 1 (the default: its thread, identity and once-a-frame call run) or 0 (nothing of it runs: the layer is off, as it is by default)")
     parser.add_argument("--ticks", type=int, default=300)
     parser.add_argument("--frames", type=int, default=200)
     parser.add_argument("--controls", action="store_true")
@@ -119,6 +120,7 @@ def main():
     parser.add_argument("out", type=Path)
     arguments = parser.parse_args()
     arguments.out.mkdir(parents=True, exist_ok=True)
+    OFF["HALO_SOCIAL"] = arguments.social
     results = {"base": arguments.base, "head_environment": OFF}
     head = digest.build()
     if arguments.smoke:

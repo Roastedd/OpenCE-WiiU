@@ -1373,6 +1373,47 @@ static boolean delete_playlist_profile_request(
 	struct widget_instance *widget,
 	struct event_record *event,
 	boolean *widget_deleted);
+/* port: the game this machine is in left without the pause menu (the friends layer's join of a friend's game from an invitation answered in a game), as that menu's QUIT would: every
+player on this machine out of a network game (a split screen or hosted game, co-op or a game joined; the host's game goes on or ends as it does when its player quits), else the
+map alone to the main menu, a campaign saving its checkpoint first as QUIT does. Called every frame while the game is going; TRUE once the game is on its way out. The campaign
+pauses the clock first and quits half a second later: the save must not run over a tick (the pause screen has the player's time for that). */
+void ui_widget_port_pause_game(void);
+
+boolean ui_widget_port_leave_game(
+	unsigned long milliseconds)
+{
+	static unsigned long paused_at = 0, quit_at = 0;
+	short controller_index;
+
+	if (global_network_game_client_get())
+	{
+		/* (each call asks the host to remove the players: once, and again after three seconds if the game is still there) */
+		if (quit_at && milliseconds - quit_at < 3000)
+			return TRUE;
+		for (controller_index = 0; controller_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS; controller_index++)
+			network_game_client_local_player_quit(controller_index);
+		quit_at = milliseconds ? milliseconds : 1;
+		paused_at = 0;
+		return TRUE;
+	}
+	quit_at = 0;
+	if (main_get_current_solo_level() != NONE)
+	{
+		if (!paused_at)
+		{
+			ui_widget_port_pause_game();
+			paused_at = milliseconds ? milliseconds : 1;
+			return FALSE;
+		}
+		if (milliseconds - paused_at < 500)
+			return FALSE;
+		game_state_save_to_persistent_storage();
+	}
+	paused_at = 0;
+	main_goto_main_menu();
+	return TRUE;
+}
+
 static boolean delete_player_profile_final(
 	struct widget_instance *widget,
 	struct event_record *event,
@@ -1393,6 +1434,31 @@ static boolean create_and_begin_editing_new_player_profile(
 	struct widget_instance *widget,
 	struct event_record *event,
 	boolean *widget_deleted);
+/* port: the team of this machine's player of the controller swapped, as the lobby's SWITCH TEAM does (the Players page's CHANGE TEAM on the player's own row). FALSE if the game has no
+teams, or the controller has no player in it. */
+boolean ui_widget_port_swap_team(
+	short controller_index)
+{
+	struct network_game *game = network_game_get_game();
+	short machine_index = network_game_client_get_local_machine_index();
+	long player_index;
+
+	if (!game || game->variant.universal_variant.teams != TRUE || machine_index == NONE || !global_network_game_client_get())
+		return FALSE;
+	for (player_index = 0; player_index < (long)NUMBEROF(game->players); player_index++)
+	{
+		if (network_player_is_valid(&game->players[player_index]) && (short)game->players[player_index].machine_index == machine_index &&
+			(short)game->players[player_index].controller_index == controller_index)
+		{
+			struct network_player player = game->players[player_index];
+
+			player.team_index = !player.team_index;
+			return network_game_client_update_local_player_data(global_network_game_client_get(), &player) ? TRUE : FALSE;
+		}
+	}
+	return FALSE;
+}
+
 static boolean network_game_start_faster(
 	struct widget_instance *widget,
 	struct event_record *event,
