@@ -2195,6 +2195,9 @@ void ui_widgets_initialize(
 	byte *base_address;
 	long local_player_index;
 
+	/* port: (the menus' file work, counted: halo/filecount.txt) */
+	FILE_COUNTS_START();
+
 	base_address = pool_alloc(WIDGET_MEMORY_POOL_SIZE);
 	if (base_address)
 	{

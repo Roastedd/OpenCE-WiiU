@@ -89,6 +89,12 @@ static void settings_read(void)
 	}
 }
 
+void file_counts_start(void)
+{
+	if (!t.read)
+		settings_read();
+}
+
 void file_counts_begin(unsigned long begin[NUMBER_OF_FILE_COUNTS], long long *started)
 {
 	file_counts_read(begin);

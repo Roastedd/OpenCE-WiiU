@@ -79,6 +79,7 @@ their handlers open opens.
 #include "networking/network_game_manager.h"
 #include "saved games/player_profile.h"
 #include "saved games/saved_game_files.h"
+#include "halo_file_counts.h"
 #include "tag_files/tag_groups.h"
 #include "text/text_group.h"
 #include "text/unicode.h"
@@ -8009,7 +8010,29 @@ static void gametype_engine_name(struct widget_instance *text_box)
 
 /* ---------- public code */
 
+static boolean menu_event_function_invoke(
+	struct widget_instance *widget,
+	struct event_record *event,
+	long function_index,
+	boolean *widget_deleted);
+
+/* (the card calls an event's function makes are counted with the function's name: halo_file_counts.h) */
 boolean pc_menu_event_function_invoke(
+	struct widget_instance *widget,
+	struct event_record *event,
+	long function_index,
+	boolean *widget_deleted)
+{
+	char const *label = pc_menu_function_name(function_index);
+	boolean result;
+	FILE_COUNTS_SCOPE_BEGIN();
+
+	result = menu_event_function_invoke(widget, event, function_index, widget_deleted);
+	FILE_COUNTS_SCOPE_END(label ? label : "a menu event", function_index);
+	return result;
+}
+
+static boolean menu_event_function_invoke(
 	struct widget_instance *widget,
 	struct event_record *event,
 	long function_index,

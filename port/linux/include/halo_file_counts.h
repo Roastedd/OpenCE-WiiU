@@ -46,18 +46,22 @@ unsigned long file_counts_card_calls(unsigned long const counts[NUMBER_OF_FILE_C
 
 #ifdef HALO_WIIU
 
-/* once a menu frame (process_ui_widgets): the report of the frame before */
+/* when the menus start (the card's setting is read, so that a screen opened as the game loads is counted too), and once a menu frame (process_ui_widgets): the report
+of the frame before */
+void file_counts_start(void);
 void file_counts_frame(void);
 /* around a menu function: its label, and the counts and the time it began with */
 void file_counts_begin(unsigned long begin[NUMBER_OF_FILE_COUNTS], long long *started);
 void file_counts_end(char const *label, long number, unsigned long const begin[NUMBER_OF_FILE_COUNTS], long long started);
 
+#define FILE_COUNTS_START() file_counts_start()
 #define FILE_COUNTS_FRAME() file_counts_frame()
 #define FILE_COUNTS_SCOPE_BEGIN() unsigned long file_counts_start[NUMBER_OF_FILE_COUNTS]; long long file_counts_time = 0; if (file_counting) file_counts_begin(file_counts_start, &file_counts_time)
 #define FILE_COUNTS_SCOPE_END(label, number) do { if (file_counting) file_counts_end((label), (number), file_counts_start, file_counts_time); } while (0)
 
 #else
 
+#define FILE_COUNTS_START() ((void)0)
 #define FILE_COUNTS_FRAME() ((void)0)
 #define FILE_COUNTS_SCOPE_BEGIN() ((void)0)
 #define FILE_COUNTS_SCOPE_END(label, number) ((void)(label), (void)(number))
