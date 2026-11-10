@@ -453,8 +453,11 @@ treat as any player's. The bots have a budget of the tick (`game/bots_budget.c`,
 `bots.budget_us` or, counted in work done and the same every run, `bots.budget_credit`)
 and a cap on their number (`bots.max`): over the budget, they look half as often,
 decide half as often, search paths every other tick, and the farthest from the
-players hold their controls, in that order. With no budget set, which is the
-default, nothing is limited or shed and the log's `bots: budget:` line says so.
+players hold their controls, in that order; and in a tick the bots after the
+cap is reached hold their last controls for a few ticks, so that a tick costs the cap and
+a few bots' thinks whatever the number of bots. The default is the guard on, at
+3,000 us a tick (`bots.budget_us`); 0 sets no budget, and nothing is limited or shed
+then, which the log's `bots: budget:` line says.
 
 ## OpenCE gametypes
 
@@ -621,7 +624,7 @@ the setting for one start of the game. It has priority over the file.
 | `bots.teams` | `"even"` | `HALO_BOT_TEAMS` | In a team game: `"even"` puts the bots on both teams, evening them with the players; `"against"` puts them all on the team the players are not on. |
 | `screens.enable` | `0` | `HALO_SCREENS` | The social screens (the Players page, the bot settings, the Friends screen, toasts, the Wii U GamePad's social view; `port/linux/game/screens.h`). `0`: none of them exists in the menus or the game. `1`: the screens, with made-up players, friends, a party and toasts, to look at with no network. `2`: the screens fed by the game's own players and the friends service the build has (an empty Friends screen with none). |
 | `bots.max` | `15` | `HALO_BOTS_MAX` | The most bots there may be, `0` to `15`: `bots.count` asks for no more than this. |
-| `bots.budget_us` | `0` | `HALO_BOTS_BUDGET_US` | The most microseconds that one tick of all the bots may cost. Over it the bots look half as often, decide half as often, search paths every other tick, and the farthest hold their controls, in that order, until the cost is back under 2/5 of it. `0`: no budget, nothing limited or shed (the cost is only counted in the log). |
+| `bots.budget_us` | `3000` | `HALO_BOTS_BUDGET_US` | The most microseconds that one tick of all the bots may cost (the guard against a frame blown by many bots). Over it the bots look half as often, decide half as often, search paths every other tick, and the farthest hold their controls, in that order, until the cost is back under 2/5 of it; the bots whose turn comes after the cap is reached in a tick hold their last controls for a few ticks. 3 bots cost 158 us a tick on the console, so a game that plays well never reaches it. `0`: no budget, nothing limited or shed (the cost is only counted in the log). |
 | `bots.budget_credit` | `0` | `HALO_BOTS_BUDGET_CREDIT` | The same budget counted in units of work (a sight test 80, a path node 5, a goal decision 200), which is the same every run: for tests. Used before `bots.budget_us`. `0`: none. |
 | `debug.bots_skills` | `""` | `HALO_BOTS_SKILLS` | Each bot's own skill level by its place in the list (`"legendary,recruit,,normal"`: the third follows `bots.skill`); for tests. Empty: all follow `bots.skill`. |
 | `bots.sim_ticks` | `0` | `HALO_BOTS_SIM_TICKS` | For automated runs (`tools/harness/bots_sim.py`): this many game ticks after the bots first play, the game says the `bots-sim:` block (each bot's frags, deaths, seconds stuck, path failures and think time) and ends the run. `0`: never. |

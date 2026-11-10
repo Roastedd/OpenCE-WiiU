@@ -5007,7 +5007,8 @@ void bots_tick(void)
 		bots_budget_elapsed(&bots_globals.budget, (long)(bot_started - tick_started));
 		bots_budget_spend(&bots_globals.budget, BOTS_BUDGET_MOTOR);
 		/* (the top step of the shedding: a bot among the farther half holds its last controls, up to a few ticks running) */
-		if (hold_ticks && bots_globals.far_from_humans[bot_index] && bot->last_action_valid && bot->held_ticks < hold_ticks)
+		if ((hold_ticks && bots_globals.far_from_humans[bot_index] && bot->last_action_valid && bot->held_ticks < hold_ticks) ||
+			(bot->last_action_valid && bots_budget_hold_over(&bots_globals.budget, bot->held_ticks)))
 		{
 			bots_hold_action(bot, action);
 			bot->held_ticks++;
@@ -5036,7 +5037,7 @@ void bots_tick(void)
 		if (bots_budget_take_change(&bots_globals.budget, &level, &reason))
 			platform_log("bots: budget: step %d of %d at tick %ld: %s", (int)level, BOTS_BUDGET_TOP_LEVEL, bots_globals.now, reason);
 		if (bots_budget_take_shed_request(&bots_globals.budget))
-			platform_log("bots: budget: the cap is broken at the top step (a bot fewer is asked for; nothing acts on it yet)");
+			platform_log("bots: budget: the cap is broken at the top step (the bots after the cap hold their last controls up to %d ticks)", BOTS_BUDGET_OVER_HOLD_TICKS);
 #ifdef BOTS_TICK_PART
 		wiiu_tick_part("game_tick_bots_section", part_started);
 #endif

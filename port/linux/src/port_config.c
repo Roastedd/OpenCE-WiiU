@@ -710,11 +710,13 @@ static const struct config_setting config_settings[] =
 	{ "bots.max", _config_integer, "15", "HALO_BOTS_MAX", _environment_value, _platform_all,
 		"The most bots there may be, 0 to 15: bots.count asks for no more than this. 15 is the game's own\n"
 		"most (a split screen game is 16 players with one of them yours)." },
-	{ "bots.budget_us", _config_integer, "0", "HALO_BOTS_BUDGET_US", _environment_value, _platform_all,
-		"The most microseconds that one tick of all the bots may cost; over it the bots look half as often,\n"
-		"decide half as often, search paths every other tick, and the farthest hold their controls, in that\n"
-		"order, until the cost is back under 2/5 of it. 0: no budget, nothing is limited or shed (the bots\n"
-		"cost is only counted in the log). The console's cost is not measured yet." },
+	{ "bots.budget_us", _config_integer, "3000", "HALO_BOTS_BUDGET_US", _environment_value, _platform_all,
+		"The most microseconds that one tick of all the bots may cost (the guard against a frame blown by many bots): over it the bots look half as\n"
+		"often, decide half as often, search paths every other tick, and the farthest hold their controls, in that order, until the cost is back\n"
+		"under 2/5 of it; and the bots whose turn comes after the cap is reached in a tick hold their last controls for a few ticks (a bot held\n"
+		"for 6 ticks thinks, 2 of them at most in a tick). The console's first numbers: 3 bots cost 158 us a tick on Blood Gulch, so 3,000 is\n"
+		"never reached by a game that plays well; it is for 15 bots in a big fight. 0: no budget, nothing is limited or shed (the bots' cost is\n"
+		"only counted in the log)." },
 	{ "bots.budget_credit", _config_integer, "0", "HALO_BOTS_BUDGET_CREDIT", _environment_value, _platform_all,
 		"The same budget counted in units of work (a sight test is 80, a path node 5, a goal decision 200),\n"
 		"which is the same every run: for tests. Used before bots.budget_us. 0: none." },

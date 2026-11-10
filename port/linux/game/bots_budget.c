@@ -19,6 +19,7 @@ void bots_budget_initialize(struct bots_budget *budget, short mode, long cap, sh
 	budget->tick = 0;
 	budget->spent = 0;
 	budget->searches = 0;
+	budget->forced = 0;
 	budget->mean = 0.0f;
 	budget->over_run = 0;
 	budget->level = 0;
@@ -38,6 +39,7 @@ void bots_budget_begin_tick(struct bots_budget *budget, long tick)
 	budget->tick = tick;
 	budget->spent = 0;
 	budget->searches = 0;
+	budget->forced = 0;
 }
 
 void bots_budget_spend(struct bots_budget *budget, long credit)
@@ -55,6 +57,18 @@ void bots_budget_elapsed(struct bots_budget *budget, long microseconds)
 int bots_budget_over(struct bots_budget const *budget)
 {
 	return budget->mode != _bots_budget_off && budget->spent >= budget->cap;
+}
+
+int bots_budget_hold_over(struct bots_budget *budget, int held_ticks)
+{
+	if (!bots_budget_over(budget))
+		return 0;
+	if (held_ticks >= BOTS_BUDGET_OVER_HOLD_TICKS && budget->forced < BOTS_BUDGET_FORCED_PER_TICK)
+	{
+		budget->forced++;
+		return 0;
+	}
+	return 1;
 }
 
 int bots_budget_search_allowed(struct bots_budget const *budget)

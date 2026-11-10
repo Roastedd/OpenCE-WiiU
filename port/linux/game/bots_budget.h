@@ -45,6 +45,10 @@ enum
 
 /* the steps of the shedding (0: none) */
 #define BOTS_BUDGET_TOP_LEVEL 4
+/* the ticks a bot whose turn comes after the tick's cap was reached holds its last controls before it may think regardless (so that none is starved), and
+how many may do that in one tick (so that those held together do not all think together) */
+#define BOTS_BUDGET_OVER_HOLD_TICKS 6
+#define BOTS_BUDGET_FORCED_PER_TICK 2
 /* the ticks the last controls of a far bot are held at the top level */
 #define BOTS_BUDGET_HOLD_TICKS 3
 /* the ticks of the mean, and the least between two steps up, and before one back down */
@@ -68,6 +72,8 @@ struct bots_budget
 	long tick;
 	long spent;
 	short searches;
+	/* the bots that thought this tick after the cap was reached, because they had been held long enough */
+	short forced;
 
 	/* the history */
 	float mean;
@@ -96,6 +102,10 @@ void bots_budget_begin_tick(struct bots_budget *budget, long tick);
 void bots_budget_spend(struct bots_budget *budget, long credit);
 /* the clock mode: the microseconds this tick has taken so far (a poll between the bots) */
 void bots_budget_elapsed(struct bots_budget *budget, long microseconds);
+/* the cap of the tick has been reached and this bot (held for `held_ticks` ticks running) holds its last controls instead of thinking: the guard that bounds a
+tick's cost at the cap and a few bots' thinks, however many bots there are. A bot held BOTS_BUDGET_OVER_HOLD_TICKS ticks thinks regardless, as far as
+BOTS_BUDGET_FORCED_PER_TICK of them a tick. Never when off. */
+int bots_budget_hold_over(struct bots_budget *budget, int held_ticks);
 /* the tick's cap is reached: no more work this tick. Never when off. */
 int bots_budget_over(struct bots_budget const *budget);
 /* one more path search may be made this tick (under the step 3 only every other tick), and a search made */

@@ -243,6 +243,65 @@ int main(int argc, char **argv)
 			"an unknown rate changed the cap");
 		return 0;
 	}
+	/* The guard against a frame blown by many bots, with a cost model of the console: each bot's turn costs its think (the console's 40 to 55 us a tick as measured on
+	Blood Gulch with 3 bots, a path search now and then, a fight's looks) or 3 us when it holds its last controls. 15 bots in the clock mode with a 3,000 us cap: a tick
+	never costs more than the cap and three thinks, no bot is held for longer than its turn comes in the rotation of those allowed to think regardless, and a light load is not touched at all. */
+	CASE("guard-15-bots")
+	{
+		static int const scenarios[4] = { 50, 150, 400, 1200 };	/* us a bot's think: the console's, 3 times it, a Beaver Creek's fight, a runaway */
+		int scenario;
+
+		for (scenario = 0; scenario < 4; scenario++)
+		{
+			int held[15] = { 0 }, think_of_bot = scenarios[scenario];
+			long worst_tick = 0, total = 0, holds = 0;
+			int run_worst = 0, light = think_of_bot * 10 * 15 / 7 < 1200;
+
+			bots_budget_initialize(&budget, _bots_budget_clock, 3000, 15, 3);
+			for (tick = 0; tick < 3000; tick++)
+			{
+				long spent_us = 0;
+				int bot;
+
+				bots_budget_begin_tick(&budget, tick);
+				for (bot = 0; bot < 15; bot++)
+				{
+					/* (the think of a turn: its base, and every seventh tick a path search and a look: 4 times it) */
+					long think = think_of_bot * ((tick + bot) % 7 == 0 ? 4 : 1);
+
+					bots_budget_elapsed(&budget, (long)spent_us);
+					if (bots_budget_hold_over(&budget, held[bot]))
+					{
+						held[bot]++;
+						if (held[bot] > run_worst)
+							run_worst = held[bot];
+						holds++;
+						spent_us += 3;
+						continue;
+					}
+					if (held[bot] > run_worst)
+						run_worst = held[bot];
+					held[bot] = 0;
+					spent_us += think;
+				}
+				if (spent_us > worst_tick)
+					worst_tick = spent_us;
+				total += spent_us;
+				bots_budget_end_tick(&budget, spent_us);
+			}
+			/* (the cap, the think that crossed it and the few that were held long enough to think regardless) */
+			CHECK(worst_tick <= 3000 + think_of_bot * 4 * (1 + BOTS_BUDGET_FORCED_PER_TICK) + 15 * 3, "scenario %d (%d us a think): a tick cost %ld us", scenario, think_of_bot, worst_tick);
+			CHECK(run_worst <= BOTS_BUDGET_OVER_HOLD_TICKS + 14 / BOTS_BUDGET_FORCED_PER_TICK, "scenario %d: a bot held %d ticks running", scenario, run_worst);
+			if (light)
+				CHECK(holds == 0 && budget.level == 0, "scenario %d: a light load was held %ld times at step %d", scenario, holds, budget.level);
+			else
+				CHECK(holds > 0, "scenario %d: a heavy load was never held", scenario);
+			/* (a load that is not light is brought to about the cap, far under what the bots would cost) */
+			if (think_of_bot >= 400)
+				CHECK(total / 3000 <= 3000 + 3 * think_of_bot * 10 / 7, "scenario %d: the mean tick cost %ld us", scenario, total / 3000);
+		}
+		return 0;
+	}
 	/* work left undone is counted for the log */
 	CASE("deferred")
 	{
