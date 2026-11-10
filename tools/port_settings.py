@@ -2672,7 +2672,7 @@ def _mod_store() -> list:
                         '<on event="left_mouse" run="mouse emit accept event"/>'])
     lines += _widget(f"{base}/store_button_bar", [("type", "column_list"), ("width", 640), ("height", 28),
                                                   ("flags", "pass_unhandled_to_focused_child left_right_tabs_items")], children) + widgets
-    return lines
+    return lines + _social_band(base)
 
 
 # ---------- the social screens (port/linux/game/screens.h, menu_screens.c): the Players page (the pause menu's PLAYERS, and the lobby's rows), its

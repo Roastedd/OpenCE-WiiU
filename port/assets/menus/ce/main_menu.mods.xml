@@ -194,6 +194,7 @@
 		<on event="back" back="true"/>
 		<on event="x" run="port store remove"/>
 		<on event="y" run="port store refresh"/>
+		<child widget="main_menu/mods/store/header_band" y="-170"/>
 		<child widget="main_menu/mods/store/store_list"/>
 		<child widget="main_menu/mods/store/store_title"/>
 		<child widget="main_menu/mods/store/store_head"/>
@@ -201,15 +202,15 @@
 		<child widget="main_menu/mods/store/store_detail"/>
 		<child widget="main_menu/mods/store/store_footer"/>
 	</widget>
-	<widget name="main_menu/mods/store/store_title" type="text" controller="1" left="35" top="14" width="360" height="30" font="ui\large_ui" color="#FF2995FD" text="MOD STORE" text_y="3" text_flags="no_focus_test">
+	<widget name="main_menu/mods/store/store_title" type="text" controller="1" left="35" top="14" width="360" height="30" font="ui\large_ui" color="#FF2995FD" text="MOD STORE" text_x="12" text_y="3" text_flags="no_focus_test">
 	</widget>
 	<widget name="main_menu/mods/store/store_head" type="text" controller="1" left="340" top="16" width="226" height="26" font="ui\large_ui" color="#FFFFFFFF" align="right" text_y="3" text_flags="no_focus_test">
 	</widget>
 	<widget name="main_menu/mods/store/store_empty" type="text" controller="1" left="100" top="176" width="440" height="70" font="ui\large_ui" color="#FFFFFFFF" align="center" text_y="4" text_flags="no_focus_test">
 	</widget>
-	<widget name="main_menu/mods/store/store_detail" type="text" controller="1" left="54" top="336" width="512" height="48" font="ui\large_ui" color="#FFFFFFFF" text_y="4" text_flags="no_focus_test">
+	<widget name="main_menu/mods/store/store_detail" type="text" controller="1" left="54" top="336" width="512" height="48" font="ui\large_ui" color="#FFFFFFFF" text_x="12" text_y="4" text_flags="no_focus_test">
 	</widget>
-	<widget name="main_menu/mods/store/store_footer" type="text" controller="1" left="54" top="388" width="512" height="22" font="ui\small_ui" color="#FF6CBAFF" text_y="4" text_flags="no_focus_test">
+	<widget name="main_menu/mods/store/store_footer" type="text" controller="1" left="54" top="388" width="512" height="22" font="ui\small_ui" color="#FF6CBAFF" text_x="13" text_y="4" text_flags="no_focus_test">
 	</widget>
 	<widget name="main_menu/mods/store/store_list" type="column_list" width="640" height="480" flags="pass_unhandled_to_focused_child up_down_tabs_children">
 		<data input="port store update"/>
@@ -305,13 +306,13 @@
 		<child widget="main_menu/mods/store/store_cell_size" x="282" y="3"/>
 		<child widget="main_menu/mods/store/store_cell_status" x="344" y="3"/>
 	</widget>
-	<widget name="main_menu/mods/store/store_cell_name" type="text" width="164" height="22" font="ui\large_ui" color="#FF2896FF" text_y="4" text_flags="no_focus_test">
+	<widget name="main_menu/mods/store/store_cell_name" type="text" width="164" height="28" font="ui\large_ui" color="#FF2896FF" text_y="4" text_flags="no_focus_test">
 	</widget>
-	<widget name="main_menu/mods/store/store_cell_author" type="text" width="94" height="22" font="ui\small_ui" color="#FF2896FF" text_y="5" text_flags="no_focus_test">
+	<widget name="main_menu/mods/store/store_cell_author" type="text" width="94" height="28" font="ui\small_ui" color="#FF2896FF" text_y="6" text_flags="no_focus_test">
 	</widget>
-	<widget name="main_menu/mods/store/store_cell_size" type="text" width="58" height="22" font="ui\small_ui" color="#FF2896FF" align="right" text_y="5" text_flags="no_focus_test">
+	<widget name="main_menu/mods/store/store_cell_size" type="text" width="58" height="28" font="ui\small_ui" color="#FF2896FF" align="right" text_y="6" text_flags="no_focus_test">
 	</widget>
-	<widget name="main_menu/mods/store/store_cell_status" type="text" width="154" height="22" font="ui\small_ui" color="#FF2896FF" text_y="5" text_flags="no_focus_test">
+	<widget name="main_menu/mods/store/store_cell_status" type="text" width="154" height="28" font="ui\small_ui" color="#FF2896FF" text_y="6" text_flags="no_focus_test">
 	</widget>
 	<widget name="main_menu/mods/store/store_button_bar" type="column_list" width="640" height="28" flags="pass_unhandled_to_focused_child left_right_tabs_items">
 		<child widget="main_menu/mods/store/store_button_get" x="120" y="1"/>
@@ -350,5 +351,7 @@
 		<on event="a" run="mouse emit back event"/>
 		<on event="start" run="mouse emit back event"/>
 		<on event="left_mouse" run="mouse emit accept event"/>
+	</widget>
+	<widget name="main_menu/mods/store/header_band" controller="1" left="0" top="0" width="640" height="240" bitmap="bitmaps/semi_transparent_grey">
 	</widget>
 </menus>
