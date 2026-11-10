@@ -328,8 +328,15 @@ static struct
 	short channel, controller;
 	long player;
 	boolean physical;
+	/* where the line goes: NETWORK_CHAT_TO_* (the game's chat, or the friends layer's handler) */
+	short destination;
 	char text[CHAT_TEXT_SIZE];
 } chat_input;
+
+/* the GamePad social view's KEYBOARD button asked for the keyboard (the destination asked for), and the friends layer's handler of a line that is not for the game */
+static boolean chat_keyboard_requested;
+static short chat_keyboard_destination;
+static int (*chat_line_handler)(int destination, char const *text);
 
 /* the keyboard's chat actions held last frame (a press starts a line) */
 static unsigned long chat_actions_held;
@@ -2338,11 +2345,14 @@ static void chat_update(
 		chat_actions_held = held;
 		/* (or the controller's D-pad Up, the touch controls' too, which opens
 		the on-screen keyboard) */
-		if ((pressed || requested_port != NONE || TEST_FLAG(pad_pressed, HALO_CHAT_PAD_UP)) && !console_is_active())
+		if ((pressed || requested_port != NONE || TEST_FLAG(pad_pressed, HALO_CHAT_PAD_UP) || chat_keyboard_requested) && !console_is_active())
 		{
+			short destination = chat_keyboard_requested ? chat_keyboard_destination : NETWORK_CHAT_TO_GAME;
+
+			chat_keyboard_requested = FALSE;
 			/* (no typing where the host has the chat off: it says so, once a
-			while) */
-			if (!TEST_FLAG(chat_config_flags(), _chat_config_allowed_bit))
+			while; a line for the party or a friend's code is no game chat) */
+			if (destination == NETWORK_CHAT_TO_GAME && !TEST_FLAG(chat_config_flags(), _chat_config_allowed_bit))
 			{
 				if (!chat_off_noticed || now - chat_off_noticed_at >= CHAT_LINE_MILLISECONDS + CHAT_FADE_MILLISECONDS)
 				{
@@ -2357,6 +2367,7 @@ static void chat_update(
 			{
 				chat_input_begin(requested_channel, requested_port, requested_port != NONE);
 				if (!chat_input.active) return;
+				chat_input.destination = destination;
 				chat_keyboard.opening_buttons = requested_port != NONE ?
 					halo_chat_pad_buttons_for_port(chat_input.controller) : halo_chat_pad_buttons();
 				chat_keyboard.held = 0;
@@ -2386,7 +2397,14 @@ static void chat_update(
 			break;
 		case _key_return:
 		case _keypad_enter:
-			chat_send(chat_input.channel, chat_input.text, TRUE, TRUE);
+			if (chat_input.destination != NETWORK_CHAT_TO_GAME)
+			{
+				/* (the party's chat, a friend's code: the friends layer's, not the game's) */
+				if (chat_line_handler)
+					chat_line_handler(chat_input.destination, chat_input.text);
+			}
+			else
+				chat_send(chat_input.channel, chat_input.text, TRUE, TRUE);
 			chat_input_end();
 			break;
 		/* (to everyone, the team, the vehicle, in turn) */
@@ -2515,6 +2533,19 @@ void network_chat_keyboard_channel(
 {
 	if (chat_keyboard_platform_open() && channel >= 0 && channel < NUMBER_OF_CHAT_CHANNELS)
 		chat_input.channel = channel;
+}
+
+void network_chat_keyboard_request(
+	int destination)
+{
+	chat_keyboard_requested = TRUE;
+	chat_keyboard_destination = (short)destination;
+}
+
+void network_chat_set_line_handler(
+	int (*handler)(int destination, char const *text))
+{
+	chat_line_handler = handler;
 }
 
 void network_chat_keyboard_close(
