@@ -242,7 +242,10 @@ static void render_model_parts(
 	short geometry_detail_level_index,
 	short detail_rules, /* port: model_detail_rules */
 	short forced_shader_permutation_index,
-	long flags);
+	long flags,
+	boolean solid_parts_only); /* port: model_solid_parts_only */
+static boolean model_solid_parts_only(
+	long model_index);
 static void model_geometry_part_build_tangent_matrices(
 	struct model_geometry_part *part);
 static void model_data_error(
@@ -277,10 +280,13 @@ static void render_model_parts(
 	short geometry_detail_level_index,
 	short detail_rules, /* port: model_detail_rules */
 	short forced_shader_permutation_index,
-	long flags)
+	long flags,
+	boolean solid_parts_only)
 {
 	boolean immediate = TEST_FLAG(flags, _render_model_immediate_bit);
-	short last_pass = TEST_FLAG(flags, _render_model_shadow_bit) ? _render_model_pass_solid : _render_model_pass_transparent;
+	/* port: a model with no part in the decal or the transparent pass (most) is walked once, not three times: the walks of those passes found nothing to draw
+	(model_solid_parts_only) */
+	short last_pass = (TEST_FLAG(flags, _render_model_shadow_bit) || solid_parts_only) ? _render_model_pass_solid : _render_model_pass_transparent;
 	struct render_sort_filth sort_filth[MAXIMUM_PARTS_PER_MODEL_GEOMETRY];
 	real_point3d centroid;
 	short pass;
@@ -532,6 +538,70 @@ static void model_geometry_fix_transparent_part_links(
 	}
 }
 
+/* port: whether each model (by its tag's absolute index) has a part drawn in the decal or the transparent pass of render_model_parts, found as the map's models
+are linked (below), so that render_model_parts walks the others once and not three times. 0: not found (the three walks, as before); 1: no such part in any of
+the model's geometries; 2: there is one. The scan makes the same tests the walks make, of every part of every geometry, whatever the permutations draw. */
+enum
+{
+	MODEL_PASSES_NOT_FOUND = 0,
+	MODEL_PASSES_SOLID_ONLY,
+	MODEL_PASSES_MORE,
+	MODEL_PASSES_TABLE_SIZE = 0x10000,
+};
+
+static byte model_passes_found[MODEL_PASSES_TABLE_SIZE];
+
+static byte model_scan_passes(
+	struct model const *model)
+{
+	long geometry_index;
+
+	if (model->geometries.count < 0 || model->shaders.count < 0)
+	{
+		return MODEL_PASSES_NOT_FOUND;
+	}
+	for (geometry_index = 0; geometry_index < model->geometries.count; geometry_index++)
+	{
+		struct model_geometry *geometry = TAG_BLOCK_GET_ELEMENT(&model->geometries, geometry_index, struct model_geometry);
+		short part_index;
+
+		if (geometry->parts.count < 0)
+		{
+			return MODEL_PASSES_NOT_FOUND;
+		}
+		for (part_index = 0; part_index < geometry->parts.count; part_index++)
+		{
+			struct model_geometry_part *part = TAG_BLOCK_GET_ELEMENT(&geometry->parts, part_index, struct model_geometry_part);
+			struct model_shader_reference *shader_reference;
+			struct shader *shader;
+
+			if (!VALID_INDEX(part->shader_index, model->shaders.count))
+			{
+				continue;
+			}
+			shader_reference = TAG_BLOCK_GET_ELEMENT(&model->shaders, part->shader_index, struct model_shader_reference);
+			shader = shader_definition_get(shader_reference->shader.index);
+			if (shader_type_is_valid_for_model(shader->base.type) && !TEST_FLAG(part->flags, _model_geometry_part_stripped_bit))
+			{
+				if (shader_type_is_transparent(shader->base.type) ||
+					(shader->base.type==_shader_type_model &&
+						TEST_FLAG(((struct shader_model_definition *)shader_get_and_verify_type(shader, _shader_type_model))->flags, _shader_model_alpha_blended_decal_bit)))
+				{
+					return MODEL_PASSES_MORE;
+				}
+			}
+		}
+	}
+
+	return MODEL_PASSES_SOLID_ONLY;
+}
+
+static boolean model_solid_parts_only(
+	long model_index)
+{
+	return model_index != NONE && model_passes_found[(word)model_index] == MODEL_PASSES_SOLID_ONLY;
+}
+
 /* port: the links of every model the map loaded (at its start: the meshes
 do not change, and the next map's tags are loaded afresh) */
 void models_fix_transparent_part_links(void)
@@ -539,6 +609,7 @@ void models_fix_transparent_part_links(void)
 	struct tag_iterator iterator;
 	long index;
 
+	memset(model_passes_found, MODEL_PASSES_NOT_FOUND, sizeof(model_passes_found));
 	tag_iterator_new(&iterator, MODELS_GROUP_TAG);
 	while ((index = tag_iterator_next(&iterator)) != NONE)
 	{
@@ -549,6 +620,7 @@ void models_fix_transparent_part_links(void)
 			model_geometry_fix_transparent_part_links(model,
 				TAG_BLOCK_GET_ELEMENT(&model->geometries, geometry, struct model_geometry));
 		}
+		model_passes_found[(word)index] = model_scan_passes(model);
 	}
 }
 
@@ -1283,7 +1355,8 @@ void render_model(
 			geometry_detail_level_index,
 			detail_rules,
 			forced_shader_permutation_index,
-			flags);
+			flags,
+			model_solid_parts_only(model_index));
 		if (TEST_FLAG(flags, _render_model_shadow_bit))
 		{
 			rasterizer_environment_shadow_model_end();
