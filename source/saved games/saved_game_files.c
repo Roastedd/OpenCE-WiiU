@@ -506,6 +506,25 @@ static wchar_t saved_game_file_display_name[MAX_GAMENAME];
 
 struct saved_game_files_globals saved_game_files_globals = {0};
 
+/* port: a count of the changes made to the saved games (the mapfile's entries, the files made and removed, a variant written), so that what a menu has read
+of them - a gametype's name and rules, which its list showed by reading the card every frame - is read again only when this has moved. A change is counted
+before it is made (the readers take the mapfile's mutex, the variants' writes finish before a read) and again when a thread that writes has ended. */
+static volatile long saved_game_files_change_counter;
+
+void saved_game_files_changed(
+	void)
+{
+	__atomic_fetch_add(&saved_game_files_change_counter, 1, __ATOMIC_SEQ_CST);
+
+	return;
+}
+
+unsigned long saved_game_files_change_count(
+	void)
+{
+	return (unsigned long)__atomic_load_n(&saved_game_files_change_counter, __ATOMIC_SEQ_CST);
+}
+
 /* ---------- public code */
 
 void saved_game_files_initialize(
@@ -635,6 +654,7 @@ void saved_game_files_notify_memory_units_changed(
 	void)
 {
 	saved_game_files_globals.memory_units_dirty = TRUE;
+	saved_game_files_changed(); /* port: (the menus keep what they read of the saved games) */
 
 	return;
 }
@@ -1366,6 +1386,7 @@ static boolean set_nth_entry_in_mapfile(
 {
 	boolean success = FALSE;
 
+	saved_game_files_changed(); /* port: (the menus keep what they read of the saved games: a gametype's name and rules) */
 	match_assert(
 		"c:\\halo\\SOURCE\\saved games\\saved_game_files.c",
 		2018,
@@ -1452,6 +1473,7 @@ long create_enumerated_saved_game_file(
 	long new_profile_index = NONE;
 	short file_system_check;
 
+	saved_game_files_changed(); /* port: (the menus keep what they read of the saved games: a gametype's name and rules) */
 	match_assert(
 		"c:\\halo\\SOURCE\\saved games\\saved_game_files.c",
 		332,
@@ -1601,6 +1623,7 @@ boolean delete_enumerated_saved_game_file(
 	struct enumerated_saved_game_file file;
 	boolean success = FALSE;
 
+	saved_game_files_changed(); /* port: (the menus keep what they read of the saved games) */
 	if (saved_game_files_globals.memory_units_dirty)
 	{
 		error(_error_silent, "failed to delete saved game file because memory units have been inserted/removed");
@@ -1893,6 +1916,7 @@ void saved_game_files_delete_all_custom_profiles(
 	long number_of_enumerated_files = 0;
 	unsigned long memory_unit_index;
 
+	saved_game_files_changed(); /* port: (the menus keep what they read of the saved games) */
 	memory_unit_index = _memory_unit_hard_drive;
 
 	while (memory_unit_index <= _memory_unit_hard_drive)
@@ -2096,6 +2120,7 @@ static void enumerate_memory_units(
 	}
 
 	saved_game_files_globals.memory_units_dirty = FALSE;
+	saved_game_files_changed(); /* port: (the menus keep what they read of the saved games) */
 	return;
 }
 
@@ -2504,6 +2529,7 @@ static boolean append_entry_to_mapfile(
 {
 	boolean success = FALSE;
 
+	saved_game_files_changed(); /* port: (the menus keep what they read of the saved games: a gametype's name and rules) */
 	match_assert(
 		"c:\\halo\\SOURCE\\saved games\\saved_game_files.c",
 		2081,
@@ -2583,6 +2609,7 @@ static boolean remove_nth_entry_in_mapfile(
 	unsigned long next_entry_offset;
 	boolean success = FALSE;
 
+	saved_game_files_changed(); /* port: (the menus keep what they read of the saved games: a gametype's name and rules) */
 	match_assert(
 		"c:\\halo\\SOURCE\\saved games\\saved_game_files.c",
 		2170,

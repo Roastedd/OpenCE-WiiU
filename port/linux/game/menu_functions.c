@@ -78,6 +78,7 @@ their handlers open opens.
 #include "main/main.h"
 #include "networking/network_game_manager.h"
 #include "saved games/player_profile.h"
+#include "saved games/saved_game_files.h"
 #include "tag_files/tag_groups.h"
 #include "text/text_group.h"
 #include "text/unicode.h"
@@ -3532,20 +3533,131 @@ enum
 	NUMBER_OF_GAMETYPE_BANKS
 };
 
+/* What the gametype lists show of a gametype - its name, its bank, its rules and engine - is read from the saved games when it is first wanted, and kept
+until the saved games change (saved_game_files_change_count: a gametype made, renamed, written or removed). The lists asked for every row's name and the chosen
+gametype's variant and options in every frame, each a read of the mapfile (z:\saved\hdmu.map) and of the variant's file through the file layer: on the Wii U's
+card some 300 calls in each frame, 215 ms (reports/research/2026-11-09/menulag-result.md). A read that fails (the saved games' mutex is held by another thread,
+a file not yet there) is not kept, and is tried again after GAMETYPE_TEXT_RETRY_MS. */
+#define GAMETYPE_TEXT_ENTRIES 128
+#define GAMETYPE_TEXT_RETRY_MS 500
+
+#ifdef HALO_WIIU
+long wiiu_study_number(const char *name, long fallback);
+#endif
+
+/* whether the lists keep what they read: the Wii U's card file halo/menu_cache.txt, 0 (or HALO_MENU_CACHE=0 for the host's runs) for the lists to read the card in every
+frame, as they did, to compare a run with and without */
+static boolean gametype_texts_kept(void)
+{
+#ifdef HALO_WIIU
+	static int read;
+	static boolean kept = TRUE;
+
+	if (!read)
+	{
+		kept = wiiu_study_number("menu_cache.txt", 1) != 0;
+		read = 1;
+		if (!kept)
+			platform_log("menus: halo/menu_cache.txt says 0: the gametype lists read the card in every frame");
+	}
+	return kept;
+#else
+	return TRUE;
+#endif
+}
+
+struct gametype_text
+{
+	boolean used;
+	long profile_index;
+	/* the saved games' change count when the entry was begun: a different one, and what is below is read again */
+	unsigned long changes;
+	boolean name_read, bank_read, rules_read;
+	/* (when a read last failed, and whether one has) */
+	boolean name_failed, bank_failed, rules_failed;
+	unsigned long name_failed_time, bank_failed_time, rules_failed_time;
+	short bank;
+	short engine;
+	wchar_t name[ROW_TEXT_LENGTH];
+	wchar_t rules[ROW_TEXT_LENGTH * 2];
+};
+
+static struct gametype_text gametype_texts[GAMETYPE_TEXT_ENTRIES];
+static short gametype_text_next;
+
+/* the gametype's entry, begun if it is new or the saved games have changed since it was */
+static struct gametype_text *gametype_text_get(long profile_index)
+{
+	unsigned long changes = saved_game_files_change_count();
+	struct gametype_text *entry = NULL;
+	short index;
+
+	for (index = 0; index < GAMETYPE_TEXT_ENTRIES && gametype_texts_kept(); index++)
+	{
+		if (gametype_texts[index].used && gametype_texts[index].profile_index == profile_index)
+		{
+			entry = &gametype_texts[index];
+			break;
+		}
+	}
+	if (!gametype_texts_kept())
+	{
+		/* (not kept: an entry that is read, used and let go) */
+		static struct gametype_text unkept;
+
+		memset(&unkept, 0, sizeof(unkept));
+		unkept.used = TRUE;
+		unkept.profile_index = profile_index;
+		unkept.changes = changes;
+		return &unkept;
+	}
+	if (!entry)
+	{
+		entry = &gametype_texts[gametype_text_next];
+		gametype_text_next = (short)((gametype_text_next + 1) % GAMETYPE_TEXT_ENTRIES);
+		entry->changes = changes - 1;
+	}
+	if (entry->changes != changes)
+	{
+		memset(entry, 0, sizeof(*entry));
+		entry->used = TRUE;
+		entry->profile_index = profile_index;
+		entry->changes = changes;
+	}
+	return entry;
+}
+
+/* whether a read that failed at failed_time is to be tried again (one that has not failed is) */
+static boolean gametype_text_try(boolean failed, unsigned long failed_time)
+{
+	return !failed || system_milliseconds() - failed_time >= GAMETYPE_TEXT_RETRY_MS;
+}
+
 /* a gametype's bank */
 static short gametype_bank(long profile_index)
 {
+	struct gametype_text *entry;
 	struct game_variant variant;
 	struct game_variant_options options;
 
 	if (!((unsigned long)profile_index & PLAYLIST_READ_ONLY_BIT))
 		return GAMETYPE_BANK_CUSTOM;
-	if (playlist_profile_get(profile_index, &variant) && playlist_profile_get_options(profile_index, &options) &&
-		game_modes_variant_is_opence(&variant, &options))
+	entry = gametype_text_get(profile_index);
+	if (!entry->bank_read && gametype_text_try(entry->bank_failed, entry->bank_failed_time))
 	{
-		return GAMETYPE_BANK_OPENCE;
+		if (playlist_profile_get(profile_index, &variant))
+		{
+			entry->bank = playlist_profile_get_options(profile_index, &options) && game_modes_variant_is_opence(&variant, &options) ?
+				GAMETYPE_BANK_OPENCE : GAMETYPE_BANK_STANDARD;
+			entry->bank_read = TRUE;
+		}
+		else
+		{
+			entry->bank_failed = TRUE;
+			entry->bank_failed_time = system_milliseconds();
+		}
 	}
-	return GAMETYPE_BANK_STANDARD;
+	return entry->bank_read ? entry->bank : GAMETYPE_BANK_STANDARD;
 }
 
 static void gametype_bank_read(short bank)
@@ -3564,8 +3676,8 @@ static void gametype_bank_read(short bank)
 }
 
 /* a gametype's kind and rules, for the description beside a list: its game
-engine's name (or its OpenCE gametype's), teams, and what wins */
-static void gametype_rules_text(long profile_index, wchar_t *text, short size)
+engine's name (or its OpenCE gametype's), teams, and what wins (its variant, as playlist_profile_get read it; none: read here) */
+static void gametype_rules_text(long profile_index, struct game_variant const *variant_read, wchar_t *text, short size)
 {
 	struct game_variant variant;
 	struct game_variant_options options;
@@ -3573,7 +3685,9 @@ static void gametype_rules_text(long profile_index, wchar_t *text, short size)
 	long engine;
 
 	text[0] = 0;
-	if (!playlist_profile_get(profile_index, &variant))
+	if (variant_read)
+		variant = *variant_read;
+	else if (!playlist_profile_get(profile_index, &variant))
 		return;
 	if (!playlist_profile_get_options(profile_index, &options))
 		game_variant_options_default(&variant, &options);
@@ -3623,14 +3737,66 @@ static boolean gametype_list_initialize(struct widget_instance *list)
 playlist_profile_get_display_name fills MAX_GAMENAME characters) */
 static void gametype_display_name(long profile_index, wchar_t *text)
 {
-	wchar_t name[MAX_GAMENAME];
+	struct gametype_text *entry = gametype_text_get(profile_index);
 
 	text[0] = 0;
-	if (playlist_profile_get_display_name(profile_index, name))
+	if (!entry->name_read && gametype_text_try(entry->name_failed, entry->name_failed_time))
 	{
-		ustrncpy(text, name, ROW_TEXT_LENGTH - 1);
+		wchar_t name[MAX_GAMENAME];
+
+		entry->name[0] = 0;
+		if (playlist_profile_get_display_name(profile_index, name))
+		{
+			ustrncpy(entry->name, name, ROW_TEXT_LENGTH - 1);
+			entry->name[ROW_TEXT_LENGTH - 1] = 0;
+		}
+		/* (no name is a name not read: the mapfile's entry could not be, the saved games' mutex being held) */
+		if (entry->name[0])
+		{
+			entry->name_read = TRUE;
+		}
+		else
+		{
+			entry->name_failed = TRUE;
+			entry->name_failed_time = system_milliseconds();
+		}
+	}
+	if (entry->name[0])
+	{
+		ustrncpy(text, entry->name, ROW_TEXT_LENGTH - 1);
 		text[ROW_TEXT_LENGTH - 1] = 0;
 	}
+}
+
+/* a gametype's engine (for its picture's frame) and its rules' text, for the description beside a list; FALSE when its variant cannot be read (then they are
+as they were) */
+static boolean gametype_details(long profile_index, short *engine, wchar_t *text, short size)
+{
+	struct gametype_text *entry = gametype_text_get(profile_index);
+
+	if (!entry->rules_read && gametype_text_try(entry->rules_failed, entry->rules_failed_time))
+	{
+		struct game_variant variant;
+
+		if (playlist_profile_get(profile_index, &variant))
+		{
+			entry->engine = (short)PIN(variant.game_engine_index, 0, 5);
+			/* (not kept: the variant is read again by the rules, as it was before they were kept) */
+			gametype_rules_text(profile_index, gametype_texts_kept() ? &variant : NULL, entry->rules, NUMBEROF(entry->rules));
+			entry->rules_read = TRUE;
+		}
+		else
+		{
+			entry->rules_failed = TRUE;
+			entry->rules_failed_time = system_milliseconds();
+		}
+	}
+	if (!entry->rules_read)
+		return FALSE;
+	*engine = entry->engine;
+	ustrncpy(text, entry->rules, size - 1);
+	text[size - 1] = 0;
+	return TRUE;
 }
 
 static void gametype_name(short item, wchar_t *text)
@@ -3693,19 +3859,15 @@ static void gametype_list_update(struct widget_instance *list)
 	visible_set(named(description, "gametype_right_item", 0), multiplayer.bank_count > 0);
 	if (multiplayer.gametype_chosen < multiplayer.bank_count)
 	{
-		struct game_variant variant;
+		short engine;
 		wchar_t text[ROW_TEXT_LENGTH * 2];
 
 		gametype_name(multiplayer.gametype_chosen, text);
 		text_set(named(description, "gametype_right_name", 0), text);
-		if (playlist_profile_get(multiplayer.gametypes[multiplayer.bank[multiplayer.gametype_chosen]], &variant))
+		if (gametype_details(multiplayer.gametypes[multiplayer.bank[multiplayer.gametype_chosen]], &engine, text, NUMBEROF(text)))
 		{
-			long engine = PIN(variant.game_engine_index, 0, 5);
-
 			if ((widget = named(description, "gametype_right_pic", 0)) != NULL)
-				widget->animation.current_frame_index = (short)engine;
-			gametype_rules_text(multiplayer.gametypes[multiplayer.bank[multiplayer.gametype_chosen]], text,
-				NUMBEROF(text));
+				widget->animation.current_frame_index = engine;
 			text_set(named(description, "gametype_right_data", 0), text);
 		}
 	}
@@ -7604,20 +7766,17 @@ static void gametype_edit_list_update(struct widget_instance *list)
 	if (gametype_edit.chosen < gametype_edit.count)
 	{
 		long profile_index = gametype_edit.gametypes[gametype_edit.chosen];
-		struct game_variant variant;
+		short engine;
 		wchar_t text[ROW_TEXT_LENGTH * 2];
 
 		visible_set(named(description, "locked_gametype_icon", 0),
 			((unsigned long)profile_index & PLAYLIST_READ_ONLY_BIT) != 0);
 		gametype_display_name(profile_index, text);
 		text_set(named(description, "gametype_right_name", 0), text);
-		if (playlist_profile_get(profile_index, &variant))
+		if (gametype_details(profile_index, &engine, text, NUMBEROF(text)))
 		{
-			long engine = PIN(variant.game_engine_index, 0, 5);
-
 			if ((widget = named(description, "gametype_right_pic", 0)) != NULL)
-				widget->animation.current_frame_index = (short)engine;
-			gametype_rules_text(profile_index, text, NUMBEROF(text));
+				widget->animation.current_frame_index = engine;
 			text_set(named(description, "gametype_right_data", 0), text);
 		}
 	}
