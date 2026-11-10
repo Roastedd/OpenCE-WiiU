@@ -2,6 +2,7 @@
 
 /* The Friends screen's four tabs (port/linux/game/menu_screens.inl, scr_friends_tab_labels) on a widget tree made from the screen's own XML: a tab has no words of its own, so the words
 the game sets in it are the only ones it shows. Every text widget of the list with a bitmap (a tab, a button) must show a non-empty text: its own (an XML text) or the one set in it. */
+#include <stdarg.h>
 #include <wchar.h>
 #include "text_safe.h"
 #include "screens.h"
@@ -21,6 +22,16 @@ struct widget_instance
 };
 
 #define SCR_LONG 96
+static char logged[256];
+static void scr_log(char const *format, ...) __attribute__((format(printf, 1, 2)));
+static void scr_log(char const *format, ...)
+{
+	va_list arguments;
+
+	va_start(arguments, format);
+	vsnprintf(logged, sizeof(logged), format, arguments);
+	va_end(arguments);
+}
 #define NUMBEROF(array) ((int)(sizeof(array) / sizeof((array)[0])))
 
 static long config_integer_value = 1;
@@ -124,6 +135,17 @@ int main(int argc, char **argv)
 			scr_friends_tab_labels(&tree[0], (short)tab, &summary, &party);
 			which[0] = 0;
 			CHECK(silent(&tree[0], which, sizeof(which)) == 0, "a button shows nothing with tab %d chosen: %s", tab, which);
+			logged[0] = 0;
+			scr_friends_tab_log(&tree[0]);
+			{
+				char want[SCR_LONG * 2], label[4][SCR_LONG];
+				int number;
+
+				for (number = 0; number < SCREENS_TABS; number++)
+					screens_tab_label(number, number == tab, &summary, &party, label[number], SCR_LONG);
+				snprintf(want, sizeof(want), "friends tabs: '%s' '%s' '%s' '%s'", label[0], label[1], label[2], label[3]);
+				CHECK(!strcmp(logged, want) || (tab > 0 && logged[0] == 0), "the log reads the words back: '%s' not '%s'", logged, want);
+			}
 			for (index = 0; index < SCREENS_TABS; index++)
 			{
 				char name[24];

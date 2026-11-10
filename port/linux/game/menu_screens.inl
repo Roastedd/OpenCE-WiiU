@@ -898,6 +898,37 @@ static void scr_friends_tab_labels(struct widget_instance *list, short tab, stru
 	}
 }
 
+/* the words the four tabs hold, read back from the widgets, in the log when they change (what the screen is about to draw, not what was meant: the tabs showed nothing on the console once) */
+static void scr_friends_tab_log(struct widget_instance *list)
+{
+	static char last[SCR_LONG * 2];
+	char line[SCR_LONG * 2];
+	short index, length = 0;
+
+	line[0] = 0;
+	for (index = 0; index < SCREENS_TABS; index++)
+	{
+		char name[24];
+		struct widget_instance *tab;
+		wchar_t const *wide;
+
+		snprintf(name, sizeof(name), "friends_tab_%d", index);
+		tab = named(list, name, 0);
+		wide = tab ? tab->parameters.text_box.text : NULL;
+
+		length += (short)snprintf(line + length, sizeof(line) - length, "%s'", index ? " " : "");
+		for (; wide && *wide && length < (short)sizeof(line) - 4; wide++)
+			line[length++] = (char)(*wide >= 0x20 && *wide < 0x7F ? *wide : '?');
+		line[length++] = '\'';
+		line[length] = 0;
+	}
+	if (strcmp(line, last))
+	{
+		snprintf(last, sizeof(last), "%s", line);
+		scr_log("friends tabs: %s", line);
+	}
+}
+
 /* "port friends update" */
 static void scr_friends_update(struct widget_instance *list)
 {
@@ -937,6 +968,7 @@ static void scr_friends_update(struct widget_instance *list)
 	}
 	scr_focus_clamp(list, SCR_FRIEND_PREFIX, shown);
 	scr_friends_tab_labels(list, tab, summary, &scr.model.party_summary);
+	scr_friends_tab_log(list);
 	snprintf(text, sizeof(text), "%s", provider && provider->friends ? screens_service_word(summary->service) : "NO FRIEND SERVICE");
 	scr_text(screen, "friends_service", text);
 	if (summary->own_code[0])

@@ -44,7 +44,7 @@ def generated(fault=None):
     menus = read("port/linux/game/menu_functions.c")
     inl = read("port/linux/game/menu_screens.inl")
     code = "\n".join([function(menus, "descendant"), function(menus, "named"), function(menus, "text_set_length"), function(menus, "text_to_wide"), function(inl, "scr_text"),
-                      function(inl, "scr_friends_tab_labels")])
+                      function(inl, "scr_friends_tab_labels"), function(inl, "scr_friends_tab_log")])
     if fault:
         code = mutated(code, *fault)
     return (("halo_social.h", read("port/linux/include/halo_social.h")), ("screens.h", read("port/linux/game/screens.h")), ("screens_metrics.inc", read("port/linux/game/screens_metrics.inc")),
@@ -67,9 +67,12 @@ def test_tabs_get_their_words():
     # the first version: the tab asked for a widget of its own name inside itself
     ("scr_text(list, name, text);", "scr_text(named(list, name, 0), name, text);"),
     # a label for three of the four
-    ("for (index = 0; index < SCREENS_TABS; index++)", "for (index = 0; index < SCREENS_TABS - 1; index++)"),
+    ("for (index = 0; index < SCREENS_TABS; index++)\n\t{\n\t\tsnprintf(name, sizeof(name), \"friends_tab_%d\", index);\n\t\tscreens_tab_label",
+     "for (index = 0; index < SCREENS_TABS - 1; index++)\n\t{\n\t\tsnprintf(name, sizeof(name), \"friends_tab_%d\", index);\n\t\tscreens_tab_label"),
     # the words not put in
     ("scr_text(list, name, text);", "(void)text;"),
+    # the log says what was meant, not what the widgets hold (it would read well with empty tabs)
+    ("wide = tab ? tab->parameters.text_box.text : NULL;", "wide = L\"FRIENDS\"; (void)tab;"),
 ])
 def test_negative_control(fault):
     status, output = run(build("screens_tab_text", generated(fault)), "labels")
