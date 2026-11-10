@@ -3020,6 +3020,7 @@ static boolean scr_text_color(struct widget_instance *widget, real_argb_color *c
 static boolean scr_text_box_drawn(struct widget_instance *widget, rectangle2d const *bounds);
 static void scr_lobby_update(struct widget_instance *list, short first, short count, boolean teams);
 static wchar_t const *scr_lobby_help(wchar_t const *text);
+static void scr_lobby_bots_text(struct network_game const *game, wchar_t *text, int size);
 static boolean scr_enabled(void);
 static boolean scr_join_ticker(wchar_t *text, int size);
 static void scr_join_auto(struct widget_instance *list);
@@ -6519,6 +6520,8 @@ static void lobby_update(struct widget_instance *list)
 
 			usnprintf(text + length, NUMBEROF(text) - 1 - length, L" %d", seconds);
 		}
+		/* (a game on this machine alone: how many bots, which L and R change: menu_screens.inl) */
+		scr_lobby_bots_text(game, text, NUMBEROF(text));
 		if (global_network_game_server_get() && p2p_invite_link(link, sizeof(link)))
 		{
 			size_t length = ustrlen(text);

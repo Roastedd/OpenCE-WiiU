@@ -1349,6 +1349,24 @@ static boolean scr_lobby_bot(boolean add)
 	return scr_bot_change(add);
 }
 
+/* the BOTS row of the lobby of a game on this machine (a split screen game, before it starts): "BOTS: 3  (L/R)" under the panel's lines, the setting bots.count that L and R change and the
+Players page's BOT SETTINGS row sets. A game type with no bots says so; a hosted or joined game has none (bots play in a game on this machine only). */
+static void scr_lobby_bots_text(struct network_game const *game, wchar_t *text, int size)
+{
+	size_t length;
+
+	if (!game || !network_game_is_splitscreen_local() || !global_network_game_server_get())
+		return;
+	length = ustrlen(text);
+	if (length + 2 >= (size_t)size)
+		return;
+	if (!bots_game_allowed(game->variant.game_engine_index))
+		usnprintf(text + length, (size_t)size - 1 - length, L"\r\nNo bots in this game type");
+	else
+		usnprintf(text + length, (size_t)size - 1 - length, L"\r\nBots: %ld%s", bots_wanted_count(), scr_enabled() ? L"  (L/R)" : L"");
+	text[size - 1] = 0;
+}
+
 /* the lobby's line under its rows says what the new keys are (lobby_join_help's text box, when the screens are on and nobody else is joining) */
 static wchar_t const *scr_lobby_help(wchar_t const *text)
 {
