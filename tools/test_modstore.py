@@ -24,6 +24,7 @@ accepts (tools/test_mods.py's), and from hostile catalogs. What each case proves
 import hashlib
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -54,11 +55,11 @@ STATE_AVAILABLE, STATE_INSTALLED, STATE_UPDATE, STATE_LOCAL, STATE_UNPLAYABLE = 
 
 # ---------- the driver
 
-def build_driver(mutation=None):
+def build_driver(mutation=None, sanitize=False):
     """the driver, built once for a state of the sources (kept in the temporary folder by their hash); `mutation` is
     (old text, new text) in modstore.c: a deliberate fault, for the negative controls"""
     sources = [SRC / "modstore.c", SRC / "modstore.h", TOOLS / "modstore_check.c", TOOLS / "modstore_test/stub/platform.h"]
-    key = hashlib.sha256(repr(mutation).encode())
+    key = hashlib.sha256(repr((mutation, sanitize)).encode())
     for source in sources:
         key.update(source.read_bytes())
     folder = Path(tempfile.gettempdir()) / f"opence-modstore-{key.hexdigest()[:16]}"
@@ -86,6 +87,8 @@ def build_driver(mutation=None):
         objects.append(str(target))
     command = [base.CC, "-std=gnu11", "-O1", "-g", "-Wall", "-Wextra", "-DMODSTORE_STDIO", f"-I{work}", *includes,
                str(work / "modstore_check.c")]
+    if sanitize:
+        command += ["-fsanitize=address,undefined", "-fno-sanitize-recover=undefined"]
     warnings = [] if mutation else ["-Werror"]
     result = base.run(command + warnings + objects + [str(o) for o in base.mbedtls_objects()] + ["-lpthread", "-o", str(binary)])
     assert result.returncode == 0, result.stderr
@@ -933,3 +936,92 @@ def test_negative_control(name, driver, good):
     catalog.sign_file(good.out / "catalog.json", SEED)
     good.server.replace.clear()
     assert attack(faulty, good), f"{name}: with the check taken out the attack still fails, so no test would notice it is gone"
+
+
+# ---------- fuzzing: what a signed but hostile (or broken) catalog, manifest or marker may do is no more than refuse
+
+def resign_catalog(out: Path, data: bytes):
+    (out / "catalog.json").write_bytes(data)
+    (out / "catalog.json.sig").write_text(ed25519_ref.sign(SEED, data).hex() + "\n")
+
+
+def mutate(random, data: bytes) -> bytes:
+    data = bytearray(data)
+    for _ in range(random.randint(1, 4)):
+        kind = random.randint(0, 5)
+        at = random.randrange(len(data)) if data else 0
+        if kind == 0 and data:
+            data[at] ^= 1 << random.randint(0, 7)
+        elif kind == 1 and data:
+            data[at] = random.choice(b'{}[]",:0123456789-.eE\\ntfu/ ')
+        elif kind == 2:
+            del data[at:at + random.randint(1, 40)]
+        elif kind == 3:
+            data[at:at] = random.choice([b"9" * 30, b'"' * 5, b"[" * 30, b"\\u0000", b"../", b"-1", b"1e999", b"null", b"\x00"])
+        elif kind == 4:
+            data = data[:at]
+        else:
+            data[at:at] = data[random.randrange(len(data) + 1):][:random.randint(1, 60)]
+    return bytes(data)
+
+
+def test_fuzz_signed_catalogs_and_manifests(good):
+    """a hostile owner (or a broken tool) signs mutated catalogs and mutated manifests (named by the catalog, hashes and all): the game, built with the
+    address and undefined-behaviour sanitisers, never crashes, never writes outside the mods folder, and never leaves a half-made mod folder"""
+    import random
+    random_source = random.Random(20261110)
+    sanitized = build_driver(sanitize=True)
+    catalog_bytes = (good.out / "catalog.json").read_bytes()
+    document = json.loads(catalog_bytes)
+    manifests = {mod["id"]: (good.out / mod["manifest"]["path"]).read_bytes() for mod in document["mods"]}
+    outcomes = set()
+    nasty = ["x" * 3000, "\\u0000", "\\ud800", "\\u00e9\\u4e2d\\u6587", "a|b|c", "tab\\there\\nnewline", "\\u001b[31mred", "%s%s%n%x", "\\\\\\\\\\\\"]
+    for iteration in range(120):
+        good.server.replace.clear()
+        if iteration % 6 == 3:
+            # (strings of every kind in the fields the screen shows: the catalog is still good, and the mod installs)
+            text = '{"format": 1, "serial": 1, "mods": ' + json.dumps(document["mods"]).replace('"Translation"', '"' + random_source.choice(nasty) + '"').replace(
+                '"Deutsch"', '"' + random_source.choice(nasty) + '"').replace('"Bernd"', '"' + random_source.choice(nasty) + '"') + "}"
+            resign_catalog(good.out, text.encode())
+        elif iteration % 2 == 0:
+            resign_catalog(good.out, mutate(random_source, catalog_bytes))
+        else:
+            mutated = dict(document, mods=[dict(mod) for mod in document["mods"]])
+            for mod in mutated["mods"]:
+                data = mutate(random_source, manifests[mod["id"]])
+                good.server.replace["/" + mod["manifest"]["path"]] = data
+                mod["manifest"] = dict(mod["manifest"], size=len(data), sha256=hashlib.sha256(data).hexdigest())
+            resign_catalog(good.out, json.dumps(mutated).encode())
+        shutil.rmtree(good.root, ignore_errors=True)
+        good.root.mkdir()
+        lines, log = run(sanitized, good.root, good.url, PUBLIC, "open", "install", "german", "install", "hd_audio", "list", "remove", "german")
+        assert "ERROR: AddressSanitizer" not in log and "runtime error" not in log, log[-2000:]
+        outcomes.update(re.sub(r"[0-9]+", "N", line.split("message=", 1)[1]) for line in lines.get("install", []) + lines.get("open", []))
+        for item in good.root.iterdir():
+            assert item.name == "mods", f"{item} was made outside the mods folder"
+        if good.mods().exists():
+            for folder in good.mods().iterdir():
+                assert folder.name.startswith(".store-") or (folder / "mod.toml").is_file() or folder.is_file(), f"{folder} is a half-made mod"
+    # (not vacuous: the mutations reached many different refusals, and some mods were installed all the same)
+    assert len(outcomes) >= 8, outcomes
+    assert any(outcome.startswith("INSTALLED") for outcome in outcomes), outcomes
+
+
+def test_fuzz_markers(good):
+    """the .store file is on a card anyone can write: mutated, a removal deletes nothing outside the mod's folder and never crashes"""
+    import random
+    random_source = random.Random(1110)
+    sanitized = build_driver(sanitize=True)
+    good.run(sanitized, "open", "install", "german")
+    marker = (good.mods() / "german" / ".store").read_bytes()
+    sentinel = good.root / "sentinel.txt"
+    sentinel.write_text("keep")
+    for _ in range(40):
+        shutil.rmtree(good.mods() / "german", ignore_errors=True)
+        good.run(sanitized, "open", "install", "german")
+        data = mutate(random_source, marker)
+        data = data.replace(b"\n", b"\n../" if random_source.random() < 0.1 else b"\n")
+        (good.mods() / "german" / ".store").write_bytes(data)
+        lines, log = good.run(sanitized, "open", "remove", "german")
+        assert "ERROR: AddressSanitizer" not in log and "runtime error" not in log, log[-2000:]
+        assert sentinel.read_text() == "keep"
