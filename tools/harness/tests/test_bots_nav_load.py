@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import harness  # noqa: E402
 from harness import build, mutated, read  # noqa: E402
 
-CASES = ["sync", "thread", "no-pack", "other-map", "bsp-mismatch", "damaged", "not-a-pack"]
+CASES = ["sync", "thread", "no-pack", "other-map", "bsp-mismatch", "damaged", "not-a-pack", "fragmented"]
 
 NEGATIVE_CONTROLS = {
     "surfaces-unchecked": (("if (surfaces != load.surfaces || walkable != load.walkable)", "if (walkable != load.walkable)"), "bsp-mismatch"),
@@ -23,15 +23,22 @@ NEGATIVE_CONTROLS = {
     "taken-twice": (("	nav = load.nav;\n	load.nav = NULL;", "	nav = load.nav;"), "sync"),
     "begun-again": (("if (load.state != _bots_nav_load_idle && strcmp(load.begun_for, stem) == 0)", "if (0)"), "sync"),
     "bad-record-used": (("	if (!nav)\n	{\n		platform_log(\"bots: nav: the record for", "	if (0)\n	{\n		platform_log(\"bots: nav: the record for"), "damaged"),
+    "fragmented-used": (("if ((nav->flags & BOTS_NAV_FLAG_FRAGMENTED) && !config_integer(\"bots.nav_force\"))", "if (0)"), "fragmented"),
+    "force-ignored": (("if ((nav->flags & BOTS_NAV_FLAG_FRAGMENTED) && !config_integer(\"bots.nav_force\"))", "if (nav->flags & BOTS_NAV_FLAG_FRAGMENTED)"), "fragmented"),
+    "flags-not-read": (("nav->flags = nav_u32(bytes);", "nav->flags = 0;"), "fragmented"),
     "reset-keeps-state": (("	load.state = _bots_nav_load_idle;\n	load.begun_for[0] = 0;", "	load.begun_for[0] = 0;"), "thread"),
 }
 
 
 def generated(fault=None):
     code = read("port/linux/game/bots_nav_load.c")
-    if fault:
-        code = mutated(code, *fault)
     nav = read("port/linux/game/bots_nav.c")
+    if fault:
+        # (the fault is in whichever of the two files has the text)
+        if fault[0] in code:
+            code = mutated(code, *fault)
+        else:
+            nav = mutated(nav, *fault)
     return (("bots_nav.h", read("port/linux/game/bots_nav.h")), ("bots_nav_load.h", read("port/linux/game/bots_nav_load.h")),
             ("bots_nav_c.inc", nav), ("bots_nav_load_c.inc", code),
             ("under_test.inc", '#include "bots_nav_c.inc"\n#include "bots_nav_load_c.inc"\n'))

@@ -244,6 +244,7 @@ struct bots_nav *bots_nav_parse_record(char const *name, unsigned char const *by
 		strncpy(nav->name, name, BOTS_NAV_NAME_BYTES - 1);
 		nav->name[BOTS_NAV_NAME_BYTES - 1] = 0;
 	}
+	nav->flags = nav_u32(bytes);
 	nav->area_count = (long)areas;
 	nav->link_count = (long)links;
 	nav->place_count = (long)places;
@@ -388,6 +389,7 @@ unsigned char *bots_nav_write_record(struct bots_nav const *nav, size_t *count)
 
 	if (!out)
 		return NULL;
+	nav_put_u32(out, nav->flags);
 	nav_put_u16(out + 4, (unsigned long)nav->area_count);
 	nav_put_u16(out + 6, (unsigned long)nav->link_count);
 	nav_put_u16(out + 8, (unsigned long)nav->place_count);
@@ -593,14 +595,23 @@ static float nav_distance3(float const *a, float const *b)
 
 long bots_nav_find_area(struct bots_nav const *nav, float const *point)
 {
+	long best;
+
+	return bots_nav_find_areas(nav, point, &best, 1) > 0 ? best : -1;
+}
+
+long bots_nav_find_areas(struct bots_nav const *nav, float const *point, long *out, long maximum)
+{
 	long cx = (long)floor((point[0] - nav->bounds_min[0]) / BOTS_NAV_CELL);
 	long cy = (long)floor((point[1] - nav->bounds_min[1]) / BOTS_NAV_CELL);
 	unsigned long k, first, last;
-	long best = -1;
-	float best_score = 1.0e30f;
+	float scores[16];
+	long count = 0, slot;
 
-	if (cx < 0 || cy < 0 || cx >= nav->cells_x || cy >= nav->cells_y)
-		return -1;
+	if (maximum > 16)
+		maximum = 16;
+	if (cx < 0 || cy < 0 || cx >= nav->cells_x || cy >= nav->cells_y || maximum <= 0)
+		return 0;
 	first = nav->cell_first[cy * nav->cells_x + cx];
 	last = nav->cell_first[cy * nav->cells_x + cx + 1];
 	for (k = first; k < last; k++)
@@ -610,17 +621,27 @@ long bots_nav_find_area(struct bots_nav const *nav, float const *point)
 		float flat = (float)sqrt(dx * dx + dy * dy);
 		float score;
 
-		/* (inside the area's reach, and not a floor above or below: more than 1.2 units off in height is another floor) */
 		if (flat > a->radius + 0.5f || fabs(dz) > 1.2f + 0.15f * flat)
 			continue;
 		score = flat + 4.0f * (float)fabs(dz);
-		if (score < best_score)
+		/* (insertion into the best `maximum`, ascending) */
+		for (slot = count; slot > 0 && scores[slot - 1] > score; slot--)
 		{
-			best_score = score;
-			best = (long)nav->cell_areas[k];
+			if (slot < maximum)
+			{
+				scores[slot] = scores[slot - 1];
+				out[slot] = out[slot - 1];
+			}
+		}
+		if (slot < maximum)
+		{
+			scores[slot] = score;
+			out[slot] = (long)nav->cell_areas[k];
+			if (count < maximum)
+				count++;
 		}
 	}
-	return best;
+	return count;
 }
 
 long bots_nav_nearest_area(struct bots_nav const *nav, float const *point)
@@ -668,7 +689,8 @@ int bots_nav_search_new(struct bots_nav_search *search, struct bots_nav const *n
 	search->state = (unsigned char *)malloc((size_t)search->capacity_areas);
 	search->heap = (unsigned short *)malloc((size_t)search->capacity_heap * sizeof(unsigned short));
 	search->heap_key = (float *)malloc((size_t)search->capacity_heap * sizeof(float));
-	if (!search->cost || !search->parent_link || !search->parent_area || !search->state || !search->heap || !search->heap_key)
+	search->link_blocked = (unsigned char *)calloc((size_t)nav->link_count + 1, 1);
+	if (!search->link_blocked || !search->cost || !search->parent_link || !search->parent_area || !search->state || !search->heap || !search->heap_key)
 	{
 		bots_nav_search_dispose(search);
 		return 0;
@@ -684,6 +706,7 @@ void bots_nav_search_dispose(struct bots_nav_search *search)
 	free(search->state);
 	free(search->heap);
 	free(search->heap_key);
+	free(search->link_blocked);
 	memset(search, 0, sizeof(*search));
 }
 
@@ -805,6 +828,8 @@ static long nav_run(struct bots_nav const *nav, struct bots_nav_search *s, long 
 				int skip = 0;
 
 				if (s->state[l->to] == NAV_CLOSED)
+					continue;
+				if (s->link_blocked && s->link_blocked[link_index] >= 2)
 					continue;
 				for (k = 0; k < bad_count; k++)
 					if (bad[k] == link_index)

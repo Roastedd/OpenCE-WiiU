@@ -199,6 +199,8 @@ def game_environment(settings):
         "HALO_TEST_INPUT": f"tickbot:{settings['seed']}", "HALO_FIXED_STEP": "1", "HALO_RANDOM_SEED": str(settings["seed"]),
         "HALO_BOTS": str(settings["bots"]), "HALO_BOT_SKILL": settings["skill"], "HALO_BOT_TEAMS": settings["teams"],
         "HALO_BOTS_SIM_TICKS": str(ticks),
+        # (no budget in the clock mode: a loaded emulator would shed at times of its own, and two runs of one input would differ)
+        "HALO_BOTS_BUDGET_US": "0",
         # (a safety stop by the clock, well past the run: an emulator plays a few hundred ticks a second)
         "HALO_EXIT_AFTER": str(settings["timeout"]),
     }

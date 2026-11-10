@@ -710,11 +710,13 @@ static const struct config_setting config_settings[] =
 	{ "bots.max", _config_integer, "15", "HALO_BOTS_MAX", _environment_value, _platform_all,
 		"The most bots there may be, 0 to 15: bots.count asks for no more than this. 15 is the game's own\n"
 		"most (a split screen game is 16 players with one of them yours)." },
-	{ "bots.budget_us", _config_integer, "0", "HALO_BOTS_BUDGET_US", _environment_value, _platform_all,
-		"The most microseconds that one tick of all the bots may cost; over it the bots look half as often,\n"
-		"decide half as often, search paths every other tick, and the farthest hold their controls, in that\n"
-		"order, until the cost is back under 2/5 of it. 0: no budget, nothing is limited or shed (the bots\n"
-		"cost is only counted in the log). The console's cost is not measured yet." },
+	{ "bots.budget_us", _config_integer, "3000", "HALO_BOTS_BUDGET_US", _environment_value, _platform_all,
+		"The most microseconds that one tick of all the bots may cost (the guard against a frame blown by many bots): over it the bots look half as\n"
+		"often, decide half as often, search paths every other tick, and the farthest hold their controls, in that order, until the cost is back\n"
+		"under 2/5 of it; and the bots whose turn comes after the cap is reached in a tick hold their last controls for a few ticks (a bot held\n"
+		"for 6 ticks thinks, 2 of them at most in a tick). The console's first numbers: 3 bots cost 158 us a tick on Blood Gulch, so 3,000 is\n"
+		"never reached by a game that plays well; it is for 15 bots in a big fight. 0: no budget, nothing is limited or shed (the bots' cost is\n"
+		"only counted in the log)." },
 	{ "bots.budget_credit", _config_integer, "0", "HALO_BOTS_BUDGET_CREDIT", _environment_value, _platform_all,
 		"The same budget counted in units of work (a sight test is 80, a path node 5, a goal decision 200),\n"
 		"which is the same every run: for tests. Used before bots.budget_us. 0: none." },
@@ -745,23 +747,41 @@ static const struct config_setting config_settings[] =
 	{ "bots.nav_pack", _config_string, "\"\"", "HALO_BOTS_NAV_PACK", _environment_value, _platform_all,
 		"The navigation pack's path (a real path: the console's card, or a folder on the host). Empty: navs.pack in the\n"
 		"Wii U's app folder, or beside the data folder's maps on the host." },
+	{ "bots.nav_force", _config_integer, "0", "HALO_BOTS_NAV_FORCE", _environment_value, _platform_all,
+		"1: use a map's navigation graph even when its record is marked too fragmented to walk (tests of the bake; the marked maps are walked by the\n"
+		"engine's surfaces otherwise)." },
+	{ "bots.nav_tweaks", _config_integer, "7", "HALO_BOTS_NAV_TWEAKS", _environment_value, _platform_all,
+		"The graph's follower's options (bits: 1 a fighting bot that strafes into a wall strafes the other way, 2 a link a bot found bad is bad for\n"
+		"every bot for 20 s, 4 a jump or a drop that failed for a bot is not taken by any bot for the rest of the map, 8 a bot hops at a teleporter's\n"
+		"pad and a teleporter that two bots could not trigger is not gone to again). 8 is on whenever bots.objectives is 1. Only where bots.nav is 1\n"
+		"and the map's graph is in use. 7: the first three (the default: what the stuck-seconds table of bots3-result.md measures), 0: none." },
 	{ "bots.nav_sync", _config_integer, "0", "HALO_BOTS_NAV_SYNC", _environment_value, _platform_all,
 		"For tests: 1 reads the navigation record on the game thread at the map's start, so that the graph is in use from\n"
 		"the first tick (the thread's read ends at a time of its own, which no two runs share)." },
 	{ "debug.bots_tour", _config_integer, "0", "HALO_BOTS_TOUR", _environment_value, _platform_all,
 		"For the headless runs: 1 makes the bots meet nobody and go from place to place (each other, the flag stands, the\n"
 		"starting locations, the items); what they reach is in the bots-sim block." },
+	{ "debug.bots_stuck_log", _config_integer, "0", "HALO_BOTS_STUCK_LOG", _environment_value, _platform_all,
+		"For the headless runs: 1 logs each second a bot is found stuck (where, what it was doing, which link of its path)." },
+	{ "debug.bots_net_log", _config_integer, "0", "HALO_BOTS_NET_LOG", _environment_value, _platform_all,
+		"For the two-machine runs of hosted bots: 1 logs each bot's controls as the host builds them and, on a client, each action the host relays (the update, the\n"
+		"player, what the client was sent), to find where a bot's copy on a client leaves the host's." },
 	{ "debug.bots_bake_nav", _config_string, "\"\"", "HALO_BOTS_BAKE_NAV", _environment_value, _platform_all,
 		"For the navigation bake (tools/harness/bots_nav.py): the file the running map's navigation pack is written to by the\n"
 		"first bot with a unit, after which the game ends. Empty: no bake. Never on the console." },
 	{ "debug.bots_bake_probe", _config_string, "\"\"", "HALO_BOTS_BAKE_PROBE", _environment_value, _platform_all,
 		"For the navigation bake: \"x0 y0 x1 y1\", the floors under the points of that line are logged." },
+	{ "debug.bots_bake_segment", _config_string, "\"\"", "HALO_BOTS_BAKE_SEGMENT", _environment_value, _platform_all,
+		"For the navigation bake: \"x0 y0 z0 x1 y1 z1\", the bake's walk test between the two floor points is logged step by step." },
 	{ "debug.bots_bake_path", _config_string, "\"\"", "HALO_BOTS_BAKE_PATH", _environment_value, _platform_all,
 		"For the navigation bake: \"x y z x y z\", the engine's walkable surfaces' way between the two floors is logged." },
 	{ "debug.bots_bake_cell", _config_integer, "50", "HALO_BOTS_BAKE_CELL", _environment_value, _platform_all,
 		"The bake's floor grid, in hundredths of a world unit (50: half a unit)." },
 	{ "debug.bots_bake_reach", _config_integer, "60", "HALO_BOTS_BAKE_REACH", _environment_value, _platform_all,
 		"The bake's reach of an area from its anchor, in tenths of a world unit (60: six units)." },
+	{ "debug.bots_bake_margin", _config_integer, "150", "HALO_BOTS_BAKE_MARGIN", _environment_value, _platform_all,
+		"The bake makes the floor only inside the box of the map's places (items, flags, balls, hills, starts, teleporters) and this many tenths\n"
+		"of a world unit on every side (150: 15 units), not on a map's sky or far hulls. 0: the whole map." },
 	{ "debug.bots_bake_stride", _config_integer, "1", "HALO_BOTS_BAKE_STRIDE", _environment_value, _platform_all,
 		"The bake tries flights from every this-th edge node of the floor (1: all of them; more is faster and finds fewer)." },
 	{ "bots.sim_ticks", _config_integer, "0", "HALO_BOTS_SIM_TICKS", _environment_value, _platform_all,

@@ -128,6 +128,7 @@ void platform_log(char const *format, ...);
 void game_time_take_tick_peaks(long *peak_ticks, long *frames_over_four); /* game_time.c */
 /* port_config.c's, and the sockets' (posix.h: the net: lines) */
 int config_boolean(const char *name);
+long config_integer(const char *name);
 int posix_socket_census(int *highest);
 /* main.c's and port_mods.c's: this build, and the mods it plays */
 void main_build_identity(long *number, char *flavor, size_t flavor_size, char *repository, size_t repository_size,
@@ -3407,6 +3408,7 @@ static void distributed_handle_actions(
 {
 	long update_number;
 	short index;
+	static long net_log = -1; /* debug.bots_net_log, read once */
 
 	/* (the host's update in this machine's order already, turned with the
 	message by distributed_wire_entries: taken as it is, not turned again) */
@@ -3431,6 +3433,13 @@ static void distributed_handle_actions(
 		action.desired_weapon_index = relayed.desired_weapon_index;
 		action.desired_grenade_index = relayed.desired_grenade_index;
 		action.desired_zoom_level = relayed.desired_zoom_level;
+		if (net_log < 0)
+			net_log = config_integer("debug.bots_net_log");
+		if (net_log > 0)
+			platform_log("bots: net relay update %ld player %d now %ld yaw %.4f pitch %.4f throttle %.3f %.3f trigger %.2f flags %x %x %x %x weapon %d grenade %d zoom %d", update_number,
+				(int)relayed.player_index, (long)game_time_get(), action.desired_facing.yaw, action.desired_facing.pitch, action.throttle.i, action.throttle.j,
+				action.primary_trigger, (unsigned)relayed.control_flags[0], (unsigned)relayed.control_flags[1], (unsigned)relayed.control_flags[2],
+				(unsigned)relayed.control_flags[3], (int)action.desired_weapon_index, (int)action.desired_grenade_index, (int)action.desired_zoom_level);
 		update_client_handle_relayed_action(relayed.player_index, update_number, &action,
 			relayed.control_flags, DISTRIBUTED_INPUT_HISTORY);
 	}

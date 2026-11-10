@@ -2,11 +2,11 @@
 """Bakes the bots' navigation graphs: a headless game of each map with the bake switched on (debug.bots_bake_nav), run by the big-endian build under
 qemu-ppc in the opence-ppc-be image (tools/ppc-be/run.sh builds both), and the one-map packs merged into navs.pack (tools/bots_nav_pack.py).
 
-    python3 tools/harness/bots_nav.py bake MAP [MAP ...] --out DIR [--tree TREE] [--maps FOLDER] [--cell HUNDREDTHS] [--reach TENTHS] [--stride N]
+    python3 tools/harness/bots_nav.py bake MAP[=CELL] [MAP[=CELL] ...] --out DIR [--tree TREE] [--maps FOLDER] [--cell HUNDREDTHS] [--reach TENTHS] [--stride N]
     python3 tools/harness/bots_nav.py bake --all --out DIR
 
 Each map takes seconds to two minutes (the bake's log is DIR/<map>/game.log: the biped's numbers, the floor nodes, the walks, the areas, the flights and
-the places each step's count and time, and at the end which places the graph joins). DIR/navs.pack is the merged pack; DIR/report.txt says what the
+the places each step's count and time, and at the end which places the graph joins). MAP=CELL bakes that map with its own floor grid (hundredths of a unit: boardingaction=25), the others with --cell or the bake's own. DIR/navs.pack is the merged pack; DIR/report.txt says what the
 bake made (counts, and from each start the places reached). Never on the console: the bake is a game run on the Mac, and the console only reads the pack.
 """
 
@@ -63,8 +63,9 @@ def main(argv=None):
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     paths = []
-    for name in names:
-        path, text, seconds = bake(name, out, args.tree, args.maps_folder, args.cell, args.reach, args.stride)
+    for item in names:
+        name, _, own_cell = item.partition("=")
+        path, text, seconds = bake(name, out, args.tree, args.maps_folder, int(own_cell) if own_cell else args.cell, args.reach, args.stride)
         done = [line for line in text.splitlines() if "bake: done" in line or "bake: wrote" in line]
         print(f"{name}: {seconds:.0f} s wall; " + " | ".join(line.split("bake: ", 1)[-1] for line in done))
         paths.append(str(path))

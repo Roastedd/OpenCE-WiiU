@@ -26,6 +26,13 @@ What it does, in order (the log says each step's count and time):
    Teleporters join their source and target flags.
 6. The places: the item spawns (with their period), flag stands, ball spawns, hill points, starting locations, vehicles.
 
+The floor is made only inside the box of the map's places and a margin (debug.bots_bake_margin, 15 units): a map's sky and its far hulls (Boarding Action's
+372,000 nodes were 97,000 inside it) are floors no game is played on. debug.bots_bake_cell sets the grid (a map with doorways and ramps under a unit wide
+wants 0.25: Boarding Action's and Put Put's records are baked so). The log of the bake also says what the map has in it (the objects by type, the scenery, the
+machines), where the pieces of the floor graph nearly touch (the gaps: what may join them), and debug.bots_bake_probe "x0 y0 x1 y1 [step]" and
+debug.bots_bake_segment "x0 y0 z0 x1 y1 z1" log the floors under a line and the bake's walk test between two points, step by step. A graph that reaches too little of the
+places from the starts is marked fragmented by tools/bots_nav_pack.py merge, and the game then walks the map by the engine's surfaces.
+
 What it does not do (bots2-result.md): the validation by driving a unit through each link in a game; doors and elevators as links; the
 hint file; the exposure and cover analysis.
 */
@@ -47,6 +54,8 @@ hint file; the exposure and cover analysis.
 #include "units/biped_definitions.h"
 #include "items/items.h"
 #include "items/item_definitions.h"
+#include "devices/device_machines.h"
+#include "devices/device_definitions.h"
 #include "physics/collisions.h"
 #include "scenario/scenario.h"
 #include "scenario/scenario_definitions.h"
@@ -117,6 +126,9 @@ static struct
 	float radius, height, slope_tan, jump_velocity, gravity, run_speed, drop_height, step;
 	/* the cell of the grid */
 	float cell;
+	/* the box of the places (and a margin) the floor is made inside of: a map's sky and its far hulls are no floor a game is played on */
+	int play_on;
+	float play_min[2], play_max[2];
 	long cast_count;
 	/* why a walk was refused: no floor, too steep, the knees met something, the body did */
 	long refused[4];
@@ -296,6 +308,8 @@ static void bake_add_node(float x, float y, float z, long cx, long cy)
 {
 	struct bake_node *node;
 
+	if (bake.play_on && (x < bake.play_min[0] || x > bake.play_max[0] || y < bake.play_min[1] || y > bake.play_max[1]))
+		return;
 	if (grid.count >= grid.capacity)
 	{
 		long capacity = grid.capacity ? grid.capacity * 2 : 65536;
@@ -574,6 +588,80 @@ static void bake_report_pieces(void)
 	platform_log("bots: bake: the floor graph has %ld pieces, the largest of %ld of %ld nodes (the first sixteen: %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld)", pieces, big,
 		grid.count, sizes[0], sizes[1], sizes[2], sizes[3], sizes[4], sizes[5], sizes[6], sizes[7], sizes[8], sizes[9], sizes[10], sizes[11], sizes[12],
 		sizes[13], sizes[14], sizes[15]);
+	/* (where the pieces nearly touch: for each pair of the larger pieces the two nodes nearest each other within two units in the plane, for looking at what
+	may join them: a door, a lift, a step too tall for a walk, a jump) */
+	{
+		long *piece_size = (long *)calloc((size_t)pieces + 1, sizeof(long)), *rank = (long *)malloc(((size_t)pieces + 1) * sizeof(long));
+		long considered = 0, a, b;
+		struct gap { float distance; long first, second; } *gaps;
+
+		if (piece_size && rank)
+		{
+			for (index = 0; index < grid.count; index++)
+				piece_size[piece[index]]++;
+			for (a = 0; a < pieces; a++)
+				rank[a] = piece_size[a] >= 40 && considered < 60 ? considered++ : -1;
+			gaps = (struct gap *)malloc((size_t)(considered * considered + 1) * sizeof(struct gap));
+			if (gaps)
+			{
+				for (a = 0; a < considered * considered; a++)
+				{
+					gaps[a].distance = 1.0e30f;
+					gaps[a].first = gaps[a].second = -1;
+				}
+				for (index = 0; index < grid.count; index++)
+				{
+					struct bake_node *node = &grid.nodes[index];
+					long from_rank = rank[piece[index]], dx, dy;
+
+					if (from_rank < 0)
+						continue;
+					for (dy = -4; dy <= 4; dy++)
+						for (dx = -4; dx <= 4; dx++)
+						{
+							long cx = node->cx + dx, cy = node->cy + dy, k;
+
+							if (cx < 0 || cy < 0 || cx >= grid.cells_x || cy >= grid.cells_y)
+								continue;
+							for (k = grid.cell_start[cy * grid.cells_x + cx]; k < grid.cell_start[cy * grid.cells_x + cx + 1]; k++)
+							{
+								long to_rank = rank[piece[k]];
+								float ex, ey, ez, distance;
+
+								if (to_rank < 0 || to_rank == from_rank)
+									continue;
+								ex = grid.nodes[k].p[0] - node->p[0];
+								ey = grid.nodes[k].p[1] - node->p[1];
+								ez = grid.nodes[k].p[2] - node->p[2];
+								if ((float)fabs(ez) > 3.0f)
+									continue;
+								distance = (float)sqrt(ex * ex + ey * ey) + 0.3f * (float)fabs(ez);
+								if (distance < gaps[from_rank * considered + to_rank].distance)
+								{
+									gaps[from_rank * considered + to_rank].distance = distance;
+									gaps[from_rank * considered + to_rank].first = index;
+									gaps[from_rank * considered + to_rank].second = k;
+								}
+							}
+						}
+				}
+				for (a = 0; a < pieces; a++)
+					for (b = a + 1; b < pieces; b++)
+						if (rank[a] >= 0 && rank[b] >= 0 && gaps[rank[a] * considered + rank[b]].first >= 0)
+						{
+							struct gap *g = &gaps[rank[a] * considered + rank[b]];
+							struct bake_node *n1 = &grid.nodes[g->first], *n2 = &grid.nodes[g->second];
+
+							platform_log("bots: bake: gap: piece %ld (%ld nodes) and piece %ld (%ld nodes): (%.2f %.2f %.2f) to (%.2f %.2f %.2f), %.2f apart in the plane, %.2f in height", a,
+								piece_size[a], b, piece_size[b], n1->p[0], n1->p[1], n1->p[2], n2->p[0], n2->p[1], n2->p[2],
+								(double)sqrt((n1->p[0] - n2->p[0]) * (n1->p[0] - n2->p[0]) + (n1->p[1] - n2->p[1]) * (n1->p[1] - n2->p[1])), (double)(n2->p[2] - n1->p[2]));
+						}
+				free(gaps);
+			}
+		}
+		free(piece_size);
+		free(rank);
+	}
 	if (path && path[0])
 	{
 		char image[1100];
@@ -2019,14 +2107,14 @@ int bots_nav_bake_run(long unit_index, char const *map_name, char const *path)
 	{
 		/* (debug.bots_bake_probe "x0 y0 x1 y1": the floors under a line of points, every half unit, for looking at a place that does not link) */
 		char const *probe = config_string("debug.bots_bake_probe");
-		float x0, y0, x1, y1;
+		float x0, y0, x1, y1, probe_step = 0.5f;
 
-		if (probe && probe[0] && sscanf(probe, "%f %f %f %f", &x0, &y0, &x1, &y1) == 4)
+		if (probe && probe[0] && sscanf(probe, "%f %f %f %f %f", &x0, &y0, &x1, &y1, &probe_step) >= 4)
 		{
 			bake.watch[0] = x0;
 			bake.watch[1] = y0;
 			bake.watching = 1;
-			long steps = (long)(sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)) / 0.5f), step;
+			long steps = (long)(sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)) / MAX(probe_step, 0.02f)), step;
 
 			for (step = 0; step <= steps; step++)
 			{
@@ -2034,7 +2122,7 @@ int bots_nav_bake_run(long unit_index, char const *map_name, char const *path)
 				char line[300];
 				int length = 0, hits = 0;
 
-				length = snprintf(line, sizeof(line), "bots: bake: probe (%.1f %.1f):", x, y);
+				length = snprintf(line, sizeof(line), "bots: bake: probe (%.2f %.2f):", x, y);
 				while (hits < 6)
 				{
 					float height, normal;
@@ -2047,6 +2135,103 @@ int bots_nav_bake_run(long unit_index, char const *map_name, char const *path)
 				}
 				platform_log("%s", line);
 			}
+		}
+	}
+	{
+		/* (the machines: what they are and where, for deciding what the bake does with doors and lifts) */
+		struct object_iterator machines;
+		long machine_count = 0;
+
+		long type_counts[32] = { 0 };
+
+		object_iterator_new(&machines, _object_mask_all, 0);
+		while (object_iterator_next(&machines))
+		{
+			short type = object_get(machines.index)->object.type;
+
+			if (type >= 0 && type < 32)
+				type_counts[type]++;
+		}
+		platform_log("bots: bake: objects by type: biped %ld vehicle %ld weapon %ld equipment %ld garbage %ld projectile %ld scenery %ld machine %ld control %ld light %ld placeholder %ld", type_counts[_object_type_biped],
+			type_counts[_object_type_vehicle], type_counts[_object_type_weapon], type_counts[_object_type_equipment], type_counts[_object_type_garbage],
+			type_counts[_object_type_projectile], type_counts[_object_type_scenery], type_counts[_object_type_machine], type_counts[_object_type_control],
+			type_counts[_object_type_light_fixture], type_counts[_object_type_placeholder]);
+		object_iterator_new(&machines, _object_mask_scenery, 0);
+		while (object_iterator_next(&machines))
+		{
+			struct object_datum *scenery = object_get(machines.index);
+
+			platform_log("bots: bake: scenery %s at (%.2f %.2f %.2f)", tag_get_name(scenery->definition_index), scenery->object.position.x, scenery->object.position.y,
+				scenery->object.position.z);
+		}
+		object_iterator_new(&machines, _object_mask_machine, 0);
+		while (object_iterator_next(&machines))
+		{
+			struct machine_datum *machine = machine_get(machines.index);
+			struct machine_definition *definition = (struct machine_definition *)tag_get(MACHINE_DEFINITION_TAG, machine->definition_index);
+
+			machine_count++;
+			platform_log("bots: bake: machine %ld %s type %d flags %x position (%.2f %.2f %.2f) power %.2f open %.2f", machine_count - 1, tag_get_name(machine->definition_index),
+				(int)definition->machine.type, (unsigned)definition->machine.flags, machine->object.position.x, machine->object.position.y, machine->object.position.z,
+				(double)machine->device.power, (double)machine->device.position);
+		}
+	}
+	{
+		/* (debug.bots_bake_segment "x0 y0 z0 x1 y1 z1": the walk test of the bake from one floor point to another, step by step, with the reason it says no) */
+		char const *segment = config_string("debug.bots_bake_segment");
+		float a[3], b[3];
+
+		if (segment && segment[0] && sscanf(segment, "%f %f %f %f %f %f", &a[0], &a[1], &a[2], &b[0], &b[1], &b[2]) == 6)
+		{
+			float spacing = bake.cell * 0.55f, dx = b[0] - a[0], dy = b[1] - a[1], distance = (float)sqrt(dx * dx + dy * dy);
+			long steps = (long)ceil(distance / spacing), step;
+
+			for (step = 0; step <= steps; step++)
+			{
+				float t = (float)step / (float)steps, height = 0.0f, normal = 0.0f;
+				int found = bake_floor(a[0] + dx * t, a[1] + dy * t, a[2] + bake.step + 0.45f, 0.45f + 2.0f * bake.step + 0.5f, &height, &normal);
+
+				platform_log("bots: bake: segment sample %ld (%.2f %.2f): floor %s %.3f (normal %.2f)", step, a[0] + dx * t, a[1] + dy * t, found ? "at" : "none", height, normal);
+			}
+			platform_log("bots: bake: segment (%.2f %.2f %.2f) to (%.2f %.2f %.2f): %s (reason %d)", a[0], a[1], a[2], b[0], b[1], b[2],
+				bake_segment_walkable_inner(a, b, spacing) ? "walkable" : "refused", bake.last_reason);
+		}
+	}
+	{
+		/* (the box of the places: items, flags, balls, hills, starts, teleporters, with a margin; debug.bots_bake_margin tenths of a unit, 0 for the whole map) */
+		long margin_tenths = config_integer("debug.bots_bake_margin");
+		float lo[2] = { 1e30f, 1e30f }, hi[2] = { -1e30f, -1e30f };
+		long k;
+
+		for (k = 0; k < scenario->netgame_equipment.count; k++)
+		{
+			real_point3d const *q = &TAG_BLOCK_GET_ELEMENT(&scenario->netgame_equipment, k, struct scenario_netgame_equipment)->position;
+
+			lo[0] = MIN(lo[0], q->x); lo[1] = MIN(lo[1], q->y); hi[0] = MAX(hi[0], q->x); hi[1] = MAX(hi[1], q->y);
+		}
+		for (k = 0; k < scenario->netgame_flags.count; k++)
+		{
+			real_point3d const *q = &TAG_BLOCK_GET_ELEMENT(&scenario->netgame_flags, k, struct scenario_netgame_flag)->position;
+
+			lo[0] = MIN(lo[0], q->x); lo[1] = MIN(lo[1], q->y); hi[0] = MAX(hi[0], q->x); hi[1] = MAX(hi[1], q->y);
+		}
+		for (k = 0; k < scenario->players.count; k++)
+		{
+			real_point3d const *q = &TAG_BLOCK_GET_ELEMENT(&scenario->players, k, struct player_starting_location)->position;
+
+			lo[0] = MIN(lo[0], q->x); lo[1] = MIN(lo[1], q->y); hi[0] = MAX(hi[0], q->x); hi[1] = MAX(hi[1], q->y);
+		}
+		if (margin_tenths > 0 && lo[0] < hi[0])
+		{
+			float margin = (float)margin_tenths / 10.0f;
+
+			bake.play_on = 1;
+			bake.play_min[0] = lo[0] - margin;
+			bake.play_min[1] = lo[1] - margin;
+			bake.play_max[0] = hi[0] + margin;
+			bake.play_max[1] = hi[1] + margin;
+			platform_log("bots: bake: the floor is made inside the box of the places and %.0f units: (%.1f %.1f) to (%.1f %.1f)", margin, bake.play_min[0], bake.play_min[1],
+				bake.play_max[0], bake.play_max[1]);
 		}
 	}
 	bake_engine_pieces(bsp, structure);

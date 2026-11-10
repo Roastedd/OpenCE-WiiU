@@ -232,6 +232,29 @@ int main(int argc, char **argv)
 		bots_nav_dispose(nav);
 		return 0;
 	}
+	/* the areas that reach a point, best first: the nearest anchor leads, the others follow in order, no more than asked for, none on another floor */
+	CASE("find-areas")
+	{
+		struct bots_nav *nav = make_grid(4, 3, -1, 0, NULL, NULL);
+		float p[3] = { 13.0f, 8.0f, 1.0f };
+		long found[8], count;
+
+		/* (area 5 at 8 8 and area 6 at 16 8 both reach it; 6 is nearer but comes later in the tables) */
+		count = bots_nav_find_areas(nav, p, found, 8);
+		CHECK(count == 2 && found[0] == 6 && found[1] == 5, "the areas (%ld): %ld %ld", count, found[0], found[1]);
+		CHECK(bots_nav_find_areas(nav, p, found, 1) == 1 && found[0] == 6 && found[0] == bots_nav_find_area(nav, p), "the one asked for is find_area's");
+		/* (a worse one than the full list's is not put past its end) */
+		p[0] = 11.0f;
+		found[1] = -7;
+		count = bots_nav_find_areas(nav, p, found, 1);
+		CHECK(count == 1 && found[0] == 5 && found[1] == -7, "past the end: %ld areas, %ld %ld", count, found[0], found[1]);
+		p[2] = 6.0f;
+		CHECK(bots_nav_find_areas(nav, p, found, 8) == 0, "areas on another floor");
+		p[0] = 500.0f;
+		CHECK(bots_nav_find_areas(nav, p, found, 8) == 0, "areas off the map");
+		bots_nav_dispose(nav);
+		return 0;
+	}
 	/* the search: the shortest way over the grid, a path of the right links; the jump is taken when it is faster */
 	CASE("search")
 	{
@@ -266,6 +289,16 @@ int main(int argc, char **argv)
 			CHECK(bots_nav_search_path(nav, &search, 0, 11, a, b, bad, 1, 0, &path), "no path round");
 			CHECK(path.link_count == 5 && nav->links[path.links[0]].type == _bots_nav_link_walk, "the bad jump was taken (%d links)", path.link_count);
 		}
+		/* (a link the game blocked for every bot is not taken by any search, with no list of bad links given, and taken again when the block is lifted) */
+		CHECK(bots_nav_search_path(nav, &search, 0, 11, a, b, NULL, 0, 0, &path) && path.link_count == 1, "the jump again");
+		CHECK(search.link_blocked != NULL, "no list of blocked links");
+		search.link_blocked[path.links[0]] = 1;
+		CHECK(bots_nav_search_path(nav, &search, 0, 11, a, b, NULL, 0, 0, &path) && path.link_count == 1, "one failure blocked a link");
+		search.link_blocked[path.links[0]] = 2;
+		CHECK(bots_nav_search_path(nav, &search, 0, 11, a, b, NULL, 0, 0, &path), "no path round the block");
+		CHECK(path.link_count == 5 && nav->links[path.links[0]].type == _bots_nav_link_walk, "the blocked jump was taken (%d links)", path.link_count);
+		memset(search.link_blocked, 0, (size_t)nav->link_count + 1);
+		CHECK(bots_nav_search_path(nav, &search, 0, 11, a, b, NULL, 0, 0, &path) && path.link_count == 1, "the block was not lifted");
 		bots_nav_search_dispose(&search);
 		bots_nav_dispose(nav);
 		return 0;

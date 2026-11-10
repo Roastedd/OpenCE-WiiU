@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import CHECK_FAILED, build, mutated, read, run  # noqa: E402
 
 CASES = ["off", "cap-of-a-tick", "clock", "steps-in-order", "searches-every-other-tick", "sheds-a-bot", "mean-over-the-target",
-         "steps-back-down", "frame-rate", "deferred"]
+         "steps-back-down", "frame-rate", "deferred", "guard-15-bots"]
 
 # a fault in bots_budget.c, and the case that must catch it
 NEGATIVE_CONTROLS = {
@@ -49,6 +49,10 @@ NEGATIVE_CONTROLS = {
     "steps-down-while-over": (("budget->level > 0 && budget->over_run == 0 &&", "budget->level > 0 &&"), "steps-back-down"),
     "frame-rate-below-one": (("if (frames_per_second < 40.0f && cap > 1)", "if (frames_per_second < 40.0f)"), "frame-rate"),
     "frame-rate-unknown": (("\tif (frames_per_second <= 0.0f)\n\t\treturn cap;\n", ""), "frame-rate"),
+    "guard-never-holds": (("\tif (!bots_budget_over(budget))\n\t\treturn 0;\n\tif (held_ticks >=", "\treturn 0;\n\tif (held_ticks >="), "guard-15-bots"),
+    "guard-holds-forever": (("if (held_ticks >= BOTS_BUDGET_OVER_HOLD_TICKS && budget->forced < BOTS_BUDGET_FORCED_PER_TICK)", "if (0)"), "guard-15-bots"),
+    "guard-forces-all-together": (("budget->forced < BOTS_BUDGET_FORCED_PER_TICK)", "1)"), "guard-15-bots"),
+    "guard-holds-when-off": (("\tif (!bots_budget_over(budget))\n\t\treturn 0;\n\tif (held_ticks >=", "\tif (budget->mode == 99)\n\t\treturn 0;\n\tif (held_ticks >="), "guard-15-bots"),
     "deferred-uncounted": (("\tbudget->deferred++;", ""), "deferred"),
 }
 

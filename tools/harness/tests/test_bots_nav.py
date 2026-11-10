@@ -10,7 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import CHECK_FAILED, build, mutated, read, run  # noqa: E402
 
-CASES = ["crc", "round-trip", "pack", "bad-record", "find-area", "search", "unreachable", "jitter", "points", "places"]
+CASES = ["crc", "round-trip", "pack", "bad-record", "find-area", "find-areas", "search", "unreachable", "jitter", "points", "places"]
 
 # a fault in bots_nav.c, and the case that must catch it
 NEGATIVE_CONTROLS = {
@@ -26,7 +26,12 @@ NEGATIVE_CONTROLS = {
     "link-to-unchecked": (("if (l->to >= areas || l->type", "if (l->type"), "bad-record"),
     "table-size-unchecked": (("if (count < need)", "if (need > 0x7FFFFFFFUL)"), "bad-record"),
     "far-floor-is-the-area": (("fabs(dz) > 1.2f + 0.15f * flat", "fabs(dz) > 100.0f"), "find-area"),
+    "areas-not-sorted": (("for (slot = count; slot > 0 && scores[slot - 1] > score; slot--)", "for (slot = count; slot > 0 && 0; slot--)"), "find-areas"),
+    "areas-over-the-limit": (("if (slot < maximum)\n\t\t{\n\t\t\tscores[slot] = score;", "{\n\t\t\tscores[slot] = score;"), "find-areas"),
     "bad-link-taken": (("if (bad[k] == link_index)", "if (0)"), "search"),
+    "blocked-link-taken": (("if (s->link_blocked && s->link_blocked[link_index] >= 2)", "if (0)"), "search"),
+    "one-failure-blocks": (("if (s->link_blocked && s->link_blocked[link_index] >= 2)", "if (s->link_blocked && s->link_blocked[link_index] >= 1)"), "search"),
+    "blocked-links-not-kept": (("search->link_blocked = (unsigned char *)calloc((size_t)nav->link_count + 1, 1);\n\tif (!search->link_blocked ||", "search->link_blocked = NULL;\n\tif ("), "search"),
     "cost-ignored": (("cost = (float)l->cost_q / 16.0f;", "cost = 1.0f;"), "search"),
     "partial-claims-complete": (("path->complete = end == to;", "path->complete = 1;"), "unreachable"),
     "jitter-ignored": (("if (jitter_seed)\n					cost *=", "if (0)\n					cost *="), "jitter"),
