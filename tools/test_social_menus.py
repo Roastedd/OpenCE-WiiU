@@ -310,3 +310,16 @@ def test_every_function_the_menus_run_is_in_menu_tags_tables():
         if name.endswith("tab "):
             continue
         assert name in functions or name in inputs, f"{name} has a handler and is not in the tables"
+
+
+def test_the_friends_screens_top_right_is_clear_of_the_tab_row():
+    """the service word and this machine's code (top right) end a margin above the tab row: on the console 'YOUR CODE: ...' touched the tabs (it ended at 40 against the tabs' 44)"""
+    widgets, _, _ = all_widgets()
+    tabs = int(next(child for child in widgets[f"{SOCIAL}/friends_list"].findall("child") if child.get("widget") == f"{SOCIAL}/friends_tab_bar").get("y"))
+    assert tabs == port_settings.SOCIAL_TAB_TOP
+    for name in ("friends_service", "friends_code"):
+        element = widgets[f"{SOCIAL}/{name}"]
+        assert int(element.get("top")) + int(element.get("height")) + 8 <= tabs, f"{name} runs down to {int(element.get('top')) + int(element.get('height'))}, the tabs start at {tabs}"
+    service, code = widgets[f"{SOCIAL}/friends_service"], widgets[f"{SOCIAL}/friends_code"]
+    # (the two lines do not overlap each other's text: the service's text ends before the code's starts)
+    assert int(service.get("top")) + int(service.get("text_y")) + 12 <= int(code.get("top")) + int(code.get("text_y"))

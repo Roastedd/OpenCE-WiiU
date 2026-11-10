@@ -2729,8 +2729,9 @@ def _social_friends() -> list:
                            [f'<child widget="{base}/friends_list"/>', f'<child widget="{base}/friends_title"/>', f'<child widget="{base}/friends_service"/>',
                             f'<child widget="{base}/friends_code"/>', f'<child widget="{base}/friends_detail"/>'])
     lines += _social_text(f"{base}/friends_title", 35, 8, 200, 30, color=SOCIAL_TITLE_COLOR, text="FRIENDS", text_y=3)
-    lines += _social_text(f"{base}/friends_service", 330, 6, 236, 18, "small", color="#FFFFFFFF", align="right", text_y=2)
-    lines += _social_text(f"{base}/friends_code", 250, 22, 316, 18, "small", align="right", text_y=2)
+    # (the service word and this machine's code, small, in the top right and clear of the tab row below them: on the console the code touched it at 22 + 18 against the tabs' 44)
+    lines += _social_text(f"{base}/friends_service", 330, 0, 236, 18, "small", color="#FFFFFFFF", align="right", text_y=2)
+    lines += _social_text(f"{base}/friends_code", 250, 14, 316, 18, "small", align="right", text_y=2)
     lines += _social_text(f"{base}/friends_detail", SOCIAL_ROWS_LEFT, SOCIAL_ROWS_TOP + SOCIAL_FRIEND_ROWS * SOCIAL_ROW_PITCH + 6, SOCIAL_ROW_WIDTH, 52,
                           color="#FFFFFFFF", text_y=4)
     rows = [f'<child widget="{base}/friend_item_{index + 1}" x="{SOCIAL_ROWS_LEFT}" y="{SOCIAL_ROWS_TOP + index * SOCIAL_ROW_PITCH}"/>'
