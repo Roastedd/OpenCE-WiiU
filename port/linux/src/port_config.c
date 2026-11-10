@@ -761,6 +761,9 @@ static const struct config_setting config_settings[] =
 		"starting locations, the items); what they reach is in the bots-sim block." },
 	{ "debug.bots_stuck_log", _config_integer, "0", "HALO_BOTS_STUCK_LOG", _environment_value, _platform_all,
 		"For the headless runs: 1 logs each second a bot is found stuck (where, what it was doing, which link of its path)." },
+	{ "debug.bots_net_log", _config_integer, "0", "HALO_BOTS_NET_LOG", _environment_value, _platform_all,
+		"For the two-machine runs of hosted bots: 1 logs each bot's controls as the host builds them and, on a client, each action the host relays (the update, the\n"
+		"player, what the client was sent), to find where a bot's copy on a client leaves the host's." },
 	{ "debug.bots_bake_nav", _config_string, "\"\"", "HALO_BOTS_BAKE_NAV", _environment_value, _platform_all,
 		"For the navigation bake (tools/harness/bots_nav.py): the file the running map's navigation pack is written to by the\n"
 		"first bot with a unit, after which the game ends. Empty: no bake. Never on the console." },

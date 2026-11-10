@@ -9,7 +9,7 @@
 # A spec is x86 (build/linux/halo of $X86_TREE, qemu-i386, null renderer), ppc (build/linux-ppc/halo of $PPC_TREE, qemu-ppc, null renderer)
 # or digest:<folder> (the folder of a game digest program, build/game-digest/trees/NAME/build/game-digest; qemu-ppc -cpu 750, drawing).
 #
-# HOST_ENV and CLIENT_ENV: "NAME=VALUE NAME=VALUE" for that machine only (HALO_NET_OVERLAP=1, HALO_TICK_OVERLAP_JITTER=3, ...). HALO_HOST_TEST is the
+# CLIENT_NICE: a nice level (1 to 19) for the client's process. HOST_ENV and CLIENT_ENV: "NAME=VALUE NAME=VALUE" for that machine only (HALO_NET_OVERLAP=1, HALO_TICK_OVERLAP_JITTER=3, ...). HALO_HOST_TEST is the
 # host's debug.network_test (host:bloodgulch by default); HALO_TEST_INPUT, HALO_RANDOM_SEED, HALO_NETWORK_TEST_START, _KILL, _SCORE, _SHOOT,
 # _VEHICLE, _PICKUP and _PICKUP_WEAPON go to both. MAPS_PPC and MAPS_X86 are the folders of the converted maps and of the Xbox disc's. DIGEST_TICKS
 # is the tick a digest machine ends its run at (the glue's GAME_DIGEST_TICKS; default 100000: the seconds' timeout ends it). NETEM_*: not used
@@ -30,7 +30,7 @@ ppc_tree="${PPC_TREE:-$root}"
 digest_ticks="${DIGEST_TICKS:-100000}"
 
 environment=()
-for name in HALO_HOST_TEST HALO_TEST_INPUT HALO_RANDOM_SEED HALO_NETWORK_TEST_START HALO_NETWORK_TEST_KILL \
+for name in CLIENT_NICE HALO_HOST_TEST HALO_TEST_INPUT HALO_RANDOM_SEED HALO_NETWORK_TEST_START HALO_NETWORK_TEST_KILL \
 	HALO_NETWORK_TEST_SCORE HALO_NETWORK_TEST_SHOOT HALO_NETWORK_TEST_VEHICLE HALO_NETWORK_TEST_PICKUP \
 	HALO_NETWORK_TEST_PICKUP_WEAPON HOST_ENV CLIENT_ENV; do
 	[ -n "${!name:-}" ] && environment+=(-e "$name=${!name}")
@@ -57,6 +57,9 @@ docker run --rm --ulimit core=0 "${mounts[@]}" ${environment[@]+"${environment[@
 			[ $role = host ] && test="${HALO_HOST_TEST:-host:bloodgulch}"
 			local role_env=$CLIENT_ENV
 			[ $role = host ] && role_env=$HOST_ENV
+			# (CLIENT_NICE: the client runs at that nice level, so that a busy machine keeps the host, which has the bots to think of, ahead of the clients clock)
+			local nice=""
+			[ $role = client ] && [ -n "${CLIENT_NICE:-}" ] && nice="nice -n $CLIENT_NICE"
 			local env_args=()
 			for pair in $role_env; do env_args+=("$pair"); done
 			if [ $kind = digest ]; then
@@ -73,7 +76,7 @@ docker run --rm --ulimit core=0 "${mounts[@]}" ${environment[@]+"${environment[@
 			(cd /run/$role && env HOME=/run/$role/home QEMU_LD_PREFIX=$libraries HALO_NETWORK_TEST="$test" HALO_NET_ADDRESS=$address \
 				HALO_NET_BROADCAST=$other HALO_NO_AUDIO=1 HALO_HIDDEN_WINDOW=1 SDL_VIDEO_DRIVER=offscreen SDL_AUDIO_DRIVER=dummy \
 				"${env_args[@]}" \
-				timeout -s KILL '"$seconds"' $emulator $binary $extra > /out/$role.log 2>&1;
+				timeout -s KILL '"$seconds"' $nice $emulator $binary $extra > /out/$role.log 2>&1;
 				cp /run/$role/data/debug.txt /out/$role.debug.txt 2>/dev/null || true) &
 		}
 		machine host "$HOST_SPEC" 127.0.0.200 127.0.0.201 "$HOST_DIGEST"

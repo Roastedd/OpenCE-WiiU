@@ -504,6 +504,7 @@ static struct
 	/* debug.bots_tour: the bots meet nobody, and go from one place to the next (each other, the flags, the starts, the items); what they did */
 	boolean tour;
 	long stuck_log_on;
+	long net_log;
 	long tour_reached[4], tour_given_up[4], tour_ticks[4];
 
 	/* the tick being built (see bots_now), the game's time when the last was, and the ticks built while the game stood still
@@ -1940,6 +1941,7 @@ static void bots_nav_prepare(void)
 	bots_globals.nav_tweaks = config_integer("bots.nav_tweaks");
 	bots_globals.tour = config_integer("debug.bots_tour") != 0;
 	bots_globals.stuck_log_on = config_integer("debug.bots_stuck_log");
+	bots_globals.net_log = config_integer("debug.bots_net_log");
 	if (!bots_globals.nav_enabled || !structure || structure->collision_bsp.count <= 0)
 		return;
 	surfaces = (unsigned long)TAG_BLOCK_GET_ELEMENT(&structure->collision_bsp, 0, struct collision_bsp)->surfaces.count;
@@ -5056,6 +5058,10 @@ boolean bots_fill_action(long player_index, struct player_action *action)
 	if (player_index < 0 || player_index >= HALO_PORT_MAXIMUM_NETWORK_PLAYERS || !bots_globals.action_valid[player_index])
 		return FALSE;
 	*action = bots_globals.actions[player_index];
+	if (bots_globals.net_log)
+		platform_log("bots: net act tick %ld player %ld yaw %.4f pitch %.4f throttle %.3f %.3f trigger %.2f flags %lx weapon %d grenade %d zoom %d", (long)game_time_get(),
+			player_index, action->desired_facing.yaw, action->desired_facing.pitch, action->throttle.i, action->throttle.j, action->primary_trigger,
+			(unsigned long)action->control_flags, (int)action->desired_weapon_index, (int)action->desired_grenade_index, (int)action->desired_zoom_level);
 	return TRUE;
 }
 

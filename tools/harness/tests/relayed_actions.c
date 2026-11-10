@@ -29,6 +29,8 @@ typedef struct { real i, j; } real_vector2d;
 #include "types.inc"
 static long now = 900;
 static long game_time_get(void) { return now; }
+static long config_integer(char const *name) { (void)name; return 0; }
+static void platform_log(char const *format, ...) { (void)format; }
 #define build_message_header(header, size, priority, flags) (*(header) = (message_header)(size))
 static struct { long sent; } distributed_statistics;
 /* (a batch with room for the message; the message goes to the test's wire) */
