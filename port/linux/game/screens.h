@@ -109,6 +109,8 @@ struct screens_roster_row
 	short score;
 	/* the game's machine for a row (a backend's key: its actions name the row by it) */
 	long machine;
+	/* the controller of this machine's player (its own rows); -1: not known */
+	signed char controller;
 };
 
 struct screens_roster_summary

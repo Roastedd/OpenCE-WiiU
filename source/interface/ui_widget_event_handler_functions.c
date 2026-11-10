@@ -1434,6 +1434,31 @@ static boolean create_and_begin_editing_new_player_profile(
 	struct widget_instance *widget,
 	struct event_record *event,
 	boolean *widget_deleted);
+/* port: the team of this machine's player of the controller swapped, as the lobby's SWITCH TEAM does (the Players page's CHANGE TEAM on the player's own row). FALSE if the game has no
+teams, or the controller has no player in it. */
+boolean ui_widget_port_swap_team(
+	short controller_index)
+{
+	struct network_game *game = network_game_get_game();
+	short machine_index = network_game_client_get_local_machine_index();
+	long player_index;
+
+	if (!game || game->variant.universal_variant.teams != TRUE || machine_index == NONE || !global_network_game_client_get())
+		return FALSE;
+	for (player_index = 0; player_index < (long)NUMBEROF(game->players); player_index++)
+	{
+		if (network_player_is_valid(&game->players[player_index]) && (short)game->players[player_index].machine_index == machine_index &&
+			(short)game->players[player_index].controller_index == controller_index)
+		{
+			struct network_player player = game->players[player_index];
+
+			player.team_index = !player.team_index;
+			return network_game_client_update_local_player_data(global_network_game_client_get(), &player) ? TRUE : FALSE;
+		}
+	}
+	return FALSE;
+}
+
 static boolean network_game_start_faster(
 	struct widget_instance *widget,
 	struct event_record *event,

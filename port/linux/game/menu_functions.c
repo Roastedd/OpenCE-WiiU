@@ -91,6 +91,7 @@ their handlers open opens.
 #include "game_modes.h"
 #include "graphics_quality.h"
 #include "network_voice.h"
+#include "network_votekick.h"
 #include "bots.h"
 #include "screens.h"
 #include "screens_social_backend.h"

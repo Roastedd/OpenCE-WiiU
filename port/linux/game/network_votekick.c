@@ -1289,6 +1289,24 @@ boolean network_votekick_player_named(
 	return network_votekick_request((short)DATUM_INDEX_TO_ABSOLUTE_INDEX(found));
 }
 
+boolean network_votekick_machine(
+	short machine_index)
+{
+	struct data_iterator iterator;
+	struct player_datum *player;
+
+	if (!network_votekick_available() || machine_index < 0)
+		return FALSE;
+	data_iterator_new(&iterator, player_data);
+	while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
+	{
+		/* (a player of that machine that is not this machine's and is still in the game) */
+		if (!player->quit_out_of_game && player->local_player_index == NONE && (short)player->network_player_data.machine_index == machine_index)
+			return network_votekick_request((short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index));
+	}
+	return FALSE;
+}
+
 /* (the host) its Kick and Ban on the scoreboard: the player's machine */
 boolean network_votekick_host_kick(
 	short player_index,

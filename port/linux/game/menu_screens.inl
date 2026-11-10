@@ -200,6 +200,7 @@ static void scr_game_row(struct network_player const *player, int me_machine, st
 	row->ping = -1;
 	row->score = -1;
 	row->machine = player->machine_index;
+	row->controller = player->controller_index;
 }
 
 static unsigned long scr_game_generation(void)
@@ -390,6 +391,70 @@ static int scr_game_kick(struct screens_roster_row const *row, boolean ban, char
 	return 1;
 }
 
+/* VOTE TO KICK: this machine's vote against a player of another machine in a game that is under way (the host counts it: network_votekick.c; the vote's box and its keys are the game's own) */
+static int scr_game_vote_kick(struct screens_roster_row const *row, char *answer, int size)
+{
+	struct network_game *game;
+	short state;
+
+	if ((row->flags & (SCREENS_ROW_BOT | SCREENS_ROW_ME | SCREENS_ROW_LOCAL)) || !scr_game_players(&game, &state))
+	{
+		scr_answer(answer, size, "YOU CAN ONLY VOTE AGAINST ANOTHER MACHINE'S PLAYER.");
+		return 0;
+	}
+	if (state <= _client_state_pregame)
+	{
+		scr_answer(answer, size, "A VOTE CAN BE CALLED ONCE THE GAME HAS STARTED. THE HOST CAN KICK NOW.");
+		return 0;
+	}
+	if (!network_votekick_machine((short)row->machine))
+	{
+		scr_answer(answer, size, "THAT PLAYER IS NOT IN THE GAME ANY MORE.");
+		return 0;
+	}
+	scr_answer(answer, size, "YOUR VOTE IS IN. F1 YES AND F2 NO, OR D-PAD RIGHT AND LEFT, FOR THE OTHERS.");
+	return 1;
+}
+
+/* CHANGE TEAM: this machine's own player, in the lobby of a game with teams, as the lobby's SWITCH TEAM does. A bot's team is the bots' setting (BOTS > TEAMS), another person's is theirs. */
+static int scr_game_change_team(struct screens_roster_row const *row, char *answer, int size)
+{
+	struct network_game *game;
+	short state;
+
+	if (!scr_game_players(&game, &state))
+	{
+		scr_answer(answer, size, "THERE IS NO GAME TO CHANGE TEAMS IN.");
+		return 0;
+	}
+	if (row->flags & SCREENS_ROW_BOT)
+	{
+		scr_answer(answer, size, "A BOT'S TEAM FOLLOWS BOTS > TEAMS IN THE BOT SETTINGS.");
+		return 0;
+	}
+	if (!(row->flags & SCREENS_ROW_ME))
+	{
+		scr_answer(answer, size, "ONLY A PLAYER CAN CHANGE THEIR OWN TEAM.");
+		return 0;
+	}
+	if (!game->variant.universal_variant.teams)
+	{
+		scr_answer(answer, size, "THIS GAME HAS NO TEAMS.");
+		return 0;
+	}
+	if (state != _client_state_pregame)
+	{
+		scr_answer(answer, size, "TEAMS CAN BE CHANGED IN THE LOBBY, BEFORE THE GAME STARTS.");
+		return 0;
+	}
+	if (!ui_widget_port_swap_team(row->controller >= 0 ? row->controller : 0))
+	{
+		scr_answer(answer, size, "THAT DID NOT WORK.");
+		return 0;
+	}
+	return 1;
+}
+
 static int scr_game_roster_action(int action, struct screens_roster_row const *row, char *answer, int size)
 {
 	struct screens_provider const *backend = screens_backend();
@@ -408,6 +473,10 @@ static int scr_game_roster_action(int action, struct screens_roster_row const *r
 	case SCREENS_ACTION_KICK:
 	case SCREENS_ACTION_BAN:
 		return scr_game_kick(row, action == SCREENS_ACTION_BAN, answer, size);
+	case SCREENS_ACTION_VOTE_KICK:
+		return scr_game_vote_kick(row, answer, size);
+	case SCREENS_ACTION_CHANGE_TEAM:
+		return scr_game_change_team(row, answer, size);
 	default:
 		if (backend && backend->roster_action)
 			return backend->roster_action(action, row, answer, size);
@@ -435,6 +504,7 @@ static void scr_game_roster_actions(struct screens_roster_row const *row, struct
 		if (action == SCREENS_ACTION_MUTE || action == SCREENS_ACTION_UNMUTE || action == SCREENS_ACTION_CANCEL || action == SCREENS_ACTION_BOT_SETTINGS ||
 			((action == SCREENS_ACTION_DROP_BOT || action == SCREENS_ACTION_BOT_SKILL_UP || action == SCREENS_ACTION_BOT_SKILL_DOWN) && summary->host) ||
 			((action == SCREENS_ACTION_KICK || action == SCREENS_ACTION_BAN) && summary->host && !(row->flags & (SCREENS_ROW_BOT | SCREENS_ROW_ME | SCREENS_ROW_LOCAL))) ||
+			(action == SCREENS_ACTION_VOTE_KICK && !summary->host) || (action == SCREENS_ACTION_CHANGE_TEAM && (row->flags & SCREENS_ROW_ME)) ||
 			(action == SCREENS_ACTION_INVITE_PARTY && (row->flags & SCREENS_ROW_FRIEND) && backend && backend->roster_action))
 		{
 			actions[count++] = action;

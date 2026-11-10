@@ -57,6 +57,9 @@ boolean network_votekick_get_status(struct network_votekick_status *status);
 /* this machine votes against the player (absolute index): starts a vote,
 or votes in the one running; the host answers on the console */
 boolean network_votekick_request(short player_index);
+/* this machine votes against a player of the machine (the lobby's machine index of the Players page's rows): its first player in the game that is not this machine's; FALSE if there
+is none, or no network game */
+boolean network_votekick_machine(short machine_index);
 /* this machine starts a vote to end the game (the chat's "!endgame") */
 boolean network_vote_end_game(void);
 /* this machine votes yes or no in the vote running (F1, F2); FALSE if it
