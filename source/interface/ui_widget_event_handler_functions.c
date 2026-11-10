@@ -931,6 +931,7 @@ symbols in this file:
 #include "saved games/saved_game_files.h"
 #include "text/unicode.h"
 #include "halo_menus.h" /* port: PC_MENU_FUNCTION_BASE */
+#include "halo_file_counts.h" /* port: port/linux/include/halo_file_counts.h */
 
 /* ---------- constants */
 
@@ -3466,7 +3467,10 @@ boolean ui_widget_event_handler_function_invoke(
 	}
 	if ((short)function_index >= 0 && function_index < 102)
 	{
+		FILE_COUNTS_SCOPE_BEGIN();
+
 		result = event_handler_function_list.functions[(short)function_index](widget, event, widget_deleted);
+		FILE_COUNTS_SCOPE_END(event_handler_function_list.names[(short)function_index], function_index);
 		if (!result)
 			console_warning("event handler '%s' failed", event_handler_function_list.names[(short)function_index]);
 		return result;

@@ -1215,7 +1215,7 @@ __attribute__((constructor)) static void glue_stamp_install(void)
 #endif
 
 /* wiiu_study.c: a study switch's number from a file on the card; here from the environment (tick_thread.txt: HALO_TICK_THREAD,
-tick_overlap.txt: HALO_TICK_OVERLAP, startup.txt: HALO_STARTUP, stream.txt: HALO_STREAM, hotpaths.txt: HALO_HOTPATHS), so that a run can have the ticks on a thread of their own, and overlapped */
+tick_overlap.txt: HALO_TICK_OVERLAP, startup.txt: HALO_STARTUP, filecount.txt: HALO_FILECOUNT, stream.txt: HALO_STREAM, hotpaths.txt: HALO_HOTPATHS), so that a run can have the ticks on a thread of their own, and overlapped */
 long wiiu_study_number(const char *name, long fallback)
 {
 	const char *variable = !strcmp(name, "tick_thread.txt") ? "HALO_TICK_THREAD" : !strcmp(name, "tick_overlap.txt") ? "HALO_TICK_OVERLAP" :
@@ -1224,6 +1224,7 @@ long wiiu_study_number(const char *name, long fallback)
 		!strcmp(name, "net_overlap.txt") ? "HALO_NET_OVERLAP" :
 		!strcmp(name, "tick_overlap_save_serial.txt") ? "HALO_TICK_OVERLAP_SAVE_SERIAL" : !strcmp(name, "async_save_revert_image.txt") ? "HALO_ASYNC_SAVE_REVERT_IMAGE" :
 		!strcmp(name, "startup.txt") ? "HALO_STARTUP" :
+		!strcmp(name, "filecount.txt") ? "HALO_FILECOUNT" : !strcmp(name, "menu_cache.txt") ? "HALO_MENU_CACHE" : !strcmp(name, "directory_cache.txt") ? "HALO_DIRECTORY_CACHE" :
 		!strcmp(name, "stream.txt") ? "HALO_STREAM" : !strcmp(name, "hotpaths.txt") ? "HALO_HOTPATHS" :
 		!strcmp(name, "stream_delay.txt") ? "HALO_STREAM_DELAY" :
 		!strcmp(name, "hud_sheets.txt") ? "HALO_HUD_SHEETS" :

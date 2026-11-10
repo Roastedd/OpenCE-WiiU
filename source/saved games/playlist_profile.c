@@ -375,6 +375,9 @@ long playlist_profile_new(
 		}
 	}
 
+	/* port: (the menus keep what they read of the saved games: the variant is written) */
+	saved_game_files_changed();
+
 	return playlist_profile_index;
 }
 
@@ -870,6 +873,8 @@ static unsigned long __stdcall playlist_profile_write_thread_proc(
 			"failed to get saved game files mutex; perhaps another operation is in progress?");
 	}
 
+	/* port: (the menus keep what they read of the saved games: the variant is written) */
+	saved_game_files_changed();
 	error(
 		_error_silent,
 		"end playlist profile write");
@@ -885,6 +890,9 @@ static void playlist_profile_write(
 		"c:\\halo\\SOURCE\\saved games\\playlist_profile.c",
 		490,
 		variant);
+
+	/* port: (the menus keep what they read of the saved games: a variant is to be written) */
+	saved_game_files_changed();
 
 	if (playlist_profile_globals.thread)
 	{

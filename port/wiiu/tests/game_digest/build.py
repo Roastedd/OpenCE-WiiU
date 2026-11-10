@@ -139,6 +139,10 @@ class DigestWriter(Writer):
                 if source == "source/main/main.c":
                     # (the game's flags, for the sweep's unit: it is compiled as a game unit is)
                     self.game_variables = dict(variables)
+            if source == "port/linux/src/xbox_files.c":
+                # (the Wii U's file layer keeps the names in the directories its path translation looks in: directory_cache.h)
+                variables = dict(variables or {})
+                variables["cflags"] = variables["cflags"] + " -DHALO_DIRECTORY_CACHE"
             if self.wiiu_input and source == "port/linux/src/xinput_sdl.c":
                 variables = dict(variables or {})
                 variables["cflags"] = variables["cflags"] + "".join(f" -D{name}=sdl_{name}" for name in SDL_INPUT_RENAMES)

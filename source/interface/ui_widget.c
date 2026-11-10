@@ -681,6 +681,7 @@ struct widget_instance;
 #include "text/unicode.h"
 #include "ui_widget.h"
 #include "halo_startup.h" /* port: port/linux/include/halo_startup.h */
+#include "halo_file_counts.h" /* port: port/linux/include/halo_file_counts.h */
 
 #ifdef HALO_WIIU
 /* port: a menu's pause of the game clock is a message to the tick thread, and the menu reads what it has asked for
@@ -2193,6 +2194,9 @@ void ui_widgets_initialize(
 	boolean success = TRUE;
 	byte *base_address;
 	long local_player_index;
+
+	/* port: (the menus' file work, counted: halo/filecount.txt) */
+	FILE_COUNTS_START();
 
 	base_address = pool_alloc(WIDGET_MEMORY_POOL_SIZE);
 	if (base_address)
@@ -8634,6 +8638,8 @@ void process_ui_widgets(
 		"c:\\halo\\SOURCE\\interface\\ui_widget.c",
 		644,
 		widget_globals.initialized);
+	/* port: (the menus' file work, counted: halo/filecount.txt) */
+	FILE_COUNTS_FRAME();
 	widget_globals.current_system_milliseconds = system_milliseconds();
 	ui_widgets_process_mouse();
 	if (ui_widget_port_press_controller != NONE)

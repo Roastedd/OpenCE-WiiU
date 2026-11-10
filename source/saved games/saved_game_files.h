@@ -48,6 +48,11 @@ boolean saved_game_file_close(
 	long profile_index);
 void saved_game_files_notify_memory_units_changed(
 	void);
+/* port: see saved_game_files.c */
+void saved_game_files_changed(
+	void);
+unsigned long saved_game_files_change_count(
+	void);
 boolean saved_game_files_take_mutex(
 	void);
 void saved_game_files_release_mutex(

@@ -356,6 +356,7 @@ symbols in this file:
 #include "text/unicode.h"
 #include "custom_edition_maps.h" /* port: port/linux/game/custom_edition_maps.c */
 #include "halo_menus.h" /* port: PC_MENU_FUNCTION_BASE */
+#include "halo_file_counts.h" /* port: port/linux/include/halo_file_counts.h */
 
 /* ---------- constants */
 
@@ -715,13 +716,20 @@ void ui_widget_game_data_function_invoke(
 	if (function >= PC_MENU_FUNCTION_BASE && function < 0x8000)
 	{
 		extern void pc_menu_game_data_function_invoke(struct widget_instance *widget, long function);
+		extern char const *pc_menu_game_data_input_name(long function_index);
+		char const *name = pc_menu_game_data_input_name(function - PC_MENU_FUNCTION_BASE);
+		FILE_COUNTS_SCOPE_BEGIN();
 
 		pc_menu_game_data_function_invoke(widget, function - PC_MENU_FUNCTION_BASE);
+		FILE_COUNTS_SCOPE_END(name ? name : "a menu function", function);
 		return;
 	}
 	if ((short)function >= 0 && function < NUMBEROF(game_data_input_function_list))
 	{
+		FILE_COUNTS_SCOPE_BEGIN();
+
 		game_data_input_function_list[(short)function](widget);
+		FILE_COUNTS_SCOPE_END("a game data input", function);
 		return;
 	}
 

@@ -684,12 +684,26 @@ void player_ui_set_single_player_local_player_controller(
 long player_ui_get_player1_last_used_profile_index(
 	void)
 {
+	/* port: a card with no profile yet has no z:\lastprof.txt, and every call looked for it again (a path translated, directories opened, an open that fails, a
+	line in the log), in every frame of a screen that shows the profile's name. It is looked for again once a second at most. */
+	static boolean looked_in_vain = FALSE;
+	static unsigned long looked_in_vain_time;
+
 	if (!player1_profile_path[0] &&
-		saved_game_file_retrieve_player1_last_used_profile_directory(
-			player1_profile_path))
+		(!looked_in_vain || system_milliseconds() - looked_in_vain_time >= 1000))
 	{
-		player1_last_used_profile_index = saved_game_file_find_profile_index_for_directory_path(
-			player1_profile_path, _saved_game_file_type_player_profile);
+		if (saved_game_file_retrieve_player1_last_used_profile_directory(
+			player1_profile_path))
+		{
+			player1_last_used_profile_index = saved_game_file_find_profile_index_for_directory_path(
+				player1_profile_path, _saved_game_file_type_player_profile);
+			looked_in_vain = FALSE;
+		}
+		else
+		{
+			looked_in_vain = TRUE;
+			looked_in_vain_time = system_milliseconds();
+		}
 	}
 	return player1_last_used_profile_index;
 }
