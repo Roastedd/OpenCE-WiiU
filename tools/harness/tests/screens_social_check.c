@@ -361,6 +361,18 @@ static int find_toast(int count, int kind)
 	return -1;
 }
 
+static int find_toast_text(int count, int kind, char const *text)
+{
+	int index;
+
+	for (index = 0; index < count; index++)
+	{
+		if (toast_kinds[index] == kind && !strcmp(last_toast[index].text, text))
+			return index;
+	}
+	return -1;
+}
+
 /* the typed code of a node: lower case, in groups of four, as a person types it */
 static void typed_code(struct fake_node *node, char *text)
 {
@@ -1026,6 +1038,187 @@ static void case_clean_text(void)
 	CHECK(!provider->roster_action(SCREENS_ACTION_INVITE_PARTY, &(struct screens_roster_row){ .name = "Stranger" }, answer, sizeof(answer)) && strstr(answer, "ONLY A FRIEND"), "only a friend: %s", answer);
 }
 
+/* the party end to end through the screens' backend, on three machines: invited by the Friends screen, joined by the toast, party chat both ways (as toasts), follow off and on, the lead handed
+over, a member removed, the party disbanded, and the leader's game followed by a member in the menus (the join and the member's state on the leader's screen) */
+static void case_party_whole(void)
+{
+	struct fake_node *a, *b, *c;
+	struct screens_provider const *provider;
+	struct screens_friend_row row;
+	char answer[SCREENS_LINE_SIZE];
+	int count, index, found;
+	struct social_join_status status;
+
+	begin_world(31, 3);
+	a = &net.nodes[0];
+	b = &net.nodes[1];
+	c = &net.nodes[2];
+	provider = screens_provider();
+	link_friends(a, b);
+	link_friends(a, c);
+	link_friends(b, c);
+	use(a);
+	fake_run(&net, 8000);
+	look();
+	/* nothing to say to: a party chat with no party is refused in words */
+	CHECK(!provider->party_chat("hello", answer, sizeof(answer)) && !strcmp(answer, "YOU ARE NOT IN A PARTY."), "no party: %s", answer);
+	row = *friend_named("Node1");
+	CHECK(provider->friend_action(SCREENS_ACTION_INVITE_PARTY, &row, answer, sizeof(answer)), "invite b");
+	fake_run(&net, 1000);
+	row = *friend_named("Node2");
+	CHECK(provider->friend_action(SCREENS_ACTION_INVITE_PARTY, &row, answer, sizeof(answer)), "invite c");
+	fake_run(&net, 1500);
+	for (index = 1; index <= 2; index++)
+	{
+		use(&net.nodes[index]);
+		count = drain_toasts();
+		found = find_toast(count, SCREENS_TOAST_INVITE);
+		CHECK(found >= 0, "node %d has the invitation", index);
+		provider->invite_answer(last_toast[found].id, 1);
+		fake_run(&net, 1000);
+	}
+	fake_run(&net, 12000);
+	use(a);
+	screens_model_update(&model, 1);
+	CHECK(model.party_summary.present && model.party_count == 3 && model.party_summary.i_lead, "a leads three: %d", model.party_count);
+	/* party chat: a says it, b and c hear it as toasts (the name and "party", then the words), a is not told its own */
+	drain_toasts();
+	CHECK(provider->party_chat("meet at the base", answer, sizeof(answer)) && !strcmp(answer, "SENT TO THE PARTY."), "chat: %s", answer);
+	fake_run(&net, 2000);
+	for (index = 1; index <= 2; index++)
+	{
+		use(&net.nodes[index]);
+		count = drain_toasts();
+		found = find_toast_text(count, SCREENS_TOAST_NOTICE, "NODE0 (PARTY)");
+		CHECK(found >= 0 && !strcmp(last_toast[found].detail, "meet at the base"), "node %d hears it: %d toasts", index, count);
+	}
+	/* text that is not clean is cleaned (control characters and the layer's separator dropped), a long line is cut to what a toast holds, and nothing at all is not sent */
+	use(a);
+	fake_run(&net, 4000);
+	CHECK(provider->party_chat("tab\there|pipe\x01 end", answer, sizeof(answer)), "dirty text");
+	fake_run(&net, 2000);
+	use(b);
+	count = drain_toasts();
+	found = find_toast_text(count, SCREENS_TOAST_NOTICE, "NODE0 (PARTY)");
+	CHECK(found >= 0 && !strcmp(last_toast[found].detail, "tabherepipe end"), "cleaned: '%s'", found >= 0 ? last_toast[found].detail : "(no toast)");
+	use(a);
+	fake_run(&net, 4000);
+	{
+		char longest[400];
+
+		memset(longest, 'x', sizeof(longest) - 1);
+		longest[sizeof(longest) - 1] = 0;
+		CHECK(provider->party_chat(longest, answer, sizeof(answer)), "a long line");
+		fake_run(&net, 2000);
+		use(b);
+		count = drain_toasts();
+		found = find_toast_text(count, SCREENS_TOAST_NOTICE, "NODE0 (PARTY)");
+		CHECK(found >= 0 && strlen(last_toast[found].detail) < SCREENS_LINE_SIZE && last_toast[found].detail[0] == 'x', "cut to a toast's size: %d characters", found >= 0 ? (int)strlen(last_toast[found].detail) : -1);
+	}
+	use(a);
+	CHECK(!provider->party_chat("\t \x01", answer, sizeof(answer)) && !strcmp(answer, "TYPE SOMETHING TO SAY."), "nothing printable: %s", answer);
+	/* b turns following off: the leader's screen shows it staying */
+	use(b);
+	screens_model_update(&model, 1);
+	for (index = 0; index < model.party_count; index++)
+	{
+		if (model.party[index].me)
+			CHECK(provider->party_action(SCREENS_ACTION_FOLLOW_OFF, &model.party[index], answer, sizeof(answer)), "follow off");
+	}
+	fake_run(&net, 8000);
+	use(a);
+	screens_model_update(&model, 1);
+	found = 0;
+	for (index = 0; index < model.party_count; index++)
+		found += !strcmp(model.party[index].name, "Node1") && model.party[index].state == SCREENS_MEMBER_STAYING;
+	CHECK(found == 1, "the leader's screen shows b staying");
+	use(b);
+	screens_model_update(&model, 1);
+	for (index = 0; index < model.party_count; index++)
+	{
+		if (model.party[index].me)
+			CHECK(provider->party_action(SCREENS_ACTION_FOLLOW_ON, &model.party[index], answer, sizeof(answer)), "follow on");
+	}
+	fake_run(&net, 3000);
+	/* the leader hosts; c, in the menus, follows: its join begins by itself, and the leader sees it */
+	use(c);
+	world.menus_up = 1;
+	world.screen = SOCIAL_FLOW_SCREEN_SAFE;
+	world.game_ready = 1;
+	host_place(a, 1, 1);
+	{
+		struct social_place place;
+
+		memset(&place, 0, sizeof(place));
+		place.activity = SOCIAL_MENUS;
+		social_front_set_place(c->front, &place);
+		social_front_set_place(b->front, &place);
+	}
+	for (index = 0; index < 120 && world.begun == 0; index++)
+	{
+		world.clock += 100;
+		fake_run(&net, 100);
+		social_flow_update();
+	}
+	for (index = 0; index < 5; index++)
+	{
+		world.clock += 100;
+		fake_run(&net, 100);
+		social_flow_update();
+	}
+	social_join_status_get(&status);
+	CHECK(world.begun == 1 && status.state == SOCIAL_JOIN_READY && world.opened == 1, "c follows: begun %d state %d opened %d", world.begun, status.state, world.opened);
+	world.busy = 1;
+	world.clock += 100;
+	social_flow_update();
+	fake_run(&net, 9000);
+	use(a);
+	screens_model_update(&model, 1);
+	found = 0;
+	for (index = 0; index < model.party_count; index++)
+		found += !strcmp(model.party[index].name, "Node2") && model.party[index].state == SCREENS_MEMBER_IN_GAME;
+	CHECK(found == 1, "the leader's screen shows c in the game");
+	world.busy = 0;
+	/* the lead is handed to b; c is removed by it; b disbands */
+	for (index = 0; index < model.party_count; index++)
+	{
+		if (!strcmp(model.party[index].name, "Node1"))
+			CHECK(provider->party_action(SCREENS_ACTION_MAKE_LEADER, &model.party[index], answer, sizeof(answer)), "hand over to b");
+	}
+	fake_run(&net, 4000);
+	use(b);
+	screens_model_update(&model, 1);
+	CHECK(model.party_summary.i_lead, "b leads");
+	drain_toasts();
+	for (index = 0; index < model.party_count; index++)
+	{
+		if (!strcmp(model.party[index].name, "Node2"))
+			CHECK(provider->party_action(SCREENS_ACTION_REMOVE_FROM_PARTY, &model.party[index], answer, sizeof(answer)), "remove c");
+	}
+	fake_run(&net, 3000);
+	use(c);
+	count = drain_toasts();
+	found = find_toast(count, SCREENS_TOAST_PARTY_LEFT);
+	CHECK(found >= 0 && strstr(last_toast[found].text, "REMOVED YOU FROM THE PARTY"), "c is told: %d toasts", count);
+	screens_model_update(&model, 1);
+	CHECK(!model.party_summary.present, "c is out");
+	use(b);
+	screens_model_update(&model, 1);
+	CHECK(model.party_count == 2, "two are left: %d", model.party_count);
+	for (index = 0; index < model.party_count; index++)
+	{
+		if (model.party[index].me)
+			CHECK(provider->party_action(SCREENS_ACTION_DISBAND_PARTY, &model.party[index], answer, sizeof(answer)), "disband");
+	}
+	fake_run(&net, 3000);
+	use(a);
+	count = drain_toasts();
+	found = find_toast(count, SCREENS_TOAST_PARTY_LEFT);
+	CHECK(found >= 0 && strstr(last_toast[found].detail, "DISBANDED"), "a is told: %d toasts '%s'", count, found >= 0 ? last_toast[found].detail : "");
+	screens_model_update(&model, 1);
+	CHECK(!model.party_summary.present, "the party is gone");
+}
+
 int main(int argc, char **argv)
 {
 	const char *name = argc > 1 ? argv[1] : "";
@@ -1040,6 +1233,8 @@ int main(int argc, char **argv)
 		case_actions();
 	else if (!strcmp(name, "party"))
 		case_party();
+	else if (!strcmp(name, "party-whole"))
+		case_party_whole();
 	else if (!strcmp(name, "roster-flags"))
 		case_roster_flags();
 	else if (!strcmp(name, "online-toasts"))

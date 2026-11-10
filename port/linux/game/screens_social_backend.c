@@ -645,8 +645,19 @@ static void be_events_collect(void)
 		case SOCIAL_API_EVENT_PARTY_LEADER:
 			be_notice_named(SCREENS_TOAST_NOTICE, event.name, " LEADS THE PARTY", "", 0);
 			break;
+		case SOCIAL_API_EVENT_PARTY_CHAT:
+		{
+			/* (a line the party said: the name and "party" first, the words under it as they were typed, clean ASCII, as much as a line holds) */
+			char who[SCREENS_NAME_SIZE], head[SCREENS_LINE_SIZE];
+
+			screens_social_upper(who, sizeof(who), event.name[0] ? event.name : "SOMEONE");
+			snprintf(head, sizeof(head), "%s (PARTY)", who);
+			snprintf(detail, sizeof(detail), "%s", event.text);
+			be_notice_push(SCREENS_TOAST_NOTICE, head, detail, 0);
+			break;
+		}
 		default:
-			/* (removed by a friend: said nowhere; party chat: the chat's own) */
+			/* (removed by a friend: said nowhere) */
 			break;
 		}
 	}
@@ -899,6 +910,49 @@ static int backend_party_action(int action, struct screens_party_member const *m
 		be_answer_set(answer, size, "THAT IS NOT AVAILABLE IN THIS BUILD YET.");
 		return 0;
 	}
+}
+
+static int backend_party_chat(char const *text, char *answer, int size)
+{
+	char clean[SCREENS_LINE_SIZE];
+	int length = 0;
+
+	if (!be_refresh())
+	{
+		be_answer_set(answer, size, "FRIENDS ARE OFF.");
+		return 0;
+	}
+	if (!be.snapshot.party.active)
+	{
+		be_answer_set(answer, size, "YOU ARE NOT IN A PARTY.");
+		return 0;
+	}
+	/* (only the printable characters a chat line holds; the layer cleans it again) */
+	for (; text && *text && length < (int)sizeof(clean) - 1; text++)
+	{
+		if ((unsigned char)*text >= 0x20 && (unsigned char)*text <= 0x7E && *text != '|')
+			clean[length++] = *text;
+	}
+	clean[length] = 0;
+	while (length > 0 && clean[length - 1] == ' ')
+		clean[--length] = 0;
+	{
+		char *start = clean;
+
+		while (*start == ' ')
+			start++;
+		memmove(clean, start, strlen(start) + 1);
+		length = (int)strlen(clean);
+	}
+	if (!length)
+	{
+		be_answer_set(answer, size, "TYPE SOMETHING TO SAY.");
+		return 0;
+	}
+	be.changes++;
+	social_party_chat(clean);
+	be_answer_set(answer, size, "SENT TO THE PARTY.");
+	return 1;
 }
 
 /* two codes, the same once read as codes */
@@ -1168,6 +1222,7 @@ static struct screens_provider const be_table =
 	NULL,
 	backend_friend_actions,
 	backend_party_actions,
+	backend_party_chat,
 };
 
 struct screens_provider const *screens_social_backend(void)

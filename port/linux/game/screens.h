@@ -344,6 +344,8 @@ struct screens_provider
 	void (*roster_actions)(struct screens_roster_row const *row, struct screens_roster_summary const *summary, int *actions);
 	void (*friend_actions)(int tab, struct screens_friend_row const *row, int *actions);
 	void (*party_actions)(struct screens_party_member const *member, struct screens_party_summary const *summary, int *actions);
+	/* a line of text to the party (typed on the GamePad's keyboard): nonzero sent; a refusal's words in answer. What the others say comes as toasts. */
+	int (*party_chat)(char const *text, char *answer, int size);
 };
 
 /* screens.enable (0 off, 1 mock, 2 the game's roster and the provider set), read once */

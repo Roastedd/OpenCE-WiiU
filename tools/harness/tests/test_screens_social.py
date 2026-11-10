@@ -10,7 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import social
 
-CASES = ["befriend-and-invite", "join-words", "invite-in-game", "actions", "party", "roster-flags", "online-toasts", "off", "generation", "clean-text"]
+CASES = ["befriend-and-invite", "join-words", "invite-in-game", "actions", "party", "party-whole", "roster-flags", "online-toasts", "off", "generation", "clean-text"]
 FILE = "screens_social_backend.c"
 
 
