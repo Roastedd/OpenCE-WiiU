@@ -4,7 +4,8 @@ and compiled as the Wii U has them and as the original has them. Three negative 
 skipped.
 
 python3 -m unittest discover -s tools -p test_wiiu_cull_exact.py
-CULL_TARGET=... CULL_RUNNER=qemu-ppc runs it big-endian.
+CULL_TARGET=... CULL_RUNNER=qemu-ppc runs it big-endian (CC=powerpc-linux-gnu-gcc in the opence-ppc-be image). It is compiled as the game is,
+with -ffp-contract=off and -fno-strict-aliasing: the game's code reads a real_point3d through a real_vector3d.
 """
 import os
 from pathlib import Path
@@ -37,7 +38,7 @@ class CullExactTest(unittest.TestCase):
             (folder / "cube_visible.inc").write_text(function_text(CAMERAS, "short render_frustum_cube_visible("))
             (folder / "cull_exact.h").write_text(header if header is not None else HEADER.read_text())
             command = [os.environ.get("CC", "cc"), *shlex.split(os.environ.get("CULL_TARGET", "")), "-std=gnu11", "-O2", "-Wall", "-Wno-unused-function",
-                       "-ffp-contract=off", "-I" + str(folder), str(TEST), "-lm", "-o", str(folder / "check")]
+                       "-ffp-contract=off", "-fno-strict-aliasing", "-I" + str(folder), str(TEST), "-lm", "-o", str(folder / "check")]
             built = subprocess.run(command, capture_output=True, text=True)
             self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
             return subprocess.run([*shlex.split(os.environ.get("CULL_RUNNER", "")), str(folder / "check")], capture_output=True, text=True, timeout=1800)
