@@ -72,17 +72,9 @@ enum
 
 #define STORE_PREFIX "store_item_"
 #define STORE_ROWS 9
-#define STORE_CELLS 4
-/* the cells' widths in the XML (tools/port_settings.py's STORE_COLUMNS: a test reads both), less the engine's inset and a margin */
-#define STORE_TEXT_INSET 6
-#define STORE_NAME_WIDTH 164
-#define STORE_AUTHOR_WIDTH 94
-#define STORE_SIZE_WIDTH 58
-#define STORE_STATUS_WIDTH 154
-/* the empty words' box (store_empty) and the detail line's lines */
-#define STORE_EMPTY_WIDTH 430
-#define STORE_EMPTY_LINES 3
+#define STORE_CELLS SCREENS_STORE_CELLS
 
+/* (the cells' widths, their inset and the words of the rows are screens.h's SCREENS_STORE_* and screens.c's screens_store_*: the preview draws the same functions) */
 enum
 {
 	_store_cell_name,
@@ -122,19 +114,6 @@ static void store_sync(void)
 		mods_screen.row_mods[row] = NONE;
 }
 
-/* a size as the rows say it: 12 KB, 999 KB, 1.0 MB, 9.9 MB, 10 MB (a mod is 128 MB at most: 10 times that fits 32 bits) */
-static void store_size_text(unsigned long size, char *text, int length)
-{
-	unsigned long tenths = (size * 10 + 524288UL) / 1048576UL;
-
-	if (size < 1000UL * 1024)
-		snprintf(text, (size_t)length, "%lu KB", (size + 1023) / 1024);
-	else if (tenths >= 100)
-		snprintf(text, (size_t)length, "%lu MB", tenths / 10);
-	else
-		snprintf(text, (size_t)length, "%lu.%lu MB", tenths / 10, tenths % 10);
-}
-
 /* the percent of the job's bytes done, or -1 */
 static int store_percent(void)
 {
@@ -147,56 +126,20 @@ static int store_percent(void)
 /* a mod's row: its cells' texts (cut to their columns), and their shades */
 static void store_cells(long index, char cells[STORE_CELLS][SCR_LONG], unsigned char *colors)
 {
-	char text[SCR_LONG];
-	int state = modstore_state(index), percent = store_percent();
-	boolean working = modstore_job() != _store_job_none && modstore_job_index() == index;
+	struct screens_cell made[SCREENS_STORE_CELLS];
+	char name[SCR_LONG], author[SCR_LONG];
+	int working = 0, cell;
 
-	modstore_field(index, _store_field_name, text, sizeof(text));
-	screens_fit(SCREENS_FONT_LARGE, (float)(STORE_NAME_WIDTH - STORE_TEXT_INSET), text, cells[_store_cell_name], SCR_LONG);
-	modstore_field(index, _store_field_author, text, sizeof(text));
-	screens_fit(SCREENS_FONT_SMALL, (float)(STORE_AUTHOR_WIDTH - STORE_TEXT_INSET), text, cells[_store_cell_author], SCR_LONG);
-	store_size_text(modstore_size(index), text, sizeof(text));
-	screens_fit(SCREENS_FONT_SMALL, (float)(STORE_SIZE_WIDTH - STORE_TEXT_INSET), text, cells[_store_cell_size], SCR_LONG);
-	colors[_store_cell_name] = SCREENS_COLOR_AZURE;
-	colors[_store_cell_author] = SCREENS_COLOR_AZURE;
-	colors[_store_cell_size] = SCREENS_COLOR_AZURE;
-	if (working)
+	if (modstore_job() != _store_job_none && modstore_job_index() == index)
+		working = modstore_job() == _store_job_remove ? 2 : 1;
+	modstore_field(index, _store_field_name, name, sizeof(name));
+	modstore_field(index, _store_field_author, author, sizeof(author));
+	screens_store_cells(name, author, modstore_size(index), modstore_state(index), working, store_percent(), made);
+	for (cell = 0; cell < STORE_CELLS; cell++)
 	{
-		if (modstore_job() == _store_job_remove)
-			snprintf(text, sizeof(text), "REMOVING");
-		else if (percent >= 0)
-			snprintf(text, sizeof(text), "%s %d%%", state == _store_mod_update ? "UPDATING" : "DOWNLOADING", percent);
-		else
-			snprintf(text, sizeof(text), "%s", state == _store_mod_update ? "UPDATING" : "DOWNLOADING");
-		colors[_store_cell_status] = SCREENS_COLOR_AMBER;
+		snprintf(cells[cell], SCR_LONG, "%s", made[cell].text);
+		colors[cell] = made[cell].color;
 	}
-	else
-	{
-		switch (state)
-		{
-		case _store_mod_installed:
-			snprintf(text, sizeof(text), "INSTALLED");
-			colors[_store_cell_status] = SCREENS_COLOR_GREEN;
-			break;
-		case _store_mod_update:
-			snprintf(text, sizeof(text), "UPDATE");
-			colors[_store_cell_status] = SCREENS_COLOR_AMBER;
-			break;
-		case _store_mod_local:
-			snprintf(text, sizeof(text), "YOUR OWN");
-			colors[_store_cell_status] = SCREENS_COLOR_GREY;
-			break;
-		case _store_mod_unplayable:
-			snprintf(text, sizeof(text), "NOT PLAYABLE");
-			colors[_store_cell_status] = SCREENS_COLOR_ALERT;
-			break;
-		default:
-			snprintf(text, sizeof(text), "DOWNLOAD");
-			colors[_store_cell_status] = SCREENS_COLOR_AZURE;
-			break;
-		}
-	}
-	screens_fit(SCREENS_FONT_SMALL, (float)(STORE_STATUS_WIDTH - STORE_TEXT_INSET), text, cells[_store_cell_status], SCR_LONG);
 }
 
 /* a cell's shade (pc_menu_text_color) */
@@ -224,33 +167,6 @@ static boolean store_text_color(struct widget_instance *widget, real_argb_color 
 	return TRUE;
 }
 
-/* the words that stand where the list would be, when there is none to show */
-static boolean store_empty_words(int phase, long count, char *text, int size)
-{
-	char message[SCR_LONG * 2];
-
-	if (phase == _store_phase_off)
-		snprintf(message, sizeof(message), "THERE IS NO MOD STORE SET UP. ITS ADDRESS AND KEY GO IN CONFIG.TOML AS MODS.STORE_URL AND MODS.STORE_KEY.");
-	else if (phase == _store_phase_idle || phase == _store_phase_loading)
-		snprintf(message, sizeof(message), "LOOKING FOR MODS...");
-	else if (phase == _store_phase_failed)
-	{
-		char said[SCR_LONG];
-
-		modstore_message(said, sizeof(said));
-		snprintf(message, sizeof(message), "%s. PRESS Y TO TRY AGAIN.", said);
-	}
-	else if (!count)
-		snprintf(message, sizeof(message), "THE STORE HAS NO MODS YET.");
-	else
-	{
-		text[0] = 0;
-		return FALSE;
-	}
-	screens_wrap(SCREENS_FONT_LARGE, (float)STORE_EMPTY_WIDTH, STORE_EMPTY_LINES, message, text, size);
-	return TRUE;
-}
-
 /* "port store update" (the list's data) */
 static void store_update(struct widget_instance *list)
 {
@@ -259,7 +175,8 @@ static void store_update(struct widget_instance *list)
 	long count = phase == _store_phase_ready ? modstore_count() : 0, chosen;
 	boolean busy, ready = phase == _store_phase_ready;
 	short shown, item, index;
-	char text[SCR_LONG * 2], detail[SCR_LONG * 2], footer[SCR_LONG];
+	int buttons;
+	char text[SCR_LONG * 2], detail[SCR_LONG * 2], footer[SCR_LONG], store_said[SCR_LONG];
 
 	store_sync();
 	item = scr_scroll(list, STORE_PREFIX, &store_ui.first, (short)MIN(count, 30000), STORE_ROWS);
@@ -314,14 +231,17 @@ static void store_update(struct widget_instance *list)
 	else
 		text[0] = 0;
 	scr_text(screen, "store_head", text);
-	if (store_empty_words(phase, count, text, (int)sizeof(text)))
+	/* (the footer's counter "4 OF 14" and the arrows at the list's edge, as the Players and Friends pages have them; this clears the empty words, set here if there is no list) */
+	scr_list_hints(screen, "store", item, store_ui.first, shown, (short)MIN(count, 30000));
+	store_said[0] = 0;
+	if (phase == _store_phase_failed)
+		modstore_message(store_said, sizeof(store_said));
+	if (screens_store_empty(phase, count, store_said, text, (int)sizeof(text)))
 		scr_text(screen, "store_empty", text);
-	else
-		scr_text(screen, "store_empty", "");
 	detail[0] = 0;
 	if (ready && chosen != NONE)
 	{
-		char field[SCR_LONG];
+		char author[SCR_LONG], kind[SCR_LONG], licence[SCR_LONG], version[SCR_LONG], held[SCR_LONG];
 
 		if (store_ui.show_note && (store_ui.note[0] || busy || job == _store_job_none))
 		{
@@ -331,9 +251,10 @@ static void store_update(struct widget_instance *list)
 				modstore_message(detail, sizeof(detail));
 			if (busy && job == _store_job_install && store_percent() >= 0)
 			{
-				size_t length = strlen(detail);
+				char said[SCR_LONG * 2];
 
-				snprintf(detail + length, sizeof(detail) - length, " (%d%%)", store_percent());
+				snprintf(said, sizeof(said), "%s", detail);
+				screens_store_job_line(said, store_percent(), detail, (int)sizeof(detail));
 			}
 		}
 		else if (state == _store_mod_local || state == _store_mod_unplayable)
@@ -342,19 +263,12 @@ static void store_update(struct widget_instance *list)
 			modstore_field(chosen, _store_field_description, detail, sizeof(detail));
 		scr_sentence(detail, (int)sizeof(detail));
 		/* (the footer: who made it, what it changes, its licence and version) */
-		modstore_field(chosen, _store_field_author, field, sizeof(field));
-		snprintf(text, sizeof(text), "BY %s", field[0] ? field : "UNKNOWN");
-		modstore_field(chosen, _store_field_kind, field, sizeof(field));
-		if (field[0])
-			snprintf(text + strlen(text), sizeof(text) - strlen(text), "   %s", field);
-		modstore_field(chosen, _store_field_licence, field, sizeof(field));
-		snprintf(text + strlen(text), sizeof(text) - strlen(text), "   %s", field);
-		modstore_field(chosen, _store_field_version, field, sizeof(field));
-		snprintf(text + strlen(text), sizeof(text) - strlen(text), "   VERSION %s", field);
-		modstore_field(chosen, _store_field_installed, field, sizeof(field));
-		if (field[0] && state == _store_mod_update)
-			snprintf(text + strlen(text), sizeof(text) - strlen(text), " (YOURS: %s)", field);
-		screens_fit(SCREENS_FONT_SMALL, (float)(SCREENS_LINE_BOX_WIDTH - STORE_TEXT_INSET), text, footer, (int)sizeof(footer));
+		modstore_field(chosen, _store_field_author, author, sizeof(author));
+		modstore_field(chosen, _store_field_kind, kind, sizeof(kind));
+		modstore_field(chosen, _store_field_licence, licence, sizeof(licence));
+		modstore_field(chosen, _store_field_version, version, sizeof(version));
+		modstore_field(chosen, _store_field_installed, held, sizeof(held));
+		screens_store_footer(author, kind, licence, version, held, state, footer, (int)sizeof(footer));
 		scr_text(screen, "store_footer", footer);
 	}
 	else
@@ -372,11 +286,12 @@ static void store_update(struct widget_instance *list)
 	}
 	scr_text(screen, "store_detail", detail);
 	/* the buttons that apply */
-	visible_set(named(list, "store_button_get", 0), ready && !busy && state == _store_mod_available);
-	visible_set(named(list, "store_button_update", 0), ready && !busy && state == _store_mod_update);
-	visible_set(named(list, "store_button_stop", 0), busy);
-	visible_set(named(list, "store_button_remove", 0), ready && !busy && (state == _store_mod_installed || state == _store_mod_update));
-	visible_set(named(list, "store_button_refresh", 0), phase != _store_phase_off && !busy && phase != _store_phase_loading);
+	buttons = screens_store_buttons(phase, busy, state);
+	visible_set(named(list, "store_button_get", 0), (buttons & SCREENS_STORE_BUTTON_GET) != 0);
+	visible_set(named(list, "store_button_update", 0), (buttons & SCREENS_STORE_BUTTON_UPDATE) != 0);
+	visible_set(named(list, "store_button_stop", 0), (buttons & SCREENS_STORE_BUTTON_STOP) != 0);
+	visible_set(named(list, "store_button_remove", 0), (buttons & SCREENS_STORE_BUTTON_REMOVE) != 0);
+	visible_set(named(list, "store_button_refresh", 0), (buttons & SCREENS_STORE_BUTTON_REFRESH) != 0);
 	focus_off_hidden(named(list, "store_button_bar", 0));
 	if (phase != store_ui.last_phase)
 	{

@@ -2613,14 +2613,15 @@ def _mods() -> list:
     return lines
 
 
-# ---------- the mod store (port/linux/src/modstore.c, port/linux/game/menu_store.inl): the Mods page's STORE opens a list of the catalog's mods
-# in the social screens' style (rows of bitmaps/option_bkds at x 54, 28 apart, the button bar at y 414, large title), nine rows with the mod's name,
-# its author, its size and its state, the description of the row chosen under them, and DOWNLOAD / UPDATE / STOP, REMOVE, REFRESH and BACK
+# ---------- the mod store (port/linux/src/modstore.c, port/linux/game/menu_store.inl): the Mods page's STORE opens a list of the catalog's mods, on the social screens'
+# spacing system (below: "THE SPACING SYSTEM"; the helpers _social_* build it): the title at the margin with the count of mods on its baseline, nine rows of 28 from y 76 with the
+# mod's name, its author, its size and its state, the description of the row chosen (or what the last job said) under them, the footer (who made it; the scroll counter), the
+# arrows at the list's edge, the words of a store that is off, loading, failed or empty in the list's middle, and the button bar DOWNLOAD / UPDATE / STOP, REMOVE, REFRESH, BACK
 STORE = f"{MODS}/store"
 STORE_ROWS = 9
-STORE_ROW_PITCH, STORE_ROWS_TOP, STORE_ROWS_LEFT, STORE_ROW_WIDTH = 28, 76, 54, 512
-# a column: its name, x in the row, width, font (the widths are modstore's, menu_store.inl's STORE_COLUMN_WIDTHS: a test reads both)
-STORE_COLUMNS = [("name", 12, 164, "large"), ("author", 184, 94, "small"), ("size", 282, 58, "small"), ("status", 344, 154, "small")]
+# a column: its name, x in the row, width, font (the widths are screens.h's SCREENS_STORE_*_WIDTH: a test reads both). The text starts 16 in, the columns are 8 apart or more, and the
+# last ends 16 before the row's end (496)
+STORE_COLUMNS = [("name", 12, 164, "large"), ("author", 184, 94, "small"), ("size", 282, 58, "small"), ("status", 344, 152, "small")]
 
 
 def _mod_store() -> list:
@@ -2628,34 +2629,31 @@ def _mod_store() -> list:
     the buttons. A on a row downloads or updates the mod, X removes it (the buttons too), Y asks for the catalog again, B goes back (and stops a
     download, which is kept to go on from)"""
     base = STORE
+    arrows, arrow_lines = _social_arrows(base, "store")
     lines = _social_screen(f"{base}/store_screen",
                            ['<on event="created" run="port store open"/>', '<on event="deleted" run="port store close"/>',
                             '<on event="b" back="true"/>', '<on event="back" back="true"/>',
                             '<on event="x" run="port store remove"/>', '<on event="y" run="port store refresh"/>'],
                            [f'<child widget="{base}/store_list"/>', f'<child widget="{base}/store_title"/>', f'<child widget="{base}/store_head"/>',
-                            f'<child widget="{base}/store_empty"/>', f'<child widget="{base}/store_detail"/>', f'<child widget="{base}/store_footer"/>'])
-    lines += _social_text(f"{base}/store_title", 35, 14, 360, 30, color=SOCIAL_TITLE_COLOR, text="MOD STORE", text_y=3)
-    lines += _social_text(f"{base}/store_head", 340, 16, 226, 26, align="right", color="#FFFFFFFF", text_y=3)
-    # (the words of a store that is off, loading, failed or empty: in the list's middle)
-    lines += _social_text(f"{base}/store_empty", 100, 176, 440, 70, align="center", color="#FFFFFFFF", text_y=4)
-    lines += _social_text(f"{base}/store_detail", SOCIAL_ROWS_LEFT, STORE_ROWS_TOP + STORE_ROWS * STORE_ROW_PITCH + 8, STORE_ROW_WIDTH, 48,
-                          color="#FFFFFFFF", text_y=4)
-    lines += _social_text(f"{base}/store_footer", SOCIAL_ROWS_LEFT, 388, STORE_ROW_WIDTH, 22, "small", color="#FF6CBAFF", text_y=4)
-    rows = [f'<child widget="{base}/store_item_{index + 1}" x="{STORE_ROWS_LEFT}" y="{STORE_ROWS_TOP + index * STORE_ROW_PITCH}"/>'
-            for index in range(STORE_ROWS)]
+                            f'<child widget="{base}/store_footer"/>', f'<child widget="{base}/store_count"/>', f'<child widget="{base}/store_detail"/>',
+                            f'<child widget="{base}/store_empty"/>', *arrows])
+    lines += _social_title(base, "store_title", "MOD STORE", 280)
+    # (the count of mods at the right, on the title's baseline)
+    lines += _social_text(f"{base}/store_head", 340, SOCIAL_TITLE_TOP, SOCIAL_TEXT_RIGHT - 340, 22, align="right", color="#FFFFFFFF", text_y=0)
+    lines += _social_footer(base, "store_footer", "store_count")
+    lines += _social_detail(base, "store_detail")
+    lines += _social_empty(base, "store_empty")
+    lines += arrow_lines
+    rows = [f'<child widget="{base}/store_item_{index + 1}" x="{SOCIAL_ROWS_LEFT}" y="{SOCIAL_ROWS_TOP + index * SOCIAL_ROW_PITCH}"/>' for index in range(STORE_ROWS)]
     lines += _widget(f"{base}/store_list", [("type", "column_list"), ("width", 640), ("height", 480),
                                             ("flags", "pass_unhandled_to_focused_child up_down_tabs_children")],
                      ['<data input="port store update"/>', *rows, f'<child widget="{base}/store_button_bar" y="414"/>'])
     for index in range(STORE_ROWS):
-        children = [f'<child widget="{base}/store_cell_{column}" x="{x}" y="3"/>' for column, x, _, _ in STORE_COLUMNS]
-        lines += _widget(f"{base}/store_item_{index + 1}",
-                         [("width", STORE_ROW_WIDTH), ("height", SOCIAL_ROW_HEIGHT), ("flags", "pass_unhandled_to_focused_child"),
-                          ("bitmap", "bitmaps/option_bkds"), ("color", SOCIAL_TEXT_COLOR)],
-                         ['<on event="a" run="port store row"/>', '<on event="start" run="port store row"/>',
-                          '<on event="left_mouse" run="mouse emit accept event"/>', *children])
+        lines += _social_row(f"{base}/store_item_{index + 1}", STORE_COLUMNS, "store_cell",
+                             ['<on event="a" run="port store row"/>', '<on event="start" run="port store row"/>'], base=base)
     for column, _, width, font in STORE_COLUMNS:
         lines += _social_cell(f"{base}/store_cell_{column}", width, font, "right" if column == "size" else None)
-    # (four slots of the bar: the first has DOWNLOAD, UPDATE or STOP, whichever applies to the row and the job, one at a time)
+    # (four slots of the bar, the social screens' own places: the first has DOWNLOAD, UPDATE or STOP, whichever applies to the row and the job, one at a time)
     buttons = [("store_button_get", "DOWNLOAD", "port store get", 120), ("store_button_update", "UPDATE", "port store get", 120),
                ("store_button_stop", "STOP", "port store stop", 120), ("store_button_remove", "REMOVE", "port store remove", 250),
                ("store_button_refresh", "REFRESH", "port store refresh", 380)]
@@ -2755,10 +2753,10 @@ def _social_cell(name: str, width: int, font: str, align: str = None) -> list:
     return _widget(name, pairs, [])
 
 
-def _social_row(name: str, columns: list, prefix: str, handlers: list, width: int = SOCIAL_ROW_WIDTH, bitmap: str = "bitmaps/option_bkds") -> list:
+def _social_row(name: str, columns: list, prefix: str, handlers: list, width: int = SOCIAL_ROW_WIDTH, bitmap: str = "bitmaps/option_bkds", base: str = None) -> list:
     """a row of the list: the focus pill (the settings screens' option_bkds: its second frame has the focus), its cells in their places. The cells sit at the row's top: their
     text_y (large 4, small 6, the settings screens' own) puts the capitals on the pill's middle"""
-    children = [f'<child widget="{SOCIAL}/{prefix}_{column}" x="{x}" y="0"/>' for column, x, _, _ in columns]
+    children = [f'<child widget="{base or SOCIAL}/{prefix}_{column}" x="{x}" y="0"/>' for column, x, _, _ in columns]
     return _widget(name, [("width", width), ("height", SOCIAL_ROW_HEIGHT), ("flags", "pass_unhandled_to_focused_child"), ("bitmap", bitmap),
                           ("color", SOCIAL_TEXT_COLOR)], handlers + ['<on event="left_mouse" run="mouse emit accept event"/>'] + children)
 

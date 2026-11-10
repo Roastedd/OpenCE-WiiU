@@ -1364,3 +1364,158 @@ int screens_model_update(struct screens_model *model, int force)
 	}
 	return 1;
 }
+
+/* ---------- the mod store's words (menu_store.inl) */
+
+/* (the small font's lighter azure, for the cells that are not a state's own colour) */
+#define SCREENS_STORE_SMALL_COLOR SCREENS_COLOR_SKY
+#define SCREENS_STORE_AVAILABLE_COLOR SCREENS_COLOR_SKY
+
+void screens_store_size_text(unsigned long size, char *text, int length)
+{
+	unsigned long tenths = (size * 10 + 524288UL) / 1048576UL;
+
+	if (size < 1000UL * 1024)
+		snprintf(text, (size_t)length, "%lu KB", (size + 1023) / 1024);
+	else if (tenths >= 100)
+		snprintf(text, (size_t)length, "%lu MB", tenths / 10);
+	else
+		snprintf(text, (size_t)length, "%lu.%lu MB", tenths / 10, tenths % 10);
+}
+
+void screens_store_cells(char const *name, char const *author, unsigned long size, int state, int working, int percent, struct screens_cell cells[SCREENS_STORE_CELLS])
+{
+	char text[SCREENS_LINE_SIZE * 2];
+	int color;
+
+	screens_fit(SCREENS_FONT_LARGE, (float)(SCREENS_STORE_NAME_WIDTH - SCREENS_STORE_INSET), name, cells[0].text, SCREENS_LINE_SIZE);
+	screens_fit(SCREENS_FONT_SMALL, (float)(SCREENS_STORE_AUTHOR_WIDTH - SCREENS_STORE_INSET), author, cells[1].text, SCREENS_LINE_SIZE);
+	screens_store_size_text(size, text, (int)sizeof(text));
+	screens_fit(SCREENS_FONT_SMALL, (float)(SCREENS_STORE_SIZE_WIDTH - SCREENS_STORE_INSET), text, cells[2].text, SCREENS_LINE_SIZE);
+	/* (the name in the menus' azure, as every row's; the small cells in the lighter sky the spacing system gives the small font) */
+	cells[0].color = SCREENS_COLOR_AZURE;
+	cells[1].color = SCREENS_STORE_SMALL_COLOR;
+	cells[2].color = SCREENS_STORE_SMALL_COLOR;
+	if (working == 2)
+	{
+		snprintf(text, sizeof(text), "REMOVING");
+		color = SCREENS_COLOR_AMBER;
+	}
+	else if (working)
+	{
+		char const *word = state == SCREENS_STORE_UPDATE ? "UPDATING" : "DOWNLOADING";
+
+		if (percent >= 0)
+			snprintf(text, sizeof(text), "%s %d%%", word, percent);
+		else
+			snprintf(text, sizeof(text), "%s", word);
+		color = SCREENS_COLOR_AMBER;
+	}
+	else
+	{
+		switch (state)
+		{
+		case SCREENS_STORE_INSTALLED:
+			snprintf(text, sizeof(text), "INSTALLED");
+			color = SCREENS_COLOR_GREEN;
+			break;
+		case SCREENS_STORE_UPDATE:
+			snprintf(text, sizeof(text), "UPDATE");
+			color = SCREENS_COLOR_AMBER;
+			break;
+		case SCREENS_STORE_LOCAL:
+			snprintf(text, sizeof(text), "YOUR OWN");
+			color = SCREENS_COLOR_GREY;
+			break;
+		case SCREENS_STORE_UNPLAYABLE:
+			snprintf(text, sizeof(text), "NOT PLAYABLE");
+			color = SCREENS_COLOR_ALERT;
+			break;
+		default:
+			snprintf(text, sizeof(text), "DOWNLOAD");
+			color = SCREENS_STORE_AVAILABLE_COLOR;
+			break;
+		}
+	}
+	screens_fit(SCREENS_FONT_SMALL, (float)(SCREENS_STORE_STATUS_WIDTH - SCREENS_STORE_INSET), text, cells[3].text, SCREENS_LINE_SIZE);
+	cells[3].color = (unsigned char)color;
+}
+
+int screens_store_empty(int phase, long count, char const *said, char *text, int size)
+{
+	char message[SCREENS_WRAP_SOURCE];
+
+	if (phase == SCREENS_STORE_OFF)
+		snprintf(message, sizeof(message), "NO MOD STORE IS SET UP. ITS ADDRESS AND KEY GO IN CONFIG.TOML.");
+	else if (phase == SCREENS_STORE_IDLE || phase == SCREENS_STORE_LOADING)
+		snprintf(message, sizeof(message), "LOOKING FOR MODS...");
+	else if (phase == SCREENS_STORE_FAILED)
+	{
+		/* (what the store said in at most two lines, cut with "..." if it must be, and the way out always whole on the third) */
+		char reason[SCREENS_WRAP_SOURCE], lines[SCREENS_WRAP_SOURCE];
+
+		snprintf(reason, sizeof(reason), "%s.", said ? said : "");
+		screens_wrap(SCREENS_FONT_LARGE, (float)SCREENS_EMPTY_BOX_WIDTH, SCREENS_EMPTY_BOX_LINES - 1, reason, lines, (int)sizeof(lines));
+		snprintf(text, (size_t)size, "%s\rPRESS Y TO TRY AGAIN.", lines);
+		return 1;
+	}
+	else if (!count)
+		snprintf(message, sizeof(message), "THE STORE HAS NO MODS YET.");
+	else
+	{
+		if (size > 0)
+			text[0] = 0;
+		return 0;
+	}
+	screens_wrap(SCREENS_FONT_LARGE, (float)SCREENS_EMPTY_BOX_WIDTH, SCREENS_EMPTY_BOX_LINES, message, text, size);
+	return 1;
+}
+
+void screens_store_footer(char const *author, char const *kind, char const *licence, char const *version, char const *installed, int state, char *text, int size)
+{
+	char line[SCREENS_WRAP_SOURCE], held[SCREENS_LINE_SIZE];
+	int drop;
+
+	held[0] = 0;
+	if (installed && installed[0] && state == SCREENS_STORE_UPDATE)
+		snprintf(held, sizeof(held), " (YOURS: %s)", installed);
+	/* (the whole line if it fits the note's box; else what the mod changes goes first, then the licence: the author and the version, which say who and which, are the last to be cut) */
+	for (drop = 0; drop < 3; drop++)
+	{
+		snprintf(line, sizeof(line), "BY %s", author && author[0] ? author : "UNKNOWN");
+		if (drop < 1 && kind && kind[0])
+			snprintf(line + strlen(line), sizeof(line) - strlen(line), "   %s", kind);
+		if (drop < 2 && licence && licence[0])
+			snprintf(line + strlen(line), sizeof(line) - strlen(line), "   %s", licence);
+		strncat(line, "   ", sizeof(line) - strlen(line) - 1);
+		snprintf(line + strlen(line), sizeof(line) - strlen(line), "VERSION %s%s", version ? version : "", held);
+		if (screens_text_width(SCREENS_FONT_SMALL, line) <= (float)(SCREENS_STORE_FOOTER_WIDTH - SCREENS_STORE_INSET))
+			break;
+	}
+	screens_fit(SCREENS_FONT_SMALL, (float)(SCREENS_STORE_FOOTER_WIDTH - SCREENS_STORE_INSET), line, text, size);
+}
+
+void screens_store_job_line(char const *message, int percent, char *text, int size)
+{
+	if (percent >= 0)
+		snprintf(text, (size_t)size, "%s (%d%%)", message, percent);
+	else
+		snprintf(text, (size_t)size, "%s", message);
+}
+
+int screens_store_buttons(int phase, int busy, int state)
+{
+	int ready = phase == SCREENS_STORE_READY, mask = 0;
+
+	if (ready && !busy && state == SCREENS_STORE_AVAILABLE)
+		mask |= SCREENS_STORE_BUTTON_GET;
+	if (ready && !busy && state == SCREENS_STORE_UPDATE)
+		mask |= SCREENS_STORE_BUTTON_UPDATE;
+	if (busy)
+		mask |= SCREENS_STORE_BUTTON_STOP;
+	if (ready && !busy && (state == SCREENS_STORE_INSTALLED || state == SCREENS_STORE_UPDATE))
+		mask |= SCREENS_STORE_BUTTON_REMOVE;
+	if (phase != SCREENS_STORE_OFF && !busy && phase != SCREENS_STORE_LOADING)
+		mask |= SCREENS_STORE_BUTTON_REFRESH;
+	return mask;
+}

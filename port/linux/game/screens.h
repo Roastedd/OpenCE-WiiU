@@ -654,4 +654,60 @@ struct screens_model
 /* the model brought up to date with the provider (nonzero: it changed); rebuilds only when the generation moved (or force) */
 int screens_model_update(struct screens_model *model, int force);
 
+/* ---------- the mod store (menu_store.inl, tools/port_settings.py's _mod_store): the words and shades of its rows, its empty states, its footer and its buttons, on the same
+spacing system as the Players and Friends pages; the numbers are modstore.h's (a test compares them). tools/screens_preview/screens_dump.c draws the same functions. */
+
+enum
+{
+	/* the store's phases (modstore.h's _modstore_*) */
+	SCREENS_STORE_OFF,
+	SCREENS_STORE_IDLE,
+	SCREENS_STORE_LOADING,
+	SCREENS_STORE_READY,
+	SCREENS_STORE_FAILED,
+};
+
+enum
+{
+	/* a mod's state (modstore.h's _modstore_mod_*) */
+	SCREENS_STORE_AVAILABLE,
+	SCREENS_STORE_INSTALLED,
+	SCREENS_STORE_UPDATE,
+	SCREENS_STORE_LOCAL,
+	SCREENS_STORE_UNPLAYABLE,
+};
+
+enum
+{
+	/* the store's cells: name (large), author, size, state (small), and their widths in the XML (port_settings.py's STORE_COLUMNS: a test reads both) */
+	SCREENS_STORE_CELLS = 4,
+	SCREENS_STORE_NAME_WIDTH = 164,
+	SCREENS_STORE_AUTHOR_WIDTH = 94,
+	SCREENS_STORE_SIZE_WIDTH = 58,
+	SCREENS_STORE_STATUS_WIDTH = 152,
+	/* what a cell's width is less than the engine's inset and a margin */
+	SCREENS_STORE_INSET = 6,
+	/* the footer's note box (the counter has the rest of the line) */
+	SCREENS_STORE_FOOTER_WIDTH = 380,
+	/* the buttons that apply (a mask) */
+	SCREENS_STORE_BUTTON_GET = 1,
+	SCREENS_STORE_BUTTON_UPDATE = 2,
+	SCREENS_STORE_BUTTON_STOP = 4,
+	SCREENS_STORE_BUTTON_REMOVE = 8,
+	SCREENS_STORE_BUTTON_REFRESH = 16,
+};
+
+/* a size as the rows say it: 12 KB, 999 KB, 1.0 MB, 9.9 MB, 10 MB */
+void screens_store_size_text(unsigned long size, char *text, int length);
+/* a mod's row: the four cells (cut to their columns) and their shades. working: 1 a download or update runs on this mod, 2 a removal; percent: the job's, or -1 */
+void screens_store_cells(char const *name, char const *author, unsigned long size, int state, int working, int percent, struct screens_cell cells[SCREENS_STORE_CELLS]);
+/* the words of a store that has no list to show (off, loading, failed with what the store said, no mods), broken for the middle of the list; returns 0 (and no text) when there are mods */
+int screens_store_empty(int phase, long count, char const *said, char *text, int size);
+/* the footer's note: who made the mod, what it changes, its licence and version (and the version held, for an update), cut to the note's box */
+void screens_store_footer(char const *author, char const *kind, char const *licence, char const *version, char const *installed, int state, char *text, int size);
+/* what a job said, with its percent (when it has one) added */
+void screens_store_job_line(char const *message, int percent, char *text, int size);
+/* the buttons that apply to the row chosen (a mask of SCREENS_STORE_BUTTON_*) */
+int screens_store_buttons(int phase, int busy, int state);
+
 #endif
