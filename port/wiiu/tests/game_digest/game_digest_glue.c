@@ -1505,6 +1505,10 @@ static struct
 	long frames;
 	double at;
 	double sum[PASSTIME_MAX + 1];
+	long count[PASSTIME_MAX + 1]; /* the marks that began each part */
+	double replay_since; /* the harness's replay of the streams (on this thread) since the last mark: not the game's */
+	double replay_sum;
+	double mark_cost; /* the thread CPU time of one mark's clock reading (measured at start): what the study's own marks add to a part */
 	FILE *file;
 } passtime = { .last = PASSTIME_MAX };
 
@@ -1529,8 +1533,11 @@ void wiiu_render_pass(int pass)
 			passtime.file = sink_open("passtime.txt");
 			passtime.at = now;
 		}
-		passtime.sum[passtime.last] += now - passtime.at;
+		passtime.sum[passtime.last] += now - passtime.at - passtime.replay_since;
+		passtime.replay_sum += passtime.replay_since;
+		passtime.replay_since = 0.0;
 		passtime.at = now;
+		passtime.count[pass]++;
 		/* the last mark ends the frame: what follows it is "out" until the next frame's first mark */
 		if (pass == PASSES_MAX - 1)
 		{
@@ -1543,7 +1550,7 @@ void wiiu_render_pass(int pass)
 		{
 			int i;
 
-			fprintf(passtime.file, "frames %ld", passtime.frames);
+			fprintf(passtime.file, "frames %ld | markcost %.9f | replay %.6f 0", passtime.frames, passtime.mark_cost, passtime.replay_sum);
 			for (i = 0; i <= PASSTIME_MAX; i++)
 			{
 				char name[16];
@@ -1555,7 +1562,7 @@ void wiiu_render_pass(int pass)
 				else
 					snprintf(name, sizeof(name), "out");
 				if (passtime.sum[i] != 0.0 || i < PASSES_MAX)
-					fprintf(passtime.file, " | %s %.6f", name, passtime.sum[i]);
+					fprintf(passtime.file, " | %s %.6f %ld", name, passtime.sum[i], passtime.count[i]);
 			}
 			fprintf(passtime.file, "\n");
 			fflush(passtime.file);
@@ -1563,8 +1570,25 @@ void wiiu_render_pass(int pass)
 	}
 }
 
+double game_digest_passtime_clock(void)
+{
+	return passtime.on && passtime.file ? passtime_now() : 0.0;
+}
+
+void game_digest_passtime_replay(double seconds)
+{
+	passtime.replay_since += seconds;
+}
+
 void game_digest_passtime_enable(void)
 {
+	double first = passtime_now(), last = first;
+	int n;
+
+	/* (the cost of a mark's clock reading under qemu-user: 20,000 back to back) */
+	for (n = 0; n < 20000; n++)
+		last = passtime_now();
+	passtime.mark_cost = (last - first) / 20000.0;
 	passtime.on = 1;
 }
 

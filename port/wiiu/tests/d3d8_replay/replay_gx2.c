@@ -692,12 +692,27 @@ int host_gx2_async(void)
 	return gx.async;
 }
 
+/* GAME_DIGEST_PASSTIME (game_digest_glue.c): the replay runs on the game thread here, so the pass timer says how much of a pass was the harness's own reading of
+the streams (the stand-in for the GX2 thread), not the game's: these two are the glue's, and do nothing in a program that has no pass timer */
+__attribute__((weak)) double game_digest_passtime_clock(void)
+{
+	return 0.0;
+}
+
+__attribute__((weak)) void game_digest_passtime_replay(double seconds)
+{
+	(void)seconds;
+}
+
 void host_gx2_submit(unsigned int commands, unsigned int size)
 {
 	const unsigned char *at = (const unsigned char *)(uintptr_t)commands;
+	const double started = game_digest_passtime_clock();
 
 	run_stream(at, at + size);
 	gx.ran++;
+	if (started != 0.0)
+		game_digest_passtime_replay(game_digest_passtime_clock() - started);
 }
 
 /* (as wiiu_gx2.c: with the queue, the last stream run; without, everything handed over) */
@@ -708,17 +723,27 @@ unsigned int host_gx2_retired(void)
 
 void host_gx2_idle(void)
 {
+	const double started = game_digest_passtime_clock();
+
 	if (gx.async)
 		while (run_one())
 			;
+	if (started != 0.0)
+		game_digest_passtime_replay(game_digest_passtime_clock() - started);
 }
 
 /* the game thread waits for the GX2 thread: one stream is run. A wait with nothing posted would never end */
 void host_gx2_pause(void)
 {
+	const double started = game_digest_passtime_clock();
+	int ran;
+
 	if (!gx.async)
 		return;
-	if (run_one())
+	ran = run_one();
+	if (started != 0.0)
+		game_digest_passtime_replay(game_digest_passtime_clock() - started);
+	if (ran)
 	{
 		gx.idle_pauses = 0;
 		return;
