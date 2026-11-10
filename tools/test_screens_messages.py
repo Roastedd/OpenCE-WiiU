@@ -21,6 +21,9 @@ CE = ROOT / "port/assets/menus/ce"
 LINE_SIZE = 72            # screens.h SCREENS_LINE_SIZE: the buffer an answer, a toast, a detail is made in, the end included
 BOX_WIDTH = int(re.search(r"SCREENS_LINE_BOX_WIDTH = (\d+)", (GAME / "screens.h").read_text()).group(1))   # (512 wide widgets: what the console draws starts 5 units in)
 BOX_LINES = 2             # screens.h SCREENS_LINE_BOX_LINES
+# the engine's message box (a refusal said over a screen: menu_screens.inl scr_say; error.xml's error_text_box 280 x 159 with text_x 9, text_y 35, which the engine wraps at its spaces
+# in 280 - 4 * 9 = 244 units and 159 - 2 * 35 = 89 high, in the small font when the large would be taller): at most 4 lines of the large font, else 5 of the small
+MESSAGE_WIDTH, MESSAGE_LINES_LARGE, MESSAGE_LINES_SMALL = 244, 4, 5
 # the sources that make the words (the screens, the game's side of them, the backend that speaks for the friends layer, the layers' own sentences)
 SOURCES = ["screens.c", "screens_mock.c", "screens_social_backend.c", "screens_social.c", "menu_screens.inl", "social_join.c", "social.c", "social_party.c", "social_friends.c"]
 # calls whose texts are the log's, not the player's
@@ -93,6 +96,9 @@ def problems_with(sentences):
             wrong.append(f"{where} has a word wider than the {BOX_WIDTH} unit box")
         elif needed > BOX_LINES:
             wrong.append(f"{where} needs {needed} lines, the box has {BOX_LINES}")
+        large, small = lines_needed(text, MESSAGE_WIDTH), lines_needed(text, MESSAGE_WIDTH, SMALL)
+        if not ((large is not None and large <= MESSAGE_LINES_LARGE) or (small is not None and small <= MESSAGE_LINES_SMALL)):
+            wrong.append(f"{where} does not fit the message box ({large} lines large, {small} small)")
     return wrong
 
 
@@ -116,6 +122,8 @@ def test_a_sentence_too_long_is_found():
     assert problems_with(base + [("x.c", 1, "A" * 36 + " " + "B" * 35)])
     assert problems_with(base + [("x.c", 1, "THIS SENTENCE IS TOO LONG FOR A BOX OF TWO LINES AND SAYS IT AT LENGTH: " * 1)])
     assert problems_with(base + [("x.c", 1, "W" * 60 + " AND MORE")])
+    # (the message box: a box of one line's width fails the same sentences; its rule is checked with the real numbers above)
+    assert lines_needed("THAT PLAYER'S CODE IS NOT KNOWN. ASK FOR IT: FRIENDS > ADD FRIEND.", MESSAGE_WIDTH) > 2
     assert problems_with(base + [("x.c", 1, "A PLAYER'S CODE IS NOT KNOWN HERE. ASK FOR IT: FRIENDS, THEN ADD FRIEND.")]), "the 72 character answer of the first console session"
 
 
