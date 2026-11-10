@@ -476,7 +476,7 @@ static struct
 	{ "beavercreek", "Battle Creek" }, { "bloodgulch", "Blood Gulch" }, { "boardingaction", "Boarding Action" }, { "carousel", "Derelict" }, { "chillout", "Chill Out" },
 	{ "damnation", "Damnation" }, { "dangercanyon", "Danger Canyon" }, { "deathisland", "Death Island" }, { "gephyrophobia", "Gephyrophobia" },
 	{ "hangemhigh", "Hang 'Em High" }, { "icefields", "Ice Fields" }, { "infinity", "Infinity" }, { "longest", "Longest" }, { "prisoner", "Prisoner" },
-	{ "putput", "Chiron TL-34" }, { "ratrace", "Rat Race" }, { "sidewinder", "Sidewinder" }, { "timberland", "Timberland" }, { "wizard", "Wizard" },
+	{ "putput", "Chiron TL34" }, { "ratrace", "Rat Race" }, { "sidewinder", "Sidewinder" }, { "timberland", "Timberland" }, { "wizard", "Wizard" },
 };
 
 void screens_map_title(char const *map, char *title, int size)

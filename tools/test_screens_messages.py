@@ -255,3 +255,22 @@ def test_the_vocabulary_check_has_teeth():
         assert vocabulary_problems(changed), f"{bad!r} in {kind} is not found"
     assert vocabulary_problems(words, [("x.c", 1, "THE HOST RUNS A NEWER BUILD. UPDATE TO JOIN.")])
     assert vocabulary_problems(words, [("x.c", 1, "NO ROUTE TO THE HOST")])
+
+
+# the map file names in the order of the game's own list of multiplayer map names (ui\shell\main_menu\mp_map_list, ce/strings.xml's "main_menu/mp_map_list")
+MAP_FILES = ["beavercreek", "sidewinder", "damnation", "ratrace", "prisoner", "hangemhigh", "chillout", "carousel", "boardingaction", "bloodgulch", "wizard", "putput", "longest", "icefields",
+             "deathisland", "dangercanyon", "infinity", "timberland", "gephyrophobia"]
+
+
+def test_the_maps_are_called_what_the_games_own_list_calls_them():
+    """a friend's map is shown by its name in the game's own loc strings (the lobby's list): screens.c's table is that list, by file name"""
+    root = ElementTree.parse(CE / "strings.xml").getroot()
+    names = [string.get("text") for element in root if element.get("name") == "main_menu/mp_map_list" for string in element.findall("string")]
+    assert names[:len(MAP_FILES)] == [name for name in names[:len(MAP_FILES)]] and "Blood Gulch" in names
+    text = (GAME / "screens.c").read_text()
+    table = dict(re.findall(r'\{ "([a-z]+)", "([^"]+)" \}', text[text.index("map_titles[] ="):text.index("void screens_map_title")]))
+    assert len(table) == len(MAP_FILES) == 19, table
+    for index, file in enumerate(MAP_FILES):
+        assert table[file] == names[index], f"{file} is {table[file]!r} here and {names[index]!r} in the game's list"
+    # (the negative control: a title that differs)
+    assert dict(table, putput="Chiron TL-34")["putput"] != names[MAP_FILES.index("putput")]

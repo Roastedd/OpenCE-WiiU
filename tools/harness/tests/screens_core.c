@@ -1329,7 +1329,7 @@ static void layout_words(void)
 	struct screens_friend_row row;
 	struct screens_cell cells[SCREENS_FRIEND_CELLS];
 	int screen, tab, service, lines, index, length;
-	char const *const stock[][2] = { { "bloodgulch", "Blood Gulch" }, { "hangemhigh", "Hang 'Em High" }, { "putput", "Chiron TL-34" }, { "carousel", "Derelict" }, { "BloodGulch", "Blood Gulch" },
+	char const *const stock[][2] = { { "bloodgulch", "Blood Gulch" }, { "hangemhigh", "Hang 'Em High" }, { "putput", "Chiron TL34" }, { "carousel", "Derelict" }, { "BloodGulch", "Blood Gulch" },
 		{ "Danger_Canyon_X", "Danger Canyon X" }, { "", "" } };
 
 	for (index = 0; index < (int)(sizeof(stock) / sizeof(stock[0])); index++)
