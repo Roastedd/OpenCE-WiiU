@@ -679,10 +679,64 @@ static void detail_draw(long tick, const struct dk_command_draw *draw)
 	detail.format_written = detail.format;
 }
 
+/* GAME_DIGEST_DEAD_REGISTERS="9,10": the vertex registers whose current value (the constants of a vertex format, the value SetVertexData last gave a register the
+declaration does not feed) no vertex program the game draws with reads. The format's hash in a draw's line covers all sixteen registers' constants, so a stale value in
+one of these (the last colour a menu set before the game's first frame, which the game never sets again until its second) moves the hash of every draw of that frame, with
+the same vertices, textures, shaders and constants; here these registers' constants are zeroed in each vertex format command before the layer reads it, so that the
+hash leaves them out. A register a program reads is not to be listed: tools/wire_digest.py lists 9 for the hosted co-op game, with reports/research/2026-11-10/
+digest-hostedcoop-finding.md for the check that no program drawn reads it. */
+static unsigned dead_registers_mask(void)
+{
+	static int known;
+	static unsigned mask;
+
+	if (!known)
+	{
+		const char *text = getenv("GAME_DIGEST_DEAD_REGISTERS");
+
+		known = 1;
+		while (text && *text)
+		{
+			char *rest;
+			long register_index = strtol(text, &rest, 10);
+
+			if (rest == text)
+				break;
+			if (register_index >= 0 && register_index < DK_ATTRIBUTE_COUNT)
+				mask |= 1u << register_index;
+			text = *rest ? rest + 1 : rest;
+		}
+	}
+	return mask;
+}
+
+static void dead_registers_zero(unsigned int commands, unsigned int size)
+{
+	unsigned char *at = (unsigned char *)(uintptr_t)commands;
+	const unsigned char *end = at + size;
+	unsigned mask = dead_registers_mask();
+
+	while (mask && at + sizeof(struct dk_command_header) <= end)
+	{
+		const struct dk_command_header *header = (const struct dk_command_header *)at;
+		unsigned index;
+
+		if (header->size < sizeof(*header) || at + header->size > end)
+			break;
+		if (header->type == DK_COMMAND_VERTEX_FORMAT)
+			for (index = 0; index < DK_ATTRIBUTE_COUNT; index++)
+				if (mask & (1u << index))
+					memset(((struct dk_command_vertex_format *)at)->format.constants[index], 0, sizeof(((struct dk_command_vertex_format *)at)->format.constants[index]));
+		at += header->size;
+	}
+}
+
 void __wrap_host_gx2_submit(unsigned int commands, unsigned int size)
 {
 	const unsigned char *at = (const unsigned char *)(uintptr_t)commands, *end = at + size;
 	long tick = -1;
+
+	dead_registers_zero(commands, size);
 
 	if (detail.tick == -2)
 	{

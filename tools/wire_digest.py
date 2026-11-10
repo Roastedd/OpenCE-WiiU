@@ -39,7 +39,10 @@ SCENARIOS = (
     ("menu", "menu", None, {}, {}),
     ("local-slayer-bots", "local-slayer", "ticks", {"HALO_BOTS": "3"}, {}),
     ("blood-gulch-plain", "solo-bloodgulch", "ticks", {}, digest.PLAIN),
-    ("coop-hosted", "host", "ticks", {}, {}),
+    # (GAME_DIGEST_DEAD_REGISTERS=9: the lobby of a hosted game leaves the last colour its menu set in vertex register 9, which the first frame of the game still carries in
+    # the vertex format of its draws, though no vertex program the game draws with reads it; the lobby's layout changes that colour, not one pixel. See
+    # reports/research/2026-11-10/digest-hostedcoop-finding.md)
+    ("coop-hosted", "host", "ticks", {"GAME_DIGEST_DEAD_REGISTERS": "9"}, {}),
 )
 
 
