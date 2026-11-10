@@ -414,7 +414,7 @@ static void case_invite_checks(void)
 	CHECK(social_flow_leave_and_join_invite(id) == SOCIAL_JOIN_REASON_MAP_MISSING && !social_flow_leaving() && world.leave_calls == 0, "a missing map: no leaving");
 	CHECK(snap(b)->invite_count == 1, "and the invitation is kept");
 	world.map_download = 0;
-	CHECK(strstr(social_join_reason_text(SOCIAL_JOIN_REASON_MAP_MISSING, "bloodgulch"), "DOWNLOAD MAPS"), "with downloads off, where to turn them on: '%s'", social_join_reason_text(SOCIAL_JOIN_REASON_MAP_MISSING, "bloodgulch"));
+	CHECK(strstr(social_join_reason_text(SOCIAL_JOIN_REASON_MAP_MISSING, "bloodgulch"), "DOWNLOAD MAPS"), "with downloads off, that they are: '%s'", social_join_reason_text(SOCIAL_JOIN_REASON_MAP_MISSING, "bloodgulch"));
 	world.map_download = 1;
 	CHECK(!strstr(social_join_reason_text(SOCIAL_JOIN_REASON_MAP_MISSING, "bloodgulch"), "DOWNLOAD MAPS") && strstr(social_join_reason_text(SOCIAL_JOIN_REASON_MAP_MISSING, "bloodgulch"), "bloodgulch"), "with downloads on, the map");
 	world.map_state = 1;

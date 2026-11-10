@@ -412,7 +412,7 @@ static int scr_game_vote_kick(struct screens_roster_row const *row, char *answer
 		scr_answer(answer, size, "THAT PLAYER IS NOT IN THE GAME ANY MORE.");
 		return 0;
 	}
-	scr_answer(answer, size, "YOUR VOTE IS IN. F1 YES AND F2 NO, OR D-PAD RIGHT AND LEFT, FOR THE OTHERS.");
+	scr_answer(answer, size, "YOUR VOTE IS IN. THE OTHERS VOTE WITH F1 AND F2.");
 	return 1;
 }
 

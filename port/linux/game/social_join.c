@@ -48,10 +48,10 @@ const char *social_join_reason_text(int reason, const char *map)
 	case SOCIAL_JOIN_REASON_VERSION:
 		return "Your friend plays another version of the game";
 	case SOCIAL_JOIN_REASON_MAP_MISSING:
-		/* (the map is not on this machine and cannot be fetched: with downloads off, where to turn them on, else that it is not one that can be) */
+		/* (the map is not on this machine and cannot be fetched: with downloads off, that they are, else the map) */
 		if (map && map[0] && hook_map_download && !hook_map_download())
 		{
-			snprintf(text, sizeof(text), "You do not have the map %s; turn on DOWNLOAD MAPS in Network Setup", map);
+			snprintf(text, sizeof(text), "You do not have the map %s; DOWNLOAD MAPS is off", map);
 			return text;
 		}
 		if (map && map[0])
