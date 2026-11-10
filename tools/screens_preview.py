@@ -426,11 +426,12 @@ def pause_menu(canvas, buttons, focus=1, host=True):
 
 
 def toast_band(canvas, text, detail, kind_color, third=None):
-    """a toast as screens_toast.c lays it: 50 percent of the width, at 9 percent of the height, black at 70 percent, the lines centred (a stand-in font)"""
+    """a toast as screens_toast.c lays it in a game: 50 percent of the width, at 16 percent of the height (under the HUD's bars; 9 percent in the menus), black at 70 percent, the
+    lines centred (a stand-in font)"""
     lines = [(text, kind_color)] + ([(detail, WHITE)] if detail else []) + ([(third, (164, 191, 222))] if third else [])
     width = UNITS_WIDE * 0.50
     left = (UNITS_WIDE - width) / 2
-    top = UNITS_HIGH * 0.09
+    top = UNITS_HIGH * 0.16
     line_height = 19.0
     height = line_height * len(lines) + line_height / 2
     canvas.rect(left, top, left + width, top + height, (0, 0, 0, 176))
@@ -599,7 +600,7 @@ def pause_canvas(menus, size, buttons, focus):
 
 def toast_canvas(menus, size, toast, color, third):
     canvas = Canvas(menus, size)
-    canvas.image = game_stand_in(size)
+    canvas.image = game_with_hud(size)
     canvas.draw = ImageDraw.Draw(canvas.image, "RGBA")
     toast_band(canvas, toast["text"], toast["detail"], color, third)
     return canvas
