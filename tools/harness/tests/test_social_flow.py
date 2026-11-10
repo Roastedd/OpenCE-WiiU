@@ -61,7 +61,7 @@ FAULTS = [
     # follow off ignored
     ("follow-off", "social_party.c", "|| !party->auto_follow ||", "||"),
     # the log says nothing of the leave
-    ("leave-and-join", FILE, "			flow_log(\"flow: the menus are up; the invitation's game is joined\");\n", ""),
+    ("leave-and-join", FILE, "		flow_log(\"flow: the menus are up; the invitation's game is joined\");\n", ""),
     # downloads off not told
     ("invite-checks", FILE, "		if (map && map[0] && hook_map_download && !hook_map_download())", "		if (0)"),
 ]
