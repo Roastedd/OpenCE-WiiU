@@ -254,8 +254,24 @@ real periodic_function_evaluate(
 	if (function_tables_initialized)
 	{
 		time *= 25.6f;
-		fraction = (real)fmod((double)time, 1.0);
-		index = fast_ftol(time-fraction);
+#ifdef HALO_WIIU
+		/* port: for a time from 0 to 2^31 (every time a picture or a tick asks for, and no NaN) the fraction is the time less its whole part and the index the whole
+		part, as the fmod and the rounding below find them, without the two calls of the C library: fmod is a loop of shifts and subtractions on the console and
+		the rounding a call. Any other time (negative, over 2^31, infinite, not a number) takes the original lines.
+		(port/wiiu/tests/test_periodic_exact.c compares the two on every kind of time) */
+		if (time >= 0.0f && time < 2147483648.0f)
+		{
+			long whole = (long)time;
+
+			fraction = time - (real)whole;
+			index = whole;
+		}
+		else
+#endif
+		{
+			fraction = (real)fmod((double)time, 1.0);
+			index = fast_ftol(time-fraction);
+		}
 		table = periodic_function_tables[function_type];
 		index &= PERIODIC_FUNCTION_TABLE_MASK;
 		first_value = table[index] * (1.0f/255.0f);
