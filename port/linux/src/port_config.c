@@ -1092,6 +1092,13 @@ static const struct config_setting config_settings[] =
 		"The Discord application internet play invites go through while the\n"
 		"Discord desktop client runs; empty for none." },
 
+	{ "mods.store_url", _config_string, "\"\"", "HALO_MODS_STORE_URL", _environment_value, _platform_desktop,
+		"The mod store: the https:// address of a catalog of mods (a signed catalog.json, tools/modstore_catalog.py)\n"
+		"the Mods page's STORE button browses and downloads from. Empty (the default): there is no store, and\n"
+		"the game contacts no server about mods." },
+	{ "mods.store_key", _config_string, "\"\"", "HALO_MODS_STORE_KEY", _environment_value, _platform_desktop,
+		"The public key (64 hexadecimal digits) the store's catalog must be signed with. Empty: the key this\n"
+		"build was made with, if any; a store with no key is not used." },
 	{ "update.auto", _config_boolean, "true", "HALO_UPDATE_AUTO", _environment_value, _platform_all,
 		"Look for a new version when the game starts, and offer to update to it;\n"
 		"false never looks (the game's \"Do not ask again\" writes false here)." },
