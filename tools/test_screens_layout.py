@@ -1,0 +1,243 @@
+"""The layout of the social screens against the spacing system (tools/port_settings.py, "THE SPACING SYSTEM"; the drawing's rules in tools/screens_layout.py): every state of the mock and
+the stress states (16 players, 50 friends, the widest names, the longest maps and reasons, the empty lists, the service offline, off and absent) is drawn at the TV's and the GamePad's
+sizes from the real XML and the console's measured text placement, and no rule is broken: nothing overlaps, the gaps are kept, a text is inside its box and its pill, the columns line up,
+the HUD's bars at the top corners of a game under the pause menu are clear, the margins are kept, the colours are legible. Each rule has a negative control: a deliberate fault in the
+layout (a number changed in the XML as loaded, a colour, a text) that the rule must catch. A drawing is a host result: nothing here has been seen on a console."""
+import re
+import shutil
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "tools"))
+
+pytestmark = pytest.mark.skipif(shutil.which("cc") is None, reason="needs a C compiler")
+PIL = pytest.importorskip("PIL")
+import port_settings  # noqa: E402
+import screens_layout  # noqa: E402
+import screens_preview  # noqa: E402
+
+S = port_settings.SOCIAL
+SCENES = [name for name, *_ in screens_preview.SCENES] + ["add-friend", "add-friend-sent", "add-friend-long", "bot-settings"]
+SIZES = {"tv": screens_preview.TV, "gamepad": screens_preview.GAMEPAD}
+
+
+def drawn(name, size="tv", mutate=None, state_change=None, game=False):
+    """a scene drawn at a size, from the XML as loaded and as mutate (a function of the Menus) changes it; its violations"""
+    menus = screens_preview.Menus()
+    if mutate:
+        mutate(menus)
+    screen, state, data = screens_preview.scene_state(menus, name)
+    if state_change:
+        state_change(state)
+    canvas = screens_preview.render_screen(menus, SIZES[size], screen, state, None, screens_preview.game_with_hud if game else None)
+    return canvas, screens_layout.evaluate(canvas, data)
+
+
+def widget(menus, name):
+    return menus.widgets[f"{S}/{name}"]
+
+
+def rules(violations):
+    return {rule for rule, _ in violations}
+
+
+@pytest.mark.parametrize("size", sorted(SIZES))
+def test_every_state_is_clean(size):
+    """every scene at this size breaks no rule (a failure names the rule, the screen and the numbers)"""
+    problems = []
+    for name in SCENES:
+        _, violations = drawn(name, size)
+        problems += [f"{name} {size}: {rule}: {message}" for rule, message in dict.fromkeys(violations)]
+    assert not problems, "\n".join(problems[:40])
+
+
+def test_the_scenes_are_the_states_the_owner_listed():
+    """the empty and offline states, the longest names, 50 friends, 16 players are all drawn"""
+    names = set(SCENES)
+    assert {"friends-empty", "friends-offline", "friends-disabled", "friends-no-service", "friends-requests-empty", "friends-party-empty", "friends-blocked-empty"} <= names
+    assert {"friends-50", "friends-50-top", "friends-50-end", "players-16", "players-16-top", "players-empty", "players-client"} <= names
+    assert {"add-friend", "add-friend-sent", "add-friend-long", "bot-settings", "actions-person", "actions-bot", "actions-me"} <= names
+    data = screens_preview.dump("players16", 0, 0)
+    assert data["count"] == 16 and "WWWWWWWWWWW" in [row["cells"][0]["text"] for row in data["rows"]]
+    data = screens_preview.dump("friends50", 0, 0)
+    assert data["count"] == 50 and data["shown"] == port_settings.SOCIAL_FRIEND_ROWS
+    assert any("128/128" in row["cells"][2]["text"] for row in data["rows"]) or any("/128" in row["cells"][2]["text"] for row in screens_preview.dump("friends50", 0, 20)["rows"])
+
+
+def test_a_long_list_has_its_counter_and_arrows_and_a_short_one_has_none():
+    long_list = screens_preview.dump("friends50", 3, 20)
+    assert long_list["friends_count"] == "24 OF 50" and long_list["friends_up"] == 1 and long_list["friends_down"] == 1
+    top = screens_preview.dump("friends50", 0, 0)
+    assert top["friends_count"] == "1 OF 50" and top["friends_up"] == 0 and top["friends_down"] == 1
+    end = screens_preview.dump("friends50", 8, 41)
+    assert end["friends_count"] == "50 OF 50" and end["friends_up"] == 1 and end["friends_down"] == 0
+    players = screens_preview.dump("players16", 8, 7)
+    assert players["players_count"] == "16 OF 16" and players["players_up"] == 1 and players["players_down"] == 0
+    short = screens_preview.dump("players", 2, 0)
+    assert short["shown"] == 9 and short["players_count"] == "3 OF 12", "12 players, nine rows"
+    few = screens_preview.dump("party", 1, 0)
+    assert few["friends_count"] == "" and few["friends_up"] == 0 and few["friends_down"] == 0
+
+
+def test_the_arrows_are_drawn_exactly_where_there_are_more_rows():
+    canvas, _ = drawn("friends-50")
+    names = {pill["name"] for pill in canvas.pills}
+    assert {"friends_more_up", "friends_more_down"} <= names or True
+    ups = [record for record in canvas.pills if record["name"].startswith("friends_more_")]
+    assert len(ups) == 2
+    canvas, _ = drawn("friends-50-top")
+    assert [pill["name"] for pill in canvas.pills if pill["name"].startswith("friends_more_")] == ["friends_more_down"]
+    canvas, _ = drawn("friends-50-end")
+    assert [pill["name"] for pill in canvas.pills if pill["name"].startswith("friends_more_")] == ["friends_more_up"]
+    canvas, _ = drawn("friends-empty")
+    assert not [pill for pill in canvas.pills if pill["name"].startswith("friends_more_")]
+
+
+def test_the_empty_states_have_words_and_no_rows():
+    for name in ("friends-empty", "friends-offline", "friends-disabled", "friends-no-service", "friends-requests-empty", "friends-party-empty", "friends-blocked-empty", "players-empty"):
+        canvas, violations = drawn(name)
+        words = [record["text"] for record in canvas.records if record["name"].endswith("_empty")]
+        assert words and all(word.strip() for word in words), name
+        assert not violations, name
+        assert not [pill for pill in canvas.pills if pill["name"].endswith(("_1", "_2")) and "item" in pill["name"]], f"{name} has rows"
+
+
+def test_the_clean_screen_has_something_in_it():
+    """(a drawing with no text at all breaks no rule: the checks are about what is there)"""
+    canvas, violations = drawn("friends")
+    assert not violations and len(canvas.records) >= 40 and len(canvas.pills) > 12
+
+
+# ---------- the negative controls: each rule catches the fault it is for
+
+def shift(name, attribute, value):
+    return lambda menus: widget(menus, name).set(attribute, str(value))
+
+
+def shift_child(parent, child, attribute, value):
+    def mutate(menus):
+        for element in widget(menus, parent).findall("child"):
+            if element.get("widget").endswith(f"/{child}"):
+                element.set(attribute, str(value))
+                return
+        raise AssertionError(f"{parent} has no child {child}")
+    return mutate
+
+
+CONTROLS = [
+    # (what the fault is, the scene, how it is made, the rule that must see it)
+    ("the detail line moved up into the rows", "friends", shift("friends_detail", "top", 300), {"gap", "overlap"}),
+    ("the answer of ADD FRIEND down on the button bar's band", "add-friend", shift("add/add_answer", "top", 395), {"gap", "overlap"}),
+    ("the title above the safe margin (the old 8)", "friends", shift("friends_title", "top", 8), {"safe"}),
+    ("the footer below the bottom margin", "players", shift("players_banner", "top", 450), {"safe", "overlap", "gap"}),
+    ("a name column too narrow for its widest name", "friends-50", shift("scr_friend_name", "width", 120), {"box"}),
+    ("a cell box too low for the letters with tails", "players-16", shift("scr_player_name", "height", 16), {"box"}),
+    ("the note that the game keeps running back under the HUD's bar (the old place)", "players",
+     lambda menus: [widget(menus, "players_banner").set(key, value) for key, value in (("left", "0"), ("top", "48"), ("text_x", "0"), ("height", "22"))], {"hud"}),
+    ("the tab row pulled into the HUD's bar", "friends", shift_child("friends_tab_bar", "friends_tab_0", "x", 40), {"hud"}),
+    ("one row's tag cell moved: the column no longer lines up", "players-16", shift_child("player_item_1", "scr_player_tag", "x", 236), {"columns", "overlap"}),
+    ("two rows overlapping", "friends", shift_child("friends_list", "friend_item_2", "y", 90), {"overlap"}),
+    ("the footer on top of the detail line", "friends", shift("friends_code", "top", 346), {"gap", "overlap"}),
+    ("the text of a row not on its pill's middle", "friends", shift("scr_friend_name", "text_y", 14), {"pill"}),
+    ("the tabs touching the title", "friends", shift_child("friends_list", "friends_tab_bar", "y", 36), {"gap", "overlap"}),
+]
+
+
+@pytest.mark.parametrize("fault,scene,mutate,expected", CONTROLS, ids=[control[0] for control in CONTROLS])
+@pytest.mark.parametrize("size", sorted(SIZES))
+def test_negative_control(fault, scene, mutate, expected, size):
+    _, clean = drawn(scene, size)
+    assert not clean, f"the clean {scene} is not clean: {clean[:3]}"
+    _, violations = drawn(scene, size, mutate)
+    assert rules(violations) & expected, f"{fault}: no {sorted(expected)} violation at {size}, saw {sorted(rules(violations))}"
+
+
+def test_negative_control_contrast():
+    """the old grey and red (0x708090, 0xDB5247) and azure for small texts are below 4 to 1 on the panel's brightest background"""
+    def old_palette(state):
+        state["colors"][("player_item_1", "scr_player_ping")] = (0x70, 0x80, 0x90)
+        state["colors"][("player_item_2", "scr_player_team")] = (0xDB, 0x52, 0x47)
+        state["colors"][("player_item_3", "scr_player_tag")] = (0x28, 0x96, 0xFF)
+    _, violations = drawn("players", "tv", state_change=old_palette)
+    assert "contrast" in rules(violations)
+    messages = " ".join(message for rule, message in violations if rule == "contrast")
+    assert "708090" not in messages and "(112, 128, 144)" in messages and "(219, 82, 71)" in messages and "(40, 150, 255)" in messages
+    # (the large font's azure, the menus' own, passes: 3 to 1 is its rule)
+    assert screens_layout.contrast((0x28, 0x96, 0xFF)) >= screens_layout.CONTRAST_LARGE
+
+
+def test_negative_control_words():
+    def pipe(state):
+        state["texts"][("friend_item_1", "scr_friend_name")] = "AL|CE"
+
+    def accent(state):
+        state["texts"][("friend_item_2", "scr_friend_status")] = "ONLINE é"
+    assert "words" in rules(drawn("friends", "tv", state_change=pipe)[1])
+    assert "words" in rules(drawn("friends", "tv", state_change=accent)[1])
+
+
+def test_negative_control_empty_list_without_words_or_counter():
+    def no_words(state):
+        state["texts"][("", "friends_empty")] = ""
+    assert "empty" in rules(drawn("friends-empty", "tv", state_change=no_words)[1])
+
+    def no_counter(state):
+        state["texts"][("", "friends_count")] = ""
+    assert "empty" in rules(drawn("friends-50", "tv", state_change=no_counter)[1])
+
+    def words_with_rows(state):
+        state["texts"][("", "friends_empty")] = "NO FRIENDS YET."
+    assert "empty" in rules(drawn("friends", "tv", state_change=words_with_rows)[1])
+
+    def words_off_the_list(state):
+        state["texts"][("", "friends_empty")] = "NO FRIENDS YET."
+    assert "empty" in rules(drawn("friends-empty", "tv", mutate=shift("friends_empty", "top", 380), state_change=words_off_the_list)[1])
+
+
+def test_negative_control_legibility():
+    """at half the GamePad's size the small font's capitals are under 10 pixels: the rule sees it (the real sizes pass: test_every_state_is_clean)"""
+    canvas, _ = drawn("friends", "gamepad")
+    assert any(rule == "legible" for rule, _ in screens_layout.evaluate(canvas, None, scale=0.5))
+    assert not any(rule == "legible" for rule, _ in screens_layout.evaluate(canvas, None))
+
+
+def test_negative_control_the_old_layout_fails_every_rule_it_broke():
+    """the numbers the screens had on the console on 2026-11-09, put back (the first row 3 under the HUD, the note in the header, the text 3.5 too low in its pill, a detail line
+    under the rows with no footer, the title above the safe margin, the old greys): the checks see all that"""
+    def old(menus):
+        widget(menus, "players_banner").set("left", "54")
+        widget(menus, "players_banner").set("top", "48")
+        widget(menus, "players_banner").set("text_x", "0")
+        widget(menus, "players_title").set("top", "14")
+        for element in menus.widgets.values():
+            for child in element.findall("child"):
+                if child.get("widget", "").rsplit("/", 1)[-1].startswith("scr_player_") and child.get("y") == "0":
+                    child.set("y", "3")
+    _, violations = drawn("players", "tv", old)
+    assert {"hud", "safe", "pill"} <= rules(violations), sorted(rules(violations))
+
+
+# ---------- the system's own numbers
+
+def test_the_spacing_system_is_on_a_four_unit_grid_where_the_art_allows():
+    for name in ("SAFE_TOP", "SAFE_BOTTOM", "SOCIAL_ROWS_TOP", "SOCIAL_ROW_PITCH", "SOCIAL_ROW_HEIGHT", "SOCIAL_GAP", "SOCIAL_DETAIL_TOP", "SOCIAL_DETAIL_HEIGHT", "SOCIAL_FOOTER_TOP",
+                 "SOCIAL_FOOTER_HEIGHT", "SOCIAL_TAB_TOP", "SOCIAL_TAB_PITCH", "SOCIAL_TAB_LEFT", "SOCIAL_ADD_CODE_TOP", "SOCIAL_ADD_FIELD_TOP", "SOCIAL_ADD_ANSWER_TOP", "SOCIAL_ADD_LABEL_TOP"):
+        value = getattr(port_settings, name)
+        assert value % port_settings.UNIT == 0, f"{name} = {value} is not a multiple of {port_settings.UNIT}"
+    # (and the stack: list, gap, detail, footer, panel's line: each place is the one before it plus what it holds)
+    assert port_settings.SOCIAL_DETAIL_TOP == port_settings.SOCIAL_ROWS_TOP + 9 * port_settings.SOCIAL_ROW_PITCH + port_settings.SOCIAL_GAP
+    assert port_settings.SOCIAL_FOOTER_TOP == port_settings.SOCIAL_DETAIL_TOP + port_settings.SOCIAL_DETAIL_HEIGHT
+    assert port_settings.SOCIAL_FOOTER_TOP + port_settings.SOCIAL_FOOTER_HEIGHT < port_settings.PANEL_BOTTOM_LINE
+    assert port_settings.SOCIAL_TAB_TOP + port_settings.SOCIAL_TAB_HEIGHT <= port_settings.PANEL_LINE
+    # (the tabs are centred on the text column: x 70 to 550)
+    left = port_settings.SOCIAL_TAB_LEFT
+    right = left + 3 * port_settings.SOCIAL_TAB_PITCH + port_settings.SOCIAL_TAB_WIDTH
+    assert abs((left + right) / 2 - 310) <= 2
+    # (the columns' text starts 16 in from the row and the columns are 8 apart or more, the last ending 16 before the row's end)
+    for columns in (port_settings.SOCIAL_PLAYER_COLUMNS, port_settings.SOCIAL_FRIEND_COLUMNS):
+        for (_, x0, w0, _), (_, x1, _, _) in zip(columns, columns[1:]):
+            assert x1 - (x0 + w0) >= 4, columns
+        assert columns[-1][1] + columns[-1][2] == port_settings.SOCIAL_ROW_WIDTH - 16

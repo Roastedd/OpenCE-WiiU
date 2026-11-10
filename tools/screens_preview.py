@@ -8,8 +8,10 @@ WHAT THIS IS: a layout drawing, not a screenshot of the game. The menus' own XML
 gradient) and Overpass, the fonts the game draws the menus in (port/assets/fonts/fonts.json), at the sizes their capitals have (13 and 10 units). The texts and colours of the rows are
 what port/linux/game/screens.c puts in them for the mock provider (screens_dump.c prints them as JSON: the same functions menu_screens.inl calls). The game's moving background (the ring)
 is a stand-in; the pause menu's box and buttons are drawn from the same numbers menu_tags.c uses (the real list is made of the map's tags); the toasts are drawn with a stand-in font.
-Where the engine's own text placement differs by a pixel or two, the drawing does: the offsets were checked against the console's pictures of Network Setup
-(runs/wiiu/session-20261030/menu-walk/22-network.png: rows at x 54, text 16 units below the row's top) and nothing more.
+The engine's text placement is the console's own, measured on its pictures of 2026-11-09 (runs/wiiu/mcp/20261109-223325-tv.png, -223601-tv.png, 20261110-002347-tv.png): a text's
+capitals begin 3.5 units (the large font) or 3.7 (the small) below the widget's top plus its text_y, a text starts 4.4 or 3.1 units in from the widget's left and a right
+aligned one ends 3.9 in from its right edge (ENGINE below; the text of the console's rows, titles and details matched the drawing's to within 0.5 units after it). The panel's darkness is
+the bitmap's own (alpha 176 of 255) and the header band is the engine's widen_to_screen rule (ui_widget.c) applied to the bitmaps it applies to.
 
 The screen is 852 x 480 units; the menus' 640 x 480 block is in the middle (106 units each side: MENUS_DRAWN_CENTERED). The TV is 2.2535 pixels a unit, the GamePad 1.0023.
 """
@@ -37,6 +39,11 @@ GAMEPAD = (854, 480)
 FONT_FILES = {"ui\\large_ui": ("Overpass-900.ttf", 13.0), "ui\\small_ui": ("Overpass-750.ttf", 10.0)}
 AZURE = (0x28, 0x96, 0xFF)
 WHITE = (255, 255, 255)
+# the engine's placement of a text in its widget, measured on the console's pictures (units): where a font's capitals start below top + text_y, and its inset from the left and right
+ENGINE = {"ui\\large_ui": {"cap_offset": 3.5, "left": 4.4, "right": 3.9, "caps": 13.0}, "ui\\small_ui": {"cap_offset": 3.7, "left": 3.1, "right": 3.9, "caps": 10.0}}
+# the HUD of a game under the pause menu, from the console's picture (runs/wiiu/mcp/20261109-224339-tv.png), in units of the menus' block (x 0 to 640): the shield bars at the left
+# top corner end at x 64, the health bar at the right begins at 556; their y
+HUD_ZONES = [(-60.0, 37.0, 64.0, 73.0), (556.0, 37.0, 700.0, 67.0)]
 
 
 def argb(text, default=AZURE):
@@ -71,6 +78,23 @@ class Menus:
             self.font_cache[key] = (ImageFont.truetype(str(FONTS / file), max(1, round(em * scale))), em)
         return self.font_cache[key]
 
+    def extents(self, bitmap, index):
+        """the drawn part of a frame (where its alpha is solid), in units from its top left: a row's pill is not the 28 or 32 of its frame"""
+        frames = self.bitmaps.get(bitmap)
+        if not frames:
+            return None
+        png, frame_width, frame_height = frames[min(index, len(frames) - 1)]
+        if not png:
+            return None
+        key = ("extents", png)
+        if key not in self.image_cache:
+            image = Image.open(MENUS / png).convert("RGBA")
+            alpha = image.getchannel("A").point(lambda value: 255 if value > 60 else 0)
+            box = alpha.getbbox()
+            ratio_x, ratio_y = image.width / max(1, frame_width), image.height / max(1, frame_height)
+            self.image_cache[key] = (box[0] / ratio_x, box[1] / ratio_y, box[2] / ratio_x, box[3] / ratio_y) if box else None
+        return self.image_cache[key]
+
     def frame(self, bitmap, index, width, height, scale):
         frames = self.bitmaps.get(bitmap)
         if not frames:
@@ -103,23 +127,31 @@ class Canvas:
         cut = frame.crop((0, 0, min(frame.width, round(width * self.scale)), min(frame.height, round(height * self.scale))))
         self.image.paste(cut, (round(x * self.scale), round(y * self.scale)), cut)
 
-    def text(self, tag, x, y, width, height, text, color, align=None, text_x=0, text_y=0, alpha=255):
+    def text(self, tag, x, y, width, height, text, color, align=None, text_x=0, text_y=0, alpha=255, record=None, origin=None):
+        """a text as the engine places it (ENGINE): its capitals' top at y + text_y + the font's offset, its left 4 in; `record` is told its ink (units): one line, the lines of a
+        '\\r' text are drawn one under the other as the engine's line breaks are, 22 units apart for the large font"""
         if not text:
             return
         if "\n" in text or "\r" in text:
-            # (the engine's line break: a line each, one em and a little apart)
+            pitch = 22.0 if tag == "ui\\large_ui" else 17.0
             for number, line in enumerate(text.replace("\r\n", "\n").replace("\r", "\n").split("\n")):
-                self.text(tag, x, y + number * self.menus.font(tag, 1.0)[1] * 1.15, width, height, line, color, align, text_x, text_y, alpha)
+                self.text(tag, x, y + number * pitch, width, height, line, color, align, text_x, text_y, alpha, record, origin or (x, y))
             return
-        font, em = self.menus.font(tag, self.scale)
-        advance = font.getlength(text)
-        left = x + text_x
+        font, _ = self.menus.font(tag, self.scale)
+        engine = ENGINE.get(tag, ENGINE["ui\\large_ui"])
+        advance = font.getlength(text) / self.scale
+        left = x + engine["left"] + text_x
         if align == "center":
-            left = x + (width * self.scale - advance) / self.scale / 2 + text_x * 0
+            left = x + (width - advance) / 2 + text_x
         elif align == "right":
-            left = x + width - advance / self.scale
-        baseline = y + text_y + em / 1000.0 * 1000.0 * 0 + self.menus.font(tag, 1.0)[1]
+            left = x + width - engine["right"] - advance
+        baseline = y + text_y + engine["cap_offset"] + engine["caps"]
         self.draw.text((left * self.scale, baseline * self.scale), text, font=font, fill=(*color, alpha), anchor="ls")
+        if record is not None:
+            box = font.getbbox(text, anchor="ls")
+            record({"font": tag, "text": text, "color": color, "ink": (left + box[0] / self.scale, baseline + box[1] / self.scale, left + box[2] / self.scale, baseline + box[3] / self.scale),
+                    "caps": (baseline - engine["caps"], baseline), "box": (origin[0], origin[1], origin[0] + width, origin[1] + height) if origin else (x, y, x + width, y + height),
+                    "align": align})
 
     def rect(self, x0, y0, x1, y1, fill, outline=None, width=1, radius=0):
         box = [x0 * self.scale, y0 * self.scale, x1 * self.scale - 1, y1 * self.scale - 1]
@@ -151,13 +183,54 @@ def backdrop(size, seed):
 
 
 class Drawer:
-    """draws the XML widgets of a screen into a canvas, with the state a scenario gives (texts, colours, focus, what is hidden)"""
+    """draws the XML widgets of a screen into a canvas, with the state a scenario gives (texts, colours, focus, what is hidden), and records what it drew: every text's ink and
+    its box (`records`), every pill and panel (`pills`), for the layout checks (tools/test_screens_layout.py)"""
 
     def __init__(self, menus, canvas, state):
         self.menus, self.canvas, self.state = menus, canvas, state
         self.drawn_descriptions = set()
         # (the text widgets with a bitmap, tabs and buttons, that were drawn with no words: a button that shows nothing is a defect the model's own texts can hide)
         self.silent = []
+        self.records, self.pills = [], []
+        self.stack = []
+
+    def bitmap(self, element, short, left, top, width, height):
+        """the widget's bitmap as the engine draws it: from the top left, a unit to a texel, cut to the widget; a flat or vertical fill (at most 16 texels wide) of a widget whose
+        bounds cover the whole 640 x 480 design space is widened to the whole screen (ui_widget.c's widen_to_screen: bounds from 0, 0 to at least 320 x 240)"""
+        bitmap = element.get("bitmap")
+        frames = self.menus.bitmaps.get(bitmap)
+        if not frames or not (width or height):
+            return None
+        index = 1 if short in self.state.get("focused", ()) else 0
+        frame = self.menus.frame(bitmap, index, width, height, self.canvas.scale)
+        if frame is None:
+            return None
+        scale = self.canvas.scale
+        png = Image.open(MENUS / frames[min(index, len(frames) - 1)][0])
+        if png.width <= 16:
+            x0, x1 = left, left + width
+            definition = (float(element.get("left", 0)), float(element.get("top", 0)), float(element.get("left", 0)) + width, float(element.get("top", 0)) + height)
+            if definition[0] <= 0 and definition[1] <= 0 and definition[2] >= 320 and definition[3] >= 240:
+                x0, x1 = left - BLOCK_LEFT, left + width + BLOCK_LEFT
+            rows = max(1, round(height * scale))
+            # (a texture shorter than the widget, a flat fill: its last row goes on)
+            source = frame.crop((0, 0, 1, min(frame.height, rows)))
+            column = Image.new("RGBA", (1, rows))
+            column.paste(source, (0, 0))
+            for extra_row in range(source.height, rows):
+                column.paste(source.crop((0, source.height - 1, 1, source.height)), (0, extra_row))
+            column = column.resize((max(1, round((x1 - x0) * scale)), rows))
+            self.canvas.image.paste(column, (round(x0 * scale), round(top * scale)), column)
+            self.pills.append({"name": short, "bitmap": bitmap, "rect": (x0, top, x1, top + rows / scale), "kind": "panel"})
+            return None
+        self.canvas.paste_frame(bitmap, index, left, top, width, height)
+        extent = self.menus.extents(bitmap, index)
+        if extent is None:
+            return None
+        rect = (left + extent[0], top + extent[1], min(left + extent[2], left + width), min(top + extent[3], top + height))
+        pill = {"name": short, "bitmap": bitmap, "rect": rect, "kind": "pill", "focused": index == 1}
+        self.pills.append(pill)
+        return pill
 
     def widget(self, name, x, y, path):
         element = self.menus.widgets.get(name)
@@ -171,19 +244,9 @@ class Drawer:
         width, height = float(element.get("width", 0)), float(element.get("height", 0))
         kind = element.get("type", "container")
         key = (path[-1] if path else "", short)
-        # the bitmap: a focused row or button has its second frame
-        bitmap = element.get("bitmap")
-        if bitmap and bitmap in self.menus.bitmaps and (width or height):
-            index = 1 if short in self.state.get("focused", ()) or (path and path[-1] in self.state.get("focused", ()) and False) else 0
-            if bitmap == "bitmaps/gradient":
-                gradient = self.menus.frame(bitmap, 0, width, height, self.canvas.scale)
-                if gradient is not None:
-                    # (a frame is drawn a unit to a texel from the top left, cut to the widget: its 4 units' width is repeated across, its 512 high cut to 480)
-                    stretched = gradient.resize((round(width * self.canvas.scale), gradient.height)).crop((0, 0, round(width * self.canvas.scale), round(height * self.canvas.scale)))
-                    stretched.putalpha(stretched.getchannel("A").point(lambda value: int(value * 0.82)))
-                    self.canvas.image.paste(stretched, (round(left * self.canvas.scale), round(top * self.canvas.scale)), stretched)
-            else:
-                self.canvas.paste_frame(bitmap, index, left, top, width, height)
+        pill = self.bitmap(element, short, left, top, width, height) if element.get("bitmap") else None
+        if pill:
+            self.stack.append(pill)
         if kind == "text":
             text = self.state.get("texts", {}).get(key)
             if text is None:
@@ -200,12 +263,16 @@ class Drawer:
                     color = WHITE
             if element.get("bitmap") and not (text or "").strip():
                 self.silent.append(short)
+            owner = self.stack[-1] if self.stack else None
             self.canvas.text(element.get("font", "ui\\large_ui"), left, top, width, height, text or "", color, element.get("align"), float(element.get("text_x", 0)),
-                             float(element.get("text_y", 0)))
+                             float(element.get("text_y", 0)),
+                             record=lambda record, short=short, path=tuple(path), owner=owner: self.records.append({**record, "name": short, "path": path, "owner": owner}))
         elif kind == "spinner":
             self.spinner(element, short, left, top, width)
         for child in element.findall("child"):
             self.widget(child.get("widget"), left + float(child.get("x", 0)), top + float(child.get("y", 0)), [*path, short])
+        if pill:
+            self.stack.pop()
         # (a list's description, which the engine draws with it: the help line, the lobby's panel)
         if element.get("description") and element.get("description") not in self.drawn_descriptions:
             self.drawn_descriptions.add(element.get("description"))
@@ -229,7 +296,7 @@ def block(canvas):
 def screen_state_players(data):
     texts, colors, focused, hidden = {}, {}, set(), set()
     rows = data["rows"]
-    for index in range(10):
+    for index in range(port_settings.SOCIAL_PLAYER_ROWS):
         row = f"player_item_{index + 1}"
         if index >= len(rows):
             hidden.add(row)
@@ -242,9 +309,13 @@ def screen_state_players(data):
         focused.add(f"player_item_{data['focus'] + 1}")
     texts[("", "players_head")] = data["head"]
     texts[("", "players_banner")] = data["banner"]
+    texts[("", "players_count")] = data["players_count"]
+    texts[("", "players_empty")] = data["empty"].replace("\n", "\r")
     texts[("", "players_detail")] = data["detail"]
-    for name in ("players_head", "players_detail"):
-        pass
+    if not data["players_up"]:
+        hidden.add("players_more_up")
+    if not data["players_down"]:
+        hidden.add("players_more_down")
     if not data["host"]:
         hidden |= {"players_button_add", "players_button_drop"}
     return {"texts": texts, "colors": colors, "focused": focused, "hidden": hidden}
@@ -253,7 +324,7 @@ def screen_state_players(data):
 def screen_state_friends(data):
     texts, colors, focused, hidden = {}, {}, set(), set()
     rows = data["rows"]
-    for index in range(9):
+    for index in range(port_settings.SOCIAL_FRIEND_ROWS):
         row = f"friend_item_{index + 1}"
         if index >= len(rows):
             hidden.add(row)
@@ -270,7 +341,13 @@ def screen_state_friends(data):
             focused.add(f"friends_tab_{index}")
     texts[("", "friends_service")] = data["service"]
     texts[("", "friends_code")] = data["code"]
+    texts[("", "friends_count")] = data["friends_count"]
+    texts[("", "friends_empty")] = data["empty"].replace("\n", "\r")
     texts[("", "friends_detail")] = data["detail"]
+    if not data["friends_up"]:
+        hidden.add("friends_more_up")
+    if not data["friends_down"]:
+        hidden.add("friends_more_down")
     if not data["join"]:
         hidden.add("friends_button_join")
     if not data["invite"]:
@@ -297,14 +374,19 @@ class SilentButtons(Exception):
         self.names = names
 
 
-def render_screen(menus, size, screen, state, extra=None):
+def render_screen(menus, size, screen, state, extra=None, backdrop_image=None):
     canvas = Canvas(menus, size)
+    if backdrop_image is not None:
+        canvas.image = backdrop_image(size)
+        canvas.draw = ImageDraw.Draw(canvas.image, "RGBA")
     drawer = Drawer(menus, canvas, state)
     drawer.widget(screen, BLOCK_LEFT, 0, [])
     if drawer.silent:
         raise SilentButtons(screen, drawer.silent)
     if extra:
         extra(canvas)
+    # (what was drawn, in units: tools/test_screens_layout.py's checks read it)
+    canvas.records, canvas.pills = drawer.records, drawer.pills
     return canvas
 
 
@@ -358,6 +440,67 @@ def toast_band(canvas, text, detail, kind_color, third=None):
         canvas.draw.text(((left + width / 2) * canvas.scale - advance / 2, (top + line_height / 4 + index * line_height + line_height * 0.78) * canvas.scale), line, font=font, fill=(*color, 255), anchor="ls")
 
 
+# the screens' states that are drawn and checked: name, screen, dump scenario, focus, first row shown. "add" and "lobby" and "bot-settings" have their own states below
+SCENES = [
+    ("players", "players", "players", 2, 0), ("players-scrolled", "players", "players", 6, 2), ("players-client", "players", "players-client", 1, 0),
+    ("players-empty", "players", "players-empty", 0, 0), ("players-16", "players", "players16", 8, 7), ("players-16-top", "players", "players16", 0, 0),
+    ("friends", "friends", "friends", 0, 0), ("friends-download", "friends", "friends", 2, 0), ("friends-needs-map", "friends", "friends", 5, 0),
+    ("friends-requests", "friends", "requests", 0, 0), ("friends-party", "friends", "party", 1, 0), ("friends-blocked", "friends", "blocked", 0, 0),
+    ("friends-50", "friends", "friends50", 3, 20), ("friends-50-top", "friends", "friends50", 0, 0), ("friends-50-end", "friends", "friends50", 8, 41),
+    ("friends-empty", "friends", "friends-empty", 0, 0), ("friends-offline", "friends", "friends-offline", 0, 0), ("friends-disabled", "friends", "friends-disabled", 0, 0),
+    ("friends-no-service", "friends", "friends-nofriendservice", 0, 0), ("friends-requests-empty", "friends", "requests-empty", 0, 0),
+    ("friends-party-empty", "friends", "party-empty", 0, 0), ("friends-blocked-empty", "friends", "blocked-empty", 0, 0),
+    ("actions-person", "actions", "actions-person", 0, 0), ("actions-bot", "actions", "actions-bot", 0, 0), ("actions-me", "actions", "actions-me", 0, 0),
+]
+# the same screens over a game (the pause menu's way in): the picture has the HUD's bars at the top corners behind them
+GAME_SCENES = ["players", "players-16", "friends", "friends-50", "friends-empty", "add-friend"]
+
+
+def game_with_hud(size):
+    """a stand-in game picture with the HUD's shield and health bars at the top corners, where the console's picture has them (HUD_ZONES): translucent blue, as the game draws
+    them, under whatever the menus draw"""
+    image = game_stand_in(size)
+    canvas_scale = size[0] / UNITS_WIDE
+    draw = ImageDraw.Draw(image, "RGBA")
+    for x0, y0, x1, y1 in HUD_ZONES:
+        draw.rounded_rectangle([(BLOCK_LEFT + x0) * canvas_scale, y0 * canvas_scale, (BLOCK_LEFT + x1) * canvas_scale, y1 * canvas_scale], 4 * canvas_scale, fill=(70, 130, 220, 150),
+                               outline=(150, 200, 255, 200), width=max(1, round(canvas_scale)))
+    return image
+
+
+def scene_state(menus, name, *, game=False):
+    """(screen widget name, state, data) of a named scene; the add friend and bot settings states are made here"""
+    S = port_settings.SOCIAL
+    if name in ("add-friend", "add-friend-sent", "add-friend-long"):
+        long_answer = "THAT PLAYER'S CODE IS NOT KNOWN. ASK FOR IT: FRIENDS > ADD FRIEND."
+        data = dump("add-friend", 0, 0, "7F3K 9QX", long_answer)
+        answer = {"add-friend": "KEEP TYPING: 7 OF 13.", "add-friend-sent": data["sent"], "add-friend-long": data["wrapped"]}[name]
+        state = {"texts": {("", "add_own_code"): data["own"], ("", "add_answer"): answer, ("", "code_value"): data["typed"] + "_", ("", "code_label"): "FRIEND'S CODE:"},
+                 "focused": {"op_code"}, "white": {"add_own_code", "add_answer"}}
+        return f"{S}/add/friend_add_screen", state, data
+    if name == "bot-settings":
+        bot = f"{port_settings.PE}/bot_settings"
+        return f"{bot}/bot_settings_screen", {"focused": {"op_count"}, "spinners": {"count_spinner": "6", "skill_spinner": "HEROIC", "teams_spinner": "EVEN"},
+                                             "texts": {("", "help"): "Bots only play in a game on this machine for now:\nnot in a hosted or online game."}}, None
+    for scene, screen, scenario, focus, first in SCENES:
+        if scene == name:
+            data = dump(scenario, focus, first)
+            if screen == "players":
+                return f"{S}/players_screen", screen_state_players(data), data
+            if screen == "friends":
+                return f"{S}/friends_screen", screen_state_friends(data), data
+            state = actions_state(data)
+            state["texts"][("", "actions_answer")] = ""
+            return f"{S}/actions_screen", state, data
+    raise KeyError(name)
+
+
+def scene(menus, name, size, game=False):
+    """one named scene drawn at a size: the canvas, with its records and pills (units)"""
+    screen, state, _ = scene_state(menus, name)
+    return render_screen(menus, size, screen, state, None, game_with_hud if game else None)
+
+
 def render_all(out_dir, only=None):
     menus = Menus()
     S = port_settings.SOCIAL
@@ -372,36 +515,10 @@ def render_all(out_dir, only=None):
             canvas.save(path)
             results.append(path)
 
-    def players(scenario, focus=2, first=0, name=None):
-        data = dump(scenario, focus, first)
-        emit(name or scenario, lambda size: render_screen(menus, size, f"{S}/players_screen", screen_state_players(data)))
-
-    players("players", 2, 0, "players")
-    players("players", 7, 2, "players-scrolled")
-    players("players-client", 1, 0, "players-client")
-    players("players-empty", 0, 0, "players-empty")
-    for scenario, name in (("actions-person", "actions-person"), ("actions-bot", "actions-bot"), ("actions-me", "actions-me")):
-        data = dump(scenario, 0)
-        state = actions_state(data)
-        state["texts"][("", "actions_answer")] = ""
-        emit(name, lambda size, state=state: render_screen(menus, size, f"{S}/actions_screen", state))
-    for tab_scenario, focus, name in (("friends", 0, "friends"), ("friends", 2, "friends-download"), ("friends", 5, "friends-needs-map"), ("requests", 0, "friends-requests"), ("party", 1, "friends-party"),
-                                      ("blocked", 0, "friends-blocked"), ("friends-empty", 0, "friends-empty"), ("friends-offline", 0, "friends-offline"),
-                                      ("friends-nofriendservice", 0, "friends-no-service")):
-        data = dump(tab_scenario, focus)
-        emit(name, lambda size, data=data: render_screen(menus, size, f"{S}/friends_screen", screen_state_friends(data)))
-    data = dump("add-friend", 0, 0, "7F3K 9QX")
-    state = {"texts": {("", "add_own_code"): data["own"], ("", "add_answer"): "KEEP TYPING: 7 OF 13.", ("", "code_value"): data["typed"] + "_", ("", "code_label"): "FRIEND'S CODE:"},
-             "focused": {"op_code"}, "white": {"add_own_code", "add_answer"}}
-    emit("add-friend", lambda size: render_screen(menus, size, f"{S}/add/friend_add_screen", state))
-    # (the answer of a request sent: two lines, not cut by the box's edge as it was on the console)
-    sent = {**state, "texts": {**state["texts"], ("", "add_answer"): data["sent"]}}
-    emit("add-friend-sent", lambda size: render_screen(menus, size, f"{S}/add/friend_add_screen", sent))
-    # the bot settings (spinners on the settings screens' rows)
-    bot = f"{port_settings.PE}/bot_settings"
-    emit("bot-settings", lambda size: render_screen(menus, size, f"{bot}/bot_settings_screen", {
-        "focused": {"op_count"}, "spinners": {"count_spinner": "6", "skill_spinner": "HEROIC", "teams_spinner": "EVEN"},
-        "texts": {("", "help"): "How many computer players fill the game's lobby\n(a game on this machine). They leave as it goes down."}}))
+    for name in [scene_name for scene_name, *_ in SCENES] + ["add-friend", "add-friend-sent", "add-friend-long", "bot-settings"]:
+        emit(name, lambda size, name=name: scene(menus, name, size))
+    for name in GAME_SCENES:
+        emit(f"{name}-game", lambda size, name=name: scene(menus, name, size, game=True))
     # the lobby (its rows with the tags; the map's panel is a plain frame here)
     lobby = dump("lobby")
     lobby_state = {"texts": {}, "colors": {}, "focused": {"list_item_1"}, "hidden": {"list_item_" + str(i) for i in range(len(lobby["rows"]), 11)} | {"lobby_map_pic", "lobby_map_name"}}
@@ -416,7 +533,6 @@ def render_all(out_dir, only=None):
     lobby_state["texts"][("", "lobby_join_help")] = "A: PLAYER OPTIONS   L/R: BOTS"
     lobby_state["texts"][("", "lobby_game_data")] = "Slayer\r\nTeam Slayer\r\n12 of 16 players"
     emit("lobby", lambda size: render_screen(menus, size, "main_menu/multiplayer_type_select/lobby/lobby_screen", lobby_state))
-    # the Multiplayer screen's bar with FRIENDS
     # the pause menu with PLAYERS (host and client), over a darkened frame
     emit("pause-host", lambda size: pause_canvas(menus, size, ["RESUME GAME", "PLAYERS", "SETTINGS", "END GAME", "LEAVE GAME"], 1))
     emit("pause-client", lambda size: pause_canvas(menus, size, ["RESUME GAME", "PLAYERS", "SETTINGS", "LEAVE GAME"], 1))
