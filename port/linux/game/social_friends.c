@@ -556,6 +556,13 @@ static void hello_heard(struct social_engine *engine, struct social_friend *frie
 		/* its presence is on a topic this machine listens to only now: this machine says it is here, and the friend answers with its own */
 		engine->presence_wanted = 1;
 	}
+	else if (!social_friend_online(engine, friend) && engine->presence_sent && social_elapsed(engine, engine->presence_time, SOCIAL_PRESENCE_INTERVAL))
+	{
+		/* a friend that says hello again and is still not heard: the presence this machine sent when it first had the friend's key reached the brokers before the
+		subscription to the friend's topic did (and the friend's own, the same), so each lost the other's, and nothing would be said again for a heartbeat (a
+		minute). Said again now that the subscriptions have had the hello's few seconds; the friend answers it. At most one in a presence interval. */
+		engine->presence_wanted = 1;
+	}
 	friend->acknowledged = hello.have_generation == engine->circle_generation;
 	/* told something new, or it has not our key: answered, within a few seconds */
 	if (new_circle || !friend->acknowledged)

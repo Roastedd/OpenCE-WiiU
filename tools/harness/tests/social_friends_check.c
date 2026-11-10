@@ -252,7 +252,7 @@ static void case_remove_and_rotate(void)
 	fake_run(&net, 3000);
 	social_front_accept(b->front, snap(b, 0)->requests[0].id);
 	social_front_accept(c->front, snap(c, 0)->requests[0].id);
-	fake_run(&net, 15000);
+	fake_run(&net, 25000);
 	CHECK(exchanged(a, b) && exchanged(a, c) && exchanged(b, a) && exchanged(c, a), "a is friends with b and c");
 	memcpy(old_key, a->engine->circle_key, 32);
 	old_generation = a->engine->circle_generation;
