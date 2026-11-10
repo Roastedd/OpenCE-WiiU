@@ -169,7 +169,9 @@ struct object_render_data
 	word pad;
 	real_matrix4x3 shadow_matrix;
 	real shadow_bounding_radius;
-	long unused44;
+	/* port: the size in pixels of data->object_index, found once for the pass's use of the object (render_object): the same call, of the same object in the
+	same frame, was made up to four times (the governor's cull, the lighting, the shadow's test, the model) */
+	real level_of_detail_pixels;
 };
 
 struct object_render_state
@@ -593,7 +595,10 @@ static void render_object_list(
 			{
 				struct object_definition *definition =
 					object_definition_get(object->definition_index);
-				real level_of_detail_pixels = object_get_level_of_detail_pixels(object_index);
+				/* port: the object this pass is on has its size already (render_object) */
+				real level_of_detail_pixels = object_index == data->object_index ?
+					data->level_of_detail_pixels :
+					object_get_level_of_detail_pixels(object_index);
 
 				match_assert(
 					"c:\\halo\\SOURCE\\render\\render_objects.c",
@@ -1225,8 +1230,10 @@ static void render_object(
 			/* port: dynamic quality (render_governor.c): the small cast no shadow while the frames run long */
 			real governed_shadow_pixels = render_governor_values()->shadow_min_pixels;
 
+			/* port: found once (see object_render_data) */
+			data->level_of_detail_pixels = object_get_level_of_detail_pixels(data->object_index);
 			if (governed_shadow_pixels > OBJECT_SHADOW_MINIMUM_PIXELS &&
-				object_get_level_of_detail_pixels(data->object_index) < governed_shadow_pixels)
+				data->level_of_detail_pixels < governed_shadow_pixels)
 			{
 				render_governor_counts[RENDER_GOVERNOR_COUNT_SHADOWS_SKIPPED]++;
 				return;
@@ -1234,9 +1241,9 @@ static void render_object(
 
 			data->lighting = object_get_cached_render_lighting(
 				data->object_index,
-				object_get_level_of_detail_pixels(data->object_index));
+				data->level_of_detail_pixels);
 
-			level_of_detail_pixels = object_get_level_of_detail_pixels(data->object_index);
+			level_of_detail_pixels = data->level_of_detail_pixels;
 			shadow_darkness = 1.f - real_rgb_color_brightness(&data->lighting->shadow_color);
 
 			if (level_of_detail_pixels > OBJECT_SHADOW_MINIMUM_PIXELS &&
@@ -1272,8 +1279,10 @@ static void render_object(
 				TEST_FLAG(_object_mask_item, object->object.type) ? shed->cull_item_pixels :
 				TEST_FLAG(_object_mask_projectile, object->object.type) ? 0.f : shed->cull_scenery_pixels;
 
+			/* port: found once (see object_render_data) */
+			data->level_of_detail_pixels = object_get_level_of_detail_pixels(data->object_index);
 			if (render_governor_cull_small(DATUM_INDEX_TO_ABSOLUTE_INDEX(data->object_index),
-				object_get_level_of_detail_pixels(data->object_index), cull_pixels))
+				data->level_of_detail_pixels, cull_pixels))
 			{
 				render_governor_counts[RENDER_GOVERNOR_COUNT_OBJECTS_CULLED]++;
 				return;
@@ -1307,7 +1316,7 @@ static void render_object(
 			{
 				data->lighting = object_get_cached_render_lighting(
 					data->object_index,
-					object_get_level_of_detail_pixels(data->object_index));
+					data->level_of_detail_pixels);
 			}
 			else
 			{
