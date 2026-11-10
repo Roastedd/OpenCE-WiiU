@@ -213,6 +213,9 @@ def start(program: Path, run: str, ticks: int, trace: str = None, detail: str = 
     (folder / "data").mkdir(parents=True)
     (folder / "out").mkdir()
     (folder / "data" / "empty-brokers.txt").write_text("")
+    if os.environ.get("GAME_DIGEST_SEED"):
+        # (a card's folders to start with: GAME_DIGEST_SEED holds z/ and u/ as the card's data folder has them, a profile and z/lastprof.txt for the menus' runs)
+        shutil.copytree(os.environ["GAME_DIGEST_SEED"], folder / "data", dirs_exist_ok=True)
     if os.environ.get("GAME_DIGEST_CONFIG"):
         # (the settings of a console's card, for the keys it would need: a copy of its config.toml)
         shutil.copyfile(os.environ["GAME_DIGEST_CONFIG"], folder / "data" / "config.toml")

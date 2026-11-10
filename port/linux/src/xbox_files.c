@@ -21,6 +21,7 @@ matched case-insensitively, like the Xbox's FATX volumes.
 #include "port_config.h"
 #include "server_mode.h"
 #include "halo_startup.h"
+#include "halo_file_counts.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -32,13 +33,50 @@ matched case-insensitively, like the Xbox's FATX volumes.
 #include <time.h>
 #include <unistd.h>
 
+/* ---------- the menus' file work, counted (halo_file_counts.h) */
+
+volatile int file_counting;
+static unsigned long file_count_totals[NUMBER_OF_FILE_COUNTS];
+static pthread_t file_counting_thread;
+
+void file_counts_enable(int on)
+{
+	if (on)
+		file_counting_thread = pthread_self();
+	file_counting = on;
+}
+
+void file_count_add(int kind, unsigned long amount)
+{
+	if (kind >= 0 && kind < NUMBER_OF_FILE_COUNTS && pthread_equal(pthread_self(), file_counting_thread))
+		file_count_totals[kind] += amount;
+}
+
+void file_counts_read(unsigned long counts[NUMBER_OF_FILE_COUNTS])
+{
+	memcpy(counts, file_count_totals, sizeof(file_count_totals));
+}
+
+unsigned long file_counts_card_calls(unsigned long const counts[NUMBER_OF_FILE_COUNTS])
+{
+	return counts[FILE_COUNT_SCAN] + counts[FILE_COUNT_SCAN_ENTRY] + counts[FILE_COUNT_STAT] + counts[FILE_COUNT_OPEN] +
+		counts[FILE_COUNT_FIND] + counts[FILE_COUNT_FIND_ENTRY];
+}
+
+/* every stat of this file goes through here, to be counted */
+static int counted_stat(const char *path, struct posix_file_information *information)
+{
+	FILE_COUNT(FILE_COUNT_STAT, 1);
+	return posix_stat(path, information);
+}
+
 /* ---------- paths */
 
 static BOOL directory_exists(const char *path)
 {
 	struct posix_file_information information;
 
-	return posix_stat(path, &information) == 0;
+	return counted_stat(path, &information) == 0;
 }
 
 /* whether directory has a maps folder, in any case */
@@ -207,7 +245,7 @@ const char *platform_custom_edition_root(void)
 		snprintf(root, sizeof(root), "%s", config_string("paths.custom_edition"));
 		trim_separators(root);
 		snprintf(maps, sizeof(maps), "%s/maps", root);
-		if (root[0] && posix_stat(maps, &information) != 0)
+		if (root[0] && counted_stat(maps, &information) != 0)
 		{
 			platform_log("Halo Custom Edition: %s has no maps folder; not using it", root);
 			root[0] = 0;
@@ -269,12 +307,47 @@ static int translate_elsewhere(const char *cursor, char *resolved, unsigned long
 	return 0;
 }
 
+/* the name in a directory that matches name in any case (the first, in the directory's order), counted; 0 if there is none */
+static int find_entry_case_insensitive(const char *directory, const char *name, char *result, unsigned long result_size)
+{
+	void *stream = posix_directory_open(*directory ? directory : ".");
+	char entry[MAX_PATH];
+	int found = 0;
+	unsigned long entries = 0;
+
+	FILE_COUNT(FILE_COUNT_SCAN, 1);
+	if (!stream)
+		return 0;
+	while (posix_directory_next(stream, entry, sizeof(entry)))
+	{
+		entries++;
+		if (names_match(entry, name, (unsigned long)strlen(name) + 1) && strlen(entry) + 1 <= result_size)
+		{
+			strcpy(result, entry);
+			found = 1;
+			break;
+		}
+	}
+	posix_directory_close(stream);
+	FILE_COUNT(FILE_COUNT_SCAN_ENTRY, entries);
+	return found;
+}
+
 void platform_translate_path(const char *xbox_path, char *host_path, unsigned long host_path_size)
 {
 	char resolved[1024];
 	const char *cursor = xbox_path;
 	unsigned long length;
 
+	FILE_COUNT(FILE_COUNT_TRANSLATE, 1);
+	if (file_counting > 1 && pthread_equal(pthread_self(), file_counting_thread))
+	{
+		/* (halo/filecount.txt below 0: the first paths the game thread has translated, to see which files a menu function asks for) */
+		static unsigned long said;
+
+		if (said++ < 400)
+			platform_log("files: path %s", xbox_path);
+	}
 	snprintf(resolved, sizeof(resolved), "%s", platform_data_root());
 	if (((cursor[0] >= 'a' && cursor[0] <= 'z') || (cursor[0] >= 'A' && cursor[0] <= 'Z')) && cursor[1] == ':')
 	{
@@ -294,7 +367,7 @@ void platform_translate_path(const char *xbox_path, char *host_path, unsigned lo
 
 			snprintf(resolved, sizeof(resolved), "%s/%c", platform_save_root(), drive);
 			/* every Xbox drive always exists; create its directory on first use */
-			if (posix_stat(resolved, &information) != 0)
+			if (counted_stat(resolved, &information) != 0)
 				posix_make_directory(resolved);
 		}
 		cursor += 2;
@@ -317,14 +390,15 @@ void platform_translate_path(const char *xbox_path, char *host_path, unsigned lo
 		if (!component_length || strspn(component, ". ") == component_length)
 			continue;
 
-		if (posix_find_entry_case_insensitive(resolved, component, on_disk, sizeof(on_disk)))
+		FILE_COUNT(FILE_COUNT_COMPONENT, 1);
+		if (find_entry_case_insensitive(resolved, component, on_disk, sizeof(on_disk)))
 		{
 			/* prefer an exact match when several spellings exist */
 			char exact[1100];
 			struct posix_file_information information;
 
 			snprintf(exact, sizeof(exact), "%s/%s", resolved, component);
-			if (posix_stat(exact, &information) == 0)
+			if (counted_stat(exact, &information) == 0)
 				snprintf(on_disk, sizeof(on_disk), "%s", component);
 		}
 		else
@@ -497,7 +571,7 @@ HANDLE WINAPI CreateFileA(LPCSTR file_name, DWORD desired_access, DWORD share_mo
 	(void)template_file;
 
 	platform_translate_path(file_name, path, sizeof(path));
-	existed = posix_stat(path, &information) == 0;
+	existed = counted_stat(path, &information) == 0;
 
 	if ((desired_access & GENERIC_READ) && (desired_access & GENERIC_WRITE))
 		flags = O_RDWR;
@@ -571,6 +645,7 @@ HANDLE WINAPI CreateFileA(LPCSTR file_name, DWORD desired_access, DWORD share_mo
 	}
 	file->descriptor = descriptor;
 	snprintf(file->path, sizeof(file->path), "%s", path);
+	FILE_COUNT(FILE_COUNT_OPEN, 1);
 
 	/* Win32 reports whether an OPEN_ALWAYS/CREATE_ALWAYS target existed */
 	SetLastError((existed && (creation_disposition == OPEN_ALWAYS || creation_disposition == CREATE_ALWAYS)) ?
@@ -1019,7 +1094,7 @@ DWORD WINAPI GetFileAttributesA(LPCSTR file_name)
 	char path[1024];
 
 	platform_translate_path(file_name, path, sizeof(path));
-	if (posix_stat(path, &information) != 0)
+	if (counted_stat(path, &information) != 0)
 	{
 		platform_set_last_error_from_errno(errno);
 		return (DWORD)-1;
@@ -1039,7 +1114,7 @@ BOOL WINAPI GetFileAttributesExA(LPCSTR file_name, GET_FILEEX_INFO_LEVELS level,
 		return FALSE;
 	}
 	platform_translate_path(file_name, path, sizeof(path));
-	if (posix_stat(path, &information) != 0)
+	if (counted_stat(path, &information) != 0)
 	{
 		platform_set_last_error_from_errno(errno);
 		return FALSE;
@@ -1054,7 +1129,7 @@ BOOL WINAPI SetFileAttributesA(LPCSTR file_name, DWORD attributes)
 	struct posix_file_information information;
 
 	platform_translate_path(file_name, path, sizeof(path));
-	if (posix_stat(path, &information) != 0)
+	if (counted_stat(path, &information) != 0)
 	{
 		platform_set_last_error_from_errno(errno);
 		return FALSE;
@@ -1088,7 +1163,7 @@ BOOL WINAPI MoveFileA(LPCSTR existing_file_name, LPCSTR new_file_name)
 
 	platform_translate_path(existing_file_name, from, sizeof(from));
 	platform_translate_path(new_file_name, to, sizeof(to));
-	if (posix_stat(to, &information) == 0)
+	if (counted_stat(to, &information) == 0)
 	{
 		SetLastError(ERROR_ALREADY_EXISTS);
 		return FALSE;
@@ -1262,13 +1337,15 @@ static BOOL find_next_entry(struct platform_find *find, LPWIN32_FIND_DATAA data)
 	while (posix_directory_next(find->directory, name, sizeof(name)))
 	{
 		char full_path[1400];
+
+		FILE_COUNT(FILE_COUNT_FIND_ENTRY, 1);
 		struct posix_file_information information;
 		WIN32_FILE_ATTRIBUTE_DATA attributes;
 
 		if (!wildcard_match(find->pattern, name))
 			continue;
 		snprintf(full_path, sizeof(full_path), "%s/%s", find->directory_path, name);
-		if (posix_stat(full_path, &information) != 0)
+		if (counted_stat(full_path, &information) != 0)
 			continue;
 		fill_attribute_data(&information, &attributes);
 		memset(data, 0, sizeof(*data));
@@ -1310,6 +1387,7 @@ HANDLE WINAPI FindFirstFileA(LPCSTR file_name, LPWIN32_FIND_DATAA data)
 		snprintf(find->pattern, sizeof(find->pattern), "%s", file_name);
 	}
 	platform_translate_path(xbox_directory, find->directory_path, sizeof(find->directory_path));
+	FILE_COUNT(FILE_COUNT_FIND, 1);
 	find->directory = posix_directory_open(find->directory_path);
 	if (!find->directory)
 	{
