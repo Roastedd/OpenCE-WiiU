@@ -34,3 +34,25 @@ def test_longest_names_are_drawn_whole_in_the_rows():
     assert "WWWWWWWWWWW" in names and "%@%@%@%@%@%" in names, "the made-up players have the widest names"
     friends = screens_preview.dump("friends", 0)
     assert "WWWWWWWWWWW" in [row["cells"][1]["text"] for row in friends["rows"]]
+
+
+def test_a_tab_or_button_with_no_words_is_refused():
+    """the Friends screen's four tabs showed nothing on the console: the preview now refuses a text widget with a bitmap (a tab, a button) that is drawn empty"""
+    pytest.importorskip("PIL")
+    import screens_preview
+    menus = screens_preview.Menus()
+    screen = f"{screens_preview.port_settings.SOCIAL}/friends_screen"
+    data = screens_preview.dump("friends", 0)
+    state = screens_preview.screen_state_friends(data)
+    screens_preview.render_screen(menus, screens_preview.GAMEPAD, screen, state)  # (every tab and button has words)
+    assert all(label.strip() for label in data["tabs"]) and len(data["tabs"]) == 4
+    for tab in range(4):
+        broken = dict(state, texts={key: value for key, value in state["texts"].items() if key != ("", f"friends_tab_{tab}")})
+        with pytest.raises(screens_preview.SilentButtons) as caught:
+            screens_preview.render_screen(menus, screens_preview.GAMEPAD, screen, broken)
+        assert caught.value.names == [f"friends_tab_{tab}"]
+    # a button whose words are blank
+    texts = dict(state["texts"])
+    texts[("", "friends_tab_1")] = "  "
+    with pytest.raises(screens_preview.SilentButtons):
+        screens_preview.render_screen(menus, screens_preview.GAMEPAD, screen, dict(state, texts=texts))

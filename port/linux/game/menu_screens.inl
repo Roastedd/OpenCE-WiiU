@@ -860,6 +860,21 @@ static boolean scr_friends_tab(struct widget_instance *widget, char const *which
 	return TRUE;
 }
 
+/* the four tabs' words ("[FRIENDS 12]", "REQUESTS 3", ...). A tab is a text widget with no words of its own: its text is set in it by its name. (The first version
+asked the tab itself for a widget of that name, which has none inside it, and no tab had a word on the console.) */
+static void scr_friends_tab_labels(struct widget_instance *list, short tab, struct screens_friends_summary const *summary, struct screens_party_summary const *party)
+{
+	short index;
+	char name[24], text[SCR_LONG];
+
+	for (index = 0; index < SCREENS_TABS; index++)
+	{
+		snprintf(name, sizeof(name), "friends_tab_%d", index);
+		screens_tab_label(index, index == tab, summary, party, text, (int)sizeof(text));
+		scr_text(list, name, text);
+	}
+}
+
 /* "port friends update" */
 static void scr_friends_update(struct widget_instance *list)
 {
@@ -898,16 +913,7 @@ static void scr_friends_update(struct widget_instance *list)
 			scr.friend_colors[index][item] = cells[item].color;
 	}
 	scr_focus_clamp(list, SCR_FRIEND_PREFIX, shown);
-	for (index = 0; index < SCREENS_TABS; index++)
-	{
-		struct widget_instance *tab_widget;
-		char name[24];
-
-		snprintf(name, sizeof(name), "friends_tab_%d", index);
-		tab_widget = named(list, name, 0);
-		screens_tab_label(index, index == tab, summary, &scr.model.party_summary, text, (int)sizeof(text));
-		scr_text(tab_widget ? tab_widget : screen, name, text);
-	}
+	scr_friends_tab_labels(list, tab, summary, &scr.model.party_summary);
 	snprintf(text, sizeof(text), "%s", provider && provider->friends ? screens_service_word(summary->service) : "NO FRIEND SERVICE");
 	scr_text(screen, "friends_service", text);
 	if (summary->own_code[0])

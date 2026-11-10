@@ -156,6 +156,8 @@ class Drawer:
     def __init__(self, menus, canvas, state):
         self.menus, self.canvas, self.state = menus, canvas, state
         self.drawn_descriptions = set()
+        # (the text widgets with a bitmap, tabs and buttons, that were drawn with no words: a button that shows nothing is a defect the model's own texts can hide)
+        self.silent = []
 
     def widget(self, name, x, y, path):
         element = self.menus.widgets.get(name)
@@ -196,6 +198,8 @@ class Drawer:
                 color = argb(element.get("color"))
                 if short in self.state.get("white", ()):
                     color = WHITE
+            if element.get("bitmap") and not (text or "").strip():
+                self.silent.append(short)
             self.canvas.text(element.get("font", "ui\\large_ui"), left, top, width, height, text or "", color, element.get("align"), float(element.get("text_x", 0)),
                              float(element.get("text_y", 0)))
         elif kind == "spinner":
@@ -285,10 +289,20 @@ def dump(*arguments):
     return json.loads(result.stdout)
 
 
+class SilentButtons(Exception):
+    """a tab or button was drawn with no words in it (the Friends screen's four tabs, on the console, once)"""
+
+    def __init__(self, screen, names):
+        super().__init__(f"{screen}: no text in {', '.join(names)}")
+        self.names = names
+
+
 def render_screen(menus, size, screen, state, extra=None):
     canvas = Canvas(menus, size)
     drawer = Drawer(menus, canvas, state)
     drawer.widget(screen, BLOCK_LEFT, 0, [])
+    if drawer.silent:
+        raise SilentButtons(screen, drawer.silent)
     if extra:
         extra(canvas)
     return canvas
