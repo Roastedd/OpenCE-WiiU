@@ -11,7 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import ROOT, build, mutated, read, run
 
-CASES = ["words", "fit-names", "fit-columns", "fit-cut", "player-cells", "friend-cells", "party-cells", "view", "empty-text", "tabs", "sorting", "actions", "model", "mock-actions", "mock-text",
+CASES = ["words", "fit-names", "fit-columns", "fit-cut", "wrap", "wrap-sentences", "player-cells", "friend-cells", "party-cells", "view", "empty-text", "tabs", "sorting", "actions", "model", "mock-actions", "mock-text",
          "nav-players", "nav-friends", "nav-tap", "toast-queue", "toast-time", "disabled", "level-1", "level-2", "level-clamped"]
 
 
@@ -62,6 +62,21 @@ def test_metrics_are_current():
     (None, None, ("SCREENS_FRIEND_STATUS_WIDTH = 282,", "SCREENS_FRIEND_STATUS_WIDTH = 160,"), "fit-columns"),
     # the join word cut with the map
     (("snprintf(suffix + strlen(suffix), sizeof(suffix) - strlen(suffix), \" %s\", join);", ""), None, None, "fit-columns"),
+    # a detail line cut with dots instead of broken at its spaces (the console's "THE MAP IS DOW...")
+    (("snprintf(line, sizeof(line), \"%s IS OFFLINE.\", row->name);\n\tscreens_wrap(SCREENS_FONT_LARGE, (float)SCREENS_LINE_BOX_WIDTH, SCREENS_LINE_BOX_LINES, line, text, size);",
+      "snprintf(line, sizeof(line), \"%s IS OFFLINE.\", row->name);\n\tscreens_fit(SCREENS_FONT_LARGE, 520.0f, line, text, size);"), None, None, "wrap-sentences"),
+    # a player's detail not wrapped
+    (("snprintf(line + strlen(line), sizeof(line) - strlen(line), \"  %d MS\", row->ping > 999 ? 999 : row->ping);\n\tscreens_wrap(SCREENS_FONT_LARGE, (float)SCREENS_LINE_BOX_WIDTH, SCREENS_LINE_BOX_LINES, line, text, size);",
+      "snprintf(line + strlen(line), sizeof(line) - strlen(line), \"  %d MS\", row->ping > 999 ? 999 : row->ping);\n\tscreens_fit(SCREENS_FONT_LARGE, 360.0f, line, text, size);"), None, None, "wrap-sentences"),
+    # the empty lists' words not wrapped
+    (("screens_wrap(SCREENS_FONT_LARGE, (float)SCREENS_LINE_BOX_WIDTH, SCREENS_LINE_BOX_LINES, line, text, size);\n}\n\n/* ---------- navigation */",
+      "screens_fit(SCREENS_FONT_LARGE, 300.0f, line, text, size);\n}\n\n/* ---------- navigation */"), None, None, "wrap-sentences"),
+    # a line wider than the box accepted
+    (("if (end != start && measure(context, start, (int)(word_end - start)) > width)", "if (end != start && measure(context, start, (int)(word_end - start)) > width * 2.0f)"), None, None, "wrap"),
+    # a cut not said
+    (("return whole ? lines : -lines;", "return lines;"), None, None, "wrap"),
+    # a word broken in the middle: a line taken whole when it is wider than the box
+    (("if (measure(context, part, source_length) > width)\n\t\t{", "if (0)\n\t\t{"), None, None, "wrap"),
     # a bot with no tag
     (("snprintf(text, (size_t)size, \"BOT %s\", screens_skill_word(row->skill));", "snprintf(text, (size_t)size, \"%s\", screens_skill_word(row->skill));"), None, None, "player-cells"),
     # a bot's tag not amber

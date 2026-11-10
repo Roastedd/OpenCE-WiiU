@@ -67,8 +67,8 @@
 	</strings>
 	<strings name="main_menu/settings_select/player_setup/player_profile_edit/bot_settings/help_strings">
 		<string text=""/>
-		<string text="How many computer players fill the game's lobby\n(a game on this machine). They leave as it goes down."/>
+		<string text="Bots only play in a game on this machine for now:\nnot in a hosted or online game."/>
 		<string text="How well the bots aim, react and throw grenades."/>
-		<string text="EVEN splits the bots between the teams. AGAINST YOU\nputs them all on the team you are not on."/>
+		<string text="EVEN splits the bots between the teams.\nAGAINST YOU puts them all on the other team."/>
 	</strings>
 </menus>

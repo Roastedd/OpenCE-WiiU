@@ -352,6 +352,8 @@ void screens_default_friend_actions(int tab, struct screens_friend_row const *ro
 void screens_default_party_actions(struct screens_party_member const *member, struct screens_party_summary const *summary, int *actions);
 /* the line a screen shows in place of rows it has none of, in plain words (screen 0 the Players page, 1 the Friends screen): why the list is empty */
 void screens_empty_text(int screen, int tab, struct screens_friends_summary const *summary, int have_provider, char *text, int size);
+/* the same words, broken into the two lines of the TV screens' detail line (screens_wrap) */
+void screens_empty_wrapped(int screen, int tab, struct screens_friends_summary const *summary, int have_provider, char *text, int size);
 /* the provider in use: NULL if none is set (a screen with none shows itself empty, with a word for why) */
 struct screens_provider const *screens_provider(void);
 void screens_provider_set(struct screens_provider const *provider);
@@ -389,6 +391,23 @@ enum
 float screens_text_width(int font, char const *text);
 /* text cut to fit width (with "..." if it had to be cut; the characters are ASCII, so it is a plain cut), into a buffer of size; returns the length */
 int screens_fit(int font, float width, char const *text, char *destination, int size);
+/* a sentence broken at its spaces into at most max_lines lines of no more than width each, joined by '\r' (the engine's line break), into a buffer of size. The result is whole
+(never cut mid-word) when the number of lines is returned; when a word is wider than a line or there are more lines than max_lines the last line is cut with "..." and the number
+is returned negative. The texts the screens write are short enough never to be cut: a test (test_screens.py "wrap-messages") fails for one that is. */
+int screens_wrap(int font, float width, int max_lines, char const *text, char *destination, int size);
+/* the same with any measure (the real font at run time: the toasts' band): measure(context, text, length) is the width of the first length characters of text */
+int screens_wrap_measured(float (*measure)(void *context, char const *text, int length), void *context, float width, int max_lines, char const *text, char *destination, int size);
+/* the width of the boxes the sentences go in (units of the 640 x 480 screen): a detail line or an answer under the rows (512 wide, less the 5 units its text starts in on the console
+and a margin: the metrics are about the widths the console draws, not above them), the engine's message box (its text area), and how many lines of the large font each has */
+enum
+{
+	SCREENS_WRAP_LINES = 6,
+	SCREENS_WRAP_SOURCE = 200,
+	SCREENS_LINE_BOX_WIDTH = 496,
+	SCREENS_LINE_BOX_LINES = 2,
+	SCREENS_MESSAGE_BOX_WIDTH = 244,
+	SCREENS_MESSAGE_BOX_LINES = 4,
+};
 
 /* ---------- the cells of a row: what each column of a row says, and in which colour (the menus fill their text widgets from these, the previews draw them) */
 

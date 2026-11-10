@@ -385,7 +385,7 @@ def render_all(out_dir, only=None):
         state = actions_state(data)
         state["texts"][("", "actions_answer")] = ""
         emit(name, lambda size, state=state: render_screen(menus, size, f"{S}/actions_screen", state))
-    for tab_scenario, focus, name in (("friends", 0, "friends"), ("friends", 5, "friends-needs-map"), ("requests", 0, "friends-requests"), ("party", 1, "friends-party"),
+    for tab_scenario, focus, name in (("friends", 0, "friends"), ("friends", 2, "friends-download"), ("friends", 5, "friends-needs-map"), ("requests", 0, "friends-requests"), ("party", 1, "friends-party"),
                                       ("blocked", 0, "friends-blocked"), ("friends-empty", 0, "friends-empty"), ("friends-offline", 0, "friends-offline"),
                                       ("friends-nofriendservice", 0, "friends-no-service")):
         data = dump(tab_scenario, focus)
@@ -394,6 +394,9 @@ def render_all(out_dir, only=None):
     state = {"texts": {("", "add_own_code"): data["own"], ("", "add_answer"): "KEEP TYPING: 7 OF 13.", ("", "code_value"): data["typed"] + "_", ("", "code_label"): "FRIEND'S CODE:"},
              "focused": {"op_code"}, "white": {"add_own_code", "add_answer"}}
     emit("add-friend", lambda size: render_screen(menus, size, f"{S}/add/friend_add_screen", state))
+    # (the answer of a request sent: two lines, not cut by the box's edge as it was on the console)
+    sent = {**state, "texts": {**state["texts"], ("", "add_answer"): data["sent"]}}
+    emit("add-friend-sent", lambda size: render_screen(menus, size, f"{S}/add/friend_add_screen", sent))
     # the bot settings (spinners on the settings screens' rows)
     bot = f"{port_settings.PE}/bot_settings"
     emit("bot-settings", lambda size: render_screen(menus, size, f"{bot}/bot_settings_screen", {

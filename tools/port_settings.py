@@ -484,12 +484,12 @@ SCREENS["bot_settings"] = {
     "spacing": 30, "help_top": 350,
     "rows": [
         ("BOTS:", "bots.count", [("OFF", "0")] + [(str(count), str(count)) for count in range(1, 16)],
-         "How many computer players fill the game's lobby\n(a game on this machine). They leave as it goes down.", None),
+         "Bots only play in a game on this machine for now:\nnot in a hosted or online game.", None),
         ("SKILL:", "bots.skill",
          [("RECRUIT", "recruit"), ("EASY", "easy"), ("NORMAL", "normal"), ("HEROIC", "heroic"), ("VETERAN", "veteran"), ("LEGENDARY", "legendary")],
          "How well the bots aim, react and throw grenades.", None),
         ("TEAMS:", "bots.teams", [("EVEN", "even"), ("AGAINST YOU", "against")],
-         "EVEN splits the bots between the teams. AGAINST YOU\nputs them all on the team you are not on.", None),
+         "EVEN splits the bots between the teams.\nAGAINST YOU puts them all on the other team.", None),
     ],
 }
 _network = SCREENS["network_setup"]
@@ -2671,7 +2671,7 @@ def _social_players() -> list:
     lines += _social_text(f"{base}/players_title", 35, 14, 360, 30, color=SOCIAL_TITLE_COLOR, text="PLAYERS", text_y=3)
     lines += _social_text(f"{base}/players_head", 340, 16, 226, 26, align="right", color="#FFFFFFFF", text_y=3)
     lines += _social_text(f"{base}/players_banner", SOCIAL_ROWS_LEFT, 48, SOCIAL_ROW_WIDTH, 22, "small", color="#FFFFB020", text_y=4)
-    lines += _social_text(f"{base}/players_detail", SOCIAL_ROWS_LEFT, SOCIAL_ROWS_TOP + SOCIAL_PLAYER_ROWS * SOCIAL_ROW_PITCH + 6, SOCIAL_ROW_WIDTH, 26,
+    lines += _social_text(f"{base}/players_detail", SOCIAL_ROWS_LEFT, SOCIAL_ROWS_TOP + SOCIAL_PLAYER_ROWS * SOCIAL_ROW_PITCH + 6, SOCIAL_ROW_WIDTH, 48,
                           color="#FFFFFFFF", text_y=4)
     rows = [f'<child widget="{base}/player_item_{index + 1}" x="{SOCIAL_ROWS_LEFT}" y="{SOCIAL_ROWS_TOP + index * SOCIAL_ROW_PITCH}"/>'
             for index in range(SOCIAL_PLAYER_ROWS)]
@@ -2704,7 +2704,7 @@ def _social_actions() -> list:
                             f'<on event="x" open="{PE}/bot_settings/bot_settings_screen"/>'],
                            [f'<child widget="{base}/actions_list"/>', f'<child widget="{base}/actions_title"/>', f'<child widget="{base}/actions_answer"/>'])
     lines += _social_text(f"{base}/actions_title", 35, 14, 560, 30, color=SOCIAL_TITLE_COLOR, text_y=3)
-    lines += _social_text(f"{base}/actions_answer", SOCIAL_ROWS_LEFT, SOCIAL_ROWS_TOP + SOCIAL_ACTION_ROWS * SOCIAL_ROW_PITCH + 6, SOCIAL_ROW_WIDTH, 26,
+    lines += _social_text(f"{base}/actions_answer", SOCIAL_ROWS_LEFT, SOCIAL_ROWS_TOP + SOCIAL_ACTION_ROWS * SOCIAL_ROW_PITCH + 6, SOCIAL_ROW_WIDTH, 48,
                           color="#FFFFFFFF", text_y=4)
     rows = [f'<child widget="{base}/action_item_{index + 1}" x="{SOCIAL_ROWS_LEFT}" y="{SOCIAL_ROWS_TOP + index * SOCIAL_ROW_PITCH}"/>'
             for index in range(SOCIAL_ACTION_ROWS)]

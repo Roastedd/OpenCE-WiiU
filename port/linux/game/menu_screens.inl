@@ -130,6 +130,15 @@ static void scr_text(struct widget_instance *parent, char const *name, char cons
 	text_set_length(widget, wide, SCR_LONG);
 }
 
+/* a sentence broken into the two lines a detail line, an answer, has (screens_wrap: the engine's text box cuts what is wider than itself, so a sentence is never given to one as it is) */
+static void scr_sentence(char *text, int size)
+{
+	char whole[SCR_LONG];
+
+	snprintf(whole, sizeof(whole), "%s", text);
+	screens_wrap(SCREENS_FONT_LARGE, (float)SCREENS_LINE_BOX_WIDTH, SCREENS_LINE_BOX_LINES, whole, text, size);
+}
+
 static boolean scr_enabled(void)
 {
 	return screens_enabled() != 0;
@@ -598,9 +607,12 @@ static boolean scr_actions_open(struct widget_instance *screen)
 static void scr_actions_update(struct widget_instance *list)
 {
 	struct widget_instance *screen = screen_of(list), *row;
+	char answer[SCR_LONG];
 
 	scr_text(screen, "actions_title", scr.actions_title);
-	scr_text(screen, "actions_answer", scr.actions_answer);
+	snprintf(answer, sizeof(answer), "%s", scr.actions_answer);
+	scr_sentence(answer, (int)sizeof(answer));
+	scr_text(screen, "actions_answer", answer);
 	for (row = list->child; row; row = row->next)
 	{
 		short index = scr_row_index(row, SCR_ACTION_PREFIX);
@@ -745,7 +757,7 @@ static void scr_players_update(struct widget_instance *list)
 	scr_text(screen, "players_banner", summary->running ? "THE GAME KEEPS RUNNING WHILE THIS IS OPEN." : "");
 	item = scr_focused(list, SCR_PLAYER_PREFIX);
 	if (!provider || !count)
-		screens_empty_text(0, 0, NULL, provider != NULL, text, (int)sizeof(text));
+		screens_empty_wrapped(0, 0, NULL, provider != NULL, text, (int)sizeof(text));
 	else if (item != NONE && scr.players_first + item < count)
 		screens_player_detail(&scr.model.roster[scr.players_first + item], summary, text, (int)sizeof(text));
 	else
@@ -923,7 +935,7 @@ static void scr_friends_update(struct widget_instance *list)
 	scr_text(screen, "friends_code", text);
 	item = scr_focused(list, SCR_FRIEND_PREFIX);
 	if (!provider || !provider->friends || !count)
-		screens_empty_text(1, tab, summary, provider && provider->friends, text, (int)sizeof(text));
+		screens_empty_wrapped(1, tab, summary, provider && provider->friends, text, (int)sizeof(text));
 	else if (tab == SCREENS_TAB_PARTY)
 		screens_party_head(&scr.model.party_summary, text, (int)sizeof(text));
 	else if (item != NONE && scr.friends_first[tab] + item < count)
@@ -935,7 +947,10 @@ static void scr_friends_update(struct widget_instance *list)
 		char join_line[SCR_LONG];
 
 		if (scr_enabled() && screens_social_join_line(join_line, (int)sizeof(join_line)))
+		{
 			snprintf(text, sizeof(text), "%s", join_line);
+			scr_sentence(text, (int)sizeof(text));
+		}
 	}
 	scr_text(screen, "friends_detail", text);
 	if (item != scr.friends_last_focus)
@@ -1084,6 +1099,7 @@ static void scr_add_update(struct widget_instance *list)
 		snprintf(text, sizeof(text), "%s", scr.add_answer);
 	else
 		scr_add_check(text, (int)sizeof(text));
+	scr_sentence(text, (int)sizeof(text));
 	scr_text(screen, "add_answer", text);
 }
 

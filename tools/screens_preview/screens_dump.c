@@ -22,6 +22,11 @@ static void json_string(char const *text)
 	putchar('"');
 	for (; *text; text++)
 	{
+		if (*text == '\r')
+		{
+			fputs("\\n", stdout);
+			continue;
+		}
 		if (*text == '"' || *text == '\\')
 			putchar('\\');
 		putchar(*text);
@@ -111,7 +116,7 @@ int main(int argc, char **argv)
 		}
 		else
 		{
-			screens_empty_text(0, 0, NULL, 1, text, sizeof(text));
+			screens_empty_wrapped(0, 0, NULL, 1, text, sizeof(text));
 		}
 		printf(", \"detail\": ");
 		json_string(text);
@@ -170,7 +175,7 @@ int main(int argc, char **argv)
 		}
 		printf("]");
 		if (!count || !have)
-			screens_empty_text(1, tab, &summary, have, text, sizeof(text));
+			screens_empty_wrapped(1, tab, &summary, have, text, sizeof(text));
 		else if (tab == SCREENS_TAB_PARTY)
 			screens_party_head(&model.party_summary, text, sizeof(text));
 		else
@@ -205,6 +210,14 @@ int main(int argc, char **argv)
 		json_string(model.friends_summary.own_code);
 		printf(", \"typed\": ");
 		json_string(argc > 4 ? argv[4] : "");
+		/* (the answers a request gets, as the screen puts them in its two lines) */
+		{
+			char wrapped[SCREENS_LINE_SIZE * 2];
+
+			screens_wrap(SCREENS_FONT_LARGE, (float)SCREENS_LINE_BOX_WIDTH, SCREENS_LINE_BOX_LINES, "REQUEST SENT. THEY WILL SEE IT WHEN THEY ARE ONLINE.", wrapped, sizeof(wrapped));
+			printf(", \"sent\": ");
+			json_string(wrapped);
+		}
 	}
 	else if (!strcmp(scenario, "lobby"))
 	{

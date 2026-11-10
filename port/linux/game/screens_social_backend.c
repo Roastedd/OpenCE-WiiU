@@ -1065,7 +1065,7 @@ static int backend_roster_action(int action, struct screens_roster_row const *ro
 	switch (action)
 	{
 	case SCREENS_ACTION_ADD_FRIEND:
-		be_answer_set(answer, size, "A PLAYER'S CODE IS NOT KNOWN HERE. ASK FOR IT: FRIENDS, THEN ADD FRIEND.");
+		be_answer_set(answer, size, "THAT PLAYER'S CODE IS NOT KNOWN. ASK FOR IT: FRIENDS > ADD FRIEND.");
 		return 0;
 	case SCREENS_ACTION_INVITE_PARTY:
 		friend_id = screens_social_roster_friend(row->name, "");

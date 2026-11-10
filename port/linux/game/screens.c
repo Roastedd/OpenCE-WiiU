@@ -227,6 +227,115 @@ int screens_fit(int font, float width, char const *text, char *destination, int 
 	}
 }
 
+static float range_width(int font, char const *text, int length)
+{
+	float const *advance = font == SCREENS_FONT_LARGE ? screens_advance_large : screens_advance_small;
+	float width = 0.0f;
+	int index;
+
+	for (index = 0; index < length; index++)
+	{
+		unsigned char character = (unsigned char)text[index];
+
+		width += character >= 0x20 && character <= 0x7E ? advance[character - 0x20] : advance[0x3F - 0x20];
+	}
+	return width;
+}
+
+/* the metrics' measure (screens_wrap's): the font is the context */
+static float metrics_measure(void *context, char const *text, int length)
+{
+	return range_width((int)(long)context, text, length);
+}
+
+int screens_wrap_measured(float (*measure)(void *context, char const *text, int length), void *context, float width, int max_lines, char const *text, char *destination, int size)
+{
+	char const *position = text, *line_start[SCREENS_WRAP_LINES];
+	int line_length[SCREENS_WRAP_LINES], lines = 0, whole = 1, length = 0, index;
+
+	if (size <= 0)
+		return 0;
+	destination[0] = 0;
+	if (!text)
+		return 0;
+	if (max_lines > SCREENS_WRAP_LINES)
+		max_lines = SCREENS_WRAP_LINES;
+	if (max_lines < 1)
+		max_lines = 1;
+	while (*position == ' ')
+		position++;
+	while (*position && lines < max_lines)
+	{
+		char const *start = position, *end = position, *next = position;
+
+		/* (the most whole words that fit; the first is taken whatever its width) */
+		for (;;)
+		{
+			char const *word_end = next;
+
+			while (*word_end && *word_end != ' ')
+				word_end++;
+			if (word_end == next)
+				break;
+			if (end != start && measure(context, start, (int)(word_end - start)) > width)
+				break;
+			end = word_end;
+			next = word_end;
+			while (*next == ' ')
+				next++;
+		}
+		line_start[lines] = start;
+		line_length[lines] = (int)(end - start);
+		lines++;
+		position = next;
+	}
+	if (*position)
+		whole = 0;
+	for (index = 0; index < lines; index++)
+	{
+		char part[SCREENS_WRAP_SOURCE];
+		char const *source = line_start[index];
+		int source_length = line_length[index];
+
+		if (index == lines - 1 && !whole)
+			source_length = (int)strlen(source);
+		if (source_length >= (int)sizeof(part) - 3)
+			source_length = (int)sizeof(part) - 4;
+		memcpy(part, source, (size_t)source_length);
+		part[source_length] = 0;
+		if (measure(context, part, source_length) > width)
+		{
+			/* (a line that is still too wide, a word wider than the box or the text past the last line: cut, and dots) */
+			whole = 0;
+			while (source_length > 0)
+			{
+				memcpy(part + source_length, "...", 4);
+				if (measure(context, part, source_length + 3) <= width)
+					break;
+				source_length--;
+				while (source_length > 0 && part[source_length - 1] == ' ')
+					source_length--;
+			}
+			memcpy(part + source_length, "...", 4);
+		}
+		if (length + (index ? 1 : 0) + (int)strlen(part) >= size)
+		{
+			whole = 0;
+			break;
+		}
+		if (index)
+			destination[length++] = '\r';
+		memcpy(destination + length, part, strlen(part) + 1);
+		length += (int)strlen(part);
+	}
+	return whole ? lines : -lines;
+}
+
+int screens_wrap(int font, float width, int max_lines, char const *text, char *destination, int size)
+{
+	return screens_wrap_measured(metrics_measure, (void *)(long)font, width, max_lines, text, destination, size);
+}
+
 /* ---------- cells */
 
 static void cell_set(struct screens_cell *cell, int font, float width, int color, char const *text)
@@ -468,7 +577,7 @@ void screens_player_detail(struct screens_roster_row const *row, struct screens_
 		snprintf(line + strlen(line), sizeof(line) - strlen(line), "  %d %s", row->score, row->score == 1 ? "KILL" : "KILLS");
 	if (row->ping >= 0)
 		snprintf(line + strlen(line), sizeof(line) - strlen(line), "  %d MS", row->ping > 999 ? 999 : row->ping);
-	screens_fit(SCREENS_FONT_LARGE, 520.0f, line, text, size);
+	screens_wrap(SCREENS_FONT_LARGE, (float)SCREENS_LINE_BOX_WIDTH, SCREENS_LINE_BOX_LINES, line, text, size);
 }
 
 void screens_friend_detail(int tab, struct screens_friend_row const *row, struct screens_friends_summary const *summary, char *text, int size)
@@ -519,7 +628,7 @@ void screens_friend_detail(int tab, struct screens_friend_row const *row, struct
 		snprintf(line, sizeof(line), "A: INVITE %s.", row->name);
 	else
 		snprintf(line, sizeof(line), "%s IS OFFLINE.", row->name);
-	screens_fit(SCREENS_FONT_LARGE, 520.0f, line, text, size);
+	screens_wrap(SCREENS_FONT_LARGE, (float)SCREENS_LINE_BOX_WIDTH, SCREENS_LINE_BOX_LINES, line, text, size);
 }
 
 void screens_player_head(struct screens_roster_summary const *summary, char *text, int size)
@@ -725,27 +834,40 @@ void screens_default_party_actions(struct screens_party_member const *member, st
 }
 
 
+static void empty_line(int screen, int tab, struct screens_friends_summary const *summary, int have_provider, char *line, int line_size)
+{
+	if (!have_provider)
+		snprintf(line, (size_t)line_size, screen == 0 ? "THERE IS NO PLAYER LIST HERE." : "THERE IS NO FRIEND SERVICE IN THIS BUILD.");
+	else if (screen == 0)
+		snprintf(line, (size_t)line_size, "NO PLAYERS YET.");
+	else if (summary && summary->service == SCREENS_SERVICE_DISABLED)
+		snprintf(line, (size_t)line_size, "FRIENDS ARE OFF. TURN THEM ON IN NETWORK SETUP.");
+	else if (summary && summary->service == SCREENS_SERVICE_OFF && tab == SCREENS_TAB_FRIENDS)
+		snprintf(line, (size_t)line_size, "FRIENDS ARE OFFLINE. YOUR LIST IS KEPT.");
+	else if (tab == SCREENS_TAB_FRIENDS)
+		snprintf(line, (size_t)line_size, "NO FRIENDS YET. Y: ADD A FRIEND BY CODE.");
+	else if (tab == SCREENS_TAB_REQUESTS)
+		snprintf(line, (size_t)line_size, "NO REQUESTS.");
+	else if (tab == SCREENS_TAB_PARTY)
+		snprintf(line, (size_t)line_size, "NO PARTY. INVITE A FRIEND TO START ONE.");
+	else
+		snprintf(line, (size_t)line_size, "NO ONE IS BLOCKED.");
+}
+
 void screens_empty_text(int screen, int tab, struct screens_friends_summary const *summary, int have_provider, char *text, int size)
 {
 	char line[SCREENS_LINE_SIZE];
 
-	if (!have_provider)
-		snprintf(line, sizeof(line), screen == 0 ? "THERE IS NO PLAYER LIST HERE." : "THERE IS NO FRIEND SERVICE IN THIS BUILD.");
-	else if (screen == 0)
-		snprintf(line, sizeof(line), "NO PLAYERS YET.");
-	else if (summary && summary->service == SCREENS_SERVICE_DISABLED)
-		snprintf(line, sizeof(line), "FRIENDS ARE OFF. TURN THEM ON IN NETWORK SETUP.");
-	else if (summary && summary->service == SCREENS_SERVICE_OFF && tab == SCREENS_TAB_FRIENDS)
-		snprintf(line, sizeof(line), "FRIENDS ARE OFFLINE. YOUR LIST IS KEPT.");
-	else if (tab == SCREENS_TAB_FRIENDS)
-		snprintf(line, sizeof(line), "NO FRIENDS YET. Y: ADD A FRIEND BY CODE.");
-	else if (tab == SCREENS_TAB_REQUESTS)
-		snprintf(line, sizeof(line), "NO REQUESTS.");
-	else if (tab == SCREENS_TAB_PARTY)
-		snprintf(line, sizeof(line), "NO PARTY. INVITE A FRIEND TO START ONE.");
-	else
-		snprintf(line, sizeof(line), "NO ONE IS BLOCKED.");
+	empty_line(screen, tab, summary, have_provider, line, (int)sizeof(line));
 	screens_fit(SCREENS_FONT_LARGE, 520.0f, line, text, size);
+}
+
+void screens_empty_wrapped(int screen, int tab, struct screens_friends_summary const *summary, int have_provider, char *text, int size)
+{
+	char line[SCREENS_LINE_SIZE];
+
+	empty_line(screen, tab, summary, have_provider, line, (int)sizeof(line));
+	screens_wrap(SCREENS_FONT_LARGE, (float)SCREENS_LINE_BOX_WIDTH, SCREENS_LINE_BOX_LINES, line, text, size);
 }
 
 /* ---------- navigation */

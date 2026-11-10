@@ -77,7 +77,7 @@ FAULTS = [
     # an invite's game not in the detail
     ("befriend-and-invite", FILE, "		snprintf(detail, (size_t)size, \"%s - %s - %d of %d\"", "		snprintf(detail, (size_t)size, \"%s %s %d of %d\""),
     # roster: a stranger's code asked for friendship
-    ("clean-text", FILE, "		be_answer_set(answer, size, \"A PLAYER'S CODE IS NOT KNOWN HERE. ASK FOR IT: FRIENDS, THEN ADD FRIEND.\");\n		return 0;", "		return 1;"),
+    ("clean-text", FILE, "		be_answer_set(answer, size, \"THAT PLAYER'S CODE IS NOT KNOWN. ASK FOR IT: FRIENDS > ADD FRIEND.\");\n		return 0;", "		return 1;"),
 ]
 
 

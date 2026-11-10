@@ -20,6 +20,16 @@ long config_integer(const char *name)
 #include "screens_mock_code.inc"
 #include "screens_view_code.inc"
 
+static int ascii_clean_lines(char const *text)
+{
+	for (; *text; text++)
+	{
+		if (*text != '\r' && ((unsigned char)*text < 0x20 || (unsigned char)*text > 0x7E || *text == '|'))
+			return 0;
+	}
+	return 1;
+}
+
 static int ascii_clean(char const *text)
 {
 	for (; *text; text++)
@@ -28,6 +38,148 @@ static int ascii_clean(char const *text)
 			return 0;
 	}
 	return 1;
+}
+
+/* a sentence the screens put in a text box of the TV screens: every line (the engine's '\r' breaks them) no wider than the box, no more lines than the box has, no cut ("...") */
+static int sentence_in(int font, float width, int max_lines, char const *text)
+{
+	int lines = 1;
+	char line[256];
+	size_t length = 0;
+
+	if (!text[0] || strstr(text, "..."))
+		return 0;
+	for (;; text++)
+	{
+		if (*text == '\r' || !*text)
+		{
+			line[length] = 0;
+			if (screens_text_width(font, line) > width || !length || line[0] == ' ' || line[length - 1] == ' ')
+				return 0;
+			length = 0;
+			if (!*text)
+				break;
+			if (++lines > max_lines)
+				return 0;
+			continue;
+		}
+		if (length + 1 >= sizeof(line))
+			return 0;
+		line[length++] = *text;
+	}
+	return 1;
+}
+
+static int sentence_ok(char const *text)
+{
+	return ascii_clean_lines(text) && sentence_in(SCREENS_FONT_LARGE, (float)SCREENS_LINE_BOX_WIDTH, SCREENS_LINE_BOX_LINES, text);
+}
+
+/* screens_wrap: whole words, lines of at most the width, the cut the last line gets when it cannot be whole */
+static void wrap_unit(void)
+{
+	char out[256];
+	float w = screens_text_width(SCREENS_FONT_LARGE, "AAAA BBBB");
+	int lines;
+
+	lines = screens_wrap(SCREENS_FONT_LARGE, w, 2, "AAAA BBBB CCCC", out, (int)sizeof(out));
+	CHECK(lines == 2 && !strcmp(out, "AAAA BBBB\rCCCC"), "two lines: %d '%s'", lines, out);
+	lines = screens_wrap(SCREENS_FONT_LARGE, w, 2, "AAAA BBBB", out, (int)sizeof(out));
+	CHECK(lines == 1 && !strcmp(out, "AAAA BBBB"), "a text that fits is one line: %d '%s'", lines, out);
+	lines = screens_wrap(SCREENS_FONT_LARGE, w - 0.1f, 2, "AAAA BBBB", out, (int)sizeof(out));
+	CHECK(lines == 2 && !strcmp(out, "AAAA\rBBBB"), "a text a tenth too wide breaks at the space: %d '%s'", lines, out);
+	lines = screens_wrap(SCREENS_FONT_LARGE, screens_text_width(SCREENS_FONT_LARGE, "AAAA   BBBB"), 2, "   AAAA   BBBB   CCCC  ", out, (int)sizeof(out));
+	CHECK(lines == 2 && !strcmp(out, "AAAA   BBBB\rCCCC"), "spaces inside a line are kept, at the ends and at a break dropped: %d '%s'", lines, out);
+	lines = screens_wrap(SCREENS_FONT_LARGE, w, 2, "AAAA BBBB CCCC DDDD EEEE", out, (int)sizeof(out));
+	CHECK(lines == -2 && strstr(out, "...") && strchr(out, '\r'), "more lines than the box has: the last is cut with dots: %d '%s'", lines, out);
+	lines = screens_wrap(SCREENS_FONT_LARGE, w, 2, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA BBBB", out, (int)sizeof(out));
+	CHECK(lines < 0 && strstr(out, "..."), "a word wider than a line is cut with dots, and said: %d '%s'", lines, out);
+	lines = screens_wrap(SCREENS_FONT_LARGE, w, 1, "AAAA BBBB CCCC", out, (int)sizeof(out));
+	CHECK(lines == -1 && !strchr(out, '\r') && strstr(out, "..."), "one line only: %d '%s'", lines, out);
+	lines = screens_wrap(SCREENS_FONT_LARGE, w, 2, "", out, (int)sizeof(out));
+	CHECK(lines == 0 && !out[0], "no text");
+	lines = screens_wrap(SCREENS_FONT_LARGE, w, 2, "AAAA BBBB CCCC", out, 8);
+	CHECK(strlen(out) < 8, "a small buffer is kept: '%s'", out);
+	lines = screens_wrap(SCREENS_FONT_LARGE, w, 2, NULL, out, (int)sizeof(out));
+	CHECK(lines == 0 && !out[0], "no text at all");
+}
+
+/* every sentence the TV screens write in a detail line, wrapped: whole, in the lines of the box, with the widest name and the biggest numbers */
+static void sentences(void)
+{
+	static char const *const names[] = { "WWWWWWWWWWW", "MMMMMMMMMMM", "ALICE" };
+	struct screens_friends_summary summary;
+	struct screens_roster_summary roster_summary;
+	struct screens_friend_row row;
+	struct screens_roster_row player;
+	struct screens_party_summary party;
+	char text[SCREENS_LINE_SIZE * 2];
+	int name, presence, join, tab, flags, skill, team, service, provider;
+
+	memset(&summary, 0, sizeof(summary));
+	for (name = 0; name < 3; name++)
+	{
+		for (presence = 0; presence < 8; presence++)
+		{
+			for (join = 0; join < 9; join++)
+			{
+				for (tab = 0; tab < SCREENS_TABS; tab += 1)
+				{
+					if (tab == SCREENS_TAB_PARTY)
+						continue;
+					memset(&row, 0, sizeof(row));
+					snprintf(row.name, sizeof(row.name), "%s", names[name]);
+					row.presence = (unsigned char)presence;
+					row.join = (unsigned char)join;
+					row.players = 128;
+					row.maximum = 128;
+					screens_friend_detail(tab, &row, &summary, text, (int)sizeof(text));
+					CHECK(sentence_ok(text), "friend detail %d %d %d: '%s'", presence, join, tab, text);
+				}
+			}
+		}
+	}
+	memset(&roster_summary, 0, sizeof(roster_summary));
+	roster_summary.teams = 1;
+	for (flags = 0; flags < 256; flags++)
+	{
+		for (skill = -1; skill < SCREENS_SKILLS; skill++)
+		{
+			for (team = -1; team <= 1; team++)
+			{
+				memset(&player, 0, sizeof(player));
+				snprintf(player.name, sizeof(player.name), "WWWWWWWWWWW");
+				player.flags = (unsigned short)(flags | (skill >= 0 ? SCREENS_ROW_BOT : 0));
+				player.skill = (signed char)skill;
+				player.team = (signed char)team;
+				player.ping = (short)(flags % 3 ? 12345 : -1);
+				player.score = (short)(flags % 5 ? 32000 : -1);
+				screens_player_detail(&player, &roster_summary, text, (int)sizeof(text));
+				CHECK(sentence_ok(text), "player detail %d %d %d: '%s'", flags, skill, team, text);
+			}
+		}
+	}
+	for (service = 0; service < 4; service++)
+	{
+		for (provider = 0; provider < 2; provider++)
+		{
+			for (tab = 0; tab < SCREENS_TABS; tab++)
+			{
+				summary.service = (unsigned char)service;
+				screens_empty_wrapped(1, tab, &summary, provider, text, (int)sizeof(text));
+				CHECK(sentence_ok(text), "empty %d %d %d: '%s'", service, provider, tab, text);
+			}
+		}
+	}
+	screens_empty_wrapped(0, 0, NULL, 0, text, (int)sizeof(text));
+	CHECK(sentence_ok(text), "no player list: '%s'", text);
+	memset(&party, 0, sizeof(party));
+	party.present = 1;
+	party.size = 8;
+	party.maximum = 8;
+	party.follow = 1;
+	screens_party_head(&party, text, (int)sizeof(text));
+	CHECK(!strstr(text, "...") && screens_text_width(SCREENS_FONT_LARGE, text) <= (float)SCREENS_LINE_BOX_WIDTH, "the party head: '%s'", text);
 }
 
 static void words(void)
@@ -358,7 +510,7 @@ static void friend_cells(void)
 		{
 			row.join = (unsigned char)join;
 			screens_friend_detail(SCREENS_TAB_FRIENDS, &row, &summary, text, (int)sizeof(text));
-			CHECK(text[0] && ascii_clean(text) && screens_text_width(SCREENS_FONT_LARGE, text) <= 520.0f, "detail %d %d: '%s'", index, join, text);
+			CHECK(text[0] && sentence_ok(text), "detail %d %d: '%s'", index, join, text);
 		}
 	}
 	/* the requests */
@@ -811,6 +963,8 @@ static void empty_text(void)
 				summary.service = (unsigned char)service;
 				screens_empty_text(1, tab, &summary, provider, text, (int)sizeof(text));
 				CHECK(text[0] && ascii_clean(text) && screens_text_width(SCREENS_FONT_LARGE, text) <= 520.0f, "empty %d %d %d: '%s'", service, provider, tab, text);
+				screens_empty_wrapped(1, tab, &summary, provider, text, (int)sizeof(text));
+				CHECK(text[0] && sentence_ok(text), "empty, wrapped %d %d %d: '%s'", service, provider, tab, text);
 			}
 		}
 	}
@@ -1186,6 +1340,10 @@ int main(int argc, char **argv)
 		fit_names();
 	else if (!strcmp(name, "fit-columns"))
 		fit_columns();
+	else if (!strcmp(name, "wrap"))
+		wrap_unit();
+	else if (!strcmp(name, "wrap-sentences"))
+		sentences();
 	else if (!strcmp(name, "fit-cut"))
 		fit_cut();
 	else if (!strcmp(name, "player-cells"))
