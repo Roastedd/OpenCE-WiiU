@@ -2596,6 +2596,8 @@ int port_mods_save(void);
 void port_mods_revert(void);
 /* (mods.c) */
 void mods_apply(void);
+/* (menu_store.inl) the mods found again when the mod store changed the mods folder */
+static void store_sync(void);
 
 static struct
 {
@@ -2924,9 +2926,15 @@ chosen */
 static void mods_update(struct widget_instance *list)
 {
 	struct widget_instance *row;
-	struct widget_instance *focused = mod_row(list->focused_child);
-	short count = (short)port_mods_count();
-	short focused_index = focused ? (short)(atoi(focused->name + 7) - 1) : NONE;
+	struct widget_instance *focused;
+	short count;
+	short focused_index;
+
+	/* (the mod store may have changed the mods folder, perhaps after its screen has gone) */
+	store_sync();
+	focused = mod_row(list->focused_child);
+	count = (short)port_mods_count();
+	focused_index = focused ? (short)(atoi(focused->name + 7) - 1) : NONE;
 
 	if (focused_index == MOD_ROWS - 1 && mods_screen.first + MOD_ROWS < count && list_scrolls_at_end())
 	{
@@ -3015,6 +3023,8 @@ has the focus (lobby_browser_source) */
 #define LOBBY_ROWS 11
 
 /* the social screens' (menu_screens.inl, screens.enable): the lobby's tags and keys, the cells' colours and speaker icons */
+/* the mod store's (menu_store.inl): its cells' shades */
+static boolean store_text_color(struct widget_instance *widget, real_argb_color *color);
 static boolean scr_text_color(struct widget_instance *widget, real_argb_color *color);
 static boolean scr_text_box_drawn(struct widget_instance *widget, rectangle2d const *bounds);
 static void scr_lobby_update(struct widget_instance *list, short first, short count, boolean teams);
@@ -4300,7 +4310,7 @@ boolean pc_menu_text_color(struct widget_instance *widget, real_argb_color *colo
 	short ping;
 	unsigned long rgba;
 
-	if (scr_text_color(widget, color))
+	if (scr_text_color(widget, color) || store_text_color(widget, color))
 		return TRUE;
 
 	if (row < 0 || row >= BROWSER_ROWS || strncmp(widget->name, "server_item_", 12))
@@ -8007,6 +8017,7 @@ static void gametype_engine_name(struct widget_instance *text_box)
 }
 
 #include "menu_screens.inl"
+#include "menu_store.inl"
 
 /* ---------- public code */
 
@@ -8059,6 +8070,10 @@ static boolean menu_event_function_invoke(
 			/* (the social screens' functions: menu_screens.inl) */
 			boolean mine, result = scr_event(name, widget, widget_deleted, &mine);
 
+			if (mine)
+				return result;
+			/* (the mod store's: menu_store.inl) */
+			result = store_event(name, widget, &mine);
 			if (mine)
 				return result;
 		}
@@ -8518,7 +8533,7 @@ void pc_menu_game_data_function_invoke(
 	/* (a text field whose screen has gone: let go of) */
 	if (text_field.row && system_milliseconds() - text_field_shown_time > 500)
 		text_field_end(FALSE);
-	if (scr_data(name, widget))
+	if (scr_data(name, widget) || store_data(name, widget))
 		return;
 	if (!strcmp(name, "solo map list update"))
 		level_list_update(widget);

@@ -74,6 +74,12 @@ The game's log is its output: the terminal on Linux, `halo.log` beside
 Limits: 256 mods, folder names of 63 bytes at most, 262144 files in all, 24
 folders deep under `tags`, and 64 maps in a mod's `maps`.
 
+## The mod store
+
+The Mods page's **Store** button (or Y) opens a list of mods that can be downloaded into the mods folder, from a
+signed catalog at the address `mods.store_url` in `config.toml` names (empty by default: no store, and nothing is
+contacted). See `docs/mod_store.md`.
+
 ## The load order
 
 Every mod in the mods folder is on until you turn it off. The mods load in

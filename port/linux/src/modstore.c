@@ -2063,7 +2063,7 @@ static void install_job(struct entry entry)
 	store.changed = 1;
 	pthread_mutex_unlock(&store.lock);
 	states_refresh(job_index_get());
-	say("%s %s %s. TURN IT ON IN THE MODS LIST AND PRESS OK TO PLAY IT", update ? "UPDATED" : "INSTALLED", entry.name, entry.version);
+	say("%s %s %s. IT IS ON IN THE MODS LIST", update ? "UPDATED" : "INSTALLED", entry.name, entry.version);
 	return;
 failed:
 	manifest_free(&manifest);

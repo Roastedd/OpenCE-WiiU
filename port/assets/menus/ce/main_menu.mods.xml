@@ -9,6 +9,7 @@
 	<widget name="main_menu/mods/mods_screen" width="640" height="480" flags="pass_unhandled_to_focused_child pause_game" bitmap="bitmaps/gradient">
 		<on event="b" back="true"/>
 		<on event="back" back="true"/>
+		<on event="y" run="port mods store" open="main_menu/mods/store/store_screen"/>
 		<child widget="main_menu/new_select/sel_list_desc_bkd"/>
 		<child widget="main_menu/mods/mods_list"/>
 		<child widget="main_menu/mods/header_mods"/>
@@ -161,23 +162,193 @@
 	</widget>
 	<widget name="main_menu/mods/button_bar" type="column_list" width="640" height="28" flags="pass_unhandled_to_focused_child left_right_tabs_items">
 		<child widget="main_menu/mods/button_up" y="1"/>
-		<child widget="main_menu/mods/button_down" x="130" y="1"/>
+		<child widget="main_menu/mods/button_down" x="116" y="1"/>
+		<child widget="main_menu/mods/button_store" x="232" y="1"/>
 		<child widget="main_menu/mods/button_ok" x="380" y="1"/>
 		<child widget="common_button_cancel" x="510" y="1"/>
 	</widget>
-	<widget name="main_menu/mods/button_up" type="text" width="128" height="24" bitmap="bitmaps/text_button_background" text="MOVE UP" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
+	<widget name="main_menu/mods/button_up" type="text" width="112" height="24" bitmap="bitmaps/text_button_background" text="MOVE UP" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
 		<on event="a" run="port mods move up"/>
 		<on event="start" run="port mods move up"/>
 		<on event="left_mouse" run="mouse emit accept event"/>
 	</widget>
-	<widget name="main_menu/mods/button_down" type="text" width="128" height="24" bitmap="bitmaps/text_button_background" text="MOVE DOWN" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
+	<widget name="main_menu/mods/button_down" type="text" width="112" height="24" bitmap="bitmaps/text_button_background" text="MOVE DOWN" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
 		<on event="a" run="port mods move down"/>
 		<on event="start" run="port mods move down"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+	</widget>
+	<widget name="main_menu/mods/button_store" type="text" width="112" height="24" bitmap="bitmaps/text_button_background" text="STORE" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
+		<on event="a" run="port mods store" open="main_menu/mods/store/store_screen"/>
+		<on event="start" run="port mods store" open="main_menu/mods/store/store_screen"/>
 		<on event="left_mouse" run="mouse emit accept event"/>
 	</widget>
 	<widget name="main_menu/mods/button_ok" type="text" width="128" height="24" bitmap="bitmaps/text_button_background" string_list="strings/common_button_captions" string_index="1" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
 		<on event="a" run="port mods save" back="true"/>
 		<on event="start" run="port mods save" back="true"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+	</widget>
+	<widget name="main_menu/mods/store/store_screen" width="640" height="480" flags="pass_unhandled_to_focused_child pause_game" bitmap="bitmaps/gradient">
+		<on event="created" run="port store open"/>
+		<on event="deleted" run="port store close"/>
+		<on event="b" back="true"/>
+		<on event="back" back="true"/>
+		<on event="x" run="port store remove"/>
+		<on event="y" run="port store refresh"/>
+		<child widget="main_menu/mods/store/store_list"/>
+		<child widget="main_menu/mods/store/store_title"/>
+		<child widget="main_menu/mods/store/store_head"/>
+		<child widget="main_menu/mods/store/store_empty"/>
+		<child widget="main_menu/mods/store/store_detail"/>
+		<child widget="main_menu/mods/store/store_footer"/>
+	</widget>
+	<widget name="main_menu/mods/store/store_title" type="text" controller="1" left="35" top="14" width="360" height="30" font="ui\large_ui" color="#FF2995FD" text="MOD STORE" text_y="3" text_flags="no_focus_test">
+	</widget>
+	<widget name="main_menu/mods/store/store_head" type="text" controller="1" left="340" top="16" width="226" height="26" font="ui\large_ui" color="#FFFFFFFF" align="right" text_y="3" text_flags="no_focus_test">
+	</widget>
+	<widget name="main_menu/mods/store/store_empty" type="text" controller="1" left="100" top="176" width="440" height="70" font="ui\large_ui" color="#FFFFFFFF" align="center" text_y="4" text_flags="no_focus_test">
+	</widget>
+	<widget name="main_menu/mods/store/store_detail" type="text" controller="1" left="54" top="336" width="512" height="48" font="ui\large_ui" color="#FFFFFFFF" text_y="4" text_flags="no_focus_test">
+	</widget>
+	<widget name="main_menu/mods/store/store_footer" type="text" controller="1" left="54" top="388" width="512" height="22" font="ui\small_ui" color="#FF6CBAFF" text_y="4" text_flags="no_focus_test">
+	</widget>
+	<widget name="main_menu/mods/store/store_list" type="column_list" width="640" height="480" flags="pass_unhandled_to_focused_child up_down_tabs_children">
+		<data input="port store update"/>
+		<child widget="main_menu/mods/store/store_item_1" x="54" y="76"/>
+		<child widget="main_menu/mods/store/store_item_2" x="54" y="104"/>
+		<child widget="main_menu/mods/store/store_item_3" x="54" y="132"/>
+		<child widget="main_menu/mods/store/store_item_4" x="54" y="160"/>
+		<child widget="main_menu/mods/store/store_item_5" x="54" y="188"/>
+		<child widget="main_menu/mods/store/store_item_6" x="54" y="216"/>
+		<child widget="main_menu/mods/store/store_item_7" x="54" y="244"/>
+		<child widget="main_menu/mods/store/store_item_8" x="54" y="272"/>
+		<child widget="main_menu/mods/store/store_item_9" x="54" y="300"/>
+		<child widget="main_menu/mods/store/store_button_bar" y="414"/>
+	</widget>
+	<widget name="main_menu/mods/store/store_item_1" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<on event="a" run="port store row"/>
+		<on event="start" run="port store row"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+		<child widget="main_menu/mods/store/store_cell_name" x="12" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_author" x="184" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_size" x="282" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_status" x="344" y="3"/>
+	</widget>
+	<widget name="main_menu/mods/store/store_item_2" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<on event="a" run="port store row"/>
+		<on event="start" run="port store row"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+		<child widget="main_menu/mods/store/store_cell_name" x="12" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_author" x="184" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_size" x="282" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_status" x="344" y="3"/>
+	</widget>
+	<widget name="main_menu/mods/store/store_item_3" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<on event="a" run="port store row"/>
+		<on event="start" run="port store row"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+		<child widget="main_menu/mods/store/store_cell_name" x="12" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_author" x="184" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_size" x="282" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_status" x="344" y="3"/>
+	</widget>
+	<widget name="main_menu/mods/store/store_item_4" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<on event="a" run="port store row"/>
+		<on event="start" run="port store row"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+		<child widget="main_menu/mods/store/store_cell_name" x="12" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_author" x="184" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_size" x="282" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_status" x="344" y="3"/>
+	</widget>
+	<widget name="main_menu/mods/store/store_item_5" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<on event="a" run="port store row"/>
+		<on event="start" run="port store row"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+		<child widget="main_menu/mods/store/store_cell_name" x="12" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_author" x="184" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_size" x="282" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_status" x="344" y="3"/>
+	</widget>
+	<widget name="main_menu/mods/store/store_item_6" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<on event="a" run="port store row"/>
+		<on event="start" run="port store row"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+		<child widget="main_menu/mods/store/store_cell_name" x="12" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_author" x="184" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_size" x="282" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_status" x="344" y="3"/>
+	</widget>
+	<widget name="main_menu/mods/store/store_item_7" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<on event="a" run="port store row"/>
+		<on event="start" run="port store row"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+		<child widget="main_menu/mods/store/store_cell_name" x="12" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_author" x="184" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_size" x="282" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_status" x="344" y="3"/>
+	</widget>
+	<widget name="main_menu/mods/store/store_item_8" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<on event="a" run="port store row"/>
+		<on event="start" run="port store row"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+		<child widget="main_menu/mods/store/store_cell_name" x="12" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_author" x="184" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_size" x="282" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_status" x="344" y="3"/>
+	</widget>
+	<widget name="main_menu/mods/store/store_item_9" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<on event="a" run="port store row"/>
+		<on event="start" run="port store row"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+		<child widget="main_menu/mods/store/store_cell_name" x="12" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_author" x="184" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_size" x="282" y="3"/>
+		<child widget="main_menu/mods/store/store_cell_status" x="344" y="3"/>
+	</widget>
+	<widget name="main_menu/mods/store/store_cell_name" type="text" width="164" height="22" font="ui\large_ui" color="#FF2896FF" text_y="4" text_flags="no_focus_test">
+	</widget>
+	<widget name="main_menu/mods/store/store_cell_author" type="text" width="94" height="22" font="ui\small_ui" color="#FF2896FF" text_y="5" text_flags="no_focus_test">
+	</widget>
+	<widget name="main_menu/mods/store/store_cell_size" type="text" width="58" height="22" font="ui\small_ui" color="#FF2896FF" align="right" text_y="5" text_flags="no_focus_test">
+	</widget>
+	<widget name="main_menu/mods/store/store_cell_status" type="text" width="154" height="22" font="ui\small_ui" color="#FF2896FF" text_y="5" text_flags="no_focus_test">
+	</widget>
+	<widget name="main_menu/mods/store/store_button_bar" type="column_list" width="640" height="28" flags="pass_unhandled_to_focused_child left_right_tabs_items">
+		<child widget="main_menu/mods/store/store_button_get" x="120" y="1"/>
+		<child widget="main_menu/mods/store/store_button_update" x="120" y="1"/>
+		<child widget="main_menu/mods/store/store_button_stop" x="120" y="1"/>
+		<child widget="main_menu/mods/store/store_button_remove" x="250" y="1"/>
+		<child widget="main_menu/mods/store/store_button_refresh" x="380" y="1"/>
+		<child widget="main_menu/mods/store/store_button_back" x="510" y="1"/>
+	</widget>
+	<widget name="main_menu/mods/store/store_button_get" type="text" width="128" height="24" bitmap="bitmaps/text_button_background" text="DOWNLOAD" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
+		<on event="a" run="port store get"/>
+		<on event="start" run="port store get"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+	</widget>
+	<widget name="main_menu/mods/store/store_button_update" type="text" width="128" height="24" bitmap="bitmaps/text_button_background" text="UPDATE" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
+		<on event="a" run="port store get"/>
+		<on event="start" run="port store get"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+	</widget>
+	<widget name="main_menu/mods/store/store_button_stop" type="text" width="128" height="24" bitmap="bitmaps/text_button_background" text="STOP" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
+		<on event="a" run="port store stop"/>
+		<on event="start" run="port store stop"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+	</widget>
+	<widget name="main_menu/mods/store/store_button_remove" type="text" width="128" height="24" bitmap="bitmaps/text_button_background" text="REMOVE" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
+		<on event="a" run="port store remove"/>
+		<on event="start" run="port store remove"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+	</widget>
+	<widget name="main_menu/mods/store/store_button_refresh" type="text" width="128" height="24" bitmap="bitmaps/text_button_background" text="REFRESH" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
+		<on event="a" run="port store refresh"/>
+		<on event="start" run="port store refresh"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+	</widget>
+	<widget name="main_menu/mods/store/store_button_back" type="text" width="128" height="24" bitmap="bitmaps/text_button_background" text="BACK" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
+		<on event="a" run="mouse emit back event"/>
+		<on event="start" run="mouse emit back event"/>
 		<on event="left_mouse" run="mouse emit accept event"/>
 	</widget>
 </menus>
