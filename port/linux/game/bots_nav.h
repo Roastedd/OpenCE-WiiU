@@ -43,6 +43,8 @@ area and the entry point in the next) is a point of the area, so every leg of a 
 /* the path: links (areas) kept, and the links a bot has found bad at once */
 #define BOTS_NAV_PATH_LINKS 160
 #define BOTS_NAV_BAD_LINKS 8
+/* the links every bot avoids because one found them bad */
+#define BOTS_NAV_SHARED_BAD 16
 
 enum
 {
@@ -212,6 +214,8 @@ struct bots_nav_search
 	float *heap_key;
 	long heap_count;
 	long expanded;
+	/* links no search takes (one byte each, 2 or more for blocked, a count below it): the links the game found do not work, whoever walks them; set by the game, kept for the map */
+	unsigned char *link_blocked;
 };
 
 /* ---------- reading and writing the pack (bytes, little-endian) */
@@ -240,6 +244,8 @@ unsigned char *bots_nav_write_pack(char const *name, unsigned long surfaces, uns
 
 /* the area a point is in (the nearest anchor whose area reaches it, nearest in height first among those); -1 for none */
 long bots_nav_find_area(struct bots_nav const *nav, float const *point);
+/* the areas that reach a point, best first (the order find_area ranks them in): up to `maximum` of them into out; how many */
+long bots_nav_find_areas(struct bots_nav const *nav, float const *point, long *out, long maximum);
 /* the area nearest a point whatever its reach (a goal off the graph is gone to as near as it goes) */
 long bots_nav_nearest_area(struct bots_nav const *nav, float const *point);
 

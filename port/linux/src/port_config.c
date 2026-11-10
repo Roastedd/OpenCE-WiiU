@@ -745,12 +745,18 @@ static const struct config_setting config_settings[] =
 	{ "bots.nav_pack", _config_string, "\"\"", "HALO_BOTS_NAV_PACK", _environment_value, _platform_all,
 		"The navigation pack's path (a real path: the console's card, or a folder on the host). Empty: navs.pack in the\n"
 		"Wii U's app folder, or beside the data folder's maps on the host." },
+	{ "bots.nav_tweaks", _config_integer, "7", "HALO_BOTS_NAV_TWEAKS", _environment_value, _platform_all,
+		"The graph's follower's options (bits: 1 a fighting bot that strafes into a wall strafes the other way, 2 a link a bot found bad is bad for\n"
+		"every bot for 20 s, 4 a jump or a drop that failed for a bot is not taken by any bot for the rest of the map). Only where bots.nav is 1 and\n"
+		"the map's graph is in use. 7: all (the default: what the stuck-seconds table of bots3-result.md measures), 0: none." },
 	{ "bots.nav_sync", _config_integer, "0", "HALO_BOTS_NAV_SYNC", _environment_value, _platform_all,
 		"For tests: 1 reads the navigation record on the game thread at the map's start, so that the graph is in use from\n"
 		"the first tick (the thread's read ends at a time of its own, which no two runs share)." },
 	{ "debug.bots_tour", _config_integer, "0", "HALO_BOTS_TOUR", _environment_value, _platform_all,
 		"For the headless runs: 1 makes the bots meet nobody and go from place to place (each other, the flag stands, the\n"
 		"starting locations, the items); what they reach is in the bots-sim block." },
+	{ "debug.bots_stuck_log", _config_integer, "0", "HALO_BOTS_STUCK_LOG", _environment_value, _platform_all,
+		"For the headless runs: 1 logs each second a bot is found stuck (where, what it was doing, which link of its path)." },
 	{ "debug.bots_bake_nav", _config_string, "\"\"", "HALO_BOTS_BAKE_NAV", _environment_value, _platform_all,
 		"For the navigation bake (tools/harness/bots_nav.py): the file the running map's navigation pack is written to by the\n"
 		"first bot with a unit, after which the game ends. Empty: no bake. Never on the console." },
