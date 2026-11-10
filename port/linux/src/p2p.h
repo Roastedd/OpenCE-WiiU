@@ -178,6 +178,11 @@ it: its first digits only, since players post their logs and an invite lets
 anyone join; the dedicated server's log, its operator's, has it whole */
 const char *p2p_invite_log_text(const char *invite, char *text, int size);
 
+/* whether the game this machine's server holds is a local one (split screen: it takes no connection from another machine). A local game is never hosted for the internet,
+listed, shown to friends as a game to join or given an invite, whatever allowed hosting (p2p_set_hosting_allowed) before. The server sets it as it is made, before it listens,
+and clears it as it goes */
+void p2p_set_game_local(int local);
+
 /* the hosted game's players and the most it takes, which Discord shows
 (0, 0: not hosting; until the game says, the machines the tunnel reaches
 are shown). The game's server calls it as they change (calling it with the

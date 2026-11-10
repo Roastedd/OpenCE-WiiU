@@ -78,6 +78,10 @@ static short transport_server_terminate(void)
 	CHECK(closed == 1 && slept == EXPECTED_SLEEP, "transport terminated before cleanup/required legacy grace");
 	terminated++; note('T'); return 0;
 }
+static void p2p_set_game_local(int local)
+{
+	CHECK(!local, "a server that is gone is not a local game");
+}
 static void p2p_set_game_player_counts(int count, int maximum)
 {
 	struct network_game_server empty = { 0 };

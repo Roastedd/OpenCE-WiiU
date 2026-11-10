@@ -441,6 +441,8 @@ static struct
 	int hosting_socket;
 	int hosting;
 	int hosting_lan_only;
+	/* the game is a local one (split screen: the server takes no remote connections, p2p_set_game_local): never hosted for the internet, whatever listens */
+	int game_local;
 	int has_token;
 	unsigned char token[P2P_TOKEN_SIZE];
 	/* whether the server browser's exit hook is set (lobby_quit) */
@@ -3949,9 +3951,16 @@ static void hosted_player_counts(int *count, int *maximum)
 	*maximum = p2p.game_player_maximum > 0 ? p2p.game_player_maximum : P2P_MAXIMUM_PEERS + 1;
 }
 
+/* whether the game listening is to be hosted for the internet: it listens, may be joined from the internet, and is not a local game (a split screen game on this machine, which
+no one else can join: its server listens as any does, and was once told to friends as a joinable game) */
+static int hosting_wanted(void)
+{
+	return p2p.hosting_socket >= 0 && !p2p.hosting_lan_only && !p2p.game_local;
+}
+
 static void update_hosting(void)
 {
-	int want = p2p.hosting_socket >= 0 && !p2p.hosting_lan_only;
+	int want = hosting_wanted();
 
 	if (want && !p2p.hosting)
 	{
@@ -4134,6 +4143,13 @@ int p2p_invite_link(char *link, int size)
 	snprintf(link, (size_t)size, "%s", hosting ? p2p.invite : "");
 	pthread_mutex_unlock(&p2p_lock);
 	return hosting;
+}
+
+void p2p_set_game_local(int local)
+{
+	pthread_mutex_lock(&p2p_lock);
+	p2p.game_local = local != 0;
+	pthread_mutex_unlock(&p2p_lock);
 }
 
 void p2p_set_game_player_counts(int count, int maximum)

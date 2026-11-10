@@ -358,11 +358,13 @@ static void social_place_make(struct social_place *place)
 {
 	memset(place, 0, sizeof(*place));
 	place->activity = (unsigned char)(social_activity_get() ? social_activity_get() : SOCIAL_MENUS);
-	if (p2p.hosting && p2p.has_token && place->activity != SOCIAL_SOLO)
+	if (p2p.hosting && p2p.has_token && !p2p.game_local && place->activity != SOCIAL_SOLO)
 	{
 		int count, maximum, engine_type, open, in_progress, has_password;
 
-		hosted_player_counts(&count, &maximum);
+		/* (the players the game says and the most it takes; before it says, the machines reached and no most: never the tunnel's 128, which is not the game's) */
+		count = p2p.game_player_maximum > 0 ? p2p.game_player_count : connected_player_count() + 1;
+		maximum = p2p.game_player_maximum > 0 ? p2p.game_player_maximum : 0;
 		p2p_lobby_game_details(place->map, sizeof(place->map), place->gametype, sizeof(place->gametype), &engine_type, &open, &in_progress, &has_password);
 		place->hosting = 1;
 		/* (a game being set up is a lobby, one going is a game) */
@@ -376,7 +378,7 @@ static void social_place_make(struct social_place *place)
 		p2p_key_hash(p2p_public_key(), place->invite_hash);
 		memcpy(place->invite_token, p2p.token, SOCIAL_TOKEN_SIZE);
 		/* (friends can join an internet game that takes players, unless the player turned that off) */
-		place->joinable = (unsigned char)(open && config_boolean("social.friends_can_join"));
+		place->joinable = (unsigned char)(open && maximum > 0 && config_boolean("social.friends_can_join"));
 	}
 }
 

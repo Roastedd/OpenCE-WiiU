@@ -596,13 +596,19 @@ void screens_friend_detail(int tab, struct screens_friend_row const *row, struct
 		switch (row->join)
 		{
 		case SCREENS_JOIN_OPEN:
-			snprintf(line, sizeof(line), "A: JOIN %s'S GAME, %d OF %d.", row->name, row->players, row->maximum);
+			if (row->maximum > 0)
+				snprintf(line, sizeof(line), "A: JOIN %s'S GAME, %d OF %d.", row->name, row->players, row->maximum);
+			else
+				snprintf(line, sizeof(line), "A: JOIN %s'S GAME.", row->name);
 			break;
 		case SCREENS_JOIN_DOWNLOAD:
 			snprintf(line, sizeof(line), "A: JOIN %s'S GAME. THE MAP IS DOWNLOADED FIRST.", row->name);
 			break;
 		case SCREENS_JOIN_FULL:
-			snprintf(line, sizeof(line), "%s'S GAME IS FULL, %d OF %d PLAYERS.", row->name, row->players, row->maximum);
+			if (row->maximum > 0)
+				snprintf(line, sizeof(line), "%s'S GAME IS FULL, %d OF %d PLAYERS.", row->name, row->players, row->maximum);
+			else
+				snprintf(line, sizeof(line), "%s'S GAME IS FULL.", row->name);
 			break;
 		case SCREENS_JOIN_CLOSED:
 			snprintf(line, sizeof(line), "%s'S GAME HAS STARTED OR IS CLOSED.", row->name);

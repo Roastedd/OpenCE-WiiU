@@ -484,6 +484,7 @@ symbols in this file:
 /* port: internet play's Discord presence (port/linux/src/p2p.c), and the
 server browser's listing of a public game (p2p_lobby.c) */
 void p2p_set_game_player_counts(int count, int maximum);
+void p2p_set_game_local(int local);
 void p2p_set_game_listing(const char *name, const char *map, const char *gametype, int engine_type, int kind,
 	int open, int in_progress, int has_teams);
 
@@ -1312,6 +1313,9 @@ struct network_game_server *network_game_server_create(
 
 	if (server != NULL)
 	{
+		/* port: a game that takes no connection from another machine (split screen) is a local one: internet play does not host it, list it or tell friends it can be
+		joined, though its server listens as any does (set before the connection listens) */
+		p2p_set_game_local(!network_game_should_accept_remote_connections());
 		server->connection = network_connection_new(
 			FLAG(_connection_create_server_bit),
 			NETWORK_GAME_SERVER_PORT);
@@ -1479,6 +1483,7 @@ void network_game_server_dispose(
 	network_game_server_memory_do_not_use_directly_in_use = FALSE;
 
 	p2p_set_game_player_counts(0, 0);
+	p2p_set_game_local(FALSE);
 	network_event("network server disposed");
 
 	return;

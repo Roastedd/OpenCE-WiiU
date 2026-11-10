@@ -1277,12 +1277,15 @@ static int scr_social_version(void)
 	return HALO_PORT_NETWORK_VERSION;
 }
 
-/* what friends see this machine doing */
+/* what friends see this machine doing. A split screen game (a game on this machine, with or without bots) has a server and is in "network server" connection as any hosted game is,
+but takes no one else: it is SOLO, in its lobby and in play, never a lobby or a game to join (on the console it was told to friends as a joinable game, "bloodgulch 4/128") */
 static int scr_social_activity(void)
 {
 	void *client = global_network_game_client_get();
 	short data;
 
+	if (network_game_is_splitscreen_local())
+		return SOCIAL_ACTIVITY_SOLO;
 	if (game_in_progress())
 		return game_connection() == _game_connection_local ? SOCIAL_ACTIVITY_SOLO : SOCIAL_ACTIVITY_GAME;
 	if (global_network_game_server_get() || (client && network_game_client_get_state(client, &data) >= _client_state_pregame))
