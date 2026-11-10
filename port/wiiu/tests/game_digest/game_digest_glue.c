@@ -1224,7 +1224,7 @@ long wiiu_study_number(const char *name, long fallback)
 		!strcmp(name, "net_overlap.txt") ? "HALO_NET_OVERLAP" :
 		!strcmp(name, "tick_overlap_save_serial.txt") ? "HALO_TICK_OVERLAP_SAVE_SERIAL" : !strcmp(name, "async_save_revert_image.txt") ? "HALO_ASYNC_SAVE_REVERT_IMAGE" :
 		!strcmp(name, "startup.txt") ? "HALO_STARTUP" :
-		!strcmp(name, "filecount.txt") ? "HALO_FILECOUNT" : !strcmp(name, "menu_cache.txt") ? "HALO_MENU_CACHE" :
+		!strcmp(name, "filecount.txt") ? "HALO_FILECOUNT" : !strcmp(name, "menu_cache.txt") ? "HALO_MENU_CACHE" : !strcmp(name, "directory_cache.txt") ? "HALO_DIRECTORY_CACHE" :
 		!strcmp(name, "stream.txt") ? "HALO_STREAM" : !strcmp(name, "hotpaths.txt") ? "HALO_HOTPATHS" :
 		!strcmp(name, "stream_delay.txt") ? "HALO_STREAM_DELAY" :
 		!strcmp(name, "hud_sheets.txt") ? "HALO_HUD_SHEETS" :

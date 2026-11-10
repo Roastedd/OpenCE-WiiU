@@ -70,6 +70,57 @@ static int counted_stat(const char *path, struct posix_file_information *informa
 	return posix_stat(path, information);
 }
 
+/* ---------- the directories' names, kept (directory_cache.h): on the Wii U only (the card there is not case sensitive, so that a name kept out of date
+changes a path's spelling and nothing else); the digest harness builds it too (HALO_DIRECTORY_CACHE) */
+
+#if defined(HALO_WIIU) || defined(HALO_DIRECTORY_CACHE)
+#define USE_DIRECTORY_CACHE 1
+
+static void *counted_directory_open(const char *path)
+{
+	FILE_COUNT(FILE_COUNT_SCAN, 1);
+	return posix_directory_open(path);
+}
+
+static int counted_directory_next(void *directory, char *name, unsigned long size)
+{
+	int result = posix_directory_next(directory, name, size);
+
+	if (result)
+		FILE_COUNT(FILE_COUNT_SCAN_ENTRY, 1);
+	return result;
+}
+
+static unsigned long long directory_cache_milliseconds(void)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (unsigned long long)now.tv_sec * 1000ull + (unsigned long long)now.tv_nsec / 1000000ull;
+}
+
+#define DIRECTORY_CACHE_OPEN(path) counted_directory_open(path)
+#define DIRECTORY_CACHE_NEXT(handle, name, size) counted_directory_next((handle), (name), (size))
+#define DIRECTORY_CACHE_CLOSE(handle) posix_directory_close(handle)
+#define DIRECTORY_CACHE_NOW() directory_cache_milliseconds()
+#include "directory_cache.h"
+#define DIRECTORY_CACHE_FLUSH() directory_cache_flush()
+
+long wiiu_study_number(const char *name, long fallback);
+
+/* the card's halo/directory_cache.txt (HALO_DIRECTORY_CACHE on the host): 0 reads the directories again for each component of each path, as before, to compare a run */
+static int directory_cache_enabled(void)
+{
+	static volatile int state;
+
+	if (!state)
+		state = wiiu_study_number("directory_cache.txt", 1) != 0 ? 1 : 2;
+	return state == 1;
+}
+#else
+#define DIRECTORY_CACHE_FLUSH() ((void)0)
+#endif
+
 /* ---------- paths */
 
 static BOOL directory_exists(const char *path)
@@ -192,12 +243,18 @@ static void make_directories(const char *path)
 		{
 			partial[index] = '\0';
 			if (!directory_exists(partial))
+			{
 				posix_make_directory(partial);
+				DIRECTORY_CACHE_FLUSH();
+			}
 			partial[index] = '/';
 		}
 	}
 	if (!directory_exists(partial))
+	{
 		posix_make_directory(partial);
+		DIRECTORY_CACHE_FLUSH();
+	}
 }
 
 const char *platform_save_root(void)
@@ -307,8 +364,8 @@ static int translate_elsewhere(const char *cursor, char *resolved, unsigned long
 	return 0;
 }
 
-/* the name in a directory that matches name in any case (the first, in the directory's order), counted; 0 if there is none */
-static int find_entry_case_insensitive(const char *directory, const char *name, char *result, unsigned long result_size)
+/* the name in a directory that matches name in any case (the first, in the directory's order), by reading the directory; 0 if there is none */
+static int scan_entry_case_insensitive(const char *directory, const char *name, char *result, unsigned long result_size)
 {
 	void *stream = posix_directory_open(*directory ? directory : ".");
 	char entry[MAX_PATH];
@@ -333,6 +390,34 @@ static int find_entry_case_insensitive(const char *directory, const char *name, 
 	return found;
 }
 
+/* the name in a directory that matches name in any case: 1, 0 if there is none. exact: 1 when the directory is known to have name as it is (the stat of the exact
+spelling is then not needed), else 0. The directory's names are kept where USE_DIRECTORY_CACHE says. */
+static int find_entry_case_insensitive(const char *directory, const char *name, char *result, unsigned long result_size, int *exact)
+{
+	*exact = 0;
+#ifdef USE_DIRECTORY_CACHE
+	{
+		unsigned long scans = file_count_totals[FILE_COUNT_SCAN];
+		int answer = directory_cache_enabled() ? directory_cache_find(*directory ? directory : ".", name, result, result_size, exact) : -1;
+
+		if (answer >= 0)
+		{
+			if (file_counting && file_count_totals[FILE_COUNT_SCAN] == scans)
+				FILE_COUNT(FILE_COUNT_CACHE_HIT, 1);
+			return answer;
+		}
+		/* (a directory that cannot be read or is too big to keep is read as it was) */
+		*exact = 0;
+	}
+#endif
+	return scan_entry_case_insensitive(directory, name, result, result_size);
+}
+
+#ifdef USE_DIRECTORY_CACHE
+/* the generation of the directories' cache at which each drive's directory was found (+ 1; 0: not yet) */
+static unsigned long drive_known[26];
+#endif
+
 void platform_translate_path(const char *xbox_path, char *host_path, unsigned long host_path_size)
 {
 	char resolved[1024];
@@ -340,14 +425,6 @@ void platform_translate_path(const char *xbox_path, char *host_path, unsigned lo
 	unsigned long length;
 
 	FILE_COUNT(FILE_COUNT_TRANSLATE, 1);
-	if (file_counting > 1 && pthread_equal(pthread_self(), file_counting_thread))
-	{
-		/* (halo/filecount.txt 1000 and more: the first paths the game thread has translated, to see which files a menu function asks for) */
-		static unsigned long said;
-
-		if (said++ < 400)
-			platform_log("files: path %s", xbox_path);
-	}
 	snprintf(resolved, sizeof(resolved), "%s", platform_data_root());
 	if (((cursor[0] >= 'a' && cursor[0] <= 'z') || (cursor[0] >= 'A' && cursor[0] <= 'Z')) && cursor[1] == ':')
 	{
@@ -367,8 +444,23 @@ void platform_translate_path(const char *xbox_path, char *host_path, unsigned lo
 
 			snprintf(resolved, sizeof(resolved), "%s/%c", platform_save_root(), drive);
 			/* every Xbox drive always exists; create its directory on first use */
-			if (counted_stat(resolved, &information) != 0)
-				posix_make_directory(resolved);
+#ifdef USE_DIRECTORY_CACHE
+			/* (known to be there since the last file or directory made or removed: not asked again for each path) */
+			if (drive >= 'a' && drive <= 'z' && drive_known[drive - 'a'] == directory_cache_generation + 1)
+				;
+			else
+#endif
+			{
+				if (counted_stat(resolved, &information) != 0)
+				{
+					posix_make_directory(resolved);
+					DIRECTORY_CACHE_FLUSH();
+				}
+#ifdef USE_DIRECTORY_CACHE
+				if (drive >= 'a' && drive <= 'z')
+					drive_known[drive - 'a'] = directory_cache_generation + 1;
+#endif
+			}
 		}
 		cursor += 2;
 	}
@@ -378,6 +470,7 @@ void platform_translate_path(const char *xbox_path, char *host_path, unsigned lo
 		char component[256];
 		char on_disk[256];
 		unsigned long component_length = 0;
+		int name_is_exact;
 
 		while (*cursor == '\\' || *cursor == '/')
 			cursor++;
@@ -391,15 +484,22 @@ void platform_translate_path(const char *xbox_path, char *host_path, unsigned lo
 			continue;
 
 		FILE_COUNT(FILE_COUNT_COMPONENT, 1);
-		if (find_entry_case_insensitive(resolved, component, on_disk, sizeof(on_disk)))
+		if (find_entry_case_insensitive(resolved, component, on_disk, sizeof(on_disk), &name_is_exact))
 		{
 			/* prefer an exact match when several spellings exist */
 			char exact[1100];
 			struct posix_file_information information;
 
-			snprintf(exact, sizeof(exact), "%s/%s", resolved, component);
-			if (counted_stat(exact, &information) == 0)
+			if (name_is_exact)
+			{
 				snprintf(on_disk, sizeof(on_disk), "%s", component);
+			}
+			else
+			{
+				snprintf(exact, sizeof(exact), "%s/%s", resolved, component);
+				if (counted_stat(exact, &information) == 0)
+					snprintf(on_disk, sizeof(on_disk), "%s", component);
+			}
 		}
 		else
 		{
@@ -409,6 +509,14 @@ void platform_translate_path(const char *xbox_path, char *host_path, unsigned lo
 		snprintf(resolved + length, sizeof(resolved) - length, "/%s", on_disk);
 	}
 	snprintf(host_path, host_path_size, "%s", resolved);
+	if (file_counting > 1 && pthread_equal(pthread_self(), file_counting_thread))
+	{
+		/* (halo/filecount.txt 1000 and more: the first paths the game thread has translated, to see which files a menu function asks for) */
+		static unsigned long said;
+
+		if (said++ < 400)
+			platform_log("files: path %s -> %s", xbox_path, host_path);
+	}
 }
 
 /* ---------- the maps folder's maps */
@@ -646,6 +754,8 @@ HANDLE WINAPI CreateFileA(LPCSTR file_name, DWORD desired_access, DWORD share_mo
 	file->descriptor = descriptor;
 	snprintf(file->path, sizeof(file->path), "%s", path);
 	FILE_COUNT(FILE_COUNT_OPEN, 1);
+	if (!existed && (flags & O_CREAT))
+		DIRECTORY_CACHE_FLUSH();
 
 	/* Win32 reports whether an OPEN_ALWAYS/CREATE_ALWAYS target existed */
 	SetLastError((existed && (creation_disposition == OPEN_ALWAYS || creation_disposition == CREATE_ALWAYS)) ?
@@ -1153,6 +1263,7 @@ BOOL WINAPI DeleteFileA(LPCSTR file_name)
 		platform_set_last_error_from_errno(errno);
 		return FALSE;
 	}
+	DIRECTORY_CACHE_FLUSH();
 	return TRUE;
 }
 
@@ -1173,6 +1284,7 @@ BOOL WINAPI MoveFileA(LPCSTR existing_file_name, LPCSTR new_file_name)
 		platform_set_last_error_from_errno(errno);
 		return FALSE;
 	}
+	DIRECTORY_CACHE_FLUSH();
 	return TRUE;
 }
 
@@ -1222,6 +1334,7 @@ BOOL WINAPI CopyFileA(LPCSTR existing_file_name, LPCSTR new_file_name, BOOL fail
 	}
 	close(source);
 	close(destination);
+	DIRECTORY_CACHE_FLUSH();
 	return success;
 }
 
@@ -1236,6 +1349,7 @@ BOOL WINAPI CreateDirectoryA(LPCSTR path_name, LPSECURITY_ATTRIBUTES security_at
 		platform_set_last_error_from_errno(errno);
 		return FALSE;
 	}
+	DIRECTORY_CACHE_FLUSH();
 	return TRUE;
 }
 
@@ -1249,6 +1363,7 @@ BOOL WINAPI RemoveDirectoryA(LPCSTR path_name)
 		platform_set_last_error_from_errno(errno);
 		return FALSE;
 	}
+	DIRECTORY_CACHE_FLUSH();
 	return TRUE;
 }
 
