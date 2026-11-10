@@ -277,7 +277,7 @@ static int scr_game_bots_change(int delta, int team, int skill, long machine, ch
 
 	if (!scr_game_players(&game, &state) || !global_network_game_server_get())
 	{
-		scr_answer(answer, size, "BOTS CAN BE CHANGED BY THE HOST OF THE GAME.");
+		scr_answer(answer, size, "BOTS ARE ONLY FOR A LOCAL GAME ON THIS MACHINE, NOT ONLINE PLAY.");
 		return 0;
 	}
 	if (scr_game_bots_hosted() && state >= _client_state_pregame)
@@ -315,9 +315,20 @@ static int scr_game_bots_change(int delta, int team, int skill, long machine, ch
 		}
 		return 1;
 	}
-	if (state != _client_state_pregame || !network_game_is_splitscreen_local())
+	/* (what is true of bots today: they play in a game on this machine, set in its lobby before it starts; a game this machine hosts for others has none unless bots.online is on) */
+	if (!network_game_is_splitscreen_local())
 	{
-		scr_answer(answer, size, "BOTS CAN BE CHANGED IN THE LOBBY OF A GAME ON THIS MACHINE.");
+		scr_answer(answer, size, "BOTS ARE NOT USED IN HOSTED OR ONLINE GAMES, ONLY IN A LOCAL GAME.");
+		return 0;
+	}
+	if (state != _client_state_pregame)
+	{
+		scr_answer(answer, size, "BOTS ARE CHANGED IN THE LOBBY, BEFORE THE GAME STARTS.");
+		return 0;
+	}
+	if (!bots_game_allowed(game->variant.game_engine_index))
+	{
+		scr_answer(answer, size, "THIS GAME TYPE CANNOT HAVE BOTS YET. SLAYER CAN.");
 		return 0;
 	}
 	if (wanted + delta < 0 || wanted + delta > MIN(BOTS_MAXIMUM, maximum))
