@@ -284,6 +284,7 @@ setting saves, not the parity check. */
 extern unsigned long render_governor_counts[RENDER_GOVERNOR_COUNTS];
 
 #define PASSES_MAX 14
+void game_digest_passtime_enable(void);
 static const char *const pass_names[PASSES_MAX] = { "visibility", "begin", "sky", "objects", "lightmaps", "shadows", "decals", "specular", "transparent",
 	"effects", "detail", "hud", "end", "window_end" };
 static struct
@@ -588,6 +589,8 @@ __attribute__((constructor)) static void sink_start(void)
 	if (!sink.frame_limit && !sink.tick_limit)
 		sink.frame_limit = 100;
 	sink.frames = sink_open("frames.txt");
+	if (getenv("GAME_DIGEST_PASSTIME") && *getenv("GAME_DIGEST_PASSTIME") && strcmp(getenv("GAME_DIGEST_PASSTIME"), "0"))
+		game_digest_passtime_enable();
 	if (getenv("GAME_DIGEST_PASSES") && *getenv("GAME_DIGEST_PASSES") && strcmp(getenv("GAME_DIGEST_PASSES"), "0"))
 	{
 		passes.on = 1;
@@ -1436,10 +1439,79 @@ unsigned long render_governor_pass_milliseconds(double milliseconds[13])
 /* wiiu_render_passes.c and d3d8_gx2.c's frame parts: the console's timing log */
 void halo_render_marker(char const *name);
 
+/* GAME_DIGEST_PASSTIME=1: the game thread's CPU time in each render pass (CLOCK_THREAD_CPUTIME_ID, which under qemu-user follows the instructions the
+guest thread runs: a count of instructions, not a timing of the Espresso), as passtime.txt: a line every 100 frames, cumulative, "frames N | pass seconds ... |
+out seconds" ("out" is the game thread's time between the end mark of one frame and the first of the next: the ticks of a serial loop, the loop's own work and the
+file layer). Marks 0 to 13 are the game's (source/render/render.c); a study may put marks of 14 to 31 of its own (RENDER_PASS(n)) to split a pass, named "mN". */
+#define PASSTIME_MAX 32
+static struct
+{
+	int on;
+	int last; /* the mark the thread is in, PASSTIME_MAX for outside a frame */
+	long frames;
+	double at;
+	double sum[PASSTIME_MAX + 1];
+	FILE *file;
+} passtime = { .last = PASSTIME_MAX };
+
+static double passtime_now(void)
+{
+	struct timespec t;
+
+	clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
+	return (double)t.tv_sec + (double)t.tv_nsec * 1.0e-9;
+}
+
 void wiiu_render_pass(int pass)
 {
 	if (passes.on && pass >= 0 && pass < PASSES_MAX)
 		halo_render_marker(pass_names[pass]);
+	if (passtime.on && pass >= 0 && pass < PASSTIME_MAX)
+	{
+		double now = passtime_now();
+
+		if (!passtime.file)
+		{
+			passtime.file = sink_open("passtime.txt");
+			passtime.at = now;
+		}
+		passtime.sum[passtime.last] += now - passtime.at;
+		passtime.at = now;
+		/* the last mark ends the frame: what follows it is "out" until the next frame's first mark */
+		if (pass == PASSES_MAX - 1)
+		{
+			passtime.last = PASSTIME_MAX;
+			passtime.frames++;
+		}
+		else
+			passtime.last = pass;
+		if (pass == 0 && passtime.frames && passtime.frames % 100 == 0)
+		{
+			int i;
+
+			fprintf(passtime.file, "frames %ld", passtime.frames);
+			for (i = 0; i <= PASSTIME_MAX; i++)
+			{
+				char name[16];
+
+				if (i < PASSES_MAX)
+					snprintf(name, sizeof(name), "%s", pass_names[i]);
+				else if (i < PASSTIME_MAX)
+					snprintf(name, sizeof(name), "m%d", i);
+				else
+					snprintf(name, sizeof(name), "out");
+				if (passtime.sum[i] != 0.0 || i < PASSES_MAX)
+					fprintf(passtime.file, " | %s %.6f", name, passtime.sum[i]);
+			}
+			fprintf(passtime.file, "\n");
+			fflush(passtime.file);
+		}
+	}
+}
+
+void game_digest_passtime_enable(void)
+{
+	passtime.on = 1;
 }
 
 /* wiiu_render_passes.c's: the part of the rendering a frame stayed longest in, for the hitch note; the host does not time it */
