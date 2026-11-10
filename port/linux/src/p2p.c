@@ -3553,6 +3553,8 @@ static int parse_invite(const char *text, unsigned char *host_hash, unsigned cha
 (p2p_join_listing), till another invite is joined: its identifier */
 static unsigned char listed_host[P2P_IDENTIFIER_SIZE];
 static int listed_host_known;
+/* ... and its invite's two halves, which the friends layer tells friends and the party (a public game is the way in for those who follow) */
+static unsigned char listed_host_hash[P2P_KEY_HASH_SIZE], listed_host_token[P2P_TOKEN_SIZE];
 /* the listing joined is a dedicated server's that a master server lists (an
 approved operator's, by its key: a player's host cannot say it is one) */
 static int listed_host_dedicated;
@@ -3680,6 +3682,8 @@ int p2p_join_listing(const struct p2p_listing *listing)
 	if (parse_invite(listing->invite, hash, token) > 0)
 	{
 		p2p_identifier_from_hash(hash, listed_host);
+		memcpy(listed_host_hash, hash, sizeof(listed_host_hash));
+		memcpy(listed_host_token, token, sizeof(listed_host_token));
 		listed_host_known = 1;
 		listed_host_dedicated = listing->dedicated && listing->master;
 		listed_host_master_count = listing->master ? listing->master_key_id_count : 0;
@@ -3703,6 +3707,18 @@ int p2p_joined_listed_host(void)
 	reached = peer && peer->connected;
 	pthread_mutex_unlock(&p2p_lock);
 	return reached;
+}
+
+/* the invite of the public game joined and reached (the friends layer's place, under p2p_lock on the p2p thread): 1 and its two halves, else 0 */
+static int joined_listed_invite_locked(unsigned char *hash, unsigned char *token)
+{
+	struct peer *peer = listed_host_known ? find_peer(listed_host) : NULL;
+
+	if (!peer || !peer->connected)
+		return 0;
+	memcpy(hash, listed_host_hash, sizeof(listed_host_hash));
+	memcpy(token, listed_host_token, sizeof(listed_host_token));
+	return 1;
 }
 
 int p2p_joined_listed_dedicated(void)

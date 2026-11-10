@@ -576,6 +576,41 @@ static void host_place(struct fake_node *node, int token)
 	social_front_set_place(node->front, &place);
 }
 
+/* the leader JOINS a public game (hosts nothing): its way in is the party's game, and the members are to follow; when it leaves the game the block goes */
+static void case_follow_joined(void)
+{
+	static struct fake_net net;
+	struct fake_node *a, *b;
+	struct social_join_target target;
+	struct social_place place;
+	unsigned int order;
+
+	fake_start(&net, 61);
+	a = fake_add(&net, 0, 1);
+	b = fake_add(&net, 0, 1);
+	form_party(&net, 2);
+	WAIT_FOR(&net, 30000, members_seen(a) == 2 && members_seen(b) == 2, "two");
+	host_place(a, 0x33);
+	memset(&place, 0, sizeof(place));
+	place.activity = SOCIAL_GAME;
+	place.hosting = 0;
+	place.has_invite = 1;
+	place.joinable = 1;
+	strcpy(place.map, "chillout");
+	strcpy(place.gametype, "CTF");
+	place.players = 5;
+	place.maximum_players = 16;
+	memset(place.invite_hash, 0x3C, 16);
+	memset(place.invite_token, 0xC3, 16);
+	social_front_set_place(a->front, &place);
+	WAIT_FOR(&net, 8000, social_front_follow(b->front, &target, &order), "the member is to follow a joined game");
+	CHECK(target.host_hash[0] == 0x3C && target.token[0] == 0xC3 && !strcmp(target.map, "chillout") && target.players == 5, "the joined game: %s %d", target.map, target.players);
+	/* the leader leaves it: nothing to follow */
+	place.activity = SOCIAL_MENUS;
+	social_front_set_place(a->front, &place);
+	WAIT_FOR(&net, 8000, !snap(b, 0)->party.game_present, "the game is gone from the party");
+}
+
 static void case_follow(void)
 {
 	static struct fake_net net;
@@ -910,6 +945,8 @@ int main(int argc, char **argv)
 		case_open_party();
 	else if (!strcmp(name, "partition"))
 		case_partition();
+	else if (!strcmp(name, "follow-joined"))
+		case_follow_joined();
 	else if (!strcmp(name, "follow"))
 		case_follow();
 	else if (!strcmp(name, "abuse"))

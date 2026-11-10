@@ -353,6 +353,22 @@ void social_p2p_heard(const char *topic, const unsigned char *payload, int size)
 		social_front_heard(social.front, topic, payload, size);
 }
 
+/* the game this machine has joined, as the game says (social_set_joined_game, the game's thread); under p2p_lock */
+static struct
+{
+	int valid;
+	struct social_joined_game game;
+} joined;
+
+void social_set_joined_game(const struct social_joined_game *game)
+{
+	pthread_mutex_lock(&p2p_lock);
+	joined.valid = game != NULL;
+	if (game)
+		joined.game = *game;
+	pthread_mutex_unlock(&p2p_lock);
+}
+
 /* what the machine is doing and could be joined at: the game's word (social_set_activity), and what internet play knows of the game hosted. Under p2p_lock */
 static void social_place_make(struct social_place *place)
 {
@@ -380,6 +396,25 @@ static void social_place_make(struct social_place *place)
 		memcpy(place->invite_token, p2p.token, SOCIAL_TOKEN_SIZE);
 		/* (friends can join a public internet game that takes players, unless the player turned that off; a private one only when they are invited) */
 		place->joinable = (unsigned char)(open && maximum > 0 && !place->private_game && config_boolean("social.friends_can_join"));
+	}
+	else if (joined.valid && !p2p.hosting && place->activity != SOCIAL_SOLO && (place->activity == SOCIAL_GAME || place->activity == SOCIAL_LOBBY))
+	{
+		/* a public game this machine joined from the server browser and has reached: its way in is the party's and the friends' too (a game joined by an invitation is private, and not told) */
+		unsigned char hash[SOCIAL_HASH_SIZE], token[SOCIAL_TOKEN_SIZE];
+
+		if (joined_listed_invite_locked(hash, token))
+		{
+			snprintf(place->map, sizeof(place->map), "%s", joined.game.map);
+			snprintf(place->gametype, sizeof(place->gametype), "%s", joined.game.gametype);
+			place->players = joined.game.players;
+			place->maximum_players = joined.game.maximum_players;
+			place->engine_type = joined.game.engine_type;
+			place->has_invite = 1;
+			memcpy(place->invite_hash, hash, SOCIAL_HASH_SIZE);
+			memcpy(place->invite_token, token, SOCIAL_TOKEN_SIZE);
+			place->joinable = (unsigned char)(joined.game.open && joined.game.maximum_players > 0 && joined.game.players < joined.game.maximum_players &&
+				config_boolean("social.friends_can_join"));
+		}
 	}
 }
 

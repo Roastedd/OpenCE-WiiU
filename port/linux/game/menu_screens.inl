@@ -1471,6 +1471,40 @@ static int scr_social_activity(void)
 	return SOCIAL_ACTIVITY_MENUS;
 }
 
+/* the public game this machine has joined, told to the friends layer twice a second (its map, type, players, most and whether it still takes players), and cleared when this machine is not in one:
+with the way in that internet play keeps of a game joined from the server browser, friends and the party see it as a game to join. A game this machine hosts is told by internet play itself. */
+static void scr_joined_report(unsigned long now)
+{
+	static unsigned long last;
+	static boolean told;
+	void *client = global_network_game_client_get();
+	struct network_game *game;
+	short state, data;
+
+	if (now - last < 500 && last)
+		return;
+	last = now ? now : 1;
+	if (client && !global_network_game_server_get() && (state = network_game_client_get_state(client, &data)) >= _client_state_pregame && (game = network_game_client_get_game(client)) != NULL)
+	{
+		struct social_joined_game info;
+
+		memset(&info, 0, sizeof(info));
+		snprintf(info.map, sizeof(info.map), "%s", tag_name_strip_path(game->map.name));
+		text_safe_name(info.gametype, (short)sizeof(info.gametype), game->variant.human_readable_game_description, NUMBEROF(game->variant.human_readable_game_description), "");
+		info.players = (unsigned char)MIN(255, game->player_count);
+		info.maximum_players = (unsigned char)MIN(255, game->maximum_players);
+		info.engine_type = (unsigned char)MAX(0, MIN(255, game->variant.game_engine_index));
+		info.open = game->player_count < game->maximum_players;
+		social_set_joined_game(&info);
+		told = TRUE;
+	}
+	else if (told)
+	{
+		told = FALSE;
+		social_set_joined_game(NULL);
+	}
+}
+
 void menu_screens_social_frame(void)
 {
 	static boolean started;
@@ -1506,6 +1540,7 @@ void menu_screens_social_frame(void)
 		else
 			scr_log("friends are on (screens.enable %d: no friends screens)", screens_enabled());
 	}
+	scr_joined_report(now);
 	activity = scr_social_activity();
 	if (activity != told_activity)
 	{

@@ -1295,7 +1295,8 @@ void social_party_update(struct social_engine *engine)
 		party->leader_heard = now;
 		/* the game it hosts: a new one counts */
 		const struct social_place *place = &engine->place;
-		int present = place->hosting && place->has_invite && place->joinable && place->activity != SOCIAL_SOLO;
+		/* (the game it hosts, or the public game it has joined: either has an invite to follow) */
+		int present = place->has_invite && place->joinable && place->activity != SOCIAL_SOLO;
 
 		if (present)
 		{

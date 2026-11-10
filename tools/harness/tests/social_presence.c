@@ -24,6 +24,16 @@ static struct
 } p2p;
 static int configured_friends_can_join = 1;
 static int activity_told;
+static struct { int valid; struct social_joined_game game; } joined;
+static int joined_reached;
+static int joined_listed_invite_locked(unsigned char *hash, unsigned char *token)
+{
+	if (!joined_reached)
+		return 0;
+	memset(hash, 0x3C, SOCIAL_HASH_SIZE);
+	memset(token, 0xC3, SOCIAL_TOKEN_SIZE);
+	return 1;
+}
 static int lobby_open = 1, lobby_in_progress, lobby_listed = 1, lobby_password;
 
 static int connected_player_count(void)
@@ -203,6 +213,54 @@ int main(int argc, char **argv)
 		lobby_open = 0;
 		social_place_make(&place);
 		CHECK(!place.joinable && !place.private_game && place.players == 16 && place.maximum_players == 16, "full public: joinable %d", place.joinable);
+	}
+	else CASE("joined-public")
+	{
+		/* a public game this machine joined and reached: friends and the party get its way in (map, type, players, most), though this machine hosts nothing */
+		memset(&p2p, 0, sizeof(p2p));
+		joined.valid = 1;
+		snprintf(joined.game.map, sizeof(joined.game.map), "chillout");
+		snprintf(joined.game.gametype, sizeof(joined.game.gametype), "CTF");
+		joined.game.players = 6;
+		joined.game.maximum_players = 16;
+		joined.game.engine_type = 2;
+		joined.game.open = 1;
+		activity_told = SOCIAL_GAME;
+		joined_reached = 1;
+		social_place_make(&place);
+		CHECK(!place.hosting && place.has_invite && place.joinable && !strcmp(place.map, "chillout") && !strcmp(place.gametype, "CTF") && place.players == 6 && place.maximum_players == 16 &&
+			place.invite_hash[0] == 0x3C && place.invite_token[0] == 0xC3, "joined: invite %d joinable %d map %s %d of %d", place.has_invite, place.joinable, place.map, place.players, place.maximum_players);
+		/* not reached (a game joined by an invitation has no such way in; or the host is not yet reached) */
+		joined_reached = 0;
+		social_place_make(&place);
+		CHECK(!place.has_invite && !place.joinable, "not reached: no way in told");
+		joined_reached = 1;
+		/* a full game has the way in told, and is not joinable */
+		joined.game.players = 16;
+		social_place_make(&place);
+		CHECK(place.has_invite && !place.joinable && place.players == 16, "a full game: joinable %d", place.joinable);
+		joined.game.players = 6;
+		joined.game.open = 0;
+		social_place_make(&place);
+		CHECK(!place.joinable, "a game not taking players");
+		joined.game.open = 1;
+		configured_friends_can_join = 0;
+		social_place_make(&place);
+		CHECK(!place.joinable, "friends cannot join");
+		configured_friends_can_join = 1;
+		/* the menus, and a campaign, tell nothing */
+		activity_told = SOCIAL_MENUS;
+		social_place_make(&place);
+		CHECK(!place.has_invite && !place.joinable, "in the menus");
+		activity_told = SOCIAL_SOLO;
+		social_place_make(&place);
+		CHECK(!place.has_invite && !place.joinable, "solo");
+		/* a game it hosts is its own, not the joined one */
+		activity_told = SOCIAL_LOBBY;
+		hosted_game(2, 8);
+		social_place_make(&place);
+		CHECK(place.hosting && place.maximum_players == 8 && place.invite_hash[0] != 0x3C, "hosting wins");
+		joined.valid = 0;
 	}
 	else CASE("menus-after-a-game")
 	{

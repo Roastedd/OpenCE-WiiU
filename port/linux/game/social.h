@@ -311,6 +311,18 @@ void social_set_accept_requests(int accept);
 internet play adds where the game is hosted and how to join it. Cheap: call it when it changes. */
 void social_set_activity(int activity);
 
+/* The public game this machine has joined, as the game knows it (a client's game: its map, type, players, most and whether it still takes players), told every half second while this machine
+is in one and cleared with NULL when it is not. With the way into the game that internet play keeps of a game joined from the server browser, it makes friends' JOIN and the party's leader's
+game (the followers join it). A game joined by an invitation has no such way, and is not told. */
+struct social_joined_game
+{
+	char map[SOCIAL_MAP_SIZE + 1];
+	char gametype[SOCIAL_GAMETYPE_SIZE + 1];
+	unsigned char players, maximum_players, engine_type;
+	int open;
+};
+void social_set_joined_game(const struct social_joined_game *game);
+
 /* ---------- events (toasts) */
 
 enum

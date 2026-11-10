@@ -259,7 +259,7 @@ static void be_friend_row(struct social_friend_info const *info, struct screens_
 	row->presence = (unsigned char)be_presence_of(info);
 	row->party = (unsigned char)(info->in_party != 0);
 	row->key = (long)info->id;
-	if (info->online && info->hosting && (info->activity == SOCIAL_ACTIVITY_LOBBY || info->activity == SOCIAL_ACTIVITY_GAME))
+	if (info->online && (info->hosting || info->joinable) && (info->activity == SOCIAL_ACTIVITY_LOBBY || info->activity == SOCIAL_ACTIVITY_GAME))
 	{
 		row->players = (short)info->players;
 		row->maximum = (short)info->maximum_players;
