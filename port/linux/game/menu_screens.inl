@@ -1472,6 +1472,12 @@ static int scr_flow_open_list(void *user)
 	return ui_widget_port_open_over_top(SCR_JOIN_NAME) ? 1 : 0;
 }
 
+static void scr_flow_log(void *user, char const *text)
+{
+	(void)user;
+	scr_log("%s", text);
+}
+
 static int scr_map_downloads(void)
 {
 	return config_boolean("network.map_download") ? 1 : 0;
@@ -1615,7 +1621,7 @@ void menu_screens_social_frame(void)
 		social_join_set_game_hooks(lobby_browser_map_state, scr_game_ready, scr_game_busy);
 		social_join_set_map_download_hook(scr_map_downloads);
 		{
-			struct social_flow_world world = { NULL, scr_flow_now, scr_flow_busy, scr_flow_menus_up, scr_flow_screen, scr_flow_leave, scr_flow_open_list };
+			struct social_flow_world world = { NULL, scr_flow_now, scr_flow_busy, scr_flow_menus_up, scr_flow_screen, scr_flow_leave, scr_flow_open_list, scr_flow_log };
 
 			social_flow_set_world(&world);
 		}
@@ -1634,6 +1640,8 @@ void menu_screens_social_frame(void)
 	{
 		told_activity = activity;
 		social_set_activity(activity);
+		scr_log("social: this machine tells friends it is %s", activity == SOCIAL_ACTIVITY_MENUS ? "in the menus" : activity == SOCIAL_ACTIVITY_LOBBY ? "in a lobby" : activity == SOCIAL_ACTIVITY_GAME ? "in a game" :
+			activity == SOCIAL_ACTIVITY_SOLO ? "playing alone" : "busy");
 	}
 	/* (the first profile's name, unless social.name says another. The profile is read from the card: when the player's profile is another one than last time, else every half minute in
 	the menus, and never in a game once it has been read, so that no frame waits for the card) */

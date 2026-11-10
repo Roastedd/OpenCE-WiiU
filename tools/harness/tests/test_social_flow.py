@@ -60,6 +60,8 @@ FAULTS = [
     ("follow", "social_party.c", "	if (engine->place.activity != SOCIAL_MENUS && engine->place.activity != SOCIAL_BUSY && engine->place.activity != SOCIAL_LOBBY)\n		return 0;", "	(void)engine->place.activity;"),
     # follow off ignored
     ("follow-off", "social_party.c", "|| !party->auto_follow ||", "||"),
+    # the log says nothing of the leave
+    ("leave-and-join", FILE, "			flow_log(\"flow: the menus are up; the invitation's game is joined\");\n", ""),
     # downloads off not told
     ("invite-checks", FILE, "		if (map && map[0] && hook_map_download && !hook_map_download())", "		if (0)"),
 ]

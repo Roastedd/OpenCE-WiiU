@@ -87,6 +87,15 @@ static int world_leave(void *user)
 	return 1;
 }
 
+static char flow_log_text[4096];
+
+static void world_log(void *user, const char *text)
+{
+	(void)user;
+	strncat(flow_log_text, text, sizeof(flow_log_text) - strlen(flow_log_text) - 2);
+	strcat(flow_log_text, "\n");
+}
+
 static int world_open_list(void *user)
 {
 	(void)user;
@@ -227,6 +236,8 @@ static void world_start(void)
 	flow_world.screen = world_screen;
 	flow_world.leave = world_leave;
 	flow_world.open_list = world_open_list;
+	flow_world.log = world_log;
+	flow_log_text[0] = 0;
 	social_flow_set_world(&flow_world);
 }
 
@@ -380,6 +391,9 @@ static void case_leave_and_join(void)
 	world.busy = 1;
 	step(1);
 	CHECK(status_now().state == SOCIAL_JOIN_IDLE, "done once joined: %d", status_now().state);
+	/* the log says what the flow did, for a console run to read */
+	CHECK(strstr(flow_log_text, "the game is left first") && strstr(flow_log_text, "the menus are up; the invitation's game is joined") && strstr(flow_log_text, "A pressed for the game\n") &&
+		strstr(flow_log_text, "A pressed for the game again") && strstr(flow_log_text, "the join is done"), "the log: %s", flow_log_text);
 }
 
 /* a game that cannot be joined is not worth leaving this one for */

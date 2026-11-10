@@ -193,6 +193,8 @@ struct social_flow_world
 	int (*leave)(void *user);
 	/* open the Direct Link list over the screen on top; 1 if it was opened */
 	int (*open_list)(void *user);
+	/* a line for the log (what the flow did, not a line a frame); NULL: none */
+	void (*log)(void *user, const char *text);
 };
 
 void social_flow_set_world(const struct social_flow_world *world);

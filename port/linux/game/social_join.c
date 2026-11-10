@@ -476,6 +476,12 @@ static struct
 	const char *waiting;
 } flow;
 
+static void flow_log(const char *text)
+{
+	if (flow.have && flow.world.log)
+		flow.world.log(flow.world.user, text);
+}
+
 void social_flow_set_world(const struct social_flow_world *world)
 {
 	memset(&flow, 0, sizeof(flow));
@@ -533,6 +539,7 @@ int social_flow_leave_and_join_invite(unsigned int invite_id)
 			if (global_machine.state == SOCIAL_JOIN_WORKING)
 				social_join_machine_cancel(&global_machine);
 			flow.pending = invite->target;
+			flow_log("flow: an invitation answered in a game: the game is left first");
 			flow.leaving = 1;
 			flow.leave_started = flow.world.now(flow.world.user);
 			flow.waiting = "Leaving your game...";
@@ -559,6 +566,7 @@ int social_flow_press_allowed(void)
 	if (flow.presses >= FLOW_PRESS_MAXIMUM)
 	{
 		/* (the host's game would not take this machine: the A press three times did nothing) */
+		flow_log("flow: three A presses did nothing: the game would not take this machine");
 		social_join_machine_cancel(&global_machine);
 		global_machine.reason = SOCIAL_JOIN_REASON_REFUSED;
 		return 0;
@@ -567,12 +575,14 @@ int social_flow_press_allowed(void)
 		return 0;
 	flow.presses++;
 	flow.last_press = now ? now : 1;
+	flow_log(flow.presses == 1 ? "flow: A pressed for the game" : "flow: A pressed for the game again");
 	return 1;
 }
 
 static void flow_leave_failed(unsigned int now)
 {
 	(void)now;
+	flow_log("flow: the game did not go in thirty seconds: the invitation is given up");
 	flow.leaving = 0;
 	flow.waiting = "";
 	/* (the game would not go: the join machine says why it is not joining) */
@@ -613,6 +623,7 @@ void social_flow_update(void)
 		}
 		flow.leaving = 0;
 		flow.waiting = "";
+		flow_log("flow: the menus are up; the invitation's game is joined");
 		social_join_machine_target(&global_machine, &flow.pending);
 	}
 	/* (advances the join, and starts the party's following of its leader's game when this machine is idle) */
@@ -628,6 +639,7 @@ void social_flow_update(void)
 		if (flow.world.busy(flow.world.user))
 		{
 			/* (the A press joined it: this machine is in the game now) */
+			flow_log("flow: this machine is in the game: the join is done");
 			social_join_machine_done(&global_machine);
 			flow.ready_since = flow.blocked_since = 0;
 			break;
@@ -636,6 +648,7 @@ void social_flow_update(void)
 			flow.ready_since = now ? now : 1;
 		else if ((unsigned int)(now - flow.ready_since) >= FLOW_READY_TIMEOUT)
 		{
+			flow_log("flow: nobody finished the join in two minutes: given up");
 			social_join_machine_cancel(&global_machine);
 			break;
 		}
