@@ -28,9 +28,16 @@ void platform_log(char const *format, ...)
 	log_lines++;
 }
 
+static long nav_force;
+
 const char *config_string(char const *name)
 {
 	return !strcmp(name, "bots.nav_pack") ? pack_path : "";
+}
+
+long config_integer(char const *name)
+{
+	return !strcmp(name, "bots.nav_force") ? nav_force : 0;
 }
 
 void platform_translate_path(const char *xbox_path, char *host_path, unsigned long host_path_size)
@@ -41,6 +48,8 @@ void platform_translate_path(const char *xbox_path, char *host_path, unsigned lo
 #include "under_test.inc"
 
 /* a pack of one map: a grid of 3 x 3 areas */
+static unsigned long record_flags;
+
 static void write_pack(char const *path, char const *name, unsigned long surfaces, unsigned long walkable, int damage)
 {
 	struct bots_nav nav;
@@ -63,6 +72,7 @@ static void write_pack(char const *path, char const *name, unsigned long surface
 	}
 	nav.bounds_max[0] = nav.bounds_max[1] = 24.0f;
 	nav.run_speed = 2.25f;
+	nav.flags = record_flags;
 	record = bots_nav_write_record(&nav, &count);
 	if (damage)
 		record[4] = 0;
@@ -165,6 +175,24 @@ int main(int argc, char **argv)
 		write_pack(pack_path, "bloodgulch", 4916, 2807, 1);
 		bots_nav_load_begin("levels\\test\\bloodgulch\\bloodgulch", 4916, 2807, 1);
 		CHECK(bots_nav_load_state() == _bots_nav_load_none && strstr(last_log, "no good"), "state %d: %s", bots_nav_load_state(), last_log);
+		bots_nav_load_reset();
+		return 0;
+	}
+	/* a record the bake marked too fragmented to walk is not used (the engine's surfaces keep the map), unless bots.nav_force asks for it */
+	CASE("fragmented")
+	{
+		record_flags = BOTS_NAV_FLAG_FRAGMENTED;
+		write_pack(pack_path, "boardingaction", 3693, 548, 0);
+		bots_nav_load_begin("levels\\test\\boardingaction\\boardingaction", 3693, 548, 1);
+		CHECK(bots_nav_load_state() == _bots_nav_load_none && strstr(last_log, "too fragmented"), "state %d: %s", bots_nav_load_state(), last_log);
+		CHECK(bots_nav_load_take() == NULL, "a graph that was refused");
+		bots_nav_load_reset();
+		nav_force = 1;
+		bots_nav_load_begin("levels\\test\\boardingaction\\boardingaction", 3693, 548, 1);
+		CHECK(bots_nav_load_state() == _bots_nav_load_ready, "forced: state %d: %s", bots_nav_load_state(), last_log);
+		nav = bots_nav_load_take();
+		CHECK(nav && (nav->flags & BOTS_NAV_FLAG_FRAGMENTED), "the flag is read from the record");
+		bots_nav_dispose(nav);
 		bots_nav_load_reset();
 		return 0;
 	}

@@ -73,7 +73,8 @@ def test_the_c_reader_reads_the_tools_merge(tmp_path):
     second.write_bytes(one_map_pack("aaa", 5, 4, record(areas=[(0, 0, 0, 3), (4, 0, 0, 3)], links=[], scripts=[((0, 0, 0), 0.25)],
                                                          places=[(5, 0, 0, 0, 0)])))
     merged = tmp_path / "navs.pack"
-    size, names = tool.merge(merged, [first, second])
+    size, names, marked = tool.merge(merged, [first, second])
+    assert marked == {}
     assert names == ["aaa", "grid"] and size == merged.stat().st_size
     tool.check_crc(merged.read_bytes())
     code = build("bots_nav", (("bots_nav.h", read("port/linux/game/bots_nav.h")), ("under_test.inc", read("port/linux/game/bots_nav.c"))))
@@ -116,3 +117,46 @@ def test_a_bad_pack_is_refused(tmp_path):
     duplicate.write_bytes(good)
     with pytest.raises(tool.PackError):
         tool.merge(tmp_path / "out.pack", [duplicate, duplicate])
+
+
+def test_a_fragmented_map_is_marked(tmp_path):
+    """From the one start the graph reaches the places of its own piece only: marked, unless --no-gate; a sound map is not."""
+    broken = dict(GRID)
+    # (the link out of area 0 is gone: the start reaches itself and nothing else)
+    broken["links"] = [link for link in GRID["links"] if link[0] != 0]
+    path = tmp_path / "broken.nav"
+    path.write_bytes(one_map_pack("broken", 100, 40, record(**broken)))
+    good = tmp_path / "good.nav"
+    good.write_bytes(one_map_pack("good", 100, 40, record(**GRID)))
+    merged = tmp_path / "navs.pack"
+    _, names, marked = tool.merge(merged, [path, good])
+    assert names == ["broken", "good"] and list(marked) == ["broken"] and marked["broken"]["mean"] < tool.GATE_MEAN
+    data = merged.read_bytes()
+    pack = tool.read_pack(data)
+    flags = {e["name"]: tool.parse_record(data[e["offset"]:e["offset"] + e["size"]])["flags"] for e in pack["entries"]}
+    assert flags == {"broken": tool.FLAG_FRAGMENTED, "good": 0}
+    tool.check_crc(data)
+    _, _, marked = tool.merge(tmp_path / "plain.pack", [path, good], gate=False)
+    assert marked == {}
+    data = (tmp_path / "plain.pack").read_bytes()
+    pack = tool.read_pack(data)
+    assert all(tool.parse_record(data[e["offset"]:e["offset"] + e["size"]])["flags"] == 0 for e in pack["entries"])
+    assert tool.main(["info", str(merged)]) == 0
+
+
+def test_merge_takes_only_the_maps_asked_for(tmp_path):
+    """--only: of a pack of several maps, the records named (a map baked again replaces its old record in a pack built so)."""
+    first = tmp_path / "a.nav"
+    second = tmp_path / "b.nav"
+    first.write_bytes(one_map_pack("grid", 100, 40, record(**GRID)))
+    second.write_bytes(one_map_pack("other", 5, 4, record(areas=[(0, 0, 0, 3), (4, 0, 0, 3)], links=[], scripts=[], places=[(1, 0, 0, 0, 0)])))
+    both = tmp_path / "both.pack"
+    tool.merge(both, [first, second])
+    only = tmp_path / "only.pack"
+    _, names, _ = tool.merge(only, [both], only={"other"})
+    assert names == ["other"]
+    assert tool.main(["merge", str(tmp_path / "cli.pack"), str(both), "--only", "Grid"]) == 0
+    assert [e["name"] for e in tool.read_pack((tmp_path / "cli.pack").read_bytes())["entries"]] == ["grid"]
+    # (without it, merging the pack with a record of one of its maps is a duplicate)
+    with pytest.raises(tool.PackError):
+        tool.merge(tmp_path / "dup.pack", [both, first])

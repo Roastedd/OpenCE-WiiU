@@ -745,6 +745,9 @@ static const struct config_setting config_settings[] =
 	{ "bots.nav_pack", _config_string, "\"\"", "HALO_BOTS_NAV_PACK", _environment_value, _platform_all,
 		"The navigation pack's path (a real path: the console's card, or a folder on the host). Empty: navs.pack in the\n"
 		"Wii U's app folder, or beside the data folder's maps on the host." },
+	{ "bots.nav_force", _config_integer, "0", "HALO_BOTS_NAV_FORCE", _environment_value, _platform_all,
+		"1: use a map's navigation graph even when its record is marked too fragmented to walk (tests of the bake; the marked maps are walked by the\n"
+		"engine's surfaces otherwise)." },
 	{ "bots.nav_tweaks", _config_integer, "7", "HALO_BOTS_NAV_TWEAKS", _environment_value, _platform_all,
 		"The graph's follower's options (bits: 1 a fighting bot that strafes into a wall strafes the other way, 2 a link a bot found bad is bad for\n"
 		"every bot for 20 s, 4 a jump or a drop that failed for a bot is not taken by any bot for the rest of the map). Only where bots.nav is 1 and\n"
@@ -762,12 +765,17 @@ static const struct config_setting config_settings[] =
 		"first bot with a unit, after which the game ends. Empty: no bake. Never on the console." },
 	{ "debug.bots_bake_probe", _config_string, "\"\"", "HALO_BOTS_BAKE_PROBE", _environment_value, _platform_all,
 		"For the navigation bake: \"x0 y0 x1 y1\", the floors under the points of that line are logged." },
+	{ "debug.bots_bake_segment", _config_string, "\"\"", "HALO_BOTS_BAKE_SEGMENT", _environment_value, _platform_all,
+		"For the navigation bake: \"x0 y0 z0 x1 y1 z1\", the bake's walk test between the two floor points is logged step by step." },
 	{ "debug.bots_bake_path", _config_string, "\"\"", "HALO_BOTS_BAKE_PATH", _environment_value, _platform_all,
 		"For the navigation bake: \"x y z x y z\", the engine's walkable surfaces' way between the two floors is logged." },
 	{ "debug.bots_bake_cell", _config_integer, "50", "HALO_BOTS_BAKE_CELL", _environment_value, _platform_all,
 		"The bake's floor grid, in hundredths of a world unit (50: half a unit)." },
 	{ "debug.bots_bake_reach", _config_integer, "60", "HALO_BOTS_BAKE_REACH", _environment_value, _platform_all,
 		"The bake's reach of an area from its anchor, in tenths of a world unit (60: six units)." },
+	{ "debug.bots_bake_margin", _config_integer, "150", "HALO_BOTS_BAKE_MARGIN", _environment_value, _platform_all,
+		"The bake makes the floor only inside the box of the map's places (items, flags, balls, hills, starts, teleporters) and this many tenths\n"
+		"of a world unit on every side (150: 15 units), not on a map's sky or far hulls. 0: the whole map." },
 	{ "debug.bots_bake_stride", _config_integer, "1", "HALO_BOTS_BAKE_STRIDE", _environment_value, _platform_all,
 		"The bake tries flights from every this-th edge node of the floor (1: all of them; more is faster and finds fewer)." },
 	{ "bots.sim_ticks", _config_integer, "0", "HALO_BOTS_SIM_TICKS", _environment_value, _platform_all,

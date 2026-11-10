@@ -244,6 +244,7 @@ struct bots_nav *bots_nav_parse_record(char const *name, unsigned char const *by
 		strncpy(nav->name, name, BOTS_NAV_NAME_BYTES - 1);
 		nav->name[BOTS_NAV_NAME_BYTES - 1] = 0;
 	}
+	nav->flags = nav_u32(bytes);
 	nav->area_count = (long)areas;
 	nav->link_count = (long)links;
 	nav->place_count = (long)places;
@@ -388,6 +389,7 @@ unsigned char *bots_nav_write_record(struct bots_nav const *nav, size_t *count)
 
 	if (!out)
 		return NULL;
+	nav_put_u32(out, nav->flags);
 	nav_put_u16(out + 4, (unsigned long)nav->area_count);
 	nav_put_u16(out + 6, (unsigned long)nav->link_count);
 	nav_put_u16(out + 8, (unsigned long)nav->place_count);

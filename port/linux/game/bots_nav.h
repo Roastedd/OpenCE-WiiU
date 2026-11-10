@@ -38,6 +38,9 @@ area and the entry point in the next) is a point of the area, so every leg of a 
 #define BOTS_NAV_MAXIMUM_LINKS 32768
 #define BOTS_NAV_MAXIMUM_PLACES 1024
 #define BOTS_NAV_MAXIMUM_SCRIPTS 8192
+/* the record's flags: the bake of the map found the graph too fragmented to be worth walking (from a start it reaches too few of the places: tools/bots_nav_pack.py
+merge says which maps and why); the game keeps the engine's surfaces for the map unless bots.nav_force is 1 */
+#define BOTS_NAV_FLAG_FRAGMENTED 1UL
 /* the lookup grid's cell (world units) */
 #define BOTS_NAV_CELL 4.0f
 /* the path: links (areas) kept, and the links a bot has found bad at once */
@@ -155,6 +158,7 @@ struct bots_nav_place
 struct bots_nav
 {
 	char name[BOTS_NAV_NAME_BYTES];
+	unsigned long flags;
 	long area_count, link_count, place_count, script_count;
 	float bounds_min[3], bounds_max[3];
 	/* what the bake measured of the biped: seconds' speed of a run (units a second), the jump's height, the safest drop */

@@ -2,7 +2,9 @@
 """The bots' navigation pack (port/linux/game/bots_nav.[ch]): merges the bake's one-map packs into navs.pack, checks a pack, and reports what
 the bake made of each map (counts, which places the links join, from every start).
 
-    tools/bots_nav_pack.py merge OUT.pack MAP.nav [MAP.nav ...]   one pack with an index; the maps in name order
+    tools/bots_nav_pack.py merge OUT.pack MAP.nav [MAP.nav ...] [--only MAP,MAP]   one pack with an index; the maps in name order; a map whose graph reaches too few of
+                                                                  the places from the starts is marked FRAGMENTED (the game then keeps the engine's
+                                                                  surfaces for it; --no-gate leaves the marks as the bake made them)
     tools/bots_nav_pack.py verify PACK                            the crc and the records' bounds; exit status 1 if it is no good
     tools/bots_nav_pack.py info PACK [--reach]                    a table of the maps (with --reach: from every start, the places reached)
 
@@ -150,14 +152,45 @@ def reach_report(record):
     return report
 
 
-def merge(output, sources):
+# a map's graph is marked fragmented (BOTS_NAV_FLAG_FRAGMENTED: the game walks the map by the engine's surfaces) when from the starts it reaches less than this
+# share of the places on average, or from the worst start less than the second
+GATE_MEAN = 0.85
+GATE_WORST = 0.40
+FLAG_FRAGMENTED = 1
+
+
+def fragmented(record, mean_floor=GATE_MEAN, worst_floor=GATE_WORST):
+    """The reach report of a record that is too fragmented to walk, else None (a record with no starts is not judged)."""
+    report = reach_report(record)
+    if not report["starts"]:
+        return None
+    if report["mean"] < mean_floor or report["worst"] < worst_floor:
+        return report
+    return None
+
+
+def merge(output, sources, gate=True, only=None):
+    """One pack of the one-map packs. Returns (size, names, marked): marked maps the names of the records marked fragmented to their reach report."""
     records = []
+    marked = {}
     for source in sources:
         data = Path(source).read_bytes()
         pack = read_pack(data)
         check_crc(data)
         for entry in pack["entries"]:
+            if only is not None and entry["name"].lower() not in only:
+                continue
             records.append((entry["name"].lower(), entry["surfaces"], entry["walkable"], data[entry["offset"]:entry["offset"] + entry["size"]]))
+    if gate:
+        gated = []
+        for name, surfaces, walkable, rec in records:
+            report = fragmented(parse_record(rec))
+            if report is not None:
+                flags = struct.unpack_from("<I", rec, 0)[0] | FLAG_FRAGMENTED
+                rec = struct.pack("<I", flags) + rec[4:]
+                marked[name] = report
+            gated.append((name, surfaces, walkable, rec))
+        records = gated
     records.sort(key=lambda item: item[0])
     names = [item[0] for item in records]
     if len(set(names)) != len(names):
@@ -174,7 +207,7 @@ def merge(output, sources):
     crc = zlib.crc32(tail) & 0xFFFFFFFF
     header = MAGIC + struct.pack("<HHIIIII", PACK_VERSION, NAV_FORMAT, len(records), HEADER_BYTES, crc, 1, 0)
     Path(output).write_bytes(header + tail)
-    return len(header + tail), names
+    return len(header + tail), names, marked
 
 
 def main(argv=None):
@@ -183,6 +216,8 @@ def main(argv=None):
     m = sub.add_parser("merge")
     m.add_argument("output")
     m.add_argument("sources", nargs="+")
+    m.add_argument("--no-gate", action="store_true", help="keep the records' fragmented marks as the bake made them")
+    m.add_argument("--only", help="take only the records of these maps (comma separated) from the sources (a pack of several maps)")
     v = sub.add_parser("verify")
     v.add_argument("pack")
     w = sub.add_parser("show", help="the areas within RADIUS of a point, with their links (for finding why two places do not join)")
@@ -198,8 +233,11 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == "merge":
-            size, names = merge(args.output, args.sources)
+            size, names, marked = merge(args.output, args.sources, gate=not args.no_gate, only={n.strip().lower() for n in args.only.split(',')} if args.only else None)
             print(f"{args.output}: {size} bytes, {len(names)} maps: {', '.join(names)}")
+            for name, report in sorted(marked.items()):
+                print(f"  {name}: marked FRAGMENTED: from the starts the graph reaches {report['mean']:.1%} of the places (worst start {report['worst']:.1%}); the game "
+                      f"walks it by the engine's surfaces")
             return 0
         data = Path(args.pack).read_bytes()
         pack = read_pack(data)
@@ -232,7 +270,7 @@ def main(argv=None):
             types = {}
             for place in record["places"]:
                 types[PLACE_TYPES.get(place["type"], str(place["type"]))] = types.get(PLACE_TYPES.get(place["type"], str(place["type"])), 0) + 1
-            print(f"  {entry['name']}: {entry['size']} bytes, surfaces {entry['surfaces']} ({entry['walkable']} walkable), {len(record['areas'])} areas, "
+            print(f"  {entry['name']}: {'FRAGMENTED, ' if record['flags'] & FLAG_FRAGMENTED else ''}{entry['size']} bytes, surfaces {entry['surfaces']} ({entry['walkable']} walkable), {len(record['areas'])} areas, "
                   f"{len(record['links'])} links {kinds}, {len(record['scripts'])} scripts, places {types}")
             if args.reach:
                 report = reach_report(record)

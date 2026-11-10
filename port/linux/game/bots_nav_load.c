@@ -20,6 +20,7 @@ map that is not the one baked, or the same name with another build, is not used)
 
 void platform_log(char const *format, ...);
 const char *config_string(char const *name);
+long config_integer(char const *name);
 #ifdef HALO_WIIU
 void wiiu_thread_background(const char *name);
 #else
@@ -135,6 +136,13 @@ static void nav_read(void)
 	if (!nav)
 	{
 		platform_log("bots: nav: the record for %s is no good (%s): not used", load.map, why ? why : "?");
+		load.state = _bots_nav_load_none;
+		return;
+	}
+	if ((nav->flags & BOTS_NAV_FLAG_FRAGMENTED) && !config_integer("bots.nav_force"))
+	{
+		platform_log("bots: nav: the record for %s says its graph is too fragmented to walk (the bake: from a start it reaches too few of the places): the bots walk by the engine's surfaces on this map (bots.nav_force = 1 uses it anyway)", load.map);
+		bots_nav_dispose(nav);
 		load.state = _bots_nav_load_none;
 		return;
 	}
