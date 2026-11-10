@@ -2618,10 +2618,10 @@ def _mods() -> list:
 #
 #   y   0 -  24   the margin: TVs may overscan it; no text, only the header band's backdrop
 #      24 -  38   the title (large font, capitals 24.5 to 37.5) at the left, what belongs with it (a count, the service) at the right on its baseline
-#      44 -  66   the tab row (Friends only); the panel's top line is at 70
+#      44 -  66   the tab row (Friends only), 6 under the title's capitals and 4 above the panel's top line, which is at 70
 #      76 - 328   the list: 9 rows, 28 apart, the first 5 below the line; the focus pill is the row's 28 and the text is centred on it
 #     336 - 384   the detail line: up to two lines of the large font, 8 below the last row
-#     384 - 404   the footer: one small line at the left (a note, the code), the scroll counter at the right; 5 above the panel's bottom line
+#     384 - 404   the footer: one small line at the left (a note, the code), the scroll counter at the right (capitals 388 to 398, 11 above the panel's bottom line)
 #     414 - 438   the button bar (the game's: the buttons' own 22 high pills at y 415)
 #
 #   x  54 - 566   the list, the detail and the footer: the settings screens' column. Text sits 16 in from a row's ends (4 of them are the engine's own inset), columns are
