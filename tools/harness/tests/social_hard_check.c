@@ -536,6 +536,39 @@ static void sim_attack(struct fake_net *net, int victims)
 	}
 }
 
+/* the member of the party this node sees with a name, 0 if none */
+static unsigned int sim_member_id(struct fake_node *node, const char *name)
+{
+	const struct social_snapshot *snapshot = snap(node, 0);
+	int index;
+
+	for (index = 0; index < snapshot->party.member_count; index++)
+	{
+		if (!strcmp(snapshot->party.members[index].name, name))
+			return snapshot->party.members[index].id;
+	}
+	return 0;
+}
+
+/* a node not in a party accepts a party invite it holds */
+static void sim_party_accept(struct fake_node *node)
+{
+	const struct social_snapshot *snapshot = snap(node, 0);
+	int index;
+
+	if (snapshot->party.active)
+		return;
+	for (index = 0; index < snapshot->invite_count; index++)
+	{
+		if (snapshot->invites[index].kind == 2)
+		{
+			social_front_party_token(node->front, snapshot->invites[index].party_token);
+			social_front_invite_dismiss(node->front, snapshot->invites[index].id);
+			return;
+		}
+	}
+}
+
 static void case_sim(int argc, char **argv)
 {
 	static struct fake_net net;
@@ -628,6 +661,28 @@ static void case_sim(int argc, char **argv)
 			net.broker_up[2] = 1;
 		if (step % 150 == 20)
 			social_front_party(net.nodes[1 + step / 150 % 3].front, 10, 0, 0, "chat");
+		/* the party's whole life under the same loss and brokers going: the lead handed over, a member removed, the party disbanded and another made from its members, invitations accepted */
+		if (step == 900)
+			social_front_party(net.nodes[0].front, 7, sim_member_id(&net.nodes[0], "Node1"), 0, NULL);
+		if (step == 1500)
+			social_front_party(net.nodes[1].front, 6, sim_member_id(&net.nodes[1], "Node3"), 0, NULL);
+		if (step == 2100)
+			social_front_party(net.nodes[1].front, 11, 0, 0, NULL);
+		if (step == 2160)
+			social_front_party(net.nodes[2].front, 1, 0, 0, NULL);
+		if (step == 2200 || step == 2230)
+		{
+			int target = step == 2200 ? 0 : 1;
+			unsigned int id = friend_id(&net.nodes[2], &net.nodes[target]);
+
+			if (id)
+				social_front_party(net.nodes[2].front, 2, id, 0, NULL);
+		}
+		if (step >= 2100 && step % 20 == 5)
+		{
+			for (other = 0; other < honest; other++)
+				sim_party_accept(&net.nodes[other]);
+		}
 		sim_attack(&net, honest);
 		fake_run(&net, 100);
 	}
@@ -660,14 +715,19 @@ static void case_sim(int argc, char **argv)
 	CHECK(pairs >= 7, "the friendships were made: %d", pairs);
 	/* the party agrees */
 	{
-		int members = snap(&net.nodes[0], 0)->party.member_count, leaders = 0;
+		int first = 0, members, leaders = 0;
 
+		/* (the party of the end: the first machine that is in one) */
+		while (first < honest && !snap(&net.nodes[first], 0)->party.active)
+			first++;
+		CHECK(first < honest, "somebody is in a party");
+		members = snap(&net.nodes[first], 0)->party.member_count;
 		CHECK(members >= 2, "a party of %d", members);
 		for (index = 0; index < honest; index++)
 		{
 			if (snap(&net.nodes[index], 0)->party.active)
 			{
-				CHECK(snap(&net.nodes[index], 0)->party.member_count == members, "node %d sees %d members, node 0 sees %d", index, snap(&net.nodes[index], 0)->party.member_count, members);
+				CHECK(snap(&net.nodes[index], 0)->party.member_count == members, "node %d sees %d members, node %d sees %d", index, snap(&net.nodes[index], 0)->party.member_count, first, members);
 				leaders += snap(&net.nodes[index], 0)->party.is_leader;
 			}
 		}

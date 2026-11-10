@@ -431,6 +431,51 @@ static int start_front(void)
 
 static pthread_mutex_t command_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* what this peer says it is doing (the `place` command): the menus, a lobby or a game of someone else's, solo, or a game it HOSTS as far as friends can tell: a fake invite (no host answers
+it, so a friend's join of it fails as "did not answer": the failure words, and the invitation and presence paths, can be tried from a console without a second game). Under command_lock. */
+static struct social_place peer_place;
+
+static char const *place_command(char const *line)
+{
+	static char reply[200];
+	char word[24] = "", map[SOCIAL_MAP_SIZE + 1] = "bloodgulch";
+	int players = 1, maximum = 16, private_game = 0, fields;
+
+	fields = sscanf(line, "%23s %31s %d %d %d", word, map, &players, &maximum, &private_game);
+	memset(&peer_place, 0, sizeof(peer_place));
+	if (fields < 1 || !strcmp(word, "menus"))
+		peer_place.activity = SOCIAL_MENUS;
+	else if (!strcmp(word, "lobby"))
+		peer_place.activity = SOCIAL_LOBBY;
+	else if (!strcmp(word, "game"))
+		peer_place.activity = SOCIAL_GAME;
+	else if (!strcmp(word, "solo"))
+		peer_place.activity = SOCIAL_SOLO;
+	else if (!strcmp(word, "host") || !strcmp(word, "hostgame"))
+	{
+		/* (place host [map [players [maximum [private]]]]; hostgame is a game under way, host a lobby) */
+		peer_place.activity = !strcmp(word, "hostgame") ? SOCIAL_GAME : SOCIAL_LOBBY;
+		peer_place.hosting = 1;
+		peer_place.has_invite = 1;
+		peer_place.private_game = (unsigned char)(private_game != 0);
+		peer_place.joinable = (unsigned char)(!private_game && players < maximum);
+		peer_place.players = (unsigned char)players;
+		peer_place.maximum_players = (unsigned char)maximum;
+		peer_place.engine_type = 1;
+		snprintf(peer_place.map, sizeof(peer_place.map), "%s", fields >= 2 ? map : "bloodgulch");
+		snprintf(peer_place.gametype, sizeof(peer_place.gametype), "Slayer");
+		memset(peer_place.invite_hash, 0x5A, SOCIAL_HASH_SIZE);
+		memset(peer_place.invite_token, 0xA5, SOCIAL_TOKEN_SIZE);
+	}
+	else
+	{
+		peer_place.activity = SOCIAL_MENUS;
+		return "place menus|lobby|game|solo|host [map [players [maximum [private]]]]|hostgame [...]\n";
+	}
+	snprintf(reply, sizeof(reply), "place: %s%s\n", word, peer_place.hosting ? " (a fake game: nobody answers a join)" : "");
+	return reply;
+}
+
 static void console_answer(int client, const char *line)
 {
 	static char reply[16384];
@@ -453,6 +498,8 @@ static void console_answer(int client, const char *line)
 		if (text[0])
 			quitting = 1;
 	}
+	else if (!strncmp(text, "place", 5) && (text[5] == ' ' || !text[5]))
+		snprintf(reply, sizeof(reply), "%s", place_command(text[5] ? text + 6 : ""));
 	else if (!social_command(text, reply, (int)sizeof(reply)))
 		snprintf(reply, sizeof(reply), "not a command: %s\n", text);
 	pthread_mutex_unlock(&command_lock);
@@ -574,8 +621,11 @@ static void pass(int wait_milliseconds)
 	{
 		struct social_place place;
 
-		memset(&place, 0, sizeof(place));
-		place.activity = SOCIAL_MENUS;
+		pthread_mutex_lock(&command_lock);
+		place = peer_place;
+		pthread_mutex_unlock(&command_lock);
+		if (!place.activity)
+			place.activity = SOCIAL_MENUS;
 		social_engine_set_place(social_front_engine(front), &place);
 	}
 	p2p_signal_start();

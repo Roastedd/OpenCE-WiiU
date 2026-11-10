@@ -65,6 +65,8 @@ FAULTS = [
     ("invite-in-game", FILE, "	if (social_join_hook_busy())\n	{\n		int reason = social_flow_leave_and_join_invite(invite->id);", "	if (0)\n	{\n		int reason = social_flow_leave_and_join_invite(invite->id);"),
     # the invitation is dropped when left for later
     ("invite-in-game", FILE, "	if (!accept)\n		return;", "	if (!accept)\n	{\n		social_invite_dismiss(invite->id);\n		return;\n	}"),
+    # a refusal of the leave is not said (the game would be left for nothing)
+    ("invite-in-game", FILE, "		if (reason != SOCIAL_JOIN_REASON_NONE)\n		{\n			be_sentence(text, sizeof(text), social_join_reason_text(reason, invite->target.map));\n			be_notice_push(SCREENS_TOAST_JOIN_FAILED, text, \"\", 0);\n			return;\n		}", "		(void)reason;"),
     # a request's BLOCK blocks the friend whose id it shares
     ("actions", FILE, "		if (row->presence == SCREENS_PRESENCE_REQUEST_GOT)\n			social_ignore(id);\n		else if (be_friend_by_id(id)", "		if (0)\n			social_ignore(id);\n		else if ((1 || be_friend_by_id(id))"),
     # an action on a row of another kind is done
