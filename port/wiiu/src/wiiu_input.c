@@ -445,6 +445,12 @@ static struct
 	float turn, pitch;
 } remote_mouse;
 
+/* the first player's Remote as the menus' cursor (wiiu_input_remote_cursor): 0 to 1 across and down the picture, and how far it moved since it was last asked */
+static struct
+{
+	float x, y, moved;
+} remote_cursor = { 0.5f, 0.5f, 0.0f };
+
 static void rumble_stop_all(void);
 
 static void pad_gone(unsigned int channel)
@@ -630,6 +636,12 @@ static void remote_sample(unsigned int channel, const KPADStatus *status, struct
 		{
 			remote_mouse.turn += turn;
 			remote_mouse.pitch += tilt;
+			/* (the menus' cursor: a turn of 0.11 rotations (40 degrees) crosses the picture, 0.07 (25 degrees) goes down it; the nose lifting is tilt < 0) */
+			remote_cursor.x -= turn * 9.0f;
+			remote_cursor.y += tilt * 14.4f;
+			remote_cursor.x = remote_cursor.x < 0.0f ? 0.0f : remote_cursor.x > 1.0f ? 1.0f : remote_cursor.x;
+			remote_cursor.y = remote_cursor.y < 0.0f ? 0.0f : remote_cursor.y > 1.0f ? 1.0f : remote_cursor.y;
+			remote_cursor.moved += (turn < 0.0f ? -turn : turn) + (tilt < 0.0f ? -tilt : tilt);
 		}
 		/* held still for a second and a half: the library zeroes the MotionPlus (KPADResetMpls), once for each time it is held still */
 		if (wimote_motion_still(&remotes[channel].motion, seconds, rate))
@@ -745,6 +757,32 @@ int wiiu_input_remote_look_take(float *turn, float *pitch)
 	if (!owner)
 		*turn = *pitch = 0.0f;
 	return owner;
+}
+
+int wiiu_input_remote_cursor(float *x, float *y, int *moved)
+{
+	unsigned int channel;
+	int owner = 0;
+
+	for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
+	{
+		if (last_pro[channel].present && remotes[channel].remote && remotes[channel].source == WIIMOTE_SOURCE_MOTION &&
+			wiiu_pad_players_port(&pad_players, (int)channel) == 0)
+		{
+			owner = 1;
+		}
+	}
+	if (!owner)
+	{
+		remote_cursor.moved = 0.0f;
+		return 0;
+	}
+	*x = remote_cursor.x;
+	*y = remote_cursor.y;
+	/* (a hand's tremor is not a move: a thousandth of a rotation, about a third of a degree, since the last call) */
+	*moved = remote_cursor.moved > 0.001f;
+	remote_cursor.moved = 0.0f;
+	return 1;
 }
 
 /* The controller on a KPAD channel now, into last_pro: a sample if there is a new one, else as it was. Returns 1 if it is one the game reads. */

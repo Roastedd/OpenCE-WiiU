@@ -81,6 +81,14 @@ int wiiu_input_remote_look_take(float *turn, float *pitch)
 	return 0;
 }
 
+int wiiu_input_remote_cursor(float *x, float *y, int *moved)
+{
+	(void)x;
+	(void)y;
+	(void)moved;
+	return 0;
+}
+
 unsigned long wiiu_input_milliseconds(void)
 {
 	return game_digest_milliseconds();

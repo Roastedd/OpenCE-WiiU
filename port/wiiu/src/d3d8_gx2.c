@@ -1620,6 +1620,7 @@ HRESULT WINAPI Direct3D_CreateDevice(UINT adapter, D3DDEVTYPE device_type, void 
 /* the GamePad's touch screen (wiiu_input.c, in the pixels of its 854x480 picture) is the menus' pointer: a tap clicks, a drag scrolls (touch_menu.c, which
 the Android build's touch screen shares). The GamePad shows the game's picture, letterboxed as blit_to (wiiu_gx2.c) does it. */
 int wiiu_input_touch(float *x, float *y);
+int wiiu_input_remote_cursor(float *x, float *y, int *moved);
 /* (wiiu_keyboard_font.c: the GamePad's keyboard is being shown; its glyphs asked for) */
 int wiiu_keyboard_shown(void);
 void wiiu_keyboard_prewarm(void);
@@ -1648,6 +1649,17 @@ static void menu_point_from_gamepad(float gamepad_x, float gamepad_y, short *x, 
 	top = (GAMEPAD_HEIGHT - height) / 2.0f;
 	*x = (short)floorf((gamepad_x - left) * game_width / width - (MENUS_DRAWN_CENTERED ? (game_width - 640.0f) / 2.0f : 0.0f));
 	*y = (short)floorf((gamepad_y - top) * game_height / height);
+}
+
+/* the Wii Remote's cursor (wiiu_input_remote_cursor), in the menus' coordinates, for the menus to draw (ui_widget.c); set while the menus are up and a Remote points */
+static int remote_cursor_shown;
+static short remote_cursor_x, remote_cursor_y;
+
+int halo_ui_pointer_cursor(short *x, short *y)
+{
+	*x = remote_cursor_x;
+	*y = remote_cursor_y;
+	return remote_cursor_shown;
 }
 
 int halo_ui_pointer_update(int menus_active, struct halo_ui_pointer *pointer)
@@ -1688,6 +1700,7 @@ int halo_ui_pointer_update(int menus_active, struct halo_ui_pointer *pointer)
 	}
 	if (down && wiiu_keyboard_shown())
 		down = 0;
+	remote_cursor_shown = 0;
 	if (!menus_active)
 		return 0;
 	if (down && !finger_down)
@@ -1716,6 +1729,27 @@ int halo_ui_pointer_update(int menus_active, struct halo_ui_pointer *pointer)
 	pointer->touch = 1;
 	pointer->downs = (unsigned char)(output.downs < 255 ? output.downs : 255);
 	menu_point_from_gamepad(output.down_x, output.down_y, &pointer->down_x, &pointer->down_y);
+	/* A Wii Remote with its MotionPlus on is the pointer while the screen is not touched: it moves the focus (A, as the controller's, then presses it) and a cursor is
+	drawn where it points. The screen's touch has it back as soon as there is any. */
+	{
+		float cursor_x, cursor_y;
+		int cursor_moved;
+
+		if (!down && !finger_down && !output.moved && !output.clicks && !output.wheel_steps && !output.downs &&
+			wiiu_input_remote_cursor(&cursor_x, &cursor_y, &cursor_moved))
+		{
+			short x, y;
+
+			menu_point_from_gamepad(cursor_x * GAMEPAD_WIDTH, cursor_y * GAMEPAD_HEIGHT, &x, &y);
+			memset(pointer, 0, sizeof(*pointer));
+			pointer->x = pointer->click_x = pointer->down_x = x;
+			pointer->y = pointer->click_y = pointer->down_y = y;
+			pointer->moved = cursor_moved != 0;
+			remote_cursor_x = x;
+			remote_cursor_y = y;
+			remote_cursor_shown = 1;
+		}
+	}
 	return 1;
 }
 

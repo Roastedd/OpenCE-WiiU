@@ -87,6 +87,11 @@ wiiu_input_gyro_take gives the GamePad's, in the space chosen (wiiu_input_set_gy
 the view is turned by this and not the GamePad's gyro; 0 if not (the outputs are 0). */
 int wiiu_input_remote_look_take(float *turn, float *pitch);
 
+/* The first player's Wii Remote as the menus' cursor, when its MotionPlus is on: where it points in the menus, 0 to 1 across and down the picture (x, y), and whether it
+moved since the last call. The cursor starts in the middle and follows how far the Remote has turned (the whole picture is about 40 degrees across and 25 down), held in
+the picture; holding the Remote still zeroes the MotionPlus as it does in play, and the cursor does not move then. Returns 0 (and leaves x and y) with no such Remote. */
+int wiiu_input_remote_cursor(float *x, float *y, int *moved);
+
 /* The GamePad's gyro as a mouse: how far it has turned since the last call, in rotations (turn: right positive; pitch: the top tilting away positive), worked
 out from each sample in the space chosen (wiiu_input_set_gyro_space), and cleared. */
 void wiiu_input_gyro_take(float *turn, float *pitch);

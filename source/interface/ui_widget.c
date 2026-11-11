@@ -5983,11 +5983,38 @@ static void ui_debug_draw_mark(
 finger-down and tap points; only for the render that notes the targets
 (the first player's): a split-screen viewport that is not hit-tested shows
 nothing or it would show outlines that no tap uses */
+#ifdef HALO_WIIU
+/* the Wii Remote's cursor (d3d8_gx2.c, halo_ui_pointer_update): where the Remote's MotionPlus points in the menus, in menu coordinates, while it moves the focus */
+int halo_ui_pointer_cursor(short *x, short *y);
+#endif
+
 static void ui_debug_draw_targets(
 	boolean first_players_render)
 {
 	long index;
 
+#ifdef HALO_WIIU
+	if (first_players_render)
+	{
+		short cursor_x, cursor_y;
+
+		if (halo_ui_pointer_cursor(&cursor_x, &cursor_y))
+		{
+			rectangle2d box;
+
+			box.x0 = cursor_x;
+			box.y0 = cursor_y;
+			box.x1 = cursor_x + 12;
+			box.y1 = cursor_y + 12;
+			draw_quad(&box, 0xff000000);
+			box.x0 = cursor_x + 2;
+			box.y0 = cursor_y + 2;
+			box.x1 = cursor_x + 10;
+			box.y1 = cursor_y + 10;
+			draw_quad(&box, 0xffffffff);
+		}
+	}
+#endif
 	if (!first_players_render || !ui_debug_targets_enabled())
 		return;
 	if (virtual_keyboard_active())
