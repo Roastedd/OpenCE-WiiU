@@ -53,6 +53,7 @@ const char *config_string(const char *name);
 unsigned long config_changes(void);
 /* tick_overlap.c: the milliseconds the game thread has waited for the tick thread, in all (0 without the overlap) */
 double tick_overlap_wait_ms_total(void);
+int game_time_get_paused(void);
 
 #define STEPS RENDER_GOVERNOR_STEPS
 
@@ -621,6 +622,18 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 	blend_step(now_ms);
 	/* (the map summary's: a frame at the step it was drawn at) */
 	step_frames[governor.step >= 0 && governor.step < STEPS ? governor.step : 0]++;
+	/* the game paused (the pause menu over a frozen world): the frame's cost is the pause scene's, not play's, and a step taken now would carry into play when the game
+	goes on (a run left paused 24 minutes sat at the deepest step: the pop-in followed). Nothing is decided and the window starts again when play does. */
+	if (game_time_get_paused() && settings.forced < 0)
+	{
+		governor.window_start = governor.last_change = now_ms;
+		governor.over_windows = governor.under_windows = governor.probe_windows = 0;
+		governor.sum_work = governor.sum_tick = governor.sum_render = governor.sum_wait = 0.0;
+		governor.frames = 0;
+		governor.late = governor.late_with_step_up = 0;
+		governor.window_worst = 0.0;
+		return;
+	}
 	if (!governor.up_backoff)
 		governor.up_backoff = 1;
 	if (governor.step > governor_max_step() && settings.forced < 0)
