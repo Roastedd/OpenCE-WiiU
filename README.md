@@ -45,18 +45,24 @@ crash.
 
 ## What it can do
 
-We have played these on a Wii U:
-
 - The single-player campaign, with checkpoints and saves on your SD card. Hold B,
   + or a finger on the touch screen for a second to skip a cutscene.
-- Two-player split screen in multiplayer.
+- The campaign in co-op for two players, and split screen in multiplayer for two
+  players.
 - Play on the TV or the GamePad. The GamePad can show player 1's own view while
   the TV is split.
 - Online games: a server browser, internet games found through the servers in
-  `brokers.txt` (the game uses UPnP to open the port), and system link on your
-  own network.
+  `brokers.txt` (the game uses UPnP to open the port), hosting a game from the Wii U,
+  very large games of 24 players or more, and system link on your own network.
+- Voice chat through the GamePad's microphone or a headset in its jack.
+- Halo Custom Edition maps from your PC copy, with automatic download from a host
+  that has the map.
 - The GamePad and Pro Controller, with the buttons where the Xbox's are, and the
   touch screen in the menus.
+- A Wii Remote with a Nunchuk, including the pointer and Wii Remote Plus motion
+  aiming, and gyro aiming on the GamePad.
+- Classic Controllers and, through Bloopair, other pads for the extra
+  split-screen players.
 - Graphics modes: Balanced (720 lines at 60 frames a second, the default),
   Performance, Quality (up to 1080 lines at 30, with dynamic resolution) and
   Custom. You can also set the resolution from 480 to 1080 lines, turn on smooth
@@ -73,24 +79,9 @@ We have played these on a Wii U:
 - Saves, profiles and settings kept on the SD card, with checkpoints written in
   the background so they do not stall the game.
 
-Built and tested on a computer, but not yet tried on a console:
-
-- The two-player co-op campaign, and split screen with three or four players.
-- Voice chat through the GamePad's microphone or a headset in its jack.
-- Halo Custom Edition maps from your PC copy, with automatic download from a host
-  that has the map.
-- A Wii Remote with a Nunchuk, including the pointer and Wii Remote Plus motion
-  aiming, and gyro aiming on the GamePad.
-- Classic Controllers and, through Bloopair, other pads for the extra
-  split-screen players.
-- Hosting an internet game from the Wii U, and very large games (24 players or
-  more).
-- Setting up on the Wii U itself, with an importer build that reads `halo.iso`
-  from the card.
-
-In the code but switched off for now: bots, friends and parties, the players
-page, a keyboard on the GamePad, and automatic updates (nothing is published to
-update from yet).
+Split screen with three or four players does not work yet. Bots, friends and
+parties, the players page, a keyboard on the GamePad and automatic updates are in
+the code but switched off for now (nothing is published to update from yet).
 
 ## Getting set up
 
@@ -154,19 +145,9 @@ Put the card in the Wii U and start OpenCE-U from the Wii U Menu. The first star
 makes the cache files and takes longer. Your saves are in `wiiu/apps/halo/data/`,
 so back that folder up before you try a different build.
 
-### Can I just put the ISO on the card?
+### Do I need to extract the ISO first?
 
-On a computer, yes. The helper reads the ISO directly, so there is no separate
-extraction step.
-
-On the Wii U itself, not yet. We are testing an importer build that finds
-`halo.iso` on the card at the first start and converts the maps on the console. It
-builds and its converter passes its tests, but its screens and the whole first run
-have not been tried on a console. The rc1 build does not do this. There are
-details and a test plan in the [setup guide](docs/ISO_SETUP.md).
-
-An SD card is FAT32, which cannot hold a file of 4 GB or more. When the helper
-copies a large ISO for the console to import, it splits it into parts.
+No. The helper reads the ISO directly, so there is no separate extraction step.
 
 ## Controls
 
@@ -227,8 +208,7 @@ In a 24-minute session on a console it joined six online games with no freeze or
 crash and exited normally. Five-second windows averaged 55.9 FPS. The
 [per-map results and checksums](VALIDATION.md) are in the repository.
 
-It is still experimental. We have not tested finishing the whole campaign, every
-controller setup, split screen or long co-op sessions. A newer merge with upstream
+It is still experimental. We have not tested finishing the whole campaign. A newer merge with upstream
 OpenCE (protocol 44) is in progress and still has joining problems, so it is not
 part of this baseline.
 
