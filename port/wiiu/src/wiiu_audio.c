@@ -10,6 +10,16 @@ The same samples go to the TV and to the GamePad.
 The pacing and resampler paths have native console measurements under reports/reviews.
 */
 
+#ifndef JOIN_BEAT
+#ifdef HALO_WIIU
+/* the join record's thread counters (port/wiiu/src/wiiu_join_trace.c) */
+extern volatile unsigned wiiu_thread_beats[5];
+#define JOIN_BEAT(index) (wiiu_thread_beats[index]++)
+#else
+#define JOIN_BEAT(index) ((void)0)
+#endif
+#endif
+
 #include "wiiu_shell.h"
 #include "wiiu_audio_ring.h"
 #include "wiiu_mixer_profile.h"
@@ -124,6 +134,7 @@ static int audio_thread(int argc, const char **argv)
 	{
 		uint32_t play;
 
+		JOIN_BEAT(1);
 		if (suspended)
 		{
 			/* New AX voices start with a fresh ring after HOME. */

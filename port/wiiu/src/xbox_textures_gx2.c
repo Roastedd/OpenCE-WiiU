@@ -28,6 +28,12 @@ a time, and only the atlas's rows that changed are sent again.
 #include "xgpu.h"
 #include "halo_startup.h"
 #include "port_config.h"
+
+#ifndef JOIN_BEAT
+/* the join record's thread counters (wiiu_join_trace.c) */
+extern volatile unsigned wiiu_thread_beats[5];
+#define JOIN_BEAT(index) (wiiu_thread_beats[index]++)
+#endif
 #include "dk_commands.h"
 #include "dk_textures.h"
 #include "hud_hires.h"
@@ -1172,8 +1178,12 @@ static void *hud_builder_main(void *unused)
 		long asset;
 		int made;
 
+		JOIN_BEAT(4);
 		while ((long)(hud_hold_until - system_milliseconds()) > 0)
+		{
+			JOIN_BEAT(4);
 			usleep(20000);
+		}
 		pthread_mutex_lock(&hud_queue_lock);
 		while (!hud_queue_count)
 			pthread_cond_wait(&hud_queue_wake, &hud_queue_lock);

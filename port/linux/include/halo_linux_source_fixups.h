@@ -19,10 +19,14 @@ void wiiu_hud_builder_hold(int on);
 void wiiu_join_render_frame_begin(void);
 void wiiu_join_safe_arm(void);
 int wiiu_join_safe_window(void);
+/* iteration counters of the helper threads, written in every line of the join record: which of them still turn (0 tick, 1 audio mixer, 2 silent clock, 3 decoder, 4 hud builder) */
+extern volatile unsigned wiiu_thread_beats[5];
+#define JOIN_BEAT(index) (wiiu_thread_beats[index]++)
 #define JOIN_STEP(name) wiiu_join_step(name)
 #define JOIN_FRAME_STEP(name) wiiu_join_frame_step(name)
 #else
 #define JOIN_STEP(name) ((void)0)
+#define JOIN_BEAT(index) ((void)0)
 #define JOIN_FRAME_STEP(name) ((void)0)
 #define JOIN_FRAME_STEPF(...) ((void)0)
 #endif

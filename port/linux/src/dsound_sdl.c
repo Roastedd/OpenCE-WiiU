@@ -83,6 +83,16 @@ skips opening a device; audio.channels chooses stereo or 5.1
 #include <time.h>
 #include <unistd.h>
 
+#ifndef JOIN_BEAT
+#ifdef HALO_WIIU
+/* the join record's thread counters (port/wiiu/src/wiiu_join_trace.c) */
+extern volatile unsigned wiiu_thread_beats[5];
+#define JOIN_BEAT(index) (wiiu_thread_beats[index]++)
+#else
+#define JOIN_BEAT(index) ((void)0)
+#endif
+#endif
+
 #ifndef JOIN_FRAME_STEPF
 #ifdef HALO_WIIU
 /* the join's record (port/wiiu/src/wiiu_join_trace.c) */
@@ -2653,6 +2663,7 @@ static void *silent_clock_thread(void *parameter)
 	clock_gettime(CLOCK_MONOTONIC, &next);
 	for (;;)
 	{
+		JOIN_BEAT(2);
 		mix(buffer, 480);
 #ifdef HALO_WIIU
 		/* (newlib has no clock_nanosleep) */
@@ -3065,6 +3076,8 @@ static void *decoder_thread(void *parameter)
 	for (;;)
 	{
 		struct decoder_job job;
+
+		JOIN_BEAT(3);
 		short *samples;
 		unsigned long frames = 0;
 		uint64_t started_ticks = 0, decoded_ticks = 0, published_ticks = 0;

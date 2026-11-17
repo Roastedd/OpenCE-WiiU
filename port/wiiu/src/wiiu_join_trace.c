@@ -26,6 +26,7 @@ JOIN_FRAME_LINES of them only, so that the writes do not take the game's frames 
 #define JOIN_FRAME_LINES 420u
 #define JOIN_MAXIMUM_LINES 1200u
 
+volatile unsigned wiiu_thread_beats[5];
 static FILE *join_file;
 static volatile unsigned join_step_number;
 static volatile unsigned join_frame_lines;
@@ -74,7 +75,8 @@ static void join_write(char const *kind, unsigned number, char const *name)
 	if (join_lines >= JOIN_MAXIMUM_LINES)
 		return;
 	join_lines++;
-	fprintf(join_file, "%u.%03u %s #%u %s\n", (unsigned)(join_now_ms() / 1000), (unsigned)(join_now_ms() % 1000), kind, number, name);
+	fprintf(join_file, "%u.%03u %s #%u %s [t%u a%u s%u d%u h%u]\n", (unsigned)(join_now_ms() / 1000), (unsigned)(join_now_ms() % 1000), kind, number, name,
+		wiiu_thread_beats[0], wiiu_thread_beats[1], wiiu_thread_beats[2], wiiu_thread_beats[3], wiiu_thread_beats[4]);
 	fflush(join_file);
 	fsync(fileno(join_file));
 }
@@ -121,7 +123,8 @@ void wiiu_join_note(char const *text)
 
 	if (!file)
 		return;
-	fprintf(file, "%u.%03u note #%u %s (last step: %s)\n", (unsigned)(join_now_ms() / 1000), (unsigned)(join_now_ms() % 1000), join_step_number, text, join_last_name);
+	fprintf(file, "%u.%03u note #%u %s (last step: %s) [t%u a%u s%u d%u h%u]\n", (unsigned)(join_now_ms() / 1000), (unsigned)(join_now_ms() % 1000), join_step_number, text, join_last_name,
+		wiiu_thread_beats[0], wiiu_thread_beats[1], wiiu_thread_beats[2], wiiu_thread_beats[3], wiiu_thread_beats[4]);
 	fflush(file);
 	fsync(fileno(file));
 	fclose(file);
