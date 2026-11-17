@@ -11,6 +11,8 @@ The port's functions that the game's sources call, declared for them.
 /* the record of a client's join, written to the card by the thread that is at each step (port/wiiu/src/wiiu_join_trace.c) */
 void wiiu_join_step(char const *name);
 void wiiu_join_frame_step(char const *name);
+void wiiu_join_frame_stepf(char const *format, ...);
+#define JOIN_FRAME_STEPF(...) wiiu_join_frame_stepf(__VA_ARGS__)
 /* the Wii U's HUD sheet builder thread rests while a client loads the map it joined (port/wiiu/src/xbox_textures_gx2.c) */
 void wiiu_hud_builder_hold(int on);
 /* a joined game's first frames drawn safe (port/wiiu/src/wiiu_join_trace.c): armed at the load, taken by each window of rendering */
@@ -22,6 +24,7 @@ int wiiu_join_safe_window(void);
 #else
 #define JOIN_STEP(name) ((void)0)
 #define JOIN_FRAME_STEP(name) ((void)0)
+#define JOIN_FRAME_STEPF(...) ((void)0)
 #endif
 
 #ifdef HALO_WIIU

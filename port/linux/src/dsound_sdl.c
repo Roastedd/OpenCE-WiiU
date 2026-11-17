@@ -83,9 +83,20 @@ skips opening a device; audio.channels chooses stereo or 5.1
 #include <time.h>
 #include <unistd.h>
 
+#ifndef JOIN_FRAME_STEPF
+#ifdef HALO_WIIU
+/* the join's record (port/wiiu/src/wiiu_join_trace.c) */
+void wiiu_join_frame_stepf(char const *format, ...);
+#define JOIN_FRAME_STEPF(...) wiiu_join_frame_stepf(__VA_ARGS__)
+#else
+#define JOIN_FRAME_STEPF(...) ((void)0)
+#endif
+#endif
+
 #ifdef HALO_WIIU
 #include <coreinit/time.h>
 #include <coreinit/thread.h>
+#include <coreinit/memorymap.h>
 #include "../../wiiu/src/wiiu_shell.h"
 #include "../../wiiu/src/wiiu_decoder_profile.h"
 #include "../../wiiu/src/wiiu_mixer_profile.h"
@@ -2405,9 +2416,28 @@ static void mix_buffers(float *output, unsigned long frames)
 	}
 }
 
+/* port: the most voices mixed in a chunk on the Wii U (the mixer's core is shared: a joined game starts dozens at once, and each costs a chunk's resampling); the voices beyond it wait a chunk
+(their packets are not taken: they play late, not wrong), those started first being the ones that go on. 0: no limit. */
+#ifdef HALO_WIIU
+#define VOICE_MIX_LIMIT 28
+#else
+#define VOICE_MIX_LIMIT 0
+#endif
+
+static BOOL voice_may_mix(struct sdl_stream const *stream, unsigned *mixed)
+{
+	if (!VOICE_MIX_LIMIT || stream->paused || !stream->packet_count)
+		return TRUE;
+	if (*mixed >= VOICE_MIX_LIMIT)
+		return FALSE;
+	(*mixed)++;
+	return TRUE;
+}
+
 static void mix(float *output, unsigned long frames)
 {
 	struct sdl_stream *stream;
+	unsigned voices_mixed = 0;
 	DSI3DL2LISTENER properties;
 	BOOL enabled, changed = FALSE;
 	unsigned long serial = 0;
@@ -2446,7 +2476,8 @@ static void mix(float *output, unsigned long frames)
 					pressure.queued++;
 			}
 #endif
-			mix_voice(stream, output, reverb.send, frames);
+			if (voice_may_mix(stream, &voices_mixed))
+				mix_voice(stream, output, reverb.send, frames);
 			mix_cut(stream, output, reverb.send, frames);
 			next = stream->next;
 			/* (the game thread waits: the lock is let go until it has had it) */
@@ -2486,7 +2517,8 @@ static void mix(float *output, unsigned long frames)
 #else
 	for (stream = streams; stream; stream = stream->next)
 	{
-		mix_voice(stream, output, reverb.send, frames);
+		if (voice_may_mix(stream, &voices_mixed))
+			mix_voice(stream, output, reverb.send, frames);
 		mix_cut(stream, output, reverb.send, frames);
 	}
 #endif
@@ -3198,6 +3230,19 @@ static HRESULT STDMETHODCALLTYPE stream_process(IDirectSoundStream *object, LPCX
 	(void)output;
 	if (!input)
 		return E_INVALIDARG;
+#ifdef HALO_WIIU
+	/* port: a packet whose bytes are not memory, or are none, is refused (and said): what it is decoded from is read by the game thread or the decoder, and what the mixer gets is played */
+	if (!input->pvBuffer || !input->dwMaxSize || input->dwMaxSize > 0x1000000u || !OSIsAddressValid((uint32_t)(uintptr_t)input->pvBuffer) ||
+		!OSIsAddressValid((uint32_t)(uintptr_t)input->pvBuffer + input->dwMaxSize - 1u))
+	{
+		static unsigned refused;
+
+		if (refused++ < 20)
+			platform_log("sound: a packet of %lu bytes at %08lx is not memory: refused", (unsigned long)input->dwMaxSize, (unsigned long)(uintptr_t)input->pvBuffer);
+		return E_INVALIDARG;
+	}
+#endif
+	JOIN_FRAME_STEPF("sound: packet %s %lu bytes, %lu channels, %lu Hz", stream->adpcm ? "adpcm" : "pcm", (unsigned long)input->dwMaxSize, stream->channels, (unsigned long)stream->frequency);
 #ifdef DSOUND_DECODE_THREAD
 	later = decoder.started;
 #endif
@@ -3559,6 +3604,7 @@ unsigned long __stdcall DirectSoundGetStreamVoiceStatus(LPDIRECTSOUNDSTREAM stre
 
 HRESULT WINAPI IDirectSoundStream_SetFrequency(LPDIRECTSOUNDSTREAM stream, DWORD frequency)
 {
+	JOIN_FRAME_STEPF("sound: stream frequency %lu", (unsigned long)frequency);
 	STREAM_SETTER(record->frequency = frequency ? frequency : record->sample_rate)
 }
 
@@ -3771,6 +3817,7 @@ ULONG WINAPI IDirectSoundBuffer_Release(LPDIRECTSOUNDBUFFER buffer)
 
 HRESULT WINAPI IDirectSoundBuffer_SetBufferData(LPDIRECTSOUNDBUFFER buffer, LPVOID data, DWORD size)
 {
+	JOIN_FRAME_STEPF("sound: buffer data %lu bytes", (unsigned long)size);
 	struct sdl_buffer *record = (struct sdl_buffer *)buffer;
 	short *samples = NULL;
 	unsigned long frames = 0;
@@ -3799,6 +3846,7 @@ HRESULT WINAPI IDirectSoundBuffer_SetBufferData(LPDIRECTSOUNDBUFFER buffer, LPVO
 
 HRESULT WINAPI IDirectSoundBuffer_Play(LPDIRECTSOUNDBUFFER buffer, DWORD reserved1, DWORD reserved2, DWORD flags)
 {
+	JOIN_FRAME_STEPF("sound: buffer play flags %lx", (unsigned long)flags);
 	struct sdl_buffer *record = (struct sdl_buffer *)buffer;
 
 	(void)reserved1;

@@ -4493,6 +4493,7 @@ void sound_idle(
 	if (sound_manager_globals.initialized && sound_manager_globals.enabled)
 	{
 		sound_manager_globals.platform_definition->begin_scene();
+		JOIN_FRAME_STEP("sound_render: scene begun");
 
 		if (!sound_manager_globals.paused)
 		{
@@ -4783,9 +4784,11 @@ static void detail_sound_random_offset(
 void sound_render(
 	void)
 {
+	JOIN_FRAME_STEP("sound_render: begins");
 #ifdef HALO_WIIU
 	/* port: what the ticks and the menus asked of the sound list since the last frame */
 	sound_requests_drain();
+	JOIN_FRAME_STEP("sound_render: requests drained");
 #endif
 	profile_enter(sound_render_section);
 

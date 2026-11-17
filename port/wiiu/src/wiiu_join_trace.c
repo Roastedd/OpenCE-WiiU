@@ -12,6 +12,7 @@ JOIN_FRAME_LINES of them only, so that the writes do not take the game's frames 
 
 #include <stdint.h>
 #include <string.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <unistd.h>
 
@@ -22,7 +23,7 @@ JOIN_FRAME_LINES of them only, so that the writes do not take the game's frames 
 
 #define JOIN_FILE WIIU_DATA_DIRECTORY "/join-steps.txt"
 #define JOIN_WINDOW_MS 25000u
-#define JOIN_FRAME_LINES 170u
+#define JOIN_FRAME_LINES 420u
 #define JOIN_MAXIMUM_LINES 1200u
 
 static FILE *join_file;
@@ -214,4 +215,18 @@ int wiiu_join_safe_window(void)
 		return 0;
 	join_safe_left--;
 	return 1;
+}
+
+/* a stage with figures in it (the sound's calls): formatted, then as wiiu_join_frame_step */
+void wiiu_join_frame_stepf(char const *format, ...)
+{
+	char text[160];
+	va_list arguments;
+
+	if (!join_open || join_frame_lines >= JOIN_FRAME_LINES)
+		return;
+	va_start(arguments, format);
+	vsnprintf(text, sizeof(text), format, arguments);
+	va_end(arguments);
+	wiiu_join_frame_step(text);
 }

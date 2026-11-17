@@ -88,7 +88,7 @@ def generated(source=None, fault=None, scalar=False, cache=False, gains=False):
     code += "\n#ifdef UNDER_TEST_I3DL2_SOURCE\n" + function(text, "IDirectSoundStream_SetI3DL2Source") + "\n#endif\n"
     if fault:
         code = mutated(code, *fault)
-    prefix, suffix = "#define packet_allocate malloc\n#define packet_deallocate free\nstatic unsigned long packet_serial;\n", ""
+    prefix, suffix = "#define JOIN_FRAME_STEPF(...) ((void)0)\n#define JOIN_FRAME_STEP(name) ((void)0)\n#define packet_allocate malloc\n#define packet_deallocate free\nstatic unsigned long packet_serial;\n", ""
     if gains:
         # Observe the real publisher's lock acquisition. Configuration reads
         # assert that file-reading work happens before that lock is held.

@@ -3771,7 +3771,9 @@ static void main_game_render(
 #ifdef HALO_WIIU
 	/* port: the particles, particle systems, contrails and decals that the ticks made since the frame's game_frame
 	(tick_owners.h), before the frame's draw reads and ages them */
+	JOIN_FRAME_STEP("render: before the render drain");
 	tick_owners_drain(TICK_OWNER_RENDER);
+	JOIN_FRAME_STEP("render: after the render drain");
 	/* port: the objects' memory pool is not compacted while this frame holds pointers into it (tick_owners.h) */
 	if (!overlap)
 		tick_owners_object_pool_reader_begin();
@@ -3784,20 +3786,26 @@ static void main_game_render(
 		/* port: the view first (the frame's work and the sound read objects, and the ticks run beside them), then the frame's own work, once,
 		whatever the number of times it is drawn: what the serial loop does at the end of game_time_update (game.c's game_frame), here on the
 		game thread, in the pose the frame draws (render_interpolation.c) */
+		JOIN_FRAME_STEP("render: snapshot view begins");
 		tick_snapshot_view_begin();
+		JOIN_FRAME_STEP("render: game frame begins");
 		if (!repeat)
 			game_frame((real)time_delta_since_tick_sec);
+		JOIN_FRAME_STEP("render: game frame done");
 	}
 #endif
 	/* port: the study's HALO_STUDY_NO_SOUND_RENDER=1 leaves it out */
+	JOIN_FRAME_STEP("render: sound_render begins");
 	if (!main_study_no_sound_render())
 		sound_render();
+	JOIN_FRAME_STEP("render: sound_render done");
 #ifdef HALO_WIIU
 	/* port: from here the frame reads the tick snapshot, if halo/tick_snapshot.txt says so (port/linux/game/tick_snapshot.c): the sound
 	above writes game state (mouth apertures) and reads what the tick sends it, and stays on the game state */
 	if (!overlap)
 		tick_snapshot_view_begin();
 #endif
+	JOIN_FRAME_STEP("render: windows begin");
 	force_single_screen = game_engine_force_single_screen();
 	last_local_player_index = NONE;
 
@@ -3848,7 +3856,9 @@ static void main_game_render(
 			observer = tick_snapshot_camera(window->local_player_index, observer);
 #endif
 #endif
+			JOIN_FRAME_STEP("render: the window's camera begins");
 			observer = render_interpolation_camera(window->local_player_index, observer);
+			JOIN_FRAME_STEP("render: the window's camera done");
 		}
 		else
 		{

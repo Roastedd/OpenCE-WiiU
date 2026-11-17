@@ -110,6 +110,9 @@ static int audio_thread(int argc, const char **argv)
 	OSTime last_poll = 0, last_report = 0;
 	const uint64_t budget = (uint64_t)OSMillisecondsToTicks(1000) * CHUNK_FRAMES / 48000u;
 	int have_poll = 0;
+	/* port: how long this thread has run without a sleep, and the times it has been made to sleep (see the end of a chunk) */
+	OSTime burst_started = OSGetSystemTime();
+	unsigned overload_sleeps = 0;
 
 	(void)argc;
 	(void)argv;
@@ -145,9 +148,10 @@ static int audio_thread(int argc, const char **argv)
 				now - last_poll >= (OSTime)OSMillisecondsToTicks(85));
 			if (now - last_report >= (OSTime)OSMillisecondsToTicks(10000))
 			{
-				wiiu_log("Audio ring: %u apparent overtakes, %u at deadline, %u long polling gaps (10 s)",
+				wiiu_log("Audio ring: %u apparent overtakes, %u at deadline, %u long polling gaps, %u overload sleeps (10 s)",
 					(unsigned)observations.apparent_overtakes, (unsigned)observations.at_deadline,
-					(unsigned)observations.long_gaps);
+					(unsigned)observations.long_gaps, overload_sleeps);
+				overload_sleeps = 0;
 				observations.apparent_overtakes = observations.at_deadline = observations.long_gaps = 0;
 				if (mixer_profile_enabled)
 				{
@@ -221,10 +225,20 @@ static int audio_thread(int argc, const char **argv)
 			DCFlushRange(rings[1] + write, CHUNK_FRAMES * sizeof(int16_t));
 			/* Keep filling up to the high-water mark before sleeping. A 2 ms
 			   sleep after every 64-frame chunk consumes more than a chunk. */
+			/* port: but not for ever. This thread is above everything else on its core (priority 10: the watchdog, the black box, the log, the card's callbacks), and a mixer
+			   that cannot keep up (the merged mixer, with the dozens of sounds that a joined game starts at once) never finds the ring ahead, so it never slept: the core
+			   was taken whole and the console stopped answering. After 4 ms of work it sleeps 1 ms whatever the ring says: a sound that stutters for a moment, not a hung console. */
+			if (OSGetSystemTime() - burst_started > (OSTime)OSMillisecondsToTicks(4))
+			{
+				OSSleepTicks(OSMillisecondsToTicks(1));
+				burst_started = OSGetSystemTime();
+				overload_sleeps++;
+			}
 		}
 		else
 		{
 			OSSleepTicks(OSMillisecondsToTicks(2));
+			burst_started = OSGetSystemTime();
 		}
 	}
 	return 0;
