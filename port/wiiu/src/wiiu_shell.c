@@ -954,6 +954,36 @@ static void threads_report(uint32_t window_ms)
 	wiiu_log("threads: core time in the last %.1f s: %s", (double)window_ms / 1000.0, text);
 }
 
+/* The game thread's real place, for a stall in a join's window: a running thread's saved context is its last switch's, so the thread is suspended for a moment (which saves it), read (its
+pc, lr and the return addresses up its stack) and resumed. The line goes to the log and, synchronously, to join-steps.txt. */
+static void game_thread_context_note(uint32_t stalled)
+{
+	char text[256];
+	uint32_t waited = 0, sp, depth, used;
+
+	OSSuspendThread(&game_thread);
+	while (!OSIsThreadSuspended(&game_thread) && waited < 100u)
+	{
+		sleep_ms(5);
+		waited += 5u;
+	}
+	used = (uint32_t)snprintf(text, sizeof(text), "the game's loop has not gone round for %u s: game thread pc=%08x lr=%08x, up the stack:", (unsigned)(stalled / 1000u),
+		(unsigned)game_thread.context.srr0, (unsigned)game_thread.context.lr);
+	sp = (uint32_t)game_thread.context.gpr[1];
+	for (depth = 0; depth < 8 && used + 12 < sizeof(text); depth++)
+	{
+		const uint32_t base = (uint32_t)(uintptr_t)game_stack;
+
+		if (!game_stack || sp < base || sp + 8 > base + GAME_STACK_BYTES || (sp & 7))
+			break;
+		used += (uint32_t)snprintf(text + used, sizeof(text) - used, " %08x", (unsigned)*(const uint32_t *)(uintptr_t)(sp + 4));
+		sp = *(const uint32_t *)(uintptr_t)sp;
+	}
+	OSResumeThread(&game_thread);
+	wiiu_log("%s", text);
+	wiiu_join_note(text);
+}
+
 static void *watchdog_main(void *unused)
 {
 	uint32_t frames_before = 0;
@@ -989,6 +1019,18 @@ static void *watchdog_main(void *unused)
 			wiiu_log("The game's loop has not gone round for %u s; its phase is: %s", (unsigned)(stalled / 1000u),
 				in_app_memory(phase, 0x01000000u) ? phase : "unknown");
 			box_wanted = 1;
+			/* a stall in a join's window (a step of the join in the last 25 s): where the game thread is, then, if it goes on, the app ends (the console's menu back, not a frozen game) */
+			if (wiiu_join_window_open())
+			{
+				game_thread_context_note(stalled);
+				if (stalled >= 12000u)
+				{
+					wiiu_log("The game has not gone round for %u s since a join: ending the app", (unsigned)(stalled / 1000u));
+					exit_note("a stall in a join: the watchdog ends the app (_Exit)");
+					wiiu_shell_log_flush(&shell_log, 600);
+					_Exit(0);
+				}
+			}
 		}
 		if (now - last_beat_ms >= HEARTBEAT_PERIOD_MS)
 		{

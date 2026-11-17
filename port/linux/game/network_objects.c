@@ -2324,7 +2324,10 @@ static void distributed_client_delete(
 		}
 		child_index = unit->object.first_child_object_index;
 		/* (its riders out first: they are deleted with it otherwise) */
-		while (child_index != NONE)
+		{
+		long steps = 0;
+
+		while (child_index != NONE && ++steps <= MAXIMUM_TRACKED_OBJECTS)
 		{
 			long next_index = object_get(child_index)->object.next_object_index;
 
@@ -2334,6 +2337,7 @@ static void distributed_client_delete(
 				unit_exit_seat_end(child_index);
 			}
 			child_index = next_index;
+		}
 		}
 		if (unit->unit.player_index != NONE && player_try_and_get(unit->unit.player_index) &&
 			player_get(unit->unit.player_index)->unit_index == object_index)
@@ -3949,9 +3953,19 @@ void network_objects_discard_client_effects(void)
 
 	if (!network_game_distributed_client())
 		return;
+	long steps = 0;
+
 	object_iterator_new(&iterator, _object_mask_projectile, 0);
+	/* (a limit, and a line: this runs at a join, on the game thread) */
 	while (object_iterator_next(&iterator))
+	{
 		object_delete_immediately(iterator.index);
+		if (++steps > MAXIMUM_TRACKED_OBJECTS)
+		{
+			platform_log("network_objects_discard_client_effects: more projectiles than there are objects; stopped");
+			break;
+		}
+	}
 	effects_discard_gameplay();
 }
 

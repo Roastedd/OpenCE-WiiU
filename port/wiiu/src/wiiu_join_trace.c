@@ -106,6 +106,25 @@ void wiiu_join_frame_step(char const *name)
 	join_write("frame", number, name);
 }
 
+/* whether a join's window is open (a step in the last 25 s): the watchdog's test for a stall it ends the app for */
+int wiiu_join_window_open(void)
+{
+	return join_open && join_now_ms() - join_last_ms <= JOIN_WINDOW_MS;
+}
+
+/* a line written to the join's file whether or not the record is on (the watchdog's: a stall of the game in a join's window), synchronously */
+void wiiu_join_note(char const *text)
+{
+	FILE *file = fopen(JOIN_FILE, "a");
+
+	if (!file)
+		return;
+	fprintf(file, "%u.%03u note #%u %s (last step: %s)\n", (unsigned)(join_now_ms() / 1000), (unsigned)(join_now_ms() % 1000), join_step_number, text, join_last_name);
+	fflush(file);
+	fsync(fileno(file));
+	fclose(file);
+}
+
 /* the black box thread's: once a second, while the window is open */
 void wiiu_join_heartbeat(void)
 {

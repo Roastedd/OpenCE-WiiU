@@ -437,10 +437,17 @@ long object_get_ultimate_parent(
 {
 	long result = NONE;
 	struct object_datum *object;
+	long steps = 0;
 	for (;object_index!=NONE; object_index = object->object.parent_object_index)
 	{
 		result = object_index;
 		object = object_get(object_index);
+		/* port: a chain of parents that comes back to itself would be walked for ever (a limit, and a line) */
+		if (++steps > MAXIMUM_OBJECTS_PER_MAP)
+		{
+			error(_error_silent, "object_get_ultimate_parent: the parents of object #%ld come back on themselves; stopped at #%ld", result, object_index);
+			break;
+		}
 	}
 
 	return result;
@@ -1588,10 +1595,16 @@ void object_get_velocities(
 	real_vector3d *angular_velocity)
 {
 	struct object_datum *ultimate_parent = object_get(object_index);
+	long steps = 0;
 
 	while (ultimate_parent->object.parent_object_index!=NONE)
 	{
 		ultimate_parent = object_get(ultimate_parent->object.parent_object_index);
+		if (++steps > MAXIMUM_OBJECTS_PER_MAP)
+		{
+			error(_error_silent, "object_get_velocities: the parents of object #%ld come back on themselves", object_index);
+			break;
+		}
 	}
 
 	if (translational_velocity)
@@ -5546,10 +5559,18 @@ static void object_remove_from_list(
 	long *first_object_reference,
 	long object_index)
 {
+	long steps = 0;
+
 	while (*first_object_reference!=NONE)
 	{
 		struct object_datum *object = object_get(*first_object_reference);
 
+		/* port: a list that comes back on itself is left (a limit, and a line) */
+		if (++steps > MAXIMUM_OBJECTS_PER_MAP)
+		{
+			error(_error_silent, "object_remove_from_list: the list of object #%ld comes back on itself", object_index);
+			break;
+		}
 		if (*first_object_reference==object_index)
 		{
 			*first_object_reference = object->object.next_object_index;

@@ -700,6 +700,7 @@ as effect_generate_part; the deterministic flag also covers harmless lights. */
 void effects_discard_gameplay(void)
 {
 	long effect_index;
+	long steps = 0;
 
 	if (!effect_data || !effect_data->valid)
 		return;
@@ -707,6 +708,12 @@ void effects_discard_gameplay(void)
 		effect_index != NONE;
 		effect_index = data_next_index(effect_data, effect_index))
 	{
+		/* port: a limit, and a line (this runs at a join, on the game thread) */
+		if (++steps > effect_data->maximum_count + 1)
+		{
+			error(_error_silent, "effects_discard_gameplay: more effects than there can be; stopped");
+			break;
+		}
 		struct effect_definition *definition = effect_definition_get(effect_get(effect_index)->definition_index);
 		boolean gameplay = FALSE;
 		short event_index;
