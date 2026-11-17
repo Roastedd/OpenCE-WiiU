@@ -1,7 +1,7 @@
 /*
 ZLIB_PREFIXED.H
 
-The port's zlib (1.3.2, its inflate only: what the port inflates is other
+The port's zlib (1.3.2; inflate for untrusted input and deflate for map import: what the port inflates is other
 people's data, the maps, the menus' and the HUD's PNGs, updates), beside
 the game's own (source/memory/zlib, 1.1.3): its names begin z_, so the two
 never meet. Include this, not zlib.h, so that the names always match.

@@ -124,7 +124,7 @@ MUSL_MATH_DIR = Path("port/third_party/musl-math")
 # maps, the menus' and the HUD's PNGs and the updates, data from anywhere,
 # instead of the game's own 1.1.3 (its inflate only, its names prefixed z_)
 ZLIB_DIR = Path("port/third_party/zlib")
-ZLIB_SOURCES = ("adler32.c", "crc32.c", "inffast.c", "inflate.c", "inftrees.c", "uncompr.c", "zutil.c")
+ZLIB_SOURCES = ("adler32.c", "crc32.c", "deflate.c", "trees.c", "inffast.c", "inflate.c", "inftrees.c", "uncompr.c", "zutil.c")
 # (its names prefixed, and the one Z_PREFIX leaves, its error messages, which
 # the game's zlib names the same)
 ZLIB_DEFINES = ("-DZ_PREFIX", "-Dz_errmsg=z_port_errmsg")
@@ -757,12 +757,20 @@ def generate_linux_build(n: Writer, sln: Any) -> None:
                 implicit=sysroot_inputs,
                 variables={"cflags": " ".join([posix_cflags, f"-I{ZLIB_DIR}", *ZLIB_DEFINES, posix_extra])},
             )
+            # The Wii U first-run converter is also exercised by this host tool.
+            import_source = Path("port/wiiu/src/wiiu_import_core.c")
+            import_object = obj_dir / import_source.with_suffix(".o")
+            n.build(outputs=import_object, rule="linux_cc", inputs=import_source,
+                    variables={"cflags": " ".join([posix_cflags, f"-I{ZLIB_DIR}", *ZLIB_DEFINES, posix_extra])})
             # (and the Custom Edition maps' loader, cache_file_formats.c, and
             # the byte swap the big-endian builds turn their tags with,
             # tag_swap.c)
             tool_objects = [tool_object, obj_dir / (game_dir / "tag_validate.o"),
                             obj_dir / (game_dir / "cache_file_formats.o"),
                             obj_dir / (game_dir / "tag_swap.o"),
+                            import_object,
+                            obj_dir / (platform_dir / "xiso.o"),
+                            obj_dir / (platform_dir / "posix_files.o"),
                             *(obj_dir / source.with_suffix(".o") for source in sorted(game_dir.glob("tag_schema*.c"))),
                             *(obj_dir / (ZLIB_DIR / name).with_suffix(".o") for name in ZLIB_SOURCES)]
             n.build(

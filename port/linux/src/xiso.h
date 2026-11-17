@@ -18,4 +18,10 @@ thread */
 int xiso_extract_maps(const char *image_path, const char *destination, xiso_progress_proc progress, void *context,
 	char *error, int error_size);
 
+/* port: split images use image.iso.0, image.iso.1, ... (up to 16 parts).
+The optional cancellation check is called between reads, on the caller's thread. */
+int xiso_extract_maps_cancellable(const char *image_path, const char *destination,
+	xiso_progress_proc progress, void *context, char *error, int error_size,
+	int (*cancelled)(void *context));
+
 #endif

@@ -160,6 +160,8 @@ struct tag_swap_layout
 	short field_count;
 	short first_handler;
 	short handler_count;
+	short first_pointer;
+	short pointer_count;
 	short hook;
 };
 
@@ -187,6 +189,9 @@ struct tag_swap
 	or data */
 	unsigned long *swapped;
 	unsigned long *claimed;
+	/* port: optional pointer bitmap for a Wii U map import, applied after the walk */
+	unsigned long *pointers;
+	unsigned long rebase;
 	struct tag_swap_shared *shared;
 	unsigned long shared_count;
 	struct tag_swap_region regions[MAXIMUM_TAG_SWAP_REGIONS];
@@ -450,6 +455,28 @@ static unsigned long value_u32(
 	return (swap->swapped[offset / TAG_SWAP_BITS] >> (offset % TAG_SWAP_BITS)) & 1 ?
 		big_u32(swap->bytes + offset) :
 		little_u32(swap->bytes + offset);
+}
+
+/* port: remember only schema-identified pointers whose value is in a current
+region. Rebase after the entire walk, so traversals still see Xbox addresses. */
+static void pointer_remember(struct tag_swap *swap, unsigned long offset, boolean force)
+{
+	unsigned long value, index;
+
+	if (!swap->pointers || offset > swap->size || swap->size - offset < 4)
+		return;
+	value = value_u32(swap, offset);
+	if (!value)
+		return;
+	for (index = 0; index < (unsigned long)swap->region_count; index++)
+	{
+		struct tag_swap_region const *region = &swap->regions[index];
+
+		if (value >= region->address && value - region->address < region->size)
+			force = TRUE;
+	}
+	if (force)
+		swap->pointers[offset / TAG_SWAP_BITS] |= 1UL << (offset % TAG_SWAP_BITS);
 }
 
 /* whether size bytes at offset are in the buffer */
@@ -1352,6 +1379,9 @@ static void element_swap(
 	}
 	if (swap->refused)
 		return;
+	/* port: pointer fields have been turned above, but are not moved yet. */
+	for (index = 0; index < layout->pointer_count; index++)
+		pointer_remember(swap, offset + tag_swap_pointer_offsets[layout->first_pointer + index], FALSE);
 	switch (layout->hook)
 	{
 	case _tag_swap_hook_animation:
@@ -1373,9 +1403,11 @@ static void element_swap(
 		switch (field->type)
 		{
 		case _tag_schema_block:
+			pointer_remember(swap, at + 4, FALSE);
 			block_follow(swap, definition, field, at, depth);
 			break;
 		case _tag_schema_data:
+			pointer_remember(swap, at + 12, FALSE);
 			data_follow(swap, definition, layout, field, offset, at);
 			break;
 		case _tag_schema_struct:
@@ -1438,6 +1470,13 @@ static void buffers_swap(
 		return;
 	}
 	values_swap(swap, start, 4, (unsigned long)count * BUFFER_WORDS);
+	/* port: each D3D buffer's data address, as map_convert.py records it */
+	{
+		long index;
+
+		for (index = 0; index < count; index++)
+			pointer_remember(swap, start + (unsigned long)index * BUFFER_BYTES + 4, FALSE);
+	}
 
 	return;
 }
@@ -1459,6 +1498,9 @@ static void structure_bsp_swap(
 	}
 	root = little_u32(swap->bytes + offset);
 	values_swap(swap, offset, 4, STRUCTURE_BSP_HEADER_WORDS);
+	pointer_remember(swap, offset, FALSE);
+	pointer_remember(swap, offset + 8, FALSE);
+	pointer_remember(swap, offset + 16, FALSE);
 	if (!claim(swap, offset, STRUCTURE_BSP_HEADER_BYTES))
 		swap_refuse(swap, "a structure bsp's header overlaps its tags");
 	buffers_swap(swap, signed_u32(big_u32(swap->bytes + offset + 0x04)), big_u32(swap->bytes + offset + 0x08));
@@ -1509,6 +1551,8 @@ static void tag_table_swap(
 		char text[5];
 
 		values_swap(swap, entry, 4, TAG_INSTANCE_WORDS);
+		pointer_remember(swap, entry + 0x10, FALSE);
+		pointer_remember(swap, entry + 0x14, FALSE);
 		if (group_tag == STRUCTURE_BSP_GROUP_TAG || !base_address)
 			continue;
 		if (!region_offset(swap, base_address, 4, &start))
@@ -1534,6 +1578,7 @@ static void tag_table_swap(
 				{
 					byte const *bytes = swap->bytes + references + (unsigned long)reference * STRUCTURE_BSP_REFERENCE_BYTES;
 
+					pointer_remember(swap, references + (unsigned long)reference * STRUCTURE_BSP_REFERENCE_BYTES + 8, TRUE);
 					bsp_references[reference * 3] = little_u32(bytes);
 					bsp_references[reference * 3 + 1] = little_u32(bytes + 4);
 					bsp_references[reference * 3 + 2] = little_u32(bytes + 8);
@@ -1720,11 +1765,12 @@ boolean tag_swap_custom_edition_model_data(
 	return !swap.refused;
 }
 
-boolean tag_swap_xbox_map(
+static boolean xbox_map_swap(
 	void *map,
 	unsigned long map_bytes,
 	void *scratch,
-	struct tag_swap_report *report)
+	struct tag_swap_report *report,
+	unsigned long rebase)
 {
 	static unsigned long const header_words[] = { 0x00, 0x04, 0x08, 0x10, 0x14, 0x64, 0x7FC };
 	struct tag_swap swap;
@@ -1736,6 +1782,13 @@ boolean tag_swap_xbox_map(
 	short index;
 
 	swap_begin(&swap, map, map_bytes, scratch, FALSE, report);
+	/* port: the old API uses no extra scratch and never rebases. */
+	if (rebase)
+	{
+		swap.rebase = rebase;
+		swap.pointers = (unsigned long *)((byte *)scratch + tag_swap_scratch_bytes(map_bytes));
+		csmemset(swap.pointers, 0, bit_words(map_bytes) * sizeof(unsigned long));
+	}
 	if (map_bytes < XBOX_HEADER_BYTES || little_u32(bytes) != CACHE_HEADER_SIGNATURE ||
 		little_u32(bytes + 0x08) != map_bytes)
 	{
@@ -1766,6 +1819,9 @@ boolean tag_swap_xbox_map(
 	}
 	values_swap(&swap, tags, 4, XBOX_TAG_HEADER_WORDS);
 	claim(&swap, tags, XBOX_TAG_HEADER_WORDS * 4);
+	pointer_remember(&swap, tags, FALSE);
+	pointer_remember(&swap, tags + 20, FALSE);
+	pointer_remember(&swap, tags + 28, FALSE);
 	/* (the tag table first, then the buffers, as map_convert.py checks them) */
 	{
 		unsigned long table;
@@ -1800,5 +1856,42 @@ boolean tag_swap_xbox_map(
 		swap.region_count--;
 	}
 
+	/* port: move each remembered pointer once, using explicit byte stores on
+	either host byte order. The original byte-swap API takes this path never. */
+	if (!swap.refused && swap.pointers)
+	{
+		unsigned long at;
+
+		for (at = 0; at + 4 <= map_bytes; at++)
+		{
+			if (swap.pointers[at / TAG_SWAP_BITS] & (1UL << (at % TAG_SWAP_BITS)))
+			{
+				unsigned long value = (big_u32(swap.bytes + at) + swap.rebase) & 0xFFFFFFFFUL;
+
+				swap.bytes[at] = (byte)(value >> 24);
+				swap.bytes[at + 1] = (byte)(value >> 16);
+				swap.bytes[at + 2] = (byte)(value >> 8);
+				swap.bytes[at + 3] = (byte)value;
+			}
+		}
+	}
+
 	return !swap.refused;
+}
+
+/* port: the unchanged tool API and the optional Wii U import API */
+boolean tag_swap_xbox_map(void *map, unsigned long bytes, void *scratch, struct tag_swap_report *report)
+{
+	return xbox_map_swap(map, bytes, scratch, report, 0);
+}
+
+unsigned long tag_swap_xbox_rebase_scratch_bytes(unsigned long bytes)
+{
+	return tag_swap_scratch_bytes(bytes) + bit_words(bytes) * sizeof(unsigned long);
+}
+
+boolean tag_swap_xbox_map_rebased(void *map, unsigned long bytes, void *scratch,
+	struct tag_swap_report *report, unsigned long delta)
+{
+	return xbox_map_swap(map, bytes, scratch, report, delta);
 }

@@ -57,6 +57,19 @@ usage: map_validate --swap tags.dump output [map.map]
 /* (the game's boolean, for tag_swap.h) */
 typedef unsigned char boolean;
 #include "../port/linux/game/tag_swap.h"
+#include "../port/wiiu/src/wiiu_import_core.h"
+#include "../port/linux/src/xiso.h"
+
+/* The standalone ISO extraction check has no platform logger. */
+void platform_log(char const *format, ...)
+{
+	va_list arguments;
+
+	va_start(arguments, format);
+	vfprintf(stderr, format, arguments);
+	va_end(arguments);
+	fputc('\n', stderr);
+}
 
 /* ---------- constants */
 
@@ -678,7 +691,7 @@ static int custom_edition_swap(void *bytes, unsigned long size, char const *name
 {
 #ifdef __BIG_ENDIAN__
 	struct tag_swap_report report;
-	void *scratch = malloc(tag_swap_scratch_bytes(size));
+	void *scratch = malloc(tag_swap_xbox_rebase_scratch_bytes(size));
 	int swapped = scratch &&
 		(bsp ? tag_swap_custom_edition_structure_bsp(bytes, size, (unsigned long)bsp, scratch, &report) :
 			tag_swap_custom_edition_tags(bytes, size, scratch, &report));
@@ -1033,7 +1046,7 @@ static void swap_report_print(char const *name, struct tag_swap_report const *re
 static int swap_with_scratch(char const *name, struct tag_swap_report *report, unsigned long size,
 	boolean (*swap)(void *context, void *scratch, struct tag_swap_report *report), void *context)
 {
-	void *scratch = malloc(tag_swap_scratch_bytes(size));
+	void *scratch = malloc(tag_swap_xbox_rebase_scratch_bytes(size));
 	int swapped = scratch && swap(context, scratch, report);
 
 	free(scratch);
@@ -1077,11 +1090,14 @@ static boolean swap_model_data(void *context, void *scratch, struct tag_swap_rep
 		buffer->index_data_offset, scratch, report);
 }
 
+static unsigned long xbox_rebase;
+
 static boolean swap_xbox_map(void *context, void *scratch, struct tag_swap_report *report)
 {
 	struct swap_buffer *buffer = context;
 
-	return tag_swap_xbox_map(buffer->bytes, buffer->size, scratch, report);
+	return xbox_rebase ? tag_swap_xbox_map_rebased(buffer->bytes, buffer->size, scratch, report, xbox_rebase) :
+		tag_swap_xbox_map(buffer->bytes, buffer->size, scratch, report);
 }
 
 /* --swap TAGS OUTPUT [MAP]: a Custom Edition map's tags as its loader leaves
@@ -1279,6 +1295,23 @@ int main(int argc, char **argv)
 	/* (the byte swap's checks, which need no tag cache) */
 	if (argc >= 4 && argc <= 5 && !strcmp(argv[1], "--swap"))
 		return swap_custom_edition(argv[2], argv[3], argc == 5 ? argv[4] : NULL);
+	if (argc == 4 && (!strcmp(argv[1], "--import-wiiu-map") || !strcmp(argv[1], "--extract-xiso")))
+	{
+		char problem[256] = "";
+		int ok = !strcmp(argv[1], "--extract-xiso") ?
+			xiso_extract_maps(argv[2], argv[3], NULL, NULL, problem, sizeof(problem)) :
+			xbox_map_import_file(argv[2], argv[3], NULL, NULL, problem, sizeof(problem));
+
+		if (!ok)
+			fprintf(stderr, "%s\n", problem);
+		return ok ? 0 : 1;
+	}
+
+	if (argc == 5 && !strcmp(argv[1], "--swap-xbox-rebase"))
+	{
+		xbox_rebase = strtoul(argv[2], NULL, 0);
+		return swap_xbox(argv[3], argv[4]);
+	}
 	if (argc == 4 && !strcmp(argv[1], "--swap-xbox"))
 		return swap_xbox(argv[2], argv[3]);
 

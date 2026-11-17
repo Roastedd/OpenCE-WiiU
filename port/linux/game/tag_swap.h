@@ -116,4 +116,10 @@ boolean tag_swap_xbox_map(
 	void *scratch,
 	struct tag_swap_report *report);
 
+/* port: a first-run Wii U importer uses the same walk, then moves only
+identified pointers by delta. Allocate the larger scratch size for this API. */
+unsigned long tag_swap_xbox_rebase_scratch_bytes(unsigned long bytes);
+boolean tag_swap_xbox_map_rebased(void *map, unsigned long bytes, void *scratch,
+	struct tag_swap_report *report, unsigned long delta);
+
 #endif // __TAG_SWAP_H

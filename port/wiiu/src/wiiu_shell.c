@@ -21,6 +21,7 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 
 #include "../include/wut_clang_compat.h"
 #include "wiiu_shell.h"
+#include "wiiu_import.h"
 
 #include "wiiu_crash.h"
 #include "wiiu_debug.h"
@@ -1238,6 +1239,12 @@ int wiiu_shell_run(int (*game_main)(void))
 	wiiu_shell_blackbox_init(&shell_box, BLACKBOX_FILE, thread_where);
 
 	WHBProcInit();
+	/* First-run setup finishes before game heaps, threads or GX2 are created. */
+	if (!wiiu_import_startup())
+	{
+		WHBProcShutdown();
+		_Exit(0);
+	}
 	ProcUIRegisterCallback(PROCUI_CALLBACK_RELEASE, on_release, NULL, RELEASE_PRIORITY);
 	ProcUIRegisterCallback(PROCUI_CALLBACK_ACQUIRE, on_acquire, NULL, ACQUIRE_PRIORITY);
 	ProcUIRegisterCallback(PROCUI_CALLBACK_ACQUIRE, on_acquire_late, NULL, ACQUIRE_LATE_PRIORITY);

@@ -121,6 +121,7 @@ def generate() -> str:
             if handler is not None:
                 handlers.append((field["offset"], DATA_KINDS[handler], field["name"]))
         entry = {"runs": c_runs(convert.runs[index]), "fields": fields, "handlers": handlers,
+                 "pointers": sorted(set(convert.pointer_offsets(index))),
                  "hook": HOOK_KINDS.get(definition["name"], "_tag_swap_hook_none")}
         if key in by_key and by_key[key] != entry:
             raise SystemExit(f"two definitions {key} differ: the game could not tell them apart")
@@ -179,6 +180,15 @@ def generate() -> str:
         for offset, kind, name in by_key[key]["handlers"]:
             lines.append(f"\t{{ 0x{offset:04X}, {kind} }}, /* {key[0]}.{name} */")
             handler_index += 1
+    lines += ["};", "", "/* pointer fields from the same layouts as map_convert.py */",
+              "static unsigned short const tag_swap_pointer_offsets[] =", "{"]
+    pointer_first = {}
+    pointer_index = 0
+    for key in keys:
+        pointer_first[key] = pointer_index
+        for offset in by_key[key]["pointers"]:
+            lines.append(f"\t0x{offset:04X}, /* {key[0]} */")
+            pointer_index += 1
     lines += ["};", "",
               "/* the definitions, by name and then size: their runs, fields and data",
               "handlers (first, count) and their hook */",
@@ -187,7 +197,7 @@ def generate() -> str:
         entry = by_key[key]
         lines.append(f"\t{{ \"{key[0]}\", 0x{key[1]:X}, {run_first[key]}, {len(entry['runs'])}, "
                      f"{field_first[key]}, {len(entry['fields'])}, {handler_first[key]}, {len(entry['handlers'])}, "
-                     f"{entry['hook']} }},")
+                     f"{pointer_first[key]}, {len(entry['pointers'])}, {entry['hook']} }},")
     lines += ["};", ""]
 
     lines += ["/* the fields the hooks and the model data's swap read, and their widths */"]

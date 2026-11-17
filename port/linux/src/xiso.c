@@ -40,7 +40,10 @@ copy is written to maps.partial (emptied first of what an earlier attempt
 left) and given the name maps only when every file is complete.
 */
 
-#include "platform.h"
+#include <stdlib.h>
+
+/* This reader uses no graphics or SDK declarations. */
+void platform_log(const char *format, ...);
 #include "xiso.h"
 
 #if !defined(HALO_ANDROID) && !defined(HALO_WEB)
@@ -102,7 +105,12 @@ static const unsigned long xiso_partition_starts[] =
 
 struct xiso_image
 {
-	int descriptor;
+	/* port: a full disc can be split for the Wii U's FAT32 card (.0, .1, ...). */
+	int descriptors[16];
+	unsigned long long part_sizes[16];
+	int part_count;
+	int (*cancelled)(void *context);
+	void *cancel_context;
 	unsigned long long partition;
 	/* the image's size in bytes, or ~0 when it could not be found */
 	unsigned long long size;
@@ -198,25 +206,87 @@ static unsigned long xiso_u32(const unsigned char *bytes)
 nonzero if all of them were read */
 static int xiso_read(struct xiso_image *image, unsigned long long offset, void *buffer, unsigned long size)
 {
-	posix_ulong position_low, position_high;
-	unsigned long count = 0;
+	unsigned char *bytes = buffer;
+	int part = 0;
 
-	if (posix_seek(image->descriptor, (posix_long)(offset & 0xFFFFFFFFUL), (posix_long)(offset >> 32), SEEK_SET,
-		&position_low, &position_high) != 0)
-	{
+	if (offset > image->size || size > image->size - offset)
 		return 0;
-	}
-	while (count < size)
+	while (part < image->part_count && offset >= image->part_sizes[part])
+		offset -= image->part_sizes[part++];
+	while (size && part < image->part_count)
 	{
-		int result = (int)read(image->descriptor, (char *)buffer + count, (unsigned int)(size - count));
+		posix_ulong low, high;
+		unsigned long count = image->part_sizes[part] - offset < size ?
+			(unsigned long)(image->part_sizes[part] - offset) : size;
+		unsigned long done = 0;
 
-		if (result < 0 && errno == EINTR)
-			continue;
-		if (result <= 0)
+		if (image->cancelled && image->cancelled(image->cancel_context))
 			return 0;
-		count += (unsigned long)result;
+		if (posix_seek(image->descriptors[part], (posix_long)(offset & 0xFFFFFFFFULL),
+			(posix_long)(offset >> 32), SEEK_SET, &low, &high) != 0)
+			return 0;
+		while (done < count)
+		{
+			int read_count = (int)read(image->descriptors[part], bytes + done, (unsigned int)(count - done));
+
+			if (read_count < 0 && errno == EINTR)
+				continue;
+			if (read_count <= 0)
+				return 0;
+			done += (unsigned long)read_count;
+		}
+		bytes += count;
+		size -= count;
+		offset = 0;
+		part++;
 	}
-	return 1;
+	return size == 0;
+}
+
+static void xiso_close_image(struct xiso_image *image)
+{
+	int part;
+
+	for (part = 0; part < image->part_count; part++)
+		close(image->descriptors[part]);
+	image->part_count = 0;
+}
+
+static int xiso_open_image(struct xiso_image *image, const char *path)
+{
+	char part_path[XISO_MAXIMUM_PATH];
+	size_t length = strlen(path);
+	int split = length > 2 && path[length - 2] == '.' && path[length - 1] == '0';
+	int part;
+
+	for (part = 0; part < (split ? 16 : 1); part++)
+	{
+		posix_ulong low, high;
+		int descriptor;
+
+		if (split)
+		{
+			if (snprintf(part_path, sizeof(part_path), "%.*s%d", (int)(length - 1), path, part) >=
+				(int)sizeof(part_path))
+				break;
+		}
+		else if (snprintf(part_path, sizeof(part_path), "%s", path) >= (int)sizeof(part_path))
+			break;
+		descriptor = open(part_path, O_RDONLY | O_LARGEFILE | O_CLOEXEC);
+		if (descriptor < 0 && part && errno == ENOENT)
+			return 1;
+		if (descriptor < 0)
+			break;
+		image->descriptors[image->part_count++] = descriptor;
+		if (posix_seek(descriptor, 0, 0, SEEK_END, &low, &high) != 0 || (!low && !high))
+			break;
+		image->part_sizes[part] = (unsigned long long)high << 32 | low;
+		image->size += image->part_sizes[part];
+	}
+	if (part == (split ? 16 : 1))
+		return 1;
+	xiso_close_image(image);
+	return 0;
 }
 
 /* the byte offset of a sector of the game partition */
@@ -592,8 +662,8 @@ done:
 
 /* ---------- public code */
 
-int xiso_extract_maps(const char *image_path, const char *destination, xiso_progress_proc progress, void *context,
-	char *error, int error_size)
+int xiso_extract_maps_cancellable(const char *image_path, const char *destination, xiso_progress_proc progress, void *context,
+	char *error, int error_size, int (*cancelled)(void *context))
 {
 	struct xiso_image image;
 	struct xiso_entry *entries = NULL;
@@ -604,20 +674,17 @@ int xiso_extract_maps(const char *image_path, const char *destination, xiso_prog
 	char *partial_path = NULL, *file_path = NULL, *maps_path = NULL;
 	unsigned long root_sector, root_size, maps_sector = 0, maps_size = 0;
 	unsigned long long done = 0, total = 0;
-	posix_ulong size_low, size_high;
 	int count, index, found, has_loading, out_of_memory, succeeded = 0;
 
 	memset(&image, 0, sizeof(image));
 	memset(&xbe, 0, sizeof(xbe));
-	image.descriptor = open(image_path, O_RDONLY | O_LARGEFILE | O_CLOEXEC);
-	if (image.descriptor < 0)
+	image.cancelled = cancelled;
+	image.cancel_context = context;
+	if (!xiso_open_image(&image, image_path))
 	{
 		xiso_error(error, error_size, "Could not open %s.", image_path);
 		return 0;
 	}
-	image.size = ~0ULL;
-	if (posix_seek(image.descriptor, 0, 0, SEEK_END, &size_low, &size_high) == 0)
-		image.size = (unsigned long long)size_high << 32 | size_low;
 
 	entries = malloc(sizeof(*entries) * XISO_MAXIMUM_ENTRIES);
 	buffer = malloc(XISO_COPY_CHUNK);
@@ -754,8 +821,14 @@ done:
 	free(partial_path);
 	free(buffer);
 	free(entries);
-	close(image.descriptor);
+	xiso_close_image(&image);
 	return succeeded;
+}
+
+int xiso_extract_maps(const char *image_path, const char *destination, xiso_progress_proc progress, void *context,
+	char *error, int error_size)
+{
+	return xiso_extract_maps_cancellable(image_path, destination, progress, context, error, error_size, NULL);
 }
 
 #endif
