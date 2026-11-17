@@ -97,6 +97,7 @@ void lruv_delete(
 void lruv_idle(
 	struct lruv_cache *cache);
 
+boolean lruv_block_delete_if_valid(struct lruv_cache *cache,long block_index); /* port: FALSE, nothing changed, when the block or its links are not coherent */
 void lruv_block_delete(
 	struct lruv_cache *cache,
 	long block_index);

@@ -41,6 +41,7 @@ symbols in this file:
 /* ---------- headers */
 
 #include "following_camera.h"
+#include "third_person_camera.h" /* port: local shoulder-camera framing */
 #include "passenger_camera.h" /* port: port/linux/game/passenger_camera.c */
 #include "cseries/errors.h" /* port: (error, for a short camera track) */
 #include "observer.h"
@@ -233,7 +234,7 @@ void following_camera_update(
 		if (crouched != camera->crouched)
 		{
 			result->parameter_flags[1] = TRUE;
-			result->parameter_timers[1] = MAX(0.5f, result->parameter_timers[1]);
+			result->parameter_timers[1] = MAX(third_person_camera_available(controls->local_player_index) ? 0.12f : 0.5f, result->parameter_timers[1]);
 			camera->crouched = crouched;
 		}
 
@@ -250,6 +251,9 @@ void following_camera_update(
 			camera->facing_offset.yaw = 0.f;
 		}
 
+        /* port: scope alignment must not inherit debug-orbit offsets. */
+        if(third_person_camera_scoped(controls->local_player_index))
+            camera->facing_offset.yaw=camera->facing_offset.pitch=0;
 		facing = *player_control_get_facing_angles(controls->local_player_index);
 		facing.yaw += camera->facing_offset.yaw;
 		facing.pitch = PIN(
@@ -283,6 +287,9 @@ void following_camera_update(
 		SET_FLAG(command->flags, 0, TRUE);
 	}
 
+    /* port: retain the observer's existing obstruction solver, with a
+     * controller-independent on-foot shoulder rig instead of vehicle tracks. */
+    third_person_camera_adjust(controls->local_player_index,command);
 	observer_up_from_forward(&command->forward, &command->up);
 
 	match_vassert(

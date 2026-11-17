@@ -2221,8 +2221,10 @@ void _rasterizer_frame_begin(
 		rasterizer_debug_options.DXTC_noise_enabled);
 	if (rasterizer_debug_options.draw_environment_decals)
 	{
+		decals_repair_cache(); /* port: recover both cosmetic pools outside eviction callbacks */
 		rasterizer_decal_vertices_begin_update();
 		decals_update();
+        decals_repair_cache();
 		rasterizer_decal_vertices_end_update();
 	}
 	return;

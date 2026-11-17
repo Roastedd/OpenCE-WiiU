@@ -26,6 +26,10 @@ connect callback counts the changes a read could miss), the layout is arranged, 
 
 #include <coreinit/time.h>
 
+/* The pinned WUT library exports these; its older header omits their declarations. */
+void KPADSetPosParam(KPADChan chan, float tolerance, float sensitivity);
+void KPADSetPosPlayMode(KPADChan chan, int mode);
+
 #include <malloc.h>
 #include <stdlib.h>
 #include <string.h>
@@ -413,6 +417,8 @@ static struct
 	int layout; /* the layout it has (wimote_layout_for) */
 	int source; /* the look it has (WIIMOTE_SOURCE_*) */
 	int pointer_valid; /* KPADStatus.posValid, as a yes or no */
+	float pointer_x, pointer_y;
+	OSTime pointer_seen;
 	int plus; /* WPADIsMplsIntegrated: 1 a Wii Remote Plus, 0 a Remote, -1 not known */
 	int announced; /* the connection has been told in the log: from now on the changes are */
 	unsigned int announced_extension;
@@ -425,6 +431,7 @@ static struct
 	OSTime grace_since; /* the extension was unknown since, a Remote's state is kept for a second meanwhile */
 	OSTime last_sample;
 	struct wimote_motion motion;
+	struct wimote_shake shake;
 	/* the units of the MotionPlus's rates, in the log now and then: the rates' peak, and how the angles changed over the same time */
 	float peak[3];
 	float angle_ref[3];
@@ -444,6 +451,46 @@ static struct
 {
 	float turn, pitch;
 } remote_mouse;
+
+static int prompt_owner[WIIU_PAD_PORTS] = { -1, -1, -1, -1 };
+static unsigned int remote_pointer_xy[WIIU_PAD_CHANNELS];
+static unsigned int remote_pointer_valid[WIIU_PAD_CHANNELS];
+static unsigned int remote_pointer_ms[WIIU_PAD_CHANNELS];
+static int shake_melee_enabled;
+static unsigned int remote_clutch_held[WIIU_PAD_CHANNELS];
+static float nunchuk_melee_threshold=2.0f;
+void wiiu_input_set_melee_threshold(float value) {nunchuk_melee_threshold=(value>=1.5f && value<=4.0f)?value:2.0f;}
+static unsigned int shake_melee_down[WIIU_PAD_CHANNELS];
+
+void wiiu_input_set_shake_melee(int enabled)
+{
+	shake_melee_enabled = enabled;
+}
+
+int wiiu_input_melee_gesture(unsigned int port)
+{
+	unsigned int channel;
+	if (port >= WIIU_PAD_PORTS || !shake_melee_enabled)
+		return 0;
+	for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
+		if (last_pro[channel].present && remotes[channel].remote &&
+			wiiu_pad_players_port(&pad_players, (int)channel) == (int)port &&
+			__atomic_load_n(&shake_melee_down[channel], __ATOMIC_ACQUIRE))
+			return 1;
+	return 0;
+}
+
+int wiiu_input_remote_clutch(unsigned button)
+{
+    unsigned channel;
+    for(channel=0;channel<WIIU_PAD_CHANNELS;channel++)
+        if(last_pro[channel].present && remotes[channel].remote &&
+            wiiu_pad_players_port(&pad_players,(int)channel)==0 &&
+            (__atomic_load_n(&remote_clutch_held[channel],__ATOMIC_ACQUIRE) & (button==2 ? WIIMOTE_BUTTON_C : WIIMOTE_BUTTON_2)))return 1;
+    return 0;
+}
+
+static int remote_free_aim_selected;
 
 /* the first player's Remote as the menus' cursor (wiiu_input_remote_cursor): 0 to 1 across and down the picture, and how far it moved since it was last asked */
 static struct
@@ -549,7 +596,11 @@ static void remote_control(unsigned int channel, unsigned int extension, OSTime 
 	{
 		remotes[channel].applied = wimote_settings.epoch;
 		if (wants_pointer)
+		{
 			KPADEnableDPD(chan);
+			KPADSetPosParam(chan, 0.2f, 0.2f);
+			KPADSetPosPlayMode(chan, 0); /* KPAD_PLAY_MODE_LOOSE */
+		}
 		else
 			KPADDisableDPD(chan);
 		if (!wants_motion && KPADGetMplsStatus(chan) != WPAD_MPLS_MODE_DISABLE)
@@ -582,6 +633,7 @@ static void remote_sample(unsigned int channel, const KPADStatus *status, struct
 	const unsigned int bit = 1u << channel;
 	float seconds = remotes[channel].last_sample ? (float)OSTicksToMicroseconds(now - remotes[channel].last_sample) / 1000000.0f : 0.0f;
 	int source;
+	int pointer_sample_valid = 0;
 
 	if (!remotes[channel].remote)
 	{
@@ -597,8 +649,20 @@ static void remote_sample(unsigned int channel, const KPADStatus *status, struct
 		remotes[channel].mpls_failed = 0;
 	}
 	remotes[channel].remote = 1;
+    __atomic_store_n(&remote_clutch_held[channel], wimote_hold(status->hold,nunchuk ? status->nunchuk.hold : 0u) & (WIIMOTE_BUTTON_2 | WIIMOTE_BUTTON_C), __ATOMIC_RELEASE);
 	remotes[channel].extension = extension;
 	remotes[channel].pointer_valid = valid;
+	if (valid && wimote_pointer_cursor(valid, status->pos.x, status->pos.y,
+		&remotes[channel].pointer_x, &remotes[channel].pointer_y))
+	{
+		const unsigned int x = (unsigned int)(remotes[channel].pointer_x * 65535.0f);
+		const unsigned int y = (unsigned int)(remotes[channel].pointer_y * 65535.0f);
+		pointer_sample_valid = 1;
+		remotes[channel].pointer_seen = now;
+		__atomic_store_n(&remote_pointer_xy[channel], (x << 16) | y, __ATOMIC_RELAXED);
+		__atomic_store_n(&remote_pointer_ms[channel], (unsigned int)OSTicksToMilliseconds(now), __ATOMIC_RELAXED);
+	}
+	__atomic_store_n(&remote_pointer_valid[channel], pointer_sample_valid ? 1u : 0u, __ATOMIC_RELEASE);
 	remotes[channel].layout = wimote_layout_for(extension, wimote_settings.layout);
 	wimote_map(remotes[channel].layout, wimote_hold(status->hold, nunchuk ? status->nunchuk.hold : 0u), nunchuk ? status->nunchuk.stick.x : 0.0f,
 		nunchuk ? status->nunchuk.stick.y : 0.0f, pad);
@@ -606,15 +670,17 @@ static void remote_sample(unsigned int channel, const KPADStatus *status, struct
 	remotes[channel].source = source;
 	if (source == WIIMOTE_SOURCE_POINTER)
 	{
-		wimote_pointer_look(valid, status->pos.x, status->pos.y, wimote_settings.box, wimote_settings.speed, &pad->look_x, &pad->look_y);
+		if (!__atomic_load_n(&remote_free_aim_selected, __ATOMIC_RELAXED))
+			wimote_pointer_look(valid, status->pos.x, status->pos.y, wimote_settings.box, wimote_settings.speed, &pad->look_x, &pad->look_y);
 	}
 	else if (source == WIIMOTE_SOURCE_MOTION)
 	{
-		/* the rates (KPADStatus.mplus.acc: "angular acceleration" in wut's words, the rates in degrees a second as KPAD's MotionPlus status has them) and the Remote's
-		accelerometer for the direction of up */
-		const float rate[3] = { status->mplus.acc.x, status->mplus.acc.y, status->mplus.acc.z };
+		/* KPAD's MotionPlus velocity is rotations per second. The older WUT
+		headers call this field acc. Negate its axes for the motion helpers'
+		left-positive yaw and nose-up-positive pitch, in degrees per second. */
+		const float rate[3] = { status->mplus.acc.x * -360.0f, status->mplus.acc.y * -360.0f, status->mplus.acc.z * -360.0f };
 		const float acc[3] = { status->acc.x, status->acc.y, status->acc.z };
-		float turn, tilt;
+		float turn, tilt, cursor_turn, cursor_tilt;
 		unsigned int axis, lower;
 		int owns = first;
 
@@ -623,7 +689,9 @@ static void remote_sample(unsigned int channel, const KPADStatus *status, struct
 			if (remote_present & (1u << lower) && remotes[lower].source == WIIMOTE_SOURCE_MOTION && wiiu_pad_players_port(&pad_players, (int)lower) == 0)
 				owns = 0;
 		wimote_motion_step(&remotes[channel].motion, gyro_mouse.space, seconds, acc, rate, wimote_settings.invert_x, &turn, &tilt);
-		if (wimote_settings.edge)
+		cursor_turn = turn;
+		cursor_tilt = tilt;
+		if (wimote_settings.edge && !__atomic_load_n(&remote_free_aim_selected, __ATOMIC_RELAXED))
 		{
 			float edge_turn, edge_tilt;
 
@@ -636,12 +704,14 @@ static void remote_sample(unsigned int channel, const KPADStatus *status, struct
 		{
 			remote_mouse.turn += turn;
 			remote_mouse.pitch += tilt;
-			/* (the menus' cursor: a turn of 0.11 rotations (40 degrees) crosses the picture, 0.07 (25 degrees) goes down it; the nose lifting is tilt < 0) */
-			remote_cursor.x -= turn * 9.0f;
-			remote_cursor.y += tilt * 14.4f;
+			/* The menu cursor uses physical motion only; gameplay edge turning
+			does not keep moving the cursor while the Remote is held still.
+			(the menus' cursor: a turn of 0.11 rotations (40 degrees) crosses the picture, 0.07 (25 degrees) goes down it; the nose lifting is tilt < 0) */
+			remote_cursor.x -= cursor_turn * 9.0f;
+			remote_cursor.y += cursor_tilt * 14.4f;
 			remote_cursor.x = remote_cursor.x < 0.0f ? 0.0f : remote_cursor.x > 1.0f ? 1.0f : remote_cursor.x;
 			remote_cursor.y = remote_cursor.y < 0.0f ? 0.0f : remote_cursor.y > 1.0f ? 1.0f : remote_cursor.y;
-			remote_cursor.moved += (turn < 0.0f ? -turn : turn) + (tilt < 0.0f ? -tilt : tilt);
+			remote_cursor.moved += fabsf(cursor_turn) + fabsf(cursor_tilt);
 		}
 		/* held still for a second and a half: the library zeroes the MotionPlus (KPADResetMpls), once for each time it is held still */
 		if (wimote_motion_still(&remotes[channel].motion, seconds, rate))
@@ -671,10 +741,10 @@ static void remote_sample(unsigned int channel, const KPADStatus *status, struct
 			{
 				remotes[channel].motion_told = now;
 				remotes[channel].motion_told_count++;
-				wiiu_log("Input: channel %u's MotionPlus: rates peaked at %.1f %.1f %.1f (x y z); the angles changed %.1f %.1f %.1f in %.2f s (acc %.2f %.2f %.2f)",
+				wiiu_log("Input: channel %u's MotionPlus: rates peaked at %.1f %.1f %.1f deg/s (x y z); the angles changed %.1f %.1f %.1f in %.2f s (acc %.2f %.2f %.2f)",
 					channel + 1, (double)remotes[channel].peak[0], (double)remotes[channel].peak[1], (double)remotes[channel].peak[2],
-					(double)(status->mplus.angles.x - remotes[channel].angle_ref[0]), (double)(status->mplus.angles.y - remotes[channel].angle_ref[1]),
-					(double)(status->mplus.angles.z - remotes[channel].angle_ref[2]), (double)elapsed, (double)acc[0], (double)acc[1], (double)acc[2]);
+					(double)(status->mplus.angles.x - remotes[channel].angle_ref[0]) * 360.0, (double)(status->mplus.angles.y - remotes[channel].angle_ref[1]) * 360.0,
+					(double)(status->mplus.angles.z - remotes[channel].angle_ref[2]) * 360.0, (double)elapsed, (double)acc[0], (double)acc[1], (double)acc[2]);
 			}
 			remotes[channel].angle_ref_at = now;
 			remotes[channel].angle_ref[0] = status->mplus.angles.x;
@@ -682,6 +752,12 @@ static void remote_sample(unsigned int channel, const KPADStatus *status, struct
 			remotes[channel].angle_ref[2] = status->mplus.angles.z;
 			remotes[channel].peak[0] = remotes[channel].peak[1] = remotes[channel].peak[2] = 0.0f;
 		}
+	}
+	{
+        const float nunchuk_acc[3] = {status->nunchuk.acc.x, status->nunchuk.acc.y, status->nunchuk.acc.z};
+        const int held = wimote_nunchuk_melee(&remotes[channel].shake, seconds,
+            nunchuk_acc, shake_melee_enabled && nunchuk, nunchuk_melee_threshold);
+		__atomic_store_n(&shake_melee_down[channel], held != 0, __ATOMIC_RELEASE);
 	}
 	remotes[channel].last_sample = now;
 	remote_present |= bit;
@@ -738,6 +814,11 @@ static void mpls_events_poll(unsigned int channel)
 		mpls_result[channel], wimote_extension_name(remotes[channel].extension));
 }
 
+void wiiu_input_set_remote_free_aim(int enabled)
+{
+	__atomic_store_n(&remote_free_aim_selected, enabled, __ATOMIC_RELAXED);
+}
+
 int wiiu_input_remote_look_take(float *turn, float *pitch)
 {
 	unsigned int channel;
@@ -752,6 +833,9 @@ int wiiu_input_remote_look_take(float *turn, float *pitch)
 			wiiu_pad_players_port(&pad_players, (int)channel) == 0)
 		{
 			owner = 1;
+			if (*turn * *turn + *pitch * *pitch > 0.0005f * 0.0005f)
+				__atomic_store_n(&prompt_owner[0], (int)channel, __ATOMIC_RELAXED);
+			break;
 		}
 	}
 	if (!owner)
@@ -759,30 +843,73 @@ int wiiu_input_remote_look_take(float *turn, float *pitch)
 	return owner;
 }
 
+int wiiu_input_remote_pointer(float *x, float *y, int *valid)
+{
+	unsigned int channel;
+	const unsigned int now = (unsigned int)OSTicksToMilliseconds(OSGetSystemTime());
+	*x = *y = 0.0f;
+	*valid = 0;
+	for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
+	{
+		if (last_pro[channel].present && remotes[channel].remote &&
+			(remotes[channel].source == WIIMOTE_SOURCE_POINTER ||
+			 (remotes[channel].source == WIIMOTE_SOURCE_NONE && wimote_settings.look == WIIMOTE_LOOK_AUTO &&
+			  remotes[channel].pointer_seen)) &&
+			wiiu_pad_players_port(&pad_players, (int)channel) == 0)
+		{
+			const unsigned int tracking = __atomic_load_n(&remote_pointer_valid[channel], __ATOMIC_ACQUIRE);
+			const unsigned int stamp = __atomic_load_n(&remote_pointer_ms[channel], __ATOMIC_RELAXED);
+			const unsigned int position = __atomic_load_n(&remote_pointer_xy[channel], __ATOMIC_RELAXED);
+			*x = (float)(position >> 16) * (2.0f / 65535.0f) - 1.0f;
+			*y = (float)(position & 65535u) * (2.0f / 65535.0f) - 1.0f;
+			*valid = tracking && now - stamp <= 100u;
+			if (*valid)
+			{
+				static unsigned int previous[WIIU_PAD_CHANNELS];
+				const int delta_x = (int)(position >> 16) - (int)(previous[channel] >> 16);
+				const int delta_y = (int)(position & 65535u) - (int)(previous[channel] & 65535u);
+				if (abs(delta_x) + abs(delta_y) > 512)
+					__atomic_store_n(&prompt_owner[0], (int)channel, __ATOMIC_RELAXED);
+				previous[channel] = position;
+			}
+			return 1;
+		}
+	}
+	return 0;
+}
+
 int wiiu_input_remote_cursor(float *x, float *y, int *moved)
 {
 	unsigned int channel;
-	int owner = 0;
+	const OSTime now = OSGetSystemTime();
 
 	for (channel = 0; channel < WIIU_PAD_CHANNELS; channel++)
 	{
-		if (last_pro[channel].present && remotes[channel].remote && remotes[channel].source == WIIMOTE_SOURCE_MOTION &&
-			wiiu_pad_players_port(&pad_players, (int)channel) == 0)
+		if (!last_pro[channel].present || !remotes[channel].remote ||
+			wiiu_pad_players_port(&pad_players, (int)channel) != 0)
+			continue;
+		if (remotes[channel].source == WIIMOTE_SOURCE_POINTER && remotes[channel].pointer_seen &&
+			now - remotes[channel].pointer_seen <= OSMillisecondsToTicks(150))
 		{
-			owner = 1;
+			*x = remotes[channel].pointer_x;
+			*y = remotes[channel].pointer_y;
+			*moved = fabsf(*x - remote_cursor.x) + fabsf(*y - remote_cursor.y) > 0.001f;
+			remote_cursor.x = *x;
+			remote_cursor.y = *y;
+			remote_cursor.moved = 0.0f;
+			return 1;
+		}
+		if (remotes[channel].source == WIIMOTE_SOURCE_MOTION)
+		{
+			*x = remote_cursor.x;
+			*y = remote_cursor.y;
+			*moved = remote_cursor.moved > 0.001f;
+			remote_cursor.moved = 0.0f;
+			return 1;
 		}
 	}
-	if (!owner)
-	{
-		remote_cursor.moved = 0.0f;
-		return 0;
-	}
-	*x = remote_cursor.x;
-	*y = remote_cursor.y;
-	/* (a hand's tremor is not a move: a thousandth of a rotation, about a third of a degree, since the last call) */
-	*moved = remote_cursor.moved > 0.001f;
 	remote_cursor.moved = 0.0f;
-	return 1;
+	return 0;
 }
 
 /* The controller on a KPAD channel now, into last_pro: a sample if there is a new one, else as it was. Returns 1 if it is one the game reads. */
@@ -1125,6 +1252,43 @@ static void jack_note(const VPADStatus *status)
 	__atomic_store_n(&headset, now_headset, __ATOMIC_RELEASE);
 }
 
+/* Keep the last deliberately used controller, ignoring resting stick noise. */
+static struct wiiu_pad prompt_previous[WIIU_PAD_CHANNELS + 1];
+
+static int prompt_activity(const struct wiiu_pad *now, struct wiiu_pad *previous)
+{
+	const int buttons = (now->buttons & ~previous->buttons) || (now->xbox_faces & ~previous->xbox_faces);
+	const int sticks = fabsf(now->left_x - previous->left_x) > 0.15f ||
+		fabsf(now->left_y - previous->left_y) > 0.15f ||
+		fabsf(now->right_x - previous->right_x) > 0.15f ||
+		fabsf(now->right_y - previous->right_y) > 0.15f ||
+		fabsf(now->look_x - previous->look_x) > 0.15f ||
+		fabsf(now->look_y - previous->look_y) > 0.15f;
+	*previous = *now;
+	return buttons || sticks;
+}
+
+int wiiu_input_prompt_style(unsigned int port)
+{
+	int owner;
+	if (port >= WIIU_PAD_PORTS)
+		port = 0;
+	owner = __atomic_load_n(&prompt_owner[port], __ATOMIC_RELAXED);
+	return owner >= 0 && owner < WIIU_PAD_CHANNELS && last_pro[owner].present &&
+		wiiu_pad_players_port(&pad_players, owner) == (int)port && remotes[owner].remote ? 12 : 11;
+}
+
+int wiiu_input_prompt_icon(unsigned int port, int action_icon)
+{
+	int owner;
+	if (port >= WIIU_PAD_PORTS)
+		port = 0;
+	owner = __atomic_load_n(&prompt_owner[port], __ATOMIC_RELAXED);
+	if (wiiu_input_prompt_style(port) != 12)
+		return -1;
+	return wimote_prompt_icon(remotes[owner].layout, action_icon);
+}
+
 int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 {
 	unsigned int channel;
@@ -1162,6 +1326,8 @@ int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 		{
 			memset(&last_vpad, 0, sizeof(last_vpad));
 		}
+		if (prompt_activity(&last_vpad, &prompt_previous[0]))
+			__atomic_store_n(&prompt_owner[0], -1, __ATOMIC_RELAXED);
 		*pad = last_vpad;
 		wiiu_debug_input(pad);
 		/* (the TV button as the game sees it: the debug server's held one too) */
@@ -1182,6 +1348,8 @@ int wiiu_input_read(unsigned int port, struct wiiu_pad *pad)
 	{
 		if (wiiu_pad_players_port(&pad_players, (int)channel) != (int)port || !pad_sample(channel))
 			continue;
+		if (prompt_activity(&last_pro[channel].pad, &prompt_previous[channel + 1]))
+			__atomic_store_n(&prompt_owner[port], (int)channel, __ATOMIC_RELAXED);
 		pad->buttons |= last_pro[channel].pad.buttons;
 		pad->xbox_faces |= last_pro[channel].pad.xbox_faces;
 		merge_stick(&pad->left_x, &pad->left_y, last_pro[channel].pad.left_x, last_pro[channel].pad.left_y);

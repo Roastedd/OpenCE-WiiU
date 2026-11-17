@@ -476,7 +476,76 @@ collision:
 	return TRUE;
 }
 
+#ifdef HALO_WIIU
+/* port: where the vector tests of a frame come from. Each thread has its own row (the tick thread, the main one); the main thread
+logs both every 10 s: calls and milliseconds by collision user (collision_usage.h). */
+#include <time.h>
+#include "tick_overlap.h"
+void platform_log(const char *format, ...);
+static unsigned long coll_calls[2][32];
+static double coll_ms[2][32];
+static double coll_logged_at;
+
+static boolean collision_test_vector_body(
+	unsigned long flags,
+	real_point3d const *point,
+	real_vector3d const *vector,
+	long ignore_object_index,
+	struct collision_result *collision);
+
+static double coll_now_ms(void)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (double)now.tv_sec * 1000.0 + (double)now.tv_nsec / 1000000.0;
+}
+
 boolean collision_test_vector(
+	unsigned long flags,
+	real_point3d const *point,
+	real_vector3d const *vector,
+	long ignore_object_index,
+	struct collision_result *collision)
+{
+	const int row = tick_overlap_thread_is_tick() ? 1 : 0;
+	const int user = global_current_collision_user_depth > 0 ? global_current_collision_users[global_current_collision_user_depth - 1] & 31 : 0;
+	const int timed = (coll_calls[row][user] & 31) == 0;
+	const double start = timed ? coll_now_ms() : 0.0;
+	const boolean hit = collision_test_vector_body(flags, point, vector, ignore_object_index, collision);
+	/* (every 32nd test is timed, and counts 32 times: two clock reads on each of 50,000 tests a second were themselves a visible cost) */
+	const double end = (timed || row == 0) ? coll_now_ms() : 0.0;
+
+	coll_calls[row][user]++;
+	if (timed)
+		coll_ms[row][user] += (end - start) * 32.0;
+	if (row == 0 && end - coll_logged_at >= 10000.0)
+	{
+		int r, u;
+		void particles_report_counts(void);
+		void point_physics_report_counts(void);
+
+		particles_report_counts();
+		point_physics_report_counts();
+
+		if (coll_logged_at > 0.0)
+		{
+			for (r = 0; r < 2; r++)
+				for (u = 0; u < 32; u++)
+					if (coll_calls[r][u] && coll_ms[r][u] >= 5.0)
+						platform_log("collision: %s thread, user %d: %lu vector tests, %.0f ms in 10 s", r ? "tick" : "render", u, coll_calls[r][u], coll_ms[r][u]);
+		}
+		memset(coll_calls, 0, sizeof(coll_calls));
+		memset(coll_ms, 0, sizeof(coll_ms));
+		coll_logged_at = end;
+	}
+	return hit;
+}
+
+static boolean collision_test_vector_body(
+#else
+boolean collision_test_vector(
+#endif
 	unsigned long flags,
 	real_point3d const *point,
 	real_vector3d const *vector,

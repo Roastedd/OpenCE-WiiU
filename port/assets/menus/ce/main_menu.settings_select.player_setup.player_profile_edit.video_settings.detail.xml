@@ -13,13 +13,14 @@
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/options_menu" type="column_list" width="640" height="480" flags="pass_unhandled_to_focused_child up_down_tabs_children" description="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/help">
 		<data input="port settings help"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/op_grass" x="54" y="73"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/op_decals" x="54" y="103"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/op_particles" x="54" y="133"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/op_object_shadows" x="54" y="163"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/op_lens_flares" x="54" y="193"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/op_specular" x="54" y="223"/>
-		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/op_bump_mapping" x="54" y="253"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/op_dynamic_quality" x="54" y="73"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/op_grass" x="54" y="103"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/op_decals" x="54" y="133"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/op_particles" x="54" y="163"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/op_object_shadows" x="54" y="193"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/op_lens_flares" x="54" y="223"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/op_specular" x="54" y="253"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/op_bump_mapping" x="54" y="283"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/button_bar" y="414"/>
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/button_bar" type="column_list" width="640" height="28" flags="pass_unhandled_to_focused_child left_right_tabs_items">
@@ -27,11 +28,20 @@
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/button_ok" x="380" y="1"/>
 		<child widget="common_button_cancel" x="510" y="1"/>
 	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/op_dynamic_quality" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/dynamic_quality_label"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/dynamic_quality_spinner" x="320" y="1"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/dynamic_quality_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/labels" string_index="0" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/dynamic_quality_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="ON|OFF" setting="display.dynamic_quality" values="true|false" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
+		<on event="created" run="port setting load"/>
+	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/op_grass" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/grass_label"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/grass_spinner" x="320" y="1"/>
 	</widget>
-	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/grass_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/labels" string_index="0" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/grass_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/labels" string_index="1" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/grass_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="ON|OFF" setting="display.grass" values="true|false" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
 		<on event="created" run="port setting load"/>
@@ -40,7 +50,7 @@
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/decals_label"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/decals_spinner" x="320" y="1"/>
 	</widget>
-	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/decals_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/labels" string_index="1" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/decals_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/labels" string_index="2" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/decals_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="ON|OFF" setting="display.decals" values="true|false" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
 		<on event="created" run="port setting load"/>
@@ -49,7 +59,7 @@
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/particles_label"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/particles_spinner" x="320" y="1"/>
 	</widget>
-	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/particles_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/labels" string_index="2" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/particles_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/labels" string_index="3" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/particles_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="ON|OFF" setting="display.particles" values="true|false" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
 		<on event="created" run="port setting load"/>
@@ -58,7 +68,7 @@
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/object_shadows_label"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/object_shadows_spinner" x="320" y="1"/>
 	</widget>
-	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/object_shadows_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/labels" string_index="3" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/object_shadows_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/labels" string_index="4" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/object_shadows_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="ON|OFF" setting="display.object_shadows" values="true|false" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
 		<on event="created" run="port setting load"/>
@@ -67,7 +77,7 @@
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/lens_flares_label"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/lens_flares_spinner" x="320" y="1"/>
 	</widget>
-	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/lens_flares_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/labels" string_index="4" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/lens_flares_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/labels" string_index="5" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/lens_flares_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="ON|OFF" setting="display.lens_flares" values="true|false" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
 		<on event="created" run="port setting load"/>
@@ -76,7 +86,7 @@
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/specular_label"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/specular_spinner" x="320" y="1"/>
 	</widget>
-	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/specular_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/labels" string_index="5" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/specular_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/labels" string_index="6" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/specular_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="ON|OFF" setting="display.specular" values="true|false" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
 		<on event="created" run="port setting load"/>
@@ -85,7 +95,7 @@
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/bump_mapping_label"/>
 		<child widget="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/bump_mapping_spinner" x="320" y="1"/>
 	</widget>
-	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/bump_mapping_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/labels" string_index="6" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/bump_mapping_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/labels" string_index="7" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
 	</widget>
 	<widget name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/bump_mapping_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="ON|OFF" setting="display.bump_mapping" values="true|false" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
 		<on event="created" run="port setting load"/>
@@ -101,6 +111,7 @@
 		<on event="left_mouse" run="mouse emit accept event"/>
 	</widget>
 	<strings name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/labels">
+		<string text="AUTO DETAIL:"/>
 		<string text="GRASS:"/>
 		<string text="DECALS:"/>
 		<string text="PARTICLES:"/>
@@ -111,6 +122,7 @@
 	</strings>
 	<strings name="main_menu/settings_select/player_setup/player_profile_edit/video_settings/detail/help_strings">
 		<string text=""/>
+		<string text="Leaves out small and far things, a step at a time,\nwhile the frames take over 22 ms; puts them back."/>
 		<string text="The grass, pebbles and plants near you. Off\nsaves the game's time in fields of grass."/>
 		<string text="Bullet holes, scorch marks and blood left on\nwalls and the ground."/>
 		<string text="Sparks, smoke, dust, debris and the trails of\nshots. Off leaves the shots and blasts bare."/>

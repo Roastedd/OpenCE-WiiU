@@ -489,6 +489,8 @@ int port_main_menu_active(void)
 short port_button_icon(short icon_index)
 {
 #ifdef HALO_WIIU
+	if (controller_glyph_style() == 12)
+		return icon_index;
 	if (icon_index >= 0 && icon_index < 4 && !wiiu_face_buttons_by_label())
 		return (short)(icon_index ^ 1);
 #endif
@@ -549,7 +551,8 @@ boolean hud_hires_button_draw(struct icon_hud_element_definition const *icon,
 	short i;
 	short style, slot;
 
-	if (!hud_globals || (!config_boolean("display.high_res_hud") &&
+	style = controller_glyph_style();
+	if (!hud_globals || (!config_boolean("display.high_res_hud") && style < 11 &&
 		(!custom_edition_cache_tags_loaded() ||
 		custom_edition_cache_stock_tag(hud_globals->messaging.messaging_icons.index))))
 		return FALSE;
@@ -560,9 +563,8 @@ boolean hud_hires_button_draw(struct icon_hud_element_definition const *icon,
 	if (index >= 18 || index >= hud_globals->messaging.button_icons.count)
 		return FALSE;
 	if (!ce_hud_buttons_stock(icon, index)) return FALSE;
-	if (!config_boolean("display.high_res_hud"))
+	if (!config_boolean("display.high_res_hud") && style < 11)
 		return ce_hud_button_draw(icon, cursor, color);
-	style = controller_glyph_style();
 	if (controller_glyph_draw(style, (short)index, icon, cursor, color)) return TRUE;
 	slot = index < 6 ? (short)index : hud_button_control_slot((short)index,
 		icon->frame_rate > 0 ? game_time_get() / icon->frame_rate : 0);

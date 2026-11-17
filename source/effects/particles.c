@@ -951,6 +951,65 @@ static boolean particle_update_physics(
 }
 
 #ifdef HALO_WIIU
+#define PARTICLE_FREE_LIMIT 2048
+/* port: a particle that no recent view could see drawn is not made, and one the governor is shedding for is let go sooner when unseen. The
+Halo CE for the Vita port (halo-ce-vita 1.1.2, particle_budget.c) found the same thing in a 15-bot fight: the assault rifle's sparks, 20 to 40 at
+each impact, and half of all particles deleted within half a second unseen, out of view or too small at their distance to be drawn. The test and
+numbers here are this port's own. */
+#include "render_governor.h"
+#define PARTICLE_VIEWS 4
+static struct
+{
+	long frame_index;
+	real_point3d position;
+	real_vector3d forward;
+	real pixels_per_unit;
+} particle_views[PARTICLE_VIEWS];
+
+void particle_note_view(short local_player_index, real_point3d const *position, real_vector3d const *forward, real pixels_per_unit)
+{
+	if (local_player_index >= 0 && local_player_index < PARTICLE_VIEWS && pixels_per_unit > 0.0f)
+	{
+		particle_views[local_player_index].position = *position;
+		particle_views[local_player_index].forward = *forward;
+		particle_views[local_player_index].pixels_per_unit = pixels_per_unit;
+		particle_views[local_player_index].frame_index = render.frame_index;
+	}
+}
+
+/* the governor is shedding particles (its step has cut the share kept below all of them, or capped the draw) */
+static boolean particle_shedding(void)
+{
+	struct render_governor_values const *shed = render_governor_values();
+
+	return shed->particle_keep < 16 || shed->particle_max != 0;
+}
+
+/* whether a free particle at position, radius across at the largest, which is drawn only over lod_cutoff pixels, could be seen from a view drawn in
+the last 30 frames: big enough at its distance, and not well behind the camera */
+static boolean particle_could_be_seen(real_point3d const *position, real maximum_radius, real lod_cutoff)
+{
+	boolean any_view = FALSE;
+	short view_index;
+
+	for (view_index = 0; view_index < PARTICLE_VIEWS; view_index++)
+	{
+		real_vector3d offset;
+		real distance;
+
+		if (particle_views[view_index].frame_index == 0 || render.frame_index - particle_views[view_index].frame_index > 30)
+			continue;
+		any_view = TRUE;
+		offset.i = position->x - particle_views[view_index].position.x;
+		offset.j = position->y - particle_views[view_index].position.y;
+		offset.k = position->z - particle_views[view_index].position.z;
+		distance = square_root(magnitude_squared3d(&offset));
+		if (particle_views[view_index].pixels_per_unit * 2.0f * maximum_radius >= 0.5f * lod_cutoff * MAX(distance, 0.1f) &&
+			(distance <= 4.0f || dot_product3d(&offset, &particle_views[view_index].forward) >= -0.5f * distance))
+			return TRUE;
+	}
+	return !any_view;
+}
 void particle_new_now(struct new_particle_data const *data);
 
 /* port: the particles are the render thread's (tick_owners.h): an effect's ask waits for its turn */
@@ -1026,6 +1085,16 @@ void particle_new(
 		return;
 	}
 
+#ifdef HALO_WIIU
+	/* port: the pool here holds 8192 particles, eight times the Xbox's 1024, and a fight fills it with "sparks trail" (88% of the particle updates in
+	the log of 2026-11-14: 1,000 to 1,700 live ones moving and testing the level each frame). Particles that hang on an object (a muzzle flash, a
+	thruster) always get their place; the free ones stop at twice what the Xbox could hold. */
+	if (data->object_index == NONE && particle_data->actual_count >= PARTICLE_FREE_LIMIT)
+		return;
+	if (data->object_index == NONE && particle_shedding() &&
+		!particle_could_be_seen(&position, MAX(definition->radius_lower_bound, definition->radius_upper_bound) * data->radius, definition->lod_cutoff))
+		return;
+#endif
 	particle_index = datum_new(particle_data);
 
 	if (particle_index == NONE)
@@ -1188,6 +1257,52 @@ boolean particle_drawn(
 			: 1.0f / TICKS_PER_SECOND);
 }
 
+#ifdef HALO_WIIU
+/* port: a particle the governor left out of the picture this frame (render_particles.c) is still moved, and every move tests the level's BSP. In a
+fight that is thousands of particles a frame (2,500 shed against 10 to 140 drawn, point physics 16 to 29% of the render thread in the log of
+2026-11-14). Such a particle now takes its physics every third frame in one step of the dt it missed; a particle that is drawn again is moved at once. */
+#define PARTICLE_SHED_PHYSICS_PERIOD 3
+static unsigned long particle_count_seen, particle_count_moved, particle_count_held;
+static unsigned long particle_def_seen[16];
+static long particle_def_index[16];
+static char particle_def_name[16][64];
+
+char *tag_get_name(long tag_index);
+void platform_log(const char *format, ...);
+
+void particles_report_counts(void)
+{
+	int i, top = -1;
+
+	platform_log("particles: %lu updates a 10 s, %lu moved, %lu held back (shed)", particle_count_seen, particle_count_moved, particle_count_held);
+	for (i = 0; i < 16; i++)
+		if (particle_def_seen[i])
+			platform_log("particles:   definition %ld (%s): %lu updates", particle_def_index[i], particle_def_name[i], particle_def_seen[i]);
+	(void)top;
+	particle_count_seen = particle_count_moved = particle_count_held = 0;
+	memset(particle_def_seen, 0, sizeof(particle_def_seen));
+	memset(particle_def_name, 0, sizeof(particle_def_name));
+	memset(particle_def_index, 0, sizeof(particle_def_index));
+}
+static unsigned short particle_shed_stamp[HALO_PORT_MAXIMUM_PARTICLES];
+static real particle_pending_dt[HALO_PORT_MAXIMUM_PARTICLES];
+
+void particle_note_shed(long particle_index)
+{
+	const long absolute = particle_index & 0xFFFF;
+
+	if (absolute >= 0 && absolute < HALO_PORT_MAXIMUM_PARTICLES)
+		particle_shed_stamp[absolute] = (unsigned short)render.frame_index;
+}
+#endif
+
+#ifdef HALO_WIIU
+/* (a free particle unseen for 5 ticks instead of 15 while the governor sheds: its physics and level tests stop with it) */
+#define HALO_WIIU_UNRENDERED_FRAMES(particle) ((particle)->object_index == NONE && particle_shedding() ? 5 : MAXIMUM_PARTICLE_UNRENDERED_FRAME_COUNT)
+#else
+#define HALO_WIIU_UNRENDERED_FRAMES(particle) MAXIMUM_PARTICLE_UNRENDERED_FRAME_COUNT
+#endif
+
 void particles_update(
 	real dt)
 {
@@ -1223,9 +1338,9 @@ void particles_update(
 		boolean was_new = (particle->age == 0.0f);
 
 		if (render.frame_index - particle->last_rendered_frame_index >
-			MAXIMUM_PARTICLE_UNRENDERED_FRAME_COUNT &&
+			(HALO_WIIU_UNRENDERED_FRAMES(particle)) &&
 			particle->last_rendered_frame_index < particles_tick_frame_indices[
-				(particles_tick_frame_head + 1) % NUMBEROF(particles_tick_frame_indices)])
+				(particles_tick_frame_head + NUMBEROF(particles_tick_frame_indices) - (HALO_WIIU_UNRENDERED_FRAMES(particle)) ) % NUMBEROF(particles_tick_frame_indices)])
 		{
 			datum_delete(particle_data, particle_index);
 		}
@@ -1242,7 +1357,50 @@ void particles_update(
 			else
 			{
 				if (particle_update_frame_time(particle_index, dt))
+				{
+#ifdef HALO_WIIU
+					const long absolute = particle_index & 0xFFFF;
+
+					if (absolute >= 0 && absolute < HALO_PORT_MAXIMUM_PARTICLES)
+					{
+						const unsigned short frame = (unsigned short)render.frame_index;
+						const int shed = particle_shed_stamp[absolute] == frame || particle_shed_stamp[absolute] == (unsigned short)(frame - 1);
+						const real pending = was_new ? 0.0f : particle_pending_dt[absolute];
+
+						particle_count_seen++;
+						{
+							const int slot = (int)(particle->definition_index & 15);
+
+							if (particle_def_index[slot] != particle->definition_index || !particle_def_name[slot][0])
+							{
+								/* (the name is copied now, while the map it belongs to is loaded: the report is made later, perhaps after a level change) */
+								{
+									const char *name = tag_get_name(particle->definition_index);
+
+									strncpy(particle_def_name[slot], name ? name : "?", sizeof(particle_def_name[slot]) - 1);
+								}
+								particle_def_name[slot][sizeof(particle_def_name[slot]) - 1] = 0;
+							}
+							particle_def_index[slot] = particle->definition_index;
+							particle_def_seen[slot]++;
+						}
+
+						if (shed && !was_new && ((frame + absolute) % PARTICLE_SHED_PHYSICS_PERIOD) != 0)
+						{
+							particle_pending_dt[absolute] = pending + dt;
+							particle_count_held++;
+						}
+						else
+						{
+							particle_pending_dt[absolute] = 0.0f;
+							particle_count_moved++;
+							particle_update_physics(particle_index, dt + pending);
+						}
+					}
+					else
+#endif
 					particle_update_physics(particle_index, dt);
+				}
 			}
 		}
 	}

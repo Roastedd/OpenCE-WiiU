@@ -9,6 +9,10 @@ and the deterministic camera used for shooting keeps its original view.
 
 #include "cseries.h"
 #include "passenger_camera.h"
+#include "third_person_camera.h"
+#include "gunner_feedback.h"
+#include "reticle_stability.h"
+#include "view_fov.h"
 #include "camera/director.h"
 #include "cutscene/cinematics.h"
 #include "game/game_engine.h"
@@ -27,7 +31,10 @@ and the deterministic camera used for shooting keeps its original view.
 
 int config_boolean(const char *name);
 
+unsigned long system_milliseconds(void);
+static struct reticle_stability reticle_states[MAXIMUM_LOCAL_PLAYERS];
 static boolean reticle_active;
+static boolean reticle_subpixel;
 static real_point2d reticle_offset;
 
 /* Match stock vehicle tag paths, including the PC multiplayer Warthog.
@@ -135,37 +142,67 @@ void passenger_camera_clamp_facing(short local_player_index, real_euler_angles2d
 
 boolean passenger_camera_reticle_begin(short local_player_index, long weapon_index)
 {
-	long unit_index;
+	long unit_index, gunner_vehicle=NONE;
+    long gunner_weapon=gunner_view_weapon(local_player_index,&gunner_vehicle);
 	real_point3d origin, target;
 	real_vector3d direction, ray;
 	real_point2d screen;
 	struct collision_result collision;
 
 	reticle_active = FALSE;
-	if (!passenger_camera_enabled(local_player_index) ||
-		director_get_perspective(local_player_index) != _director_perspective_third_person)
+    if(local_player_index<0 || local_player_index>=MAXIMUM_LOCAL_PLAYERS)return FALSE;
+	if (!remote_free_aim_active(local_player_index) &&
+		(!(passenger_camera_enabled(local_player_index) || third_person_camera_available(local_player_index) || gunner_weapon!=NONE) ||
+		director_get_perspective(local_player_index) != _director_perspective_third_person))
+    {
+        reticle_states[local_player_index].valid=0;
 		return TRUE;
-	unit_index = player_control_get_unit_index(local_player_index);
-	if (weapon_index == NONE || !weapon_get_projectile_ray(weapon_index, 0, &origin, &direction))
-		return FALSE;
-	/* The same finite ray as the shot's aiming reference, before random
-	spread or a projectile's flight. Its origin remains at the weapon. */
-	scale_vector3d(&direction, 128.0f, &ray);
-	if (collision_test_vector(_collision_test_for_projectiles_flags, &origin, &ray, unit_index, &collision))
-		target = collision.point;
+    }
+	reticle_subpixel = remote_free_aim_active(local_player_index) || third_person_camera_available(local_player_index) || gunner_weapon!=NONE;
+	if (remote_free_aim_active(local_player_index))
+	{
+		if (!remote_free_aim_reticle_target(local_player_index, &target))
+			return FALSE;
+	}
 	else
-		point_from_line3d(&origin, &direction, 128.0f, &target);
-	if (!render_camera_world_to_screen(&render.camera, &render.frustum, &target, &screen))
+	{
+		unit_index = player_control_get_unit_index(local_player_index);
+        if(gunner_weapon!=NONE) {
+            weapon_index=gunner_weapon;unit_index=gunner_vehicle;
+        }
+        if(weapon_index==NONE)return FALSE;
+        if(third_person_camera_available(local_player_index)) {
+            if(!third_person_camera_aim_ray(local_player_index,&origin,&direction))return FALSE;
+        }
+        else if(!weapon_get_projectile_ray(weapon_index,0,&origin,&direction))return FALSE;
+		/* Passenger views retain the projected muzzle ray for parallax. */
+		scale_vector3d(&direction, 128.0f, &ray);
+		if (collision_test_vector(_collision_test_for_projectiles_flags, &origin, &ray, unit_index, &collision))
+			target = collision.point;
+		else
+			point_from_line3d(&origin, &direction, 128.0f, &target);
+	}
+	if (!render_camera_world_to_screen(&render.camera, &render.frustum, &target, &screen) ||
+        !(screen.x>=-1000000 && screen.x<=1000000 && screen.y>=-1000000 && screen.y<=1000000))
 		return FALSE;
 	reticle_offset.x = screen.x - (render.camera.window_bounds.x0 + render.camera.window_bounds.x1) * 0.5f;
 	reticle_offset.y = screen.y - (render.camera.window_bounds.y0 + render.camera.window_bounds.y1) * 0.5f;
+
+    if(!remote_free_aim_active(local_player_index) &&
+        (gunner_weapon!=NONE || third_person_camera_available(local_player_index)) &&
+        config_boolean("display.wiiu_reticle_stabilization"))
+    {
+        reticle_stability_update(&reticle_states[local_player_index],(uint32_t)system_milliseconds(),
+            player_control_get_unit_index(local_player_index),weapon_index,gunner_weapon!=NONE?1:2,
+            &reticle_offset.x,&reticle_offset.y);
+    }
 	reticle_active = TRUE;
 	return TRUE;
 }
 
 void passenger_camera_reticle_offset(point2d *point)
 {
-	if (reticle_active)
+	if (reticle_active && !reticle_subpixel)
 	{
 		point->x = (short)(point->x + reticle_offset.x);
 		point->y = (short)(point->y + reticle_offset.y);
@@ -175,4 +212,13 @@ void passenger_camera_reticle_offset(point2d *point)
 void passenger_camera_reticle_end(void)
 {
 	reticle_active = FALSE;
+}
+
+void passenger_camera_reticle_subpixel(real *x, real *y)
+{
+	if (reticle_active && reticle_subpixel)
+	{
+		*x += reticle_offset.x;
+		*y += reticle_offset.y;
+	}
 }

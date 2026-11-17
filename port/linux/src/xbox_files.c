@@ -679,6 +679,19 @@ HANDLE WINAPI CreateFileA(LPCSTR file_name, DWORD desired_access, DWORD share_mo
 	(void)template_file;
 
 	platform_translate_path(file_name, path, sizeof(path));
+#ifdef HALO_WIIU
+	{
+		static unsigned open_trace_count;
+
+		if (open_trace_count < 600)
+		{
+			const size_t length = strlen(path);
+
+			open_trace_count++;
+			platform_log("open trace: %s access %lx", path + (length > 60 ? length - 60 : 0), (unsigned long)desired_access);
+		}
+	}
+#endif
 	existed = counted_stat(path, &information) == 0;
 
 	if ((desired_access & GENERIC_READ) && (desired_access & GENERIC_WRITE))
@@ -890,6 +903,17 @@ static double file_io_now_ms(void)
 	return (double)now.tv_sec * 1000.0 + (double)now.tv_nsec / 1000000.0;
 }
 
+#ifdef HALO_WIIU
+/* the checkpoint's writer waits for the card between pieces while the game is reading from it (a read behind a piece waited up to the piece's whole write) */
+static int reads_in_flight;
+#define READ_TRACE_LIMIT 4000
+static unsigned read_trace_count;
+static unsigned long long read_trace_offset;
+void platform_log(const char *format, ...);
+static double write_yielded_ms;
+static volatile double last_read_end_ms;
+#endif
+
 static void file_io_note(const struct platform_file *file, int write, DWORD bytes, double start_ms)
 {
 	const double ms = file_io_now_ms() - start_ms;
@@ -940,7 +964,24 @@ BOOL WINAPI ReadFile(HANDLE handle, LPVOID buffer, DWORD count, LPDWORD bytes_re
 	if (!file)
 		return FALSE;
 	start_ms = file_io_now_ms();
+#ifdef HALO_WIIU
+	__atomic_add_fetch(&reads_in_flight, 1, __ATOMIC_SEQ_CST);
+	if (read_trace_count < READ_TRACE_LIMIT)
+		read_trace_offset = overlapped ? overlapped_offset(overlapped) : (unsigned long long)lseek(file->descriptor, 0, SEEK_CUR);
+#endif
 	result = read_at(file, buffer, count, &done, overlapped != NULL, overlapped ? overlapped_offset(overlapped) : 0);
+#ifdef HALO_WIIU
+	last_read_end_ms = file_io_now_ms();
+	__atomic_sub_fetch(&reads_in_flight, 1, __ATOMIC_SEQ_CST);
+	if (read_trace_count < READ_TRACE_LIMIT)
+	{
+		const size_t length = strlen(file->path);
+
+		read_trace_count++;
+		platform_log("read trace: %s offset %llu size %lu took %.0f ms", file->path + (length > 40 ? length - 40 : 0), read_trace_offset,
+			(unsigned long)count, last_read_end_ms - start_ms);
+	}
+#endif
 	file_io_note(file, 0, done, start_ms);
 	if (bytes_read)
 		*bytes_read = done;
@@ -992,6 +1033,9 @@ BOOL platform_write_file_in_pieces(HANDLE handle, LPCVOID buffer, DWORD count, D
 	if (piece == 0)
 		piece = count ? count : 1;
 	start_ms = file_io_now_ms();
+#ifdef HALO_WIIU
+	write_yielded_ms = 0.0;
+#endif
 	while (done < count)
 	{
 		DWORD wrote = 0;
@@ -1001,6 +1045,24 @@ BOOL platform_write_file_in_pieces(HANDLE handle, LPCVOID buffer, DWORD count, D
 		done += wrote;
 		if (!result)
 			break;
+#ifdef HALO_WIIU
+		/* Give queued map reads a chance between checkpoint pieces. */
+		if (done < count)
+		{
+			const struct timespec pause = { 0, 2000000 };
+			const double begun = file_io_now_ms();
+			const double give_up = begun + 150.0;
+
+			nanosleep(&pause, NULL);
+			/* (a level's first minute is a burst of reads of the map, 30 reads totalling 5 s in the log of 2026-11-14, queued behind this write's pieces;
+			the writer now stays out of the way for as long as the game has read within the last 40 ms, up to 150 ms a piece and 8 s in all, and then
+			writes on, so that a checkpoint is always finished long before the next one) */
+			while (file_io_now_ms() < give_up && write_yielded_ms < 8000.0 &&
+				(__atomic_load_n(&reads_in_flight, __ATOMIC_SEQ_CST) > 0 || file_io_now_ms() - last_read_end_ms < 40.0))
+				nanosleep(&pause, NULL);
+			write_yielded_ms += file_io_now_ms() - begun;
+		}
+#endif
 	}
 	file_io_note(file, 1, done, start_ms);
 	if (bytes_written)

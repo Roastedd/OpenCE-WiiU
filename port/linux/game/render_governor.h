@@ -103,4 +103,6 @@ int render_governor_settings_text(char *text, unsigned long size);
 /* the game thread's milliseconds in each of the render passes since the last call, a window's average (wiiu_render_passes.c); the count of windows */
 unsigned long render_governor_pass_milliseconds(double milliseconds[13]);
 
+int render_governor_stable_visibility(void);
+int render_governor_protect_near(float distance_squared,float radius);
 #endif

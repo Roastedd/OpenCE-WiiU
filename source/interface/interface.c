@@ -108,6 +108,9 @@ symbols in this file:
 #include "map_share.h" /* port: port/linux/game/map_share.c */
 #include "latency_meter.h" /* port: port/linux/game/latency_meter.c */
 #include "stats_log.h" /* port: port/linux/game/stats_log.c */
+void gunner_feedback_draw(void); /* port: local gunner shot confirmation */
+void driving_pointer_draw(void); /* port: port/linux/game/driving_pointer.c */
+#include "camera_status.h"
 #include "frame_rate_display.h" /* port: port/linux/game/frame_rate_display.c */
 
 /* ---------- constants */
@@ -738,6 +741,10 @@ void interface_draw_screen(
 
 	hud_draw_screen();
 	game_engine_post_rasterize();
+	camera_status_draw();
+    /* port: viewport-local sensor steering feedback (game/driving_pointer.c). */
+    driving_pointer_draw();
+    gunner_feedback_draw();
 
 	return;
 }

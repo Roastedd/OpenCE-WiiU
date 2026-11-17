@@ -1,3 +1,4 @@
+#include "wiiu_uniform_runs.h"
 /*
 WIIU_GX2.C
 
@@ -403,6 +404,7 @@ struct shader
 	int uniform[PS_UNIFORMS]; /* the register offset (in floats) of each, -1: the shader does not use it */
 	uint32_t uniform_floats[PS_UNIFORMS]; /* and how many floats it has room for */
 	int16_t *elements[PS_UNIFORMS]; /* for an array, where each element is (-1: none): the compiler gives the elements it uses registers of their own, not always in a row */
+	uint8_t *element_runs[PS_UNIFORMS]; /* cached lengths for immutable register layouts */
 	int sampler[4]; /* the location of tex0..3, -1: not sampled */
 	uint32_t attribute_used; /* bit n: the vertex shader reads input location n */
 };
@@ -464,6 +466,12 @@ static void uniforms_resolve(struct shader *shader, const GX2UniformVar *vars, u
 				}
 			}
 		}
+        if (shader->elements[n])
+        {
+            shader->element_runs[n] = malloc(192);
+            if (shader->element_runs[n])
+                wiiu_uniform_runs_build(shader->elements[n], shader->element_runs[n], 192);
+        }
 	}
 }
 
@@ -953,6 +961,42 @@ static int copy_is_current(uint32_t address, uint32_t size, unsigned long serial
 	return memory_watch_generation_raw(address, size) <= serial;
 }
 
+/* Range metadata is small and shares the vertex cache's write tracking. */
+static struct
+{
+	uint32_t address, count, lowest, highest;
+	unsigned long serial;
+	int valid;
+} index_ranges[256];
+
+static void cached_index_range(const uint16_t *list, uint32_t count, uint32_t *lowest, uint32_t *highest)
+{
+	const uintptr_t address = (uintptr_t)list;
+	const uint64_t bytes = (uint64_t)count * sizeof(*list);
+	const unsigned slot = ((address >> 2) ^ count) & 255u;
+	const int watched = count && blocks.window_size && address >= blocks.window_base &&
+		address + bytes <= (uint64_t)blocks.window_base + blocks.window_size;
+	const unsigned long serial = memory_watch_serial();
+
+	if (watched && index_ranges[slot].valid && index_ranges[slot].address == address &&
+		index_ranges[slot].count == count && copy_is_current(address, bytes, index_ranges[slot].serial))
+	{
+		*lowest = index_ranges[slot].lowest;
+		*highest = index_ranges[slot].highest;
+		return;
+	}
+	wiiu_index_range(list, count, lowest, highest);
+	if (watched)
+	{
+		index_ranges[slot].address = address;
+		index_ranges[slot].count = count;
+		index_ranges[slot].lowest = *lowest;
+		index_ranges[slot].highest = *highest;
+		index_ranges[slot].serial = serial;
+		index_ranges[slot].valid = 1;
+	}
+}
+
 static void cache_flush(void)
 {
 	unsigned i;
@@ -960,6 +1004,7 @@ static void cache_flush(void)
 	for (i = 0; i < cache.chunk_count; i++)
 		free_later(cache.chunks[i]);
 	memset(&cache, 0, sizeof(cache));
+	memset(index_ranges, 0, sizeof(index_ranges));
 	memset(blocks.block, 0, sizeof(blocks.block));
 }
 
@@ -1259,15 +1304,13 @@ static void vertex_array(const struct shader *vs, unsigned which, const float (*
 	}
 	for (row = first; row < first + rows;)
 	{
-		unsigned run = 1;
+		unsigned run = wiiu_uniform_run(vs->elements[which], vs->element_runs[which], row, first + rows);
 
 		if (vs->elements[which][row] < 0)
 		{
-			row++;
+			row += run;
 			continue;
 		}
-		while (row + run < first + rows && vs->elements[which][row + run] == vs->elements[which][row] + (int)run * 4)
-			run++;
 		gx.counts_vertex_regs++;
 		GX2SetVertexUniformReg((uint32_t)vs->elements[which][row], run * 4, values[row]);
 		row += run;
@@ -1290,15 +1333,13 @@ static void pixel_array(const struct shader *ps, unsigned which, const float (*v
 	}
 	for (row = 0; row < rows;)
 	{
-		unsigned run = 1;
+		unsigned run = wiiu_uniform_run(ps->elements[which], ps->element_runs[which], row, rows);
 
 		if (ps->elements[which][row] < 0)
 		{
-			row++;
+			row += run;
 			continue;
 		}
-		while (row + run < rows && ps->elements[which][row + run] == ps->elements[which][row] + (int)run * 4)
-			run++;
 		gx.counts_pixel_regs++;
 		GX2SetPixelUniformReg((uint32_t)ps->elements[which][row], run * 4, values[row]);
 		row += run;
@@ -2465,7 +2506,7 @@ static void draw(const struct dk_command_draw *command)
 		const uint16_t *list = command->index_address == DK_INDEX_INLINE ? (const uint16_t *)(const void *)(inline_data + ((command->inline_bytes + 3u) & ~3u)) :
 			(const uint16_t *)(uintptr_t)command->index_address;
 
-		wiiu_index_range(list, command->count, &lowest, &highest);
+		cached_index_range(list, command->count, &lowest, &highest);
 		vertex_offset = -(int32_t)lowest;
 	}
 	if (!gx.vs_handle || !gx.ps_handle || !gx.format_set)

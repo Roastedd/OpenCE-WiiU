@@ -88,6 +88,16 @@ symbols in this file:
 #include "rasterizer/rasterizer_transparent_geometry.h"
 #include "model_detail.h" /* port: port/linux/game/model_detail.c */
 
+#ifdef HALO_WIIU
+/* port: port/linux/game/model_matrix_cache.c */
+int model_render_matrix_cache_enabled(void);
+#include "model_lod_stability.h" /* port: render-only LOD hysteresis */
+int render_governor_stable_visibility(void);
+static struct model_lod_memory model_lod_history[256];
+void model_render_matrix_multiply(const real_matrix4x3 *left,
+    const real_matrix4x3 *right, real_matrix4x3 *out);
+#endif
+
 /* ---------- constants */
 
 enum
@@ -1110,14 +1120,23 @@ void render_model(
 
 		if (node_matrices)
 		{
+#ifdef HALO_WIIU
+            /* port: check the experiment once per model, not once per node. */
+            int cache_matrices = model_render_matrix_cache_enabled();
+#endif
 			for (node_index = 0; node_index<node_count; node_index++)
 			{
 				struct model_node *node = TAG_BLOCK_GET_ELEMENT(&model->nodes, node_index, struct model_node);
 
-				matrix4x3_multiply(
-					&node_matrices[node_index],
-					&node->runtime_default_inverse_matrix,
-					&relative_node_matrices[node_index]);
+#ifdef HALO_WIIU
+                /* port: optional exact render-matrix reuse; game/model_matrix_cache.c */
+                if (cache_matrices)
+                    model_render_matrix_multiply(&node_matrices[node_index],
+                        &node->runtime_default_inverse_matrix, &relative_node_matrices[node_index]);
+                else
+#endif
+                    matrix4x3_multiply(&node_matrices[node_index],
+                        &node->runtime_default_inverse_matrix, &relative_node_matrices[node_index]);
 			}
 		}
 		else
@@ -1134,6 +1153,16 @@ void render_model(
 		{
 			geometry_detail_level_index--;
 		}
+#ifdef HALO_WIIU
+        /* port: preserve detail slightly longer while receding; approaching upgrades immediately. */
+        if(unique_identifier!=NONE && !TEST_FLAG(flags,_render_model_shadow_bit) && render_governor_stable_visibility())
+        {
+            unsigned slot=((unsigned)unique_identifier ^ ((unsigned)render.window_index<<5)) & 255u;
+            geometry_detail_level_index=(short)model_lod_stable(&model_lod_history[slot],
+                (uint32_t)unique_identifier,(uint32_t)model_index,(uint32_t)render.frame_index,
+                render.window_index,geometry_detail_level_index,detail_level_pixels,model->detail_cutoff_pixels);
+        }
+#endif
 		if (rasterizer_debug_options.debug_model_lod!=NONE)
 		{
 			geometry_detail_level_index = PIN(rasterizer_debug_options.debug_model_lod, 0, NUMBER_OF_DETAIL_LEVELS_PER_MODEL-1);

@@ -1257,13 +1257,13 @@ so that a harness that must not delete a card file can write -1 to put one back.
 | `game_core.txt` | 1 | the core of the game thread: 0, 1 or 2 |
 | `gx2_thread.txt` | 7 | the GX2 thread's mode (0: the game thread makes the calls) |
 | `gpu_offload.txt` | 0 | bits: 1 the interpolation's blends without square roots, 2 the GX2 census lines, 4 host-only comparison, 8 the blends of poses at rest made every frame (the A/B switch of the reuse, which is on by default), 16 host-only check of the reuse; 0 or a negative number: none |
-| `governor.txt` | **on** (the capped governor: target 22 ms, steps 0 to 3) for a map of one local player; elsewhere as `display.dynamic_quality` sets it | text, not a number: a first word `on`/`off`/`1`/`0`, or settings (`step 2`, `target 25`, `max_step 3`; `late_ms 16` makes the share of frames whose work is over 16 ms decide instead of the window's mean, with `late_share` 0.20 and `late_up_share` 0.08: off unless `late_ms` is set); **a file whose first word is -1 or `default` is the same as no file**; `off` is off for every map, `on` and settings are on only for the maps the smooth defaults are for |
+| `governor.txt` | **on** (the capped governor: target 22 ms, steps 0 to 3) for a map of one local player; elsewhere as `display.dynamic_quality` sets it | text, not a number: a first word `on`/`off`/`1`/`0`, or settings (`step 2`, `target 25`, `max_step 3`; `late_ms 16` makes the share of frames whose work is over 16 ms decide instead of the window's mean, with `late_share` 0.20 and `late_up_share` 0.08. Performance mode defaults to one 60 Hz refresh. An explicit `target` or `late_ms 0` selects the mean rule unless a positive `late_ms` is also set); **a file whose first word is -1 or `default` is the same as no file**; `off` is off for every map, `on` and settings are on only for the maps the smooth defaults are for |
 | `hotpaths.txt` | 0 | 1: while an object or an actor updates, the tick asks (dcbt) for the cache lines of the next ones (`halo_ppc_hotpaths.h`); an A/B switch, off unless 1. The memory probe of 2026-11-04 found sequential loads with dcbt slower than without, so time it both ways |
 | `memcpy_touch.txt` | 0 | 1: the port's memcpy (`wiiu_memcpy.c`) asks for the source's lines 96 bytes ahead with dcbt (as it did until 2026-11-04); 0, absent or -1: it does not (the default: three alternating pairs of fight runs on the console had the tick thread 0.7 to 1.8 ms faster and the objects pass 0.5 to 1.4 ms faster without it; the dcbt of the destination (dcbz) stays) |
 | `async_save.txt` | absent | 0: a checkpoint's 20 MiB write to `z/savegame.bin` is made on the game thread, as it was until 2026-11-04 (the game stood still 1.3 to 1.6 s at every checkpoint); 1, absent or -1: the game thread copies the game state (a few ms) and a writer thread (core 0, below the game thread) writes it in pieces; a revert, a load, the next checkpoint and the app's close wait for the write (`port/linux/game/async_save.c`, `source/saved games/game_state_xbox.c`; reports/research/2026-11-04/async-save.md) |
 | `async_save_revert_image.txt` | on | 0: a revert reads the 20 MiB back from the card (1.4 to 1.8 s on the console); 1, absent or -1: it takes the game state from the copy of the last checkpoint that is still in memory (the image), whose bytes are the file's, and reads nothing (the log: `the saved game is taken from the copy held in memory in N ms`) |
 | `async_save_verify.txt` | 0 | 1: every checkpoint is checked (the copy against the game state, the file read back against the copy) and the copy's CRC is logged; costs a second or two per checkpoint, for tests |
-| `async_save_piece_kb.txt` | 1024 | the size of the pieces the writer makes the write in (64 to 4096) |
+| `async_save_piece_kb.txt` | 256 | the size of the pieces the writer makes the write in (64 to 4096); the writer yields for 1 ms between pieces so map reads can proceed |
 | `async_save_fault.txt` | 0 | a test's faults on the checkpoint's write: 1 every second write fails after its first piece (the game thread writes it again), 2 and the second try fails too (the checkpoint is lost), 3 a write takes 800 ms more, 4 4 s more, 5 9 s more and the waits for it give up after 0.5 s. Only with the card snapshotted: it touches `z/savegame.bin`, the session's own scratch file, nothing of a profile |
 | `stream.txt` | 0 | 1: texture streaming (the section below); `stream_delay.txt` (milliseconds, a test aid for hosts) |
 | `overlay.txt` | 0 | 0 off, 1 the compact strip, 2 the detailed panel (L + R + - on the GamePad goes round the three); -1 is off |
@@ -1358,3 +1358,178 @@ game thread the first time the HUD drew one (the decoding, the levels, the copie
 
 The log: `hud sheets: ...` (the switch, the builder's core, what the map asked for, what the map's end freed) and for every sheet `high-res hud: image N made for ... in X ms on
 the game thread: decode, levels, send; K held, M KB`, and when it was made ahead `was made ahead on the builder thread in X ms ..., Y ms after it was asked for`.
+
+### Geometry range cache
+
+The GX2 renderer keeps 256 vertex-range results for index lists inside the watched game-memory window. A changed memory generation, a different address or index count, or a vertex-cache flush makes the result unusable. Lists outside the watched window are scanned normally.
+
+## Renderer candidate, 2026-11-13
+
+The local render-budget candidate precomputes contiguous shader register runs
+when a shader loads, avoiding repeated layout scans during uniform uploads.
+It preserves the register writes and falls back to the original scan if the
+small metadata allocation fails. This is a CPU optimization with no quality
+change; an FPS gain has not yet been measured on hardware.
+
+Video Setup / Graphics now exposes MODEL DETAIL on Wii U. Stock preserves the
+existing governor-adjusted LOD selection. Native scales geometry selection to
+the configured render height (not transient dynamic resolution); Highest
+requests the highest eligible geometry and can cost substantially more. The
+shared missing-geometry/interior-LOD safeguards apply to Native and Highest.
+Object disappearance distance is unchanged. Keep Stock for performance tests.
+Highest largely overrides distance-based LOD despite the governor multiplier;
+it is a quality comparison option, not a recommended 60 FPS preset.
+
+Per-pixel lighting, HDR tone mapping and adjustable shadow resolution remain
+unimplemented on Wii U. Original shader lighting remains functional. The
+Dreamcast study is a design reference, not an installed lighting upgrade.
+
+### Vehicle sensor turning candidate
+
+In a single-player vehicle, sensor-bar input now uses filtered, direct camera
+turn rates instead of simulated right-stick input. The Nunchuk and Halo's
+vehicle steering remain unchanged. The existing Wii Remote free-aim turn-speed
+setting also controls this vehicle rate. A central deadzone permits driving
+straight; pointing farther from center increases the turn rate. Tracking loss
+stops turning. Entering/exiting a vehicle resets the filter and aim offset.
+MotionPlus-only vehicle controls and on-foot aiming are unchanged. Physical
+vehicle tuning is pending owner feedback.
+
+### Driving feedback, scope input and Nunchuk melee candidate
+
+Sensor-bar driving shows a small open pointer and center-region marks. Blue
+means no turning request, white means turning, amber plus POINT AT SENSOR BAR
+means tracking was lost. The pointer follows the filtered control coordinates;
+this is steering feedback, separate from the vehicle weapon crosshair.
+
+Scoped IR now uses filtered centered turning with an 8% deadzone. Turn speed
+is divided by zoom magnification and multiplied by the existing Zoom
+Sensitivity setting. This bypasses simulated-stick acceleration while scoped;
+on-foot unscoped free aim and MotionPlus-only scope behavior are unchanged.
+
+SHAKE MELEE accepts a deliberate Remote or Nunchuk swing. Both hands share
+one rest-to-arm detector, pulse and cooldown. The existing setting disables
+both; menus ignore the melee gesture. This detects a strong motion, not a
+tracked fist position. Hardware feel and false-trigger frequency need testing.
+
+### Controls and stable visibility candidate
+
+The latest candidate supersedes the two-hand gesture behavior above: only the
+Nunchuk accelerometer can trigger melee. Its force threshold is independent
+of aiming sensitivity. Remote 2 remains button melee unless Hold to Steady
+is enabled with that button; Nunchuk C is another steady-button option.
+
+Wii Remote settings now have Aim and Turn, Context Profiles, Calibration and
+Gestures subpages. Adaptive Filter is on by default; off uses the prior fixed
+sample filter. Separate hip/scope/vehicle presets and axis multipliers tune
+turning. Full Turn At defaults to 0.75 of calibrated reach; Pointing Range
+only controls on-foot weapon reach. Calibration offsets and independent axis
+reach can be tested with Aim Guide enabled in gameplay, after saving with OK.
+
+Stable Visibility defaults on. It reduces extra governor cull thresholds to
+40%, protects objects whose bounding sphere comes within 12 game units of the
+camera, and prevents governor LOD scale dropping below 0.7. Render-only LOD
+history keeps a detailed model until 20% below its drop threshold, with full
+object/model/window identity and short frame age; approaching upgrades without
+delay. This affects governor/model selection, not collision or the engine's
+original visibility tests. It can increase rendering cost. Turn Stable
+Visibility off for an explicit matched comparison, not as a silent fallback.
+
+### Scope edge scan and decal eviction candidate
+
+Context Profiles / SCOPE EDGE SCAN preserves optical precision near the
+center and blends to a configurable minimum turn rate at the outer edge.
+25% is the default; Optical restores the previous fully magnification-scaled
+response. At 90 degrees/s and 0.75 scoped sensitivity, 10x edge turning is
+16.875 degrees/s instead of 6.75. This is a Halo tuning choice, not a BO2 clone.
+
+Decal-cache eviction now checks the full salted owner handle before deleting
+or querying a decal. Orphaned blocks can be released without dereferencing a
+stale owner or deleting a replacement. This addresses the observed assertion
+path; why a checkpoint-era cache/pool mismatch occurred still needs tracing.
+
+### On-foot camera candidate
+
+Video Setup / FOV and Viewmodels / Third Person Camera controls the optional
+shoulder rig: distance, left/center/right side and pivot height. Normal sticks
+retain their gameplay aim and movement. Wii Remote sensor mode uses the direct
+filtered hip-turn profile in third person, and while explicitly controlling a
+free camera. MotionPlus still uses the existing gyro input. Nunchuk controls
+are unchanged. The free-camera mode toggle remains the existing right-stick
+click / Remote D-pad Down; camera cycling retains its existing hold binding.
+
+On foot, the shoulder rig keeps Halo's observer collision handling and adds
+one short pivot-offset check. Its reticle projects the weapon's actual shot
+ray, with one collision query shared by all reticle pieces. Weapon zoom uses
+the eye view and normal scoped FOV/perspective; unzoom restores the shoulder
+view. Vehicle/seat cameras retain their existing tracks. Multiplayer engine
+modes, dead units and cinematic/scripted cameras do not use the new rig.
+Host tests establish the guarded code paths, not real-world wall clearance or
+controller feel. Extra collision queries may have a measurable CPU cost.
+
+### Gunner feedback and shader coverage candidate
+
+Local gunner seats have their own sensor response: smaller center region,
+full vertical rate, and a GUNNER SPEED multiplier (default 0.75) under Wii
+Remote / Aim and Turn. Driver tuning remains unchanged. The gunner reticle
+uses the vehicle weapon and ignores the vehicle for its collision query.
+The aim-ray helper recognizes the controlling gunner player and rejects
+missing muzzle markers.
+
+On-foot third-person reticles use the displayed camera direction and an
+interpolated sight origin instead of animated muzzle/tick-facing data.
+Collision still projects the aim point; this is display feedback, with no
+change to projectile simulation. Physical jitter/near-wall alignment still
+need checking.
+
+GUNNER FEEDBACK preserves up to 16 owned particles and 8 owned contrail draws
+per rendered view when the governor would otherwise remove them, while
+respecting the global particles switch and ordinary visibility rules. A
+small FIRING cue uses the vehicle weapon's actual last-shot tick, not trigger
+input. This is not a replacement for muzzle flashes; the shader pack repair
+and protected local effects are intended to restore visible feedback.
+
+Shader capture now reserves records for unavailable programs or stand-ins;
+canonical equivalents are logged but do not consume the capture queue.
+The diagnostic non-exact table holds 256 entries (was 64). The gunner run's
+64 captured keys map to 24 canonical programs; only one canonical program
+was absent. Its validated addition grows the 4,879-entry pack to 4,880 by
+832 bytes, preserving every old blob. Further uncaptured cases remain unknown.
+
+### Aim stability candidate
+
+Near-vertical free aim now transports the weapon up axis from the displayed
+view, avoiding large world-azimuth arm roll near the pitch poles. Projection
+and aim remain unchanged; invalid/degenerate bases leave the prior pose.
+
+Third-person/gunner reticles optionally stabilize tiny screen-projection
+changes with a one-HUD-pixel error bound. Deliberate moves over three pixels,
+owner/weapon/context changes and stale samples reset immediately. First-person
+free aim keeps its prior reticle path. RETICLE STABILITY is under Graphics.
+
+Menus/chat consume then discard Remote gameplay aim, ownership and filter
+state. Turn preset labels now say Turn: they change maximum rate, not the
+free-aim area. The balanced test area is 12 degrees horizontal / 8 vertical;
+25/16 postpones turning until much farther from center.
+
+### Legs and decal recovery candidate
+
+The CPU leg-waist reader now decodes model vertices with the same byte-order
+policy as the GX2 frontend. Model vertices may remain little-endian while
+converted indices are native-order. Treating both identically produced huge
+finite waist coordinates and black stretched triangles. Legs remain enabled;
+malformed/incomplete poses and out-of-range geometry now fail closed.
+
+Warthog gunner display aiming now preserves the rendered barrel direction,
+matching actual mounted firing instead of substituting tick-rate vehicle aim.
+
+The repeated stale-decal failure now uses checked deletion under the allocator
+lock and deferred paired recovery of the cosmetic decal/vertex pools. A bad
+predecessor insertion was corrected. On inconsistency, same-frame drawing stops
+and the pools reset outside callbacks. Bullet holes/scorches can clear during
+recovery; gameplay pools and vertex-buffer bytes are preserved. Underlying
+pool-mismatch timing still needs diagnostics; this is not an all-crashes claim.
+
+Visibility traversal reuses identical source-box results only within one
+cluster/frustum. Culling decisions and visibility distances are unchanged.
+The diagnostic CPU profiler is restored to 0 for normal owner testing.

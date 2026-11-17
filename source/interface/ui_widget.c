@@ -6000,18 +6000,37 @@ static void ui_debug_draw_targets(
 
 		if (halo_ui_pointer_cursor(&cursor_x, &cursor_y))
 		{
+			static const short corners[8][4] = {
+				{-9,-9,5,2}, {-9,-9,2,5}, {4,-9,5,2}, {7,-9,2,5},
+				{-9,7,5,2}, {-9,4,2,5}, {4,7,5,2}, {7,4,2,5}
+			};
+			short segment, pass;
 			rectangle2d box;
 
-			box.x0 = cursor_x;
-			box.y0 = cursor_y;
-			box.x1 = cursor_x + 12;
-			box.y1 = cursor_y + 12;
-			draw_quad(&box, 0xff000000);
-			box.x0 = cursor_x + 2;
-			box.y0 = cursor_y + 2;
-			box.x1 = cursor_x + 10;
-			box.y1 = cursor_y + 10;
-			draw_quad(&box, 0xffffffff);
+			/* The centre is the actual hit point. Open cyan brackets leave
+			menu labels visible; the dark outline survives bright scenes. */
+			for (pass = 0; pass < 2; pass++)
+			{
+				const short border = pass == 0 ? 1 : 0;
+				for (segment = 0; segment < 8; segment++)
+				{
+					box.x0 = cursor_x + corners[segment][0] - border;
+					box.y0 = cursor_y + corners[segment][1] - border;
+					box.x1 = cursor_x + corners[segment][0] + corners[segment][2] + border;
+					box.y1 = cursor_y + corners[segment][1] + corners[segment][3] + border;
+					draw_quad(&box, pass == 0 ? 0xe0001628 : 0xff79ceff);
+				}
+			}
+			box.x0 = cursor_x - 2;
+			box.y0 = cursor_y - 2;
+			box.x1 = cursor_x + 2;
+			box.y1 = cursor_y + 2;
+			draw_quad(&box, 0xe0001628);
+			box.x0 = cursor_x - 1;
+			box.y0 = cursor_y - 1;
+			box.x1 = cursor_x + 1;
+			box.y1 = cursor_y + 1;
+			draw_quad(&box, 0xffe2f6ff);
 		}
 	}
 #endif

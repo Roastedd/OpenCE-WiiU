@@ -1277,6 +1277,7 @@ void set_window_camera_values(
 				1.0f);
 	}
 
+	remote_free_aim_camera(window->local_player_index, &window->rasterizer_camera);
 	window->rasterizer_camera.mirrored = FALSE;
 	window->rasterizer_camera.z_near = rasterizer_globals.near_clip_distance;
 	window->rasterizer_camera.z_far = rasterizer_globals.far_clip_distance;

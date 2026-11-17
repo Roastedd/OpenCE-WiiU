@@ -34,6 +34,9 @@ void platform_log(char const *format, ...)
 	logs++;
 	printf("LOG %s\n", last_log);
 }
+static unsigned char clock_ready = 1;
+unsigned char game_time_initialized(void) { return clock_ready; }
+unsigned char game_time_get_paused(void) { if (!clock_ready) abort(); return 0; }
 static int performance_mode;
 static double wait_total;
 int config_boolean(const char *name) { return !strcmp(name, "display.dynamic_quality") && config_on; }
@@ -245,13 +248,14 @@ int main(int argc, char **argv)
 		run(10, 15, 0);
 		printf("RESULT step %d\n", render_governor_step());
 	}
-	else if (!strcmp(scenario, "late_halves"))
+	else if (!strcmp(scenario, "late_halves") || !strcmp(scenario, "performance_halves"))
 	{
 		/* frames of 12 and 24 ms in turn: a mean of 18, under the target of 22 (the mean rule never acts), and half of them late */
 		static const double pattern[2] = { 12, 24 };
 
 		config_on = 1;
-		settings_text = argc > 2 ? argv[2] : "late_ms 16";
+		performance_mode = !strcmp(scenario, "performance_halves");
+		settings_text = argc > 2 ? argv[2] : performance_mode ? "" : "late_ms 16";
 		run_pattern(40, pattern, 2);
 		printf("RESULT step %d\n", render_governor_step());
 	}
@@ -348,6 +352,13 @@ int main(int argc, char **argv)
 		config_on = 1;
 		performance_mode = 1;
 		run(60, 40, 0);
+		printf("RESULT step %d\n", render_governor_step());
+	}
+	else if (!strcmp(scenario, "startup"))
+	{
+		config_on = 1;
+		clock_ready = 0;
+		run(10, 40, 0);
 		printf("RESULT step %d\n", render_governor_step());
 	}
 	else if (!strcmp(scenario, "performance_online"))
@@ -547,6 +558,19 @@ def run_scenario(tmp_path, scenario, source=None, extra=()):
             results.update(dict(zip(words[0::2], map(float, words[1::2]))))
     logs = [line[4:] for line in out.splitlines() if line.startswith("LOG ")]
     return transitions, results, logs
+
+
+def test_startup_before_game_clock_exists(tmp_path):
+    _, results, _ = run_scenario(tmp_path, "startup")
+    assert results["step"] == 0
+
+
+def test_performance_mode_targets_a_refresh_unless_overridden(tmp_path):
+    _, results, logs = run_scenario(tmp_path, "performance_halves")
+    assert results["step"] > 0 and any("16.7 ms" in line for line in logs)
+    for override in ("target 22", "late_ms 0"):
+        _, results, _ = run_scenario(tmp_path, "performance_halves", extra=[override])
+        assert results["step"] == 0
 
 
 def test_the_late_frame_rule_is_off_unless_the_file_asks(tmp_path):

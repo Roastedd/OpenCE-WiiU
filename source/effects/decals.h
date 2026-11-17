@@ -85,4 +85,8 @@ void decals_disconnect_from_structure_bsp(
 void decals_reconnect_to_structure_bsp(
 	void);
 
+/* port: defer cosmetic cache recovery until outside an LRU callback. */
+void decals_request_cache_repair(void);
+boolean decals_cache_repair_pending(void);
+void decals_repair_cache(void);
 #endif // __DECALS_H

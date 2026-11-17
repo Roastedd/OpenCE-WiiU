@@ -63,6 +63,7 @@ void data_make_invalid(struct data_array *data);
 long datum_new_at_index(struct data_array *data, long index);
 long datum_new(struct data_array *data);
 void datum_delete(struct data_array *data, long index);
+boolean datum_delete_if_alive(struct data_array *data,long index); /* port: optional cache owners */
 void data_delete_all(struct data_array *data);
 void data_iterator_new(struct data_iterator *iterator, struct data_array *data);
 void *data_iterator_next(struct data_iterator *iterator);

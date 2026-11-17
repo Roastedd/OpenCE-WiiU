@@ -3010,11 +3010,11 @@ static void evaluator( \
 	long thread_index, \
 	boolean initialize) \
 { \
-	unsigned short *arguments = (unsigned short *)hs_macro_function_evaluate(function_index, thread_index, initialize); \
+	union hs_evaluation_argument const *arguments = (union hs_evaluation_argument const *)hs_macro_function_evaluate(function_index, thread_index, initialize); \
 	if (arguments) \
 	{ \
 		union hs_real_value result; \
-		result.real_value = function(arguments[0]); \
+		result.real_value = function(arguments[0].unsigned_short_value); \
 		hs_return(thread_index, result.long_value); \
 	} \
 	return; \

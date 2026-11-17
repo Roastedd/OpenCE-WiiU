@@ -37,7 +37,7 @@ static struct
     boolean attempted;
 } controller_glyph_cache[NUMBEROF(controller_glyph_assets)];
 
-short controller_glyph_style(void)
+static short controller_glyph_port(void)
 {
     short port = render.local_player_index;
     long player_index;
@@ -46,7 +46,31 @@ short controller_glyph_style(void)
         player_index = local_player_get_player_index(port);
         if (player_index != NONE) port = player_get(player_index)->local_player_index;
     }
-    return (short)controller_button_style_for_port(port);
+    return port < 0 ? 0 : port;
+}
+
+#ifdef HALO_WIIU
+int wiiu_input_prompt_style(unsigned int port);
+int wiiu_input_prompt_icon(unsigned int port, int action_icon);
+int config_boolean(const char *name);
+unsigned long config_changes(void);
+#endif
+
+short controller_glyph_style(void)
+{
+	const short port = controller_glyph_port();
+#ifdef HALO_WIIU
+	static unsigned long read_at = (unsigned long)-1;
+	static int automatic;
+	if (read_at != config_changes())
+	{
+		read_at = config_changes();
+		automatic = config_boolean("input.auto_button_detection");
+	}
+	if (automatic)
+		return (short)wiiu_input_prompt_style((unsigned int)port);
+#endif
+	return (short)controller_button_style_for_port(port);
 }
 
 void controller_glyphs_dispose(void)
@@ -89,8 +113,19 @@ boolean controller_glyph_draw(short style, short index,
     real scale, cell_width, cell_height, width, height, fit, x, y, center;
     slot = index < 6 ? index : hud_button_control_slot(index,
         icon->frame_rate > 0 ? game_time_get() / icon->frame_rate : 0);
-    key = controller_glyph_asset_index(style, slot);
+#ifdef HALO_WIIU
+    if (style == 12)
+    {
+        const int glyph = wiiu_input_prompt_icon((unsigned int)controller_glyph_port(), index);
+        key = glyph >= 0 ? (short)(76 + glyph) : NONE;
+    }
+    else if (style == 11)
+        key = slot >= 0 ? (short)(62 + slot) : NONE;
+    else
+#endif
+        key = controller_glyph_asset_index(style, slot);
     if (key == NONE) return FALSE;
+    if (style == 12 && (index == 14 || index == 15)) slot = 0;
     entry = &controller_glyph_assets[key];
     if (!controller_glyph_cache[key].attempted)
     {

@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The port's settings screen, in the PC version's style (tools/port_settings.py) -->
+<menus>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_remote_aim_screen" width="640" height="480" flags="pass_unhandled_to_focused_child pause_game" bitmap="bitmaps/gradient">
+		<on event="b" back="true"/>
+		<on event="back" back="true"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/header_profile_controller_setting"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/options_menu"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/header_profile_controller_setting" controller="1" left="35" top="11" width="605" height="59" bitmap="main_menu/settings_select/player_setup/player_profile_edit/controller_edit/header_profile_controller_setting">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/help" type="text" controller="1" left="68" top="350" width="482" height="60" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/help_strings" font="ui\large_ui" color="#FFFFFFFF">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/options_menu" type="column_list" width="640" height="480" flags="pass_unhandled_to_focused_child up_down_tabs_children" description="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/help">
+		<data input="port settings help"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/op_wiiu_wiimote_ir_samples" x="54" y="73"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/op_wiiu_wiimote_ir_scale" x="54" y="100"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/op_wiiu_wiimote_free_aim" x="54" y="127"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/op_wiiu_wiimote_sensitivity" x="54" y="154"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/op_wiiu_wiimote_free_aim_box" x="54" y="181"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/op_wiiu_wiimote_free_aim_vertical_box" x="54" y="208"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/op_wiiu_wiimote_zoom_sensitivity" x="54" y="235"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/op_wiiu_wiimote_free_aim_speed" x="54" y="262"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/op_wiiu_wiimote_turn_outer" x="54" y="289"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/op_wiiu_wiimote_gunner_speed" x="54" y="316"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/button_bar" y="414"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/button_bar" type="column_list" width="640" height="28" flags="pass_unhandled_to_focused_child left_right_tabs_items">
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/button_defaults" y="1"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/button_ok" x="380" y="1"/>
+		<child widget="common_button_cancel" x="510" y="1"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/op_wiiu_wiimote_ir_samples" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_ir_samples_label"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_ir_samples_spinner" x="320" y="1"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_ir_samples_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/labels" string_index="0" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_ir_samples_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="1|2|3|5|8" setting="input.wiiu_wiimote_ir_samples" values="1|2|3|5|8" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
+		<on event="created" run="port setting load"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/op_wiiu_wiimote_ir_scale" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_ir_scale_label"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_ir_scale_spinner" x="320" y="1"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_ir_scale_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/labels" string_index="1" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_ir_scale_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="0.5|0.65|0.75|0.9|1.0|1.25|1.5" setting="input.wiiu_wiimote_ir_scale" values="0.5|0.65|0.75|0.9|1.0|1.25|1.5" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
+		<on event="created" run="port setting load"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/op_wiiu_wiimote_free_aim" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_free_aim_label"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_free_aim_spinner" x="320" y="1"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_free_aim_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/labels" string_index="2" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_free_aim_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="ON|OFF" setting="input.wiiu_wiimote_free_aim" values="true|false" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
+		<on event="created" run="port setting load"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/op_wiiu_wiimote_sensitivity" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_sensitivity_label"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_sensitivity_spinner" x="320" y="1"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_sensitivity_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/labels" string_index="3" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_sensitivity_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="0.25|0.4|0.5|0.65|0.8|1.0|1.25|1.5|2.0" setting="input.wiiu_wiimote_sensitivity" values="0.25|0.4|0.5|0.65|0.8|1.0|1.25|1.5|2.0" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
+		<on event="created" run="port setting load"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/op_wiiu_wiimote_free_aim_box" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_free_aim_box_label"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_free_aim_box_spinner" x="320" y="1"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_free_aim_box_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/labels" string_index="4" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_free_aim_box_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="4|6|8|10|12|16|20|25" setting="input.wiiu_wiimote_free_aim_box" values="4|6|8|10|12|16|20|25" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
+		<on event="created" run="port setting load"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/op_wiiu_wiimote_free_aim_vertical_box" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_free_aim_vertical_box_label"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_free_aim_vertical_box_spinner" x="320" y="1"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_free_aim_vertical_box_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/labels" string_index="5" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_free_aim_vertical_box_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="2|4|6|8|10|12|16|20|25" setting="input.wiiu_wiimote_free_aim_vertical_box" values="2|4|6|8|10|12|16|20|25" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
+		<on event="created" run="port setting load"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/op_wiiu_wiimote_zoom_sensitivity" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_zoom_sensitivity_label"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_zoom_sensitivity_spinner" x="320" y="1"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_zoom_sensitivity_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/labels" string_index="6" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_zoom_sensitivity_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="0.25|0.5|0.75|1.0|1.25|1.5|2.0" setting="input.wiiu_wiimote_zoom_sensitivity" values="0.25|0.5|0.75|1.0|1.25|1.5|2.0" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
+		<on event="created" run="port setting load"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/op_wiiu_wiimote_free_aim_speed" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_free_aim_speed_label"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_free_aim_speed_spinner" x="320" y="1"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_free_aim_speed_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/labels" string_index="7" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_free_aim_speed_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="30|45|60|75|90|120|150|180" setting="input.wiiu_wiimote_free_aim_speed" values="30|45|60|75|90|120|150|180" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
+		<on event="created" run="port setting load"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/op_wiiu_wiimote_turn_outer" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_turn_outer_label"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_turn_outer_spinner" x="320" y="1"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_turn_outer_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/labels" string_index="8" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_turn_outer_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="0.5|0.65|0.75|0.85|1.0" setting="input.wiiu_wiimote_turn_outer" values="0.5|0.65|0.75|0.85|1.0" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
+		<on event="created" run="port setting load"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/op_wiiu_wiimote_gunner_speed" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_gunner_speed_label"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_gunner_speed_spinner" x="320" y="1"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_gunner_speed_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/labels" string_index="9" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/wiiu_wiimote_gunner_speed_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="0.5|0.75|1.0|1.25|1.5|2.0" setting="input.wiiu_wiimote_gunner_speed" values="0.5|0.75|1.0|1.25|1.5|2.0" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
+		<on event="created" run="port setting load"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/button_defaults" type="text" width="128" height="24" bitmap="bitmaps/text_button_background" string_list="strings/common_button_captions" string_index="3" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
+		<on event="a" run="port settings defaults"/>
+		<on event="start" run="port settings defaults"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/button_ok" type="text" width="128" height="24" bitmap="bitmaps/text_button_background" string_list="strings/common_button_captions" string_index="1" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
+		<on event="a" run="port settings save" back="true"/>
+		<on event="start" run="port settings save" back="true"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+	</widget>
+	<strings name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/labels">
+		<string text="SENSOR FILTER:"/>
+		<string text="POINTING RANGE:"/>
+		<string text="FREE AIM:"/>
+		<string text="MOTION SENSITIVITY:"/>
+		<string text="HORIZONTAL AREA:"/>
+		<string text="VERTICAL AREA:"/>
+		<string text="SCOPED AIM:"/>
+		<string text="TURN SPEED:"/>
+		<string text="FULL TURN AT:"/>
+		<string text="GUNNER SPEED:"/>
+	</strings>
+	<strings name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/aim/help_strings">
+		<string text=""/>
+		<string text="Recent sensor-bar samples are blended.\nLower values respond faster; 1 is unfiltered."/>
+		<string text="How far the sensor-bar pointer moves the\naim point across the screen."/>
+		<string text="Move the weapon within the screen on foot.\nThe camera turns near the aim area's edge."/>
+		<string text="How far the weapon aims when you turn the\nRemote. Lower values give finer control."/>
+		<string text="Horizontal half-width in degrees. A larger\narea gives more aim before camera turning."/>
+		<string text="Vertical half-height in degrees. Adjust it\nseparately from horizontal camera turning."/>
+		<string text="Extra sensitivity while scoped. Lower values\nmake small corrections easier."/>
+		<string text="Maximum camera speed at the aim area's\nedge, in degrees per second."/>
+		<string text="Reach maximum turn speed before pointing\nout of sensor range. Lower means earlier."/>
+		<string text="Sensor turn speed for gunner seats.\nDriving controls keep their own response."/>
+	</strings>
+</menus>

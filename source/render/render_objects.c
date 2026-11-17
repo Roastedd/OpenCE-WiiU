@@ -1128,6 +1128,26 @@ static void object_render_state_refresh(
 		state->lighting = state->desired_lighting;
 	}
 
+#ifdef HALO_WIIU
+	/* port: a light index kept from an earlier frame (the lighting is eased toward the desired one over frames, and a network game's frame with
+	the ticks beside the drawing can be drawn from a list of lights shorter than the one the index was made for) is dropped, not a halt */
+	{
+		short point_light_index;
+		short kept = 0;
+
+		for (point_light_index = 0;
+			point_light_index < state->lighting.point_light_count && point_light_index < 2;
+			point_light_index++)
+		{
+			if (state->lighting.point_light_indices[point_light_index]>=0 &&
+				state->lighting.point_light_indices[point_light_index]<debug_rasterizer_light_count)
+			{
+				state->lighting.point_light_indices[kept++] = state->lighting.point_light_indices[point_light_index];
+			}
+		}
+		state->lighting.point_light_count = kept;
+	}
+#else
 	{
 		short point_light_index;
 
@@ -1143,6 +1163,7 @@ static void object_render_state_refresh(
 		}
 	}
 
+#endif
 	state->render_scene_index = render.scene_index;
 	state->render_frame_index = render.frame_index;
 
@@ -1213,6 +1234,42 @@ static long object_get_cached_render_state(
 	return render_state_index;
 }
 
+#ifdef HALO_WIIU
+/* port: where the objects pass spends its time, by the kind of object (halo/log.txt "objects pass:" every 10 s): the cull and
+state, the lighting, and the model's draw. Four clock reads an object drawn */
+#include <time.h>
+void platform_log(const char *format, ...);
+static double render_probe_now_ms(void)
+{
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (double)now.tv_sec * 1000.0 + (double)now.tv_nsec / 1000000.0;
+}
+static double render_probe_ms[16][3];
+static unsigned long render_probe_count[16];
+static double render_probe_last_report;
+static void render_probe_report(double now)
+{
+	short type;
+	if (render_probe_last_report == 0.0) render_probe_last_report = now;
+	if (now - render_probe_last_report < 10000.0) return;
+	render_probe_last_report = now;
+	for (type = 0; type < 16; type++)
+	{
+		if (render_probe_count[type])
+		{
+			platform_log("objects pass: type %d: %lu drawn in 10 s, %.0f ms (cull, state and lighting %.0f, model %.0f), %.0f us each",
+				type, render_probe_count[type],
+				render_probe_ms[type][0] + render_probe_ms[type][2],
+				render_probe_ms[type][0], render_probe_ms[type][2],
+				1000.0 * (render_probe_ms[type][0] + render_probe_ms[type][2]) / render_probe_count[type]);
+			render_probe_ms[type][0] = render_probe_ms[type][2] = 0.0;
+			render_probe_count[type] = 0;
+		}
+	}
+}
+#endif
+
 static void render_object(
 	struct object_render_data *data)
 {
@@ -1270,6 +1327,10 @@ static void render_object(
 	{
 		struct object_datum *object = object_get(data->object_index);
 		boolean needs_lighting;
+#ifdef HALO_WIIU
+		double probe_t0 = render_probe_now_ms(), probe_t1 = probe_t0, probe_t2 = probe_t0;
+		short probe_type = (short)object->object.type & 15;
+#endif
 
 		/* port: dynamic quality (render_governor.c): the small and far, by their kind, are neither lit nor drawn while the frames run long.
 		Never a projectile, and the first person camera's own unit and what a cinematic stars are not small */
@@ -1279,6 +1340,14 @@ static void render_object(
 				TEST_FLAG(_object_mask_item, object->object.type) ? shed->cull_item_pixels :
 				TEST_FLAG(_object_mask_projectile, object->object.type) ? 0.f : shed->cull_scenery_pixels;
 
+            /* port: keep nearby obstacles visible even at deep governor steps. */
+            {
+                real dx=object->object.bounding_sphere_center.x-render.camera.position.x;
+                real dy=object->object.bounding_sphere_center.y-render.camera.position.y;
+                real dz=object->object.bounding_sphere_center.z-render.camera.position.z;
+                if(render_governor_protect_near(dx*dx+dy*dy+dz*dz,object->object.bounding_sphere_radius))
+                    cull_pixels=0;
+            }
 			/* port: found once (see object_render_data) */
 			data->level_of_detail_pixels = object_get_level_of_detail_pixels(data->object_index);
 			if (render_governor_cull_small(DATUM_INDEX_TO_ABSOLUTE_INDEX(data->object_index),
@@ -1322,6 +1391,9 @@ static void render_object(
 			{
 				data->lighting = NULL;
 			}
+#ifdef HALO_WIIU
+			probe_t1 = render_probe_now_ms();
+#endif
 
 			if (editor_preprocess_rendered_object(data->object_index, data->lighting))
 			{
@@ -1341,6 +1413,13 @@ static void render_object(
 
 				render_object_list(data, &model_effect, data->object_index);
 			}
+#ifdef HALO_WIIU
+			probe_t2 = render_probe_now_ms();
+			render_probe_ms[probe_type][0] += probe_t1 - probe_t0;
+			render_probe_ms[probe_type][2] += probe_t2 - probe_t1;
+			render_probe_count[probe_type]++;
+			render_probe_report(probe_t2);
+#endif
 		}
 	}
 

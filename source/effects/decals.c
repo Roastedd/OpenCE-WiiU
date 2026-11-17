@@ -498,6 +498,51 @@ boolean debug_decals;
 
 /* ---------- public code */
 
+#ifdef HALO_WIIU
+static boolean decal_cache_repair_requested;
+static unsigned long decal_cache_repairs;
+static unsigned decal_late_delete_reports;
+static struct decal_datum *decal_try_get_link(long index)
+{
+    return index!=NONE && (short)(index>>16)!=0 && global_decal_data && global_decal_data->valid ?
+        datum_try_and_get(global_decal_data,index) : NULL;
+}
+
+void platform_log(const char *format,...);
+void rasterizer_decals_reset_cache(void);
+#endif
+
+void decals_request_cache_repair(void)
+{
+#ifdef HALO_WIIU
+    decal_cache_repair_requested=TRUE;
+#endif
+}
+boolean decals_cache_repair_pending(void)
+{
+#ifdef HALO_WIIU
+    return decal_cache_repair_requested;
+#else
+    return FALSE;
+#endif
+}
+void decals_repair_cache(void)
+{
+#ifdef HALO_WIIU
+    if(!decal_cache_repair_requested || !global_decal_data || !global_decal_data->valid)return;
+    /* Both pools are cosmetic and render-owned. Clear them together, never
+     * recursively from their eviction callback or through malformed links. */
+    rasterizer_decals_reset_cache();
+    data_delete_all(global_decal_data);
+    csmemset(decal_globals->first_decal_indices,NONE,sizeof(decal_globals->first_decal_indices));
+    decal_globals->first_disconnected_decal_index=NONE;
+    decal_globals->locked_count=decal_globals->permanent_count=0;
+    decal_geometry.decal_vertex_count=decal_geometry.decal_surface_count=0;
+    decal_cache_repair_requested=FALSE;
+    platform_log("decals: recovered mismatched owner/cache pools (%lu repairs)",++decal_cache_repairs);
+#endif
+}
+
 void decals_initialize(
 	void)
 {
@@ -537,6 +582,9 @@ void decals_initialize_for_new_map(
 	decal_globals->permanent_count = 0;
 
 	data_make_valid(global_decal_data);
+#ifdef HALO_WIIU
+    decal_cache_repair_requested=FALSE;
+#endif
 	rasterizer_decals_initialize_for_new_map();
 
 	decal_geometry.decal_vertex_count = 0;
@@ -863,6 +911,7 @@ void decals_update(
 
 		while (data_iterator_next(&iterator))
 		{
+            if(decals_cache_repair_pending())break;
 			decal_update(iterator.datum_index);
 		}
 	}
@@ -926,8 +975,55 @@ void decals_delete_permanent_from_cluster(
 }
 
 void decal_delete(
-	long decal_index)
+    long decal_index)
 {
+#ifdef HALO_WIIU
+    struct decal_datum *decal=decal_try_get_link(decal_index);
+    struct decal_datum *neighbor;
+    long previous,next;
+    if(!decal) {decals_request_cache_repair();return;}
+    previous=decal->previous_decal_index;next=decal->next_decal_index;
+    if((previous==next && previous!=NONE) ||
+        (previous!=NONE && ((decal->cluster_index==NONE && decal_globals->first_disconnected_decal_index==decal_index) ||
+         (decal->cluster_index>=0 && decal->cluster_index<MAXIMUM_CLUSTERS_PER_STRUCTURE &&
+          decal->layer>=0 && decal->layer<NUMBER_OF_DECAL_LAYERS &&
+          decal_globals->first_decal_indices[decal->layer][decal->cluster_index]==decal_index))))
+        decals_request_cache_repair();
+    if(decals_cache_repair_pending())return;
+
+    if(next!=NONE) {
+        neighbor=decal_try_get_link(next);
+        if(neighbor && next!=decal_index && neighbor->previous_decal_index==decal_index)
+            neighbor->previous_decal_index=previous;
+        else decals_request_cache_repair();
+    }
+    if(previous!=NONE) {
+        neighbor=decal_try_get_link(previous);
+        if(neighbor && previous!=decal_index && neighbor->next_decal_index==decal_index)
+            neighbor->next_decal_index=next;
+        else decals_request_cache_repair();
+    }
+    else if(decal->cluster_index==NONE) {
+        if(decal_globals->first_disconnected_decal_index==decal_index)
+            decal_globals->first_disconnected_decal_index=next;
+        else decals_request_cache_repair();
+    }
+    else if(decal->cluster_index>=0 && decal->cluster_index<MAXIMUM_CLUSTERS_PER_STRUCTURE &&
+        decal->layer>=0 && decal->layer<NUMBER_OF_DECAL_LAYERS &&
+        decal_globals->first_decal_indices[decal->layer][decal->cluster_index]==decal_index)
+        decal_globals->first_decal_indices[decal->layer][decal->cluster_index]=next;
+    else decals_request_cache_repair();
+    if(!datum_delete_if_alive(global_decal_data,decal_index)) {
+        if(decal_late_delete_reports++<8) {
+            struct decal_datum *live=decal_try_get_link(decal_index);
+            platform_log("decals: late owner deletion %08lx, pool count %d/%d, current identifier %04x",
+                (unsigned long)decal_index,global_decal_data->count,global_decal_data->maximum_count,
+                live?(unsigned short)live->identifier:0);
+        }
+        decals_request_cache_repair();
+    }
+#else
+
 	struct decal_datum *decal= DECAL_GET(decal_index);
 
 	match_assert("c:\\halo\\SOURCE\\effects\\decals.c", 947, decal);
@@ -984,6 +1080,7 @@ void decal_delete(
 	datum_delete(global_decal_data, decal_index);
 
 	return;
+#endif
 }
 
 static void decal_projection_create(
@@ -2506,7 +2603,9 @@ static long decal_insert(
 	boolean permanent)
 {
 	struct data_iterator iterator;
-	long decal_index = datum_new_at_index(global_decal_data, cache_index);
+	long decal_index;
+    if(decals_cache_repair_pending())return NONE;
+    decal_index = datum_new_at_index(global_decal_data, cache_index);
 
 	match_assert("c:\\halo\\SOURCE\\effects\\decals.c", 479,
 		cluster_index>=0 && cluster_index<MAXIMUM_CLUSTERS_PER_STRUCTURE);
@@ -2589,8 +2688,9 @@ static long decal_insert(
 				decal_set_first_decal_index(cluster_index, layer, decal_index);
 			}
 
+            /* port: preserve the previous neighbor, not a self-link. */
+            new_decal->previous_decal_index = next->previous_decal_index;
 			next->previous_decal_index = decal_index;
-			new_decal->previous_decal_index = decal_index;
 			new_decal->next_decal_index = next_decal_index;
 			new_decal->cluster_index = cluster_index;
 			new_decal->layer = layer;

@@ -310,7 +310,7 @@ static unsigned found_told;
 pack's shader-misses capture can be full or lost: the owner's 2026-11-06 session lost the 41 keys of its stand-in draws). A key drawn with its stand-in (a shader
 class the pack has none of) has its 256 bytes written out once, in four log lines `shaders: key P <hash> <n>/4 <hex>` that tools/wiiu/log_keys.py turns back into the
 capture's format; each 5 seconds the keys that drew in the window are said, with their counts (nonexact_report, called by the 5-second note). */
-#define NONEXACT_LIMIT 64
+#define NONEXACT_LIMIT 256
 #define NONEXACT_DUMP_LIMIT 24
 #define NONEXACT_NONE 0xffffffffu
 #define NONEXACT_LINES_PER_NOTE 8
@@ -528,8 +528,10 @@ uint32_t dk_shader_for_draw(uint32_t stage, const void *key_data)
 			if (tint)
 				handle = tint;
 		}
-		if (how != DK_SHADER_FOUND_EXACT && how != DK_SHADER_FOUND_LEFT_OUT)
-			noted = missing_note(stage, hash, key_data);
+		/* Canonical aliases already have equivalent GLSL. Reserve capture space
+         * for absent programs and simplified stand-ins, not redundant aliases. */
+        if (how == DK_SHADER_FOUND_NONE || how == DK_SHADER_FOUND_FALLBACK)
+            noted = missing_note(stage, hash, key_data);
 		if ((how == DK_SHADER_FOUND_EQUIVALENT || how == DK_SHADER_FOUND_FALLBACK) && found_told < FOUND_TOLD_LIMIT)
 		{
 			found_told++;

@@ -6,6 +6,7 @@ Source PNGs are retained unchanged under port/assets/controller_buttons/source.
 The generated bounds exclude transparent padding when fitting gameplay cells.
 """
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -41,6 +42,13 @@ def sources():
                 entry['label'] = (['R1', 'L1', 'L2', 'R2'] if family == 'ps' else ['R', 'L', 'ZL', 'ZR'])[slot - 4]
                 entry['trigger'] = slot >= 6
             entries.append(entry)
+    wii_labels = {
+        'wii_pad': ['A', 'B', 'X', 'Y', 'R', 'L', 'ZL', 'ZR', 'LS', 'RS', 'L↓', 'R↓', 'L↓', 'R↓'],
+        'wii_remote': ['A', 'B', '1', '2', 'C', 'Z', '+', '−', '↑', '↓', '←', '→', 'N', 'AIM'],
+    }
+    for family, labels in wii_labels.items():
+        for slot, label in enumerate(labels):
+            entries.append(dict(name=f'{family}_{slot}', wii_label=label, cell=[21, 26]))
     return entries
 
 
@@ -82,6 +90,18 @@ def correct_label(face, text, trigger):
 
 
 def render(entry):
+    if 'wii_label' in entry:
+        result = Image.new('RGBA', (512, 512))
+        draw = ImageDraw.Draw(result)
+        draw.rounded_rectangle((176, 156, 336, 356), radius=48,
+                               fill=(245, 248, 250, 255), outline=(65, 75, 85, 255), width=8)
+        label = entry['wii_label']
+        font = ImageFont.truetype(str(ROOT / 'port/assets/fonts/Overpass-900.ttf'),
+                                  84 if len(label) == 1 else 52, layout_engine=ImageFont.Layout.BASIC)
+        bounds = draw.textbbox((0, 0), label, font=font)
+        draw.text(((512-bounds[2]-bounds[0])/2, (512-bounds[3]-bounds[1])/2),
+                  label, font=font, fill=(25, 35, 45, 255))
+        return result
     source = Image.open(ASSETS / 'source' / entry['source']).convert('RGBA')
     bounds = source.getchannel('A').getbbox()
     if not bounds:
@@ -102,9 +122,12 @@ def render(entry):
 def build():
     assets = []
     bounds = []
+    wii_only = '--wii-only' in sys.argv
     for entry in sources():
-        image = render(entry)
-        image.save(ASSETS / (entry['name'] + '.png'), optimize=True)
+        target = ASSETS / (entry['name'] + '.png')
+        image = Image.open(target).convert('RGBA') if wii_only and 'wii_label' not in entry else render(entry)
+        if not wii_only or 'wii_label' in entry:
+            image.save(target, optimize=True)
         alpha = np.asarray(image)[..., 3]
         ys, xs = np.where(alpha >= 128)
         bounds.append([int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1])

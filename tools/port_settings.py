@@ -162,8 +162,8 @@ SCREENS = {
              "The overshield rises up the body and stays lit,\nin its own color. Online: the host's choice.",
              "desktop android web"),
             ("MODEL DETAIL:", "display.model_detail", [("STOCK", "stock"), ("NATIVE", "native"), ("HIGHEST", "highest")],
-             "Stock picks models' detail by the Xbox's 480 lines;\nnative by this display's; highest, always the best.",
-             "desktop android web"),
+             "Stock: original detail. Native: display resolution.\nHighest: most geometry; may reduce frame rate.",
+             "desktop android web wiiu"),
             ("SHIELD GLOW:", "display.shield_glow", ON_OFF,
              "Shields light their surroundings as they flare.\nOnline: the host's choice.", "desktop android web"),
             ("GLOW INTENSITY:", "display.shield_glow_intensity", [("DEFAULT", "default"), ("LIGHT SHOW", "light_show")],
@@ -395,6 +395,17 @@ SCREENS["video_settings/fov_viewmodels"] = {
     ],
 }
 
+SCREENS["video_settings/fov_viewmodels"]["categories"] = [
+    ("THIRD PERSON CAMERA:","video_settings/third_person","Shoulder framing and distance for on-foot play.","wiiu")]
+SCREENS["video_settings/third_person"] = {
+    "screen":"third_person_settings_screen","header":_video["header"],"spacing":30,
+    "rows":[
+        ("SHOULDER CAMERA:","display.wiiu_shoulder_camera",ON_OFF,"On-foot third-person aiming camera.\nOff restores the original follow track.","wiiu"),
+        ("DISTANCE:","display.wiiu_camera_distance",[(str(x),str(x)) for x in (0.6,0.8,1.1,1.4,1.7,2.0)],"Follow distance; nearby walls retract the view.\nVehicles retain their own camera settings.","wiiu"),
+        ("SHOULDER:","display.wiiu_camera_shoulder",[("LEFT","-0.25"),("CENTER","0"),("RIGHT","0.25")],"Choose which side of the character to look past.\nThe reticle follows the actual shot path.","wiiu"),
+        ("HEIGHT:","display.wiiu_camera_height",[(str(x),str(x)) for x in (0.0,0.1,0.2,0.3,0.4)],"Raise the camera pivot above eye height.\nWeapon zoom uses the normal eye view.","wiiu"),
+    ]}
+
 # the Wii U's Detail screen, from Video Setup: what the graphics modes set besides the lines and the frame rate
 # (port/linux/game/graphics_quality.c; changing a row makes the mode custom: menu_functions.c's graphics_mode_settle)
 SCREENS["video_settings/detail"] = {
@@ -426,7 +437,90 @@ SCREENS["video_settings/detail"] = {
 SCREENS["gamepad_setup"]["categories"] = [
     *[(*category[:3], "desktop android web") for category in SCREENS["gamepad_setup"]["categories"]],
     ("WII U GAMEPAD:", "gamepad_setup/wiiu", "The GamePad's gyro aim, its buttons, what its\nscreen shows and the Pro Controllers.", "wiiu"),
+    ("WII REMOTE:", "gamepad_setup/wiimote", "MotionPlus aiming, the free-aim area and\ncamera turning speed.", "wiiu"),
 ]
+SCREENS["gamepad_setup/wiimote"] = {
+    "screen": "wiiu_remote_settings_screen", "header": SCREENS["gamepad_setup"]["header"], "spacing": 27,
+    "rows": [
+        ("LOOK SOURCE:", "input.wiiu_wiimote_look",
+         [("AUTO", "auto"), ("MOTIONPLUS", "motion"), ("SENSOR BAR", "pointer"), ("OFF", "off")],
+         "Auto prefers MotionPlus. Sensor Bar uses\nthe Remote's infrared pointer.", None),
+        ("SENSOR FILTER:", "input.wiiu_wiimote_ir_samples",
+         [(str(value), str(value)) for value in (1, 2, 3, 5, 8)],
+         "Recent sensor-bar samples are blended.\nLower values respond faster; 1 is unfiltered.", None),
+        ("POINTING RANGE:", "input.wiiu_wiimote_ir_scale",
+         [(str(value), str(value)) for value in (0.5, 0.65, 0.75, 0.9, 1.0, 1.25, 1.5)],
+         "How far the sensor-bar pointer moves the\naim point across the screen.", None),
+        ("SHAKE MELEE:", "input.wiiu_wiimote_shake_melee", ON_OFF,
+         "Swing either hand deliberately for melee.\nReturn to rest before the next gesture.", None),
+        ("FREE AIM:", "input.wiiu_wiimote_free_aim", ON_OFF,
+         "Move the weapon within the screen on foot.\nThe camera turns near the aim area's edge.", None),
+        ("MOTION SENSITIVITY:", "input.wiiu_wiimote_sensitivity",
+         [(str(value), str(value)) for value in (0.25, 0.4, 0.5, 0.65, 0.8, 1.0, 1.25, 1.5, 2.0)],
+         "How far the weapon aims when you turn the\nRemote. Lower values give finer control.", None),
+        ("HORIZONTAL AREA:", "input.wiiu_wiimote_free_aim_box",
+         [(str(value), str(value)) for value in (4, 6, 8, 10, 12, 16, 20, 25)],
+         "Horizontal half-width in degrees. A larger\narea gives more aim before camera turning.", None),
+        ("VERTICAL AREA:", "input.wiiu_wiimote_free_aim_vertical_box",
+         [(str(value), str(value)) for value in (2, 4, 6, 8, 10, 12, 16, 20, 25)],
+         "Vertical half-height in degrees. Adjust it\nseparately from horizontal camera turning.", None),
+        ("SCOPED AIM:", "input.wiiu_wiimote_zoom_sensitivity",
+         [(str(value), str(value)) for value in (0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0)],
+         "Extra sensitivity while scoped. Lower values\nmake small corrections easier.", None),
+        ("TURN SPEED:", "input.wiiu_wiimote_free_aim_speed",
+         [(str(value), str(value)) for value in (30, 45, 60, 75, 90, 120, 150, 180)],
+         "Maximum camera speed at the aim area's\nedge, in degrees per second.", None),
+    ],
+}
+
+# Keep tuning grouped by purpose instead of extending the flat settings page.
+_remote_original = SCREENS["gamepad_setup/wiimote"]["rows"]
+def _remote_page(name, rows):
+    SCREENS["gamepad_setup/wiimote/" + name] = {
+        "screen": "wiiu_remote_" + name + "_screen", "header": SCREENS["gamepad_setup"]["header"],
+        "spacing": 27, "rows": rows,
+    }
+_remote_page("aim", [row for row in _remote_original if row[1] not in {
+    "input.wiiu_wiimote_look", "input.wiiu_wiimote_shake_melee"}] + [
+    ("FULL TURN AT:", "input.wiiu_wiimote_turn_outer", [(str(x),str(x)) for x in (0.5,0.65,0.75,0.85,1.0)],
+     "Reach maximum turn speed before pointing\nout of sensor range. Lower means earlier.", None),
+])
+_profiles=[]
+for _context in ("hip","scope","vehicle"):
+    _profiles.append((_context.upper()+" TURN:", "input.wiiu_wiimote_"+_context+"_profile",
+        [("STEADY","steady"),("BALANCED","balanced"),("FAST","fast")],
+        "Steady/Balanced/Fast change turn speed only.\nSet the free-aim area on Aim and Turn.", None))
+    for _axis in ("horizontal","vertical"):
+        _profiles.append((_context.upper()+" "+("H" if _axis=="horizontal" else "V")+" SPEED:",
+            "input.wiiu_wiimote_"+_context+"_"+_axis,[(str(x),str(x)) for x in (0.25,0.5,0.75,1.0,1.25,1.5,2.0)],
+            "Turn-speed multiplier for this axis.\nDoes not change the other aiming modes.",None))
+_profiles.append(("SCOPE EDGE SCAN:", "input.wiiu_wiimote_scope_scan_floor", [("OPTICAL","0"),("15%","0.15"),("25%","0.25"),("35%","0.35"),("50%","0.5")],
+    "Faster scanning near the scope's outer edge.\nSmall central corrections stay precise.",None))
+SCREENS["gamepad_setup/wiimote/aim"]["rows"].append(("GUNNER SPEED:","input.wiiu_wiimote_gunner_speed",
+    [(str(x),str(x)) for x in (0.5,0.75,1.0,1.25,1.5,2.0)],"Sensor turn speed for gunner seats.\nDriving controls keep their own response.",None))
+_remote_page("profiles",_profiles)
+_remote_page("calibration",[
+    ("AIM GUIDE:","input.wiiu_wiimote_aim_guide",ON_OFF,"Preview center and full-turn boundaries in play.\nSave with OK, then test your comfortable reach.",None),
+    ("CENTER H:","input.wiiu_wiimote_center_x",[(str(x),str(x)) for x in (-0.3,-0.2,-0.1,0.0,0.1,0.2,0.3)],"Horizontal center of your comfortable pointing.\nAdjust with the sensor bar in its usual place.",None),
+    ("CENTER V:","input.wiiu_wiimote_center_y",[(str(x),str(x)) for x in (-0.3,-0.2,-0.1,0.0,0.1,0.2,0.3)],"Vertical center of your comfortable pointing.\nZero uses the default sensor center.",None),
+    ("REACH H:","input.wiiu_wiimote_range_x",[(str(x),str(x)) for x in (0.5,0.65,0.8,1.0,1.25,1.5)],"Horizontal hand travel for the full range.\nLower values need less hand movement.",None),
+    ("REACH V:","input.wiiu_wiimote_range_y",[(str(x),str(x)) for x in (0.5,0.65,0.8,1.0,1.25,1.5)],"Vertical hand travel for the full range.\nLower values need less hand movement.",None),
+])
+_remote_page("gestures",[
+    ("NUNCHUK MELEE:","input.wiiu_wiimote_shake_melee",ON_OFF,"Swing the Nunchuk, then return it to rest.\nThe aiming Remote does not trigger melee.",None),
+    ("MELEE FORCE:","input.wiiu_nunchuk_melee_threshold",[("LIGHT","1.5"),("NORMAL","2.0"),("FIRM","2.5"),("STRONG","3.0")],"Force needed for the Nunchuk gesture.\nChoose firmer if normal movement triggers it.",None),
+    ("HOLD TO STEADY:","input.wiiu_wiimote_clutch",ON_OFF,"Hold the chosen button to freeze aiming.\nReplaces that button's usual action in play.",None),
+    ("STEADY BUTTON:","input.wiiu_wiimote_clutch_button",[("REMOTE 2","2"),("NUNCHUK C","c")],"2 replaces button melee; C replaces crouch.\nMenu controls are unchanged.",None),
+])
+SCREENS["gamepad_setup/wiimote"]["rows"]=[_remote_original[0],
+    ("ADAPTIVE FILTER:","input.wiiu_wiimote_adaptive_filter",ON_OFF,"Steadier at rest, quicker during fast motion.\nOff uses Sensor Filter on the Aim page.",None)]
+SCREENS["gamepad_setup/wiimote"]["categories"]=[
+    ("AIM AND TURN:","gamepad_setup/wiimote/aim","Aim range, turning speed and scope response.","wiiu"),
+    ("CONTEXT PROFILES:","gamepad_setup/wiimote/profiles","Separate hip, scoped and vehicle tuning.","wiiu"),
+    ("CALIBRATION:","gamepad_setup/wiimote/calibration","Comfortable pointing center and axis reach.","wiiu"),
+    ("GESTURES:","gamepad_setup/wiimote/gestures","Independent Nunchuk melee and hold-to-steady.","wiiu"),
+]
+
 SCREENS["gamepad_setup/wiiu"] = {
     "screen": "wiiu_gamepad_settings_screen", "header": SCREENS["gamepad_setup"]["header"], "spacing": 30,
     "rows": [
@@ -3005,3 +3099,12 @@ def multiplayer_bar_patched(text: str) -> str:
         raise ValueError("the Multiplayer screen's bar has changed")
     block = block.replace(MULTIPLAYER_BAR_OLD, f'<data input="port screens menu update"/>\n\t\t<child widget="{marker}" x="380" y="1"/>\n\t\t' + MULTIPLAYER_BAR_OLD)
     return text[:start] + block + text[end:]
+
+SCREENS["video_settings/graphics"]["rows"].append(("STABLE VISIBILITY:", "display.wiiu_stable_visibility", ON_OFF,
+    "Keep nearby obstacles and distant detail.\nCan cost frame rate in demanding scenes.", "wiiu"))
+
+SCREENS["video_settings/graphics"]["rows"].append(("GUNNER FEEDBACK:", "display.wiiu_gunner_feedback", ON_OFF,
+    "Preserve limited local firing effects and show\na firing cue when the turret actually shoots.", "wiiu"))
+
+SCREENS["video_settings/graphics"]["rows"].append(("RETICLE STABILITY:", "display.wiiu_reticle_stabilization", ON_OFF,
+    "Smooth tiny third-person and gunner jitters.\nLarge aim moves remain immediate.", "wiiu"))

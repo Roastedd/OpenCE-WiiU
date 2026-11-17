@@ -227,6 +227,36 @@ void lruv_idle(
 	return;
 }
 
+/* port: cosmetic caches (decal vertices) must not halt the game when their owner and block pools disagree.
+Everything the strict delete would read is checked first; on FALSE nothing was changed. */
+boolean lruv_block_delete_if_valid(
+	struct lruv_cache *cache,
+	long block_index)
+{
+	struct lruv_cache_block *block;
+	struct lruv_cache_block *other;
+
+	if (!cache || !cache->blocks || !cache->blocks->valid || block_index==NONE ||
+		(short)(block_index>>16)==0 || (short)block_index<0 || (short)block_index>=cache->blocks->count)
+		return FALSE;
+	block = datum_try_and_get(cache->blocks, block_index);
+	if (!block) return FALSE;
+	if (block->previous_block_index != NONE)
+	{
+		other = datum_try_and_get(cache->blocks, block->previous_block_index);
+		if (!other || other->next_block_index != block_index) return FALSE;
+	}
+	else if (cache->first_block_index != block_index) return FALSE;
+	if (block->next_block_index != NONE)
+	{
+		other = datum_try_and_get(cache->blocks, block->next_block_index);
+		if (!other || other->previous_block_index != block_index) return FALSE;
+	}
+	else if (cache->last_block_index != block_index) return FALSE;
+	lruv_block_delete(cache, block_index);
+	return TRUE;
+}
+
 void lruv_block_delete(
 	struct lruv_cache *cache,
 	long block_index)
@@ -801,6 +831,17 @@ static void lruv_cache_verify(
 	match_assert("c:\\halo\\SOURCE\\memory\\lruv_cache.c", 755, cache->signature==LRUV_CACHE_SIGNATURE);
 	data_verify(cache->blocks);
 
+#ifdef HALO_WIIU
+	/* port: the whole-list walk below is a debug check run at every block new/delete (the decal vertex cache holds thousands of blocks, and each
+	operation walked all of them: ~1% of the game thread in a fight). Every 128th call walks; the neighbours of the one block changed are checked
+	by lruv_block_delete_if_valid and the decal repair. */
+	{
+		static unsigned walk_counter;
+
+		if (verify_blocks && (walk_counter++ & 127) != 0)
+			verify_blocks = FALSE;
+	}
+#endif
 	if (verify_blocks)
 	{
 		block_index = cache->first_block_index;

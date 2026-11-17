@@ -2403,14 +2403,21 @@ boolean weapon_get_projectile_ray(long weapon_index, short trigger_index, real_p
 	struct object_marker marker;
 	real velocity = 0.0f;
 
-	if (!unit || unit->unit.player_index == NONE || trigger_index < 0 ||
+    /* port: a local gunner's weapon belongs to the vehicle, whose direct
+     * player index may be NONE. Its gunner is the player controlling it. */
+    struct unit_datum *gunner = unit && unit->unit.gunner_object_index!=NONE ?
+        unit_try_and_get(unit->unit.gunner_object_index) : NULL;
+    long aiming_player = unit && unit->unit.player_index!=NONE ? unit->unit.player_index :
+        gunner ? gunner->unit.player_index : NONE;
+	if (!unit || (unit->unit.player_index == NONE && (!gunner || gunner->unit.player_index==NONE)) || trigger_index < 0 ||
 		trigger_index >= definition->weapon.triggers.count)
 		return FALSE;
 	trigger = TAG_BLOCK_GET_ELEMENT(&definition->weapon.triggers, trigger_index, struct weapon_trigger_definition);
 	if (trigger->projectile.index == NONE)
 		return FALSE;
-	object_get_marker_by_name(weapon_get_effect_object_index(weapon_index),
-		trigger_index == 0 ? "primary trigger" : "secondary trigger", &marker, 1);
+	if (!object_get_marker_by_name(weapon_get_effect_object_index(weapon_index),
+		trigger_index == 0 ? "primary trigger" : "secondary trigger", &marker, 1))
+        return FALSE;
 	*origin = marker.matrix.position;
 	*forward = marker.matrix.forward;
 	if (!TEST_FLAG(trigger->flags, _weapon_trigger_projectiles_cannot_be_aimed_bit) &&
@@ -2419,8 +2426,12 @@ boolean weapon_get_projectile_ray(long weapon_index, short trigger_index, real_p
 		struct unit_definition *unit_definition = unit_definition_get(unit->definition_index);
 		real_vector3d right, up;
 
+        /* port: mounted triggers fire along the barrel marker, as
+         * trigger_create_projectiles does. A tick-owned vehicle aiming
+         * vector must not replace its frame-interpolated turret direction. */
 		unit_adjust_projectile_ray(owner_index, origin, forward, &velocity,
-			TEST_FLAG(unit_definition->unit.flags, _unit_fires_from_camera_bit), TRUE);
+			TEST_FLAG(unit_definition->unit.flags, _unit_fires_from_camera_bit),
+            unit->unit.gunner_object_index == NONE);
 		cross_product3d(global_up3d, forward, &right);
 		if (normalize3d(&right) == 0.0f)
 			right = *global_left3d;
@@ -2429,7 +2440,7 @@ boolean weapon_get_projectile_ray(long weapon_index, short trigger_index, real_p
 		point_from_line3d(origin, forward, trigger->first_person_weapon_offset.x, origin);
 		point_from_line3d(origin, &right, trigger->first_person_weapon_offset.y, origin);
 		point_from_line3d(origin, &up, trigger->first_person_weapon_offset.z, origin);
-		player_aim_projectile_preview(unit->unit.player_index, origin, forward);
+		player_aim_projectile_preview(aiming_player, origin, forward);
 	}
 	if (TEST_FLAG(trigger->flags, _weapon_trigger_uses_weapon_origin_bit))
 		*origin = marker.matrix.position;

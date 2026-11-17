@@ -371,16 +371,23 @@ static long rasterizer_decals_draw_order(
 	short cluster_index)
 {
 	long count = 0, first, decal_index;
+    long visited=0,next_index;
 	/* port: dynamic quality (render_governor.c): while the frames run long, the decals far from the camera are not drawn, nor some of the rest (by
 	decal, so the same ones each frame); they are still made and age as they would */
 	struct render_governor_values const *shed = render_governor_values();
 	real shed_radius_squared = shed->decal_radius * shed->decal_radius;
 
 	for (decal_index = decal_get_first_decal_index(cluster_index, local_layer);
-		decal_index != NONE && count < MAXIMUM_DECALS_PER_MAP;
-		decal_index = DECAL_GET(decal_index)->next_decal_index)
+		decal_index != NONE && visited < MAXIMUM_DECALS_PER_MAP;
+		decal_index = next_index)
 	{
-		struct decal_datum *decal = DECAL_GET(decal_index);
+		struct decal_datum *decal=decal_index!=0 && (short)(decal_index>>16)!=0 &&
+            (short)decal_index>=0 && (short)decal_index<global_decal_data->count &&
+            (short)decal_index<local_vertex_cache->blocks->count &&
+            datum_try_and_get(local_vertex_cache->blocks,decal_index) ?
+            datum_try_and_get(global_decal_data,decal_index) : NULL;
+        if(!decal) {decals_request_cache_repair();return 0;}
+        next_index=decal->next_decal_index;visited++;
 		struct decal_definition *definition = decal_definition_get(decal->definition_index);
 		short framebuffer_blend_function = definition->shader.framebuffer_blend_function;
 
@@ -410,6 +417,7 @@ static long rasterizer_decals_draw_order(
 			0xFFFFFFFF;
 		count++;
 	}
+    if(decal_index!=NONE) {decals_request_cache_repair();return 0;}
 	for (first = 0; first < count; )
 	{
 		long last = first;
@@ -472,6 +480,15 @@ void _rasterizer_decal_vertices_unlock(
 	IDirect3DVertexBuffer8_Unlock(local_d3d_vertex_buffer);
 
 	return;
+}
+
+/* port: called only at frame begin outside LRU callbacks, before drawing. */
+void rasterizer_decals_reset_cache(void)
+{
+    data_delete_all(local_vertex_cache->blocks);
+    local_vertex_cache->first_block_index=local_vertex_cache->last_block_index=NONE;
+    local_vertex_cache->tick=1;
+    decal_batch_count=0;
 }
 
 void _rasterizer_decals_initialize_for_new_map(
@@ -610,7 +627,13 @@ void _rasterizer_decal_vertices_delete(
 		"c:\\halo\\SOURCE\\rasterizer\\xbox\\rasterizer_xbox_decals.c",
 		0x107,
 		local_vertex_cache);
+#ifdef HALO_WIIU
+	/* port: a vertex block that is already gone or has bad links is a cosmetic mismatch, repaired at the next frame start */
+	if (!lruv_block_delete_if_valid(local_vertex_cache, cache_index))
+		decals_request_cache_repair();
+#else
 	lruv_block_delete(local_vertex_cache, cache_index);
+#endif
 
 	return;
 }
@@ -640,7 +663,7 @@ void _rasterizer_decals_begin(
 	local_layer = layer;
 	if (rasterizer_debug_options.drawing_mode != _rasterizer_drawing_mode_normal)
 		return;
-	if (!rasterizer_debug_options.draw_environment_decals)
+	if (!rasterizer_debug_options.draw_environment_decals || decals_cache_repair_pending())
 		return;
 
 	match_assert(
@@ -777,7 +800,7 @@ void _rasterizer_decals_draw(
 		global_d3d_device);
 	if (rasterizer_debug_options.drawing_mode != _rasterizer_drawing_mode_normal)
 		return;
-	if (!rasterizer_debug_options.draw_environment_decals)
+	if (!rasterizer_debug_options.draw_environment_decals || decals_cache_repair_pending())
 		return;
 
 	/* port: in the order rasterizer_decals_draw_order gives */
@@ -1003,6 +1026,7 @@ void _rasterizer_decals_flush(
 static void rasterizer_decal_vertices_purge_proc(
 	long decal_index)
 {
+    struct decal_datum *decal;
 	match_assert(
 		"c:\\halo\\SOURCE\\rasterizer\\xbox\\rasterizer_xbox_decals.c",
 		29,
@@ -1019,7 +1043,16 @@ static void rasterizer_decal_vertices_purge_proc(
 		"c:\\halo\\SOURCE\\rasterizer\\xbox\\rasterizer_xbox_decals.c",
 		32,
 		decal_index!=0);
-	if (TEST_FLAG(DECAL_GET(decal_index)->flags, _decal_locked_bit) &&
+    /* port: an orphaned vertex-cache block has no matching live decal owner.
+     * Match the full salted handle; never delete a replacement in its slot. */
+    decal = global_decal_data && global_decal_data->valid ?
+        datum_try_and_get(global_decal_data, decal_index) : NULL;
+    if (!decal)
+    {
+        decals_request_cache_repair();
+        return;
+    }
+	if (TEST_FLAG(decal->flags, _decal_locked_bit) &&
 		!locked_decal_reported)
 	{
 		error(
@@ -1029,7 +1062,7 @@ static void rasterizer_decal_vertices_purge_proc(
 			last_decal_index_queried_by_lruv_cache);
 		locked_decal_reported = TRUE;
 	}
-	if (TEST_FLAG(DECAL_GET(decal_index)->flags, _decal_permanent_bit) &&
+	if (TEST_FLAG(decal->flags, _decal_permanent_bit) &&
 		!permanent_decal_reported)
 	{
 		error(
@@ -1062,7 +1095,15 @@ static boolean rasterizer_decal_vertices_locked_proc(
 		"c:\\halo\\SOURCE\\rasterizer\\xbox\\rasterizer_xbox_decals.c",
 		73,
 		decal_index!=0);
-	decal = DECAL_GET(decal_index);
+    /* port: orphaned blocks are evictable; the purge callback skips their
+     * missing owner while the LRU still frees the vertex allocation. */
+    decal = global_decal_data && global_decal_data->valid ?
+        datum_try_and_get(global_decal_data, decal_index) : NULL;
+    if (!decal)
+    {
+        decals_request_cache_repair();
+        return FALSE;
+    }
 	locked = TEST_FLAG(decal->flags, _decal_locked_bit) ||
 		TEST_FLAG(decal->flags, _decal_permanent_bit);
 	last_decal_index_queried_by_lruv_cache = decal_index;

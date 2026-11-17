@@ -26,7 +26,7 @@ frame: over both, the frame is the tick thread's and the governor does not step 
 the target before a step up is tried whatever the estimate, 20000), worst (a window with a frame over this many ms decides nothing, 80), log (ms between lines; 0 for none) and late_ms, late_share and late_up_share (below), and sN.name for N the step (0 to 7) and name one of cull_scenery, cull_item, cull_unit, lod, shadow, decal_radius, decal_keep, particle_lod,
 particle_keep, decal_max, particle_max, grass, lens_flares, specular, contrails, save (the ms the step is estimated to save, for the step-up test).
 
-The late-frame rule (late_ms, off by default: the rule above is what runs). A window's mean hides what a display that shows a frame for one refresh or two feels: frames of 12 and 24 ms
+The late-frame rule (late_ms, enabled by default in Performance mode: the rule above is what runs). A window's mean hides what a display that shows a frame for one refresh or two feels: frames of 12 and 24 ms
 mean 18 and are half late. With "late_ms 16" the governor counts, in each window, the share of frames whose work was over 16 ms (a frame under that is on time at 60 a second) and decides
 on the share: it goes down when the share is over late_share (0.20 by default) in as many windows as before, with the same dwells, drawing and tick-thread conditions, and goes up when the
 share of frames that would still be on time with the step's drawing put back (each frame's work plus the step's save, against late_ms) is at most late_up_share (0.08 by default) for as many
@@ -53,7 +53,8 @@ const char *config_string(const char *name);
 unsigned long config_changes(void);
 /* tick_overlap.c: the milliseconds the game thread has waited for the tick thread, in all (0 without the overlap) */
 double tick_overlap_wait_ms_total(void);
-int game_time_get_paused(void);
+unsigned char game_time_initialized(void);
+unsigned char game_time_get_paused(void);
 
 #define STEPS RENDER_GOVERNOR_STEPS
 
@@ -61,7 +62,7 @@ int game_time_get_paused(void);
 b30 (reports/research/2026-11-03/governor.md has how: 80% of what the host's draw counts say); the step-up test uses the saving, so an estimate too small only waits longer. */
 static struct render_governor_values const default_values[STEPS] =
 {
-	/* Steps 1 to 3 are the ones played with by default: they leave out only what is small, far or thin, never a unit, a vehicle, a weapon or a projectile.
+	/* Steps 1 to 3 are the ones played with by default: they leave out only what is small, far or thin, never a unit, a vehicle or a projectile.
 	Steps 4 to 7 cull units and items by size (at about half the sizes the first version used, so that the pop-in happens farther away: a Truth and Reconciliation run spent 61% of its frames at steps 5 to 7) and are for the Performance graphics mode, or max_step in the card file. */
 	/* name           scenery item unit  lod   shadow  decal: radius keep  particle: lod keep  grass flares specular contrails  decal_max particle_max */
 	/* 0 */ { "full",          0.f,  0.f,  0.f, 1.00f,   0.f,   0.f, 16, 1.00f, 16, 1, 1, 1, 1,   0,   0 },
@@ -86,7 +87,7 @@ static struct
 	unsigned long config_at;
 	int configured_on, card_on, card_off; /* the setting, and the card file's word (neither: the default) */
 	int forced;                         /* the step held (-1: the governor decides) */
-	int max_step, max_step_set, performance_mode;
+	int max_step, max_step_set, performance_mode, frame_rule_set;
 	double blend_ms;
 	double target_ms, window_ms, down_dwell_ms, up_dwell_ms, up_margin, log_ms, min_render_ms, tick_bound_ms, tick_bound_share, quiet_ms, probe_ms, worst_ms;
 	int down_windows, up_windows;
@@ -149,12 +150,16 @@ static int settings_value(char const *name, double number)
 	{
 		/* (a frame is a refresh of the display at the least, 16.7 ms: a target under 20 cannot be kept, and a governor asked for it would give up the picture
 		for nothing) */
+		settings.frame_rule_set = 1;
 		settings.target_ms = number < 20.0 ? 20.0 : number;
 		if (number < 20.0)
 			platform_log("governor: target %.1f ms is under 20 (a refresh is 16.7): using 20", number);
 	}
 	else if (!strcmp(name, "late_ms") && (number == 0.0 || (number >= 12.0 && number <= 100.0)))
+	{
+		settings.frame_rule_set = 1;
 		settings.late_ms = number;
+	}
 	else if (!strcmp(name, "late_share") && number > 0.0 && number <= 1.0)
 		settings.late_share = number;
 	else if (!strcmp(name, "late_up_share") && number > 0.0 && number <= 1.0)
@@ -277,6 +282,14 @@ static int governor_max_step(void);
 static int online_map;
 static void governor_publish(void);
 
+static void settings_update_mode(void)
+{
+	char const *mode = config_string("display.graphics_mode");
+	settings.performance_mode = mode && !strcmp(mode, "performance");
+	if (!settings.frame_rule_set)
+		settings.late_ms = settings.performance_mode ? 1000.0 / 60.0 : 0.0;
+}
+
 static void settings_load(void)
 {
 	char text[2048];
@@ -289,7 +302,7 @@ static void settings_load(void)
 		settings.card_on = 1;
 	settings.config_at = config_changes();
 	settings.configured_on = config_boolean("display.dynamic_quality") != 0;
-	settings.performance_mode = config_string("display.graphics_mode") && !strcmp(config_string("display.graphics_mode"), "performance");
+	settings_update_mode();
 	settings.loaded = 1;
 }
 
@@ -306,7 +319,7 @@ static void governor_say_on(void)
 		smooth_on == 1 ? (settings.card_on ? "halo/governor.txt, this map is one for it" : "the smooth defaults") : settings.card_on ? "halo/governor.txt" : "display.dynamic_quality",
 		settings.target_ms, governor_max_step(), settings.window_ms, settings.down_dwell_ms, settings.up_dwell_ms);
 	if (settings.late_ms > 0.0)
-		platform_log("governor: the late-frame rule (halo/governor.txt): down when over %.0f%% of a window's frames take over %.1f ms, up when at most %.0f%% would with the step put back",
+		platform_log("governor: the late-frame rule: down when over %.0f%% of a window's frames take over %.1f ms, up when at most %.0f%% would with the step put back",
 			settings.late_share * 100.0, settings.late_ms, settings.late_up_share * 100.0);
 	if (settings.forced >= 0)
 		platform_log("governor: held at step %d by halo/governor.txt (a test)", settings.forced);
@@ -323,7 +336,7 @@ static int governor_on(void)
 
 		settings.config_at = config_changes();
 		settings.configured_on = config_boolean("display.dynamic_quality") != 0;
-		settings.performance_mode = config_string("display.graphics_mode") && !strcmp(config_string("display.graphics_mode"), "performance");
+		settings_update_mode();
 		if (was != settings.configured_on)
 			platform_log("governor: display.dynamic_quality is now %s", settings.configured_on ? "on" : "off");
 	}
@@ -465,11 +478,26 @@ edge (its size shifts a little with the camera and its level of detail) does not
 #endif
 static unsigned char cull_bits[HALO_PORT_MAXIMUM_OBJECTS_PER_MAP / 8];
 
+int render_governor_stable_visibility(void)
+{
+    static unsigned long at=(unsigned long)-1;
+    static int enabled;
+    unsigned long changes=config_changes();
+    if(at!=changes) {at=changes;enabled=config_boolean("display.wiiu_stable_visibility");}
+    return enabled;
+}
+int render_governor_protect_near(float distance_squared,float radius)
+{
+    float reach=12.0f+(radius>0 ? radius : 0);
+    return render_governor_stable_visibility() && distance_squared<=reach*reach;
+}
+
 int render_governor_cull_small(long absolute_index, float pixels, float cull_pixels)
 {
 	unsigned char *byte;
 	unsigned char mask;
 	int was, culled;
+    if(render_governor_stable_visibility()) cull_pixels*=0.4f;
 
 	if (absolute_index < 0 || absolute_index >= HALO_PORT_MAXIMUM_OBJECTS_PER_MAP)
 		return cull_pixels > 0.f && pixels < cull_pixels;
@@ -502,7 +530,7 @@ struct render_governor_values const *render_governor_values(void)
 
 float render_governor_lod_scale(void)
 {
-	return render_governor_values()->lod_scale;
+	return render_governor_stable_visibility() ? fmaxf(0.70f,render_governor_values()->lod_scale) : render_governor_values()->lod_scale;
 }
 
 /* the deepest step the governor goes to: the card file's max_step, else 3 (small and far things only), else all of them in the Performance mode */
@@ -624,7 +652,7 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 	step_frames[governor.step >= 0 && governor.step < STEPS ? governor.step : 0]++;
 	/* the game paused (the pause menu over a frozen world): the frame's cost is the pause scene's, not play's, and a step taken now would carry into play when the game
 	goes on (a run left paused 24 minutes sat at the deepest step: the pop-in followed). Nothing is decided and the window starts again when play does. */
-	if (game_time_get_paused() && settings.forced < 0)
+	if (settings.forced < 0 && (!game_time_initialized() || game_time_get_paused()))
 	{
 		governor.window_start = governor.last_change = now_ms;
 		governor.over_windows = governor.under_windows = governor.probe_windows = 0;
@@ -808,6 +836,9 @@ float render_governor_lod_scale(void)
 {
 	return 1.f;
 }
+
+int render_governor_stable_visibility(void) {return 0;}
+int render_governor_protect_near(float distance_squared,float radius) {(void)distance_squared;(void)radius;return 0;}
 
 int render_governor_cull_small(long absolute_index, float pixels, float cull_pixels)
 {

@@ -14,5 +14,7 @@ void passenger_camera_clamp_facing(short local_player_index, real_euler_angles2d
 boolean passenger_camera_reticle_begin(short local_player_index, long weapon_index);
 void passenger_camera_reticle_offset(point2d *point);
 void passenger_camera_reticle_end(void);
+/* Apply after FOV scaling so fractional cursor motion reaches the renderer. */
+void passenger_camera_reticle_subpixel(real *x, real *y);
 
 #endif

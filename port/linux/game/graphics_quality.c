@@ -189,7 +189,7 @@ void graphics_quality_apply(void)
 	particles = config_boolean("display.particles") != 0;
 	render_particles_enabled = particles;
 	render_particle_systems_enabled = particles;
-	render_contrails_enabled = particles && shed->contrails;
+	render_contrails_enabled = particles; /* per-trail governor filtering preserves local gunner feedback */
 	/* (and the reduced split screen's: what each view draws again, at a cost that grows with what it sees) */
 	render_shadows = config_boolean("display.object_shadows") != 0 && !reduced && shed->shadow_min_pixels < 1e8f;
 	rasterizer_debug_options.draw_lens_flares = config_boolean("display.lens_flares") != 0 && !reduced && shed->lens_flares;

@@ -1066,6 +1066,10 @@ boolean structure_culling_traverse(struct structure_bsp *structure)
 		struct render_frustum const *frustum =
 			structures_use_pvs_for_vs || render.cluster_index == NONE ? &render.frustum : &rendered_cluster->frustum;
 		long b;
+        /* One immutable source may own several split buckets. The source
+         * test is unchanged while this cluster's frustum is unchanged. */
+        real_rectangle3d const *source_bounds_at = NULL;
+        boolean source_visible = FALSE;
 		if (render.environment_surface_count >= MAXIMUM_RENDERED_ENVIRONMENT_SURFACES)
 		{
 			break;
@@ -1078,20 +1082,31 @@ boolean structure_culling_traverse(struct structure_bsp *structure)
 			short facing = _structure_culling_facing_mixed;
 			short bucket_reason = 0;
 			boolean triangle_facing;
+            boolean source_rejected = FALSE;
 			long p;
 			if (render.environment_surface_count >= MAXIMUM_RENDERED_ENVIRONMENT_SURFACES)
 			{
 				break;
 			}
-			/* retain the original fog-clamped test on the source, not its finer buckets */
-			if (bucket->source_bounds && !render_frustum_cube_visible(frustum, bucket->source_bounds, FALSE))
-			{
-				box = 0;
-			}
-			else
-			{
-				box = structure_culling_box_test(planes, &bucket->bounds);
-			}
+            /* Retain the original fog-clamped source test, once per run of
+             * split buckets sharing it. No result survives this cluster. */
+            if (bucket->source_bounds)
+            {
+                if (bucket->source_bounds != source_bounds_at)
+                {
+                    source_bounds_at = bucket->source_bounds;
+                    source_visible = render_frustum_cube_visible(frustum, bucket->source_bounds, FALSE);
+                }
+                source_rejected = !source_visible;
+            }
+            if (source_rejected)
+            {
+                box = 0;
+            }
+            else
+            {
+                box = structure_culling_box_test(planes, &bucket->bounds);
+            }
 			if (!box)
 			{
 				bucket_reason = 1;

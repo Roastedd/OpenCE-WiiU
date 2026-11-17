@@ -1648,3 +1648,6 @@ int gl_functions_load(void)
 
 /* (gl_functions.c's pointer to glGetString, which gl_functions_load would have set) */
 void (*halo_glGetString)();
+
+/* Host replay has no physical accelerometer. */
+int wiiu_input_melee_gesture(unsigned int port) { (void)port; return 0; }

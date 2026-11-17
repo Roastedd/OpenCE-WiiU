@@ -412,3 +412,84 @@ int wimote_motion_still(struct wimote_motion *motion, float seconds, const float
 	}
 	return 0;
 }
+
+/* Glyph order matches the original Wii Remote artwork in buttons.json. */
+int wimote_prompt_icon(int layout, int action_icon)
+{
+	static const unsigned int sources[] = {
+		WIIMOTE_BUTTON_A, WIIMOTE_BUTTON_B, WIIMOTE_BUTTON_1, WIIMOTE_BUTTON_2,
+		WIIMOTE_BUTTON_C, WIIMOTE_BUTTON_Z, WIIMOTE_BUTTON_PLUS, WIIMOTE_BUTTON_MINUS,
+		WIIMOTE_BUTTON_UP, WIIMOTE_BUTTON_DOWN, WIIMOTE_BUTTON_LEFT, WIIMOTE_BUTTON_RIGHT
+	};
+	static const unsigned int targets[] = {
+		0, 0, 0, 0, WIIU_PAD_R, WIIU_PAD_L, WIIU_PAD_ZL, WIIU_PAD_ZR
+	};
+	unsigned int glyph;
+	for (glyph = 0; glyph < sizeof(sources) / sizeof(sources[0]); glyph++)
+	{
+		struct wiiu_pad mapped;
+		unsigned int face = action_icon >= 0 && action_icon < 4 ? 1u << action_icon : 0u;
+		unsigned int button = action_icon >= 4 && action_icon < 8 ? targets[action_icon] :
+			action_icon == 14 ? WIIU_PAD_STICK_L : action_icon == 15 ? WIIU_PAD_STICK_R : 0u;
+		wimote_map(layout, sources[glyph], 0.0f, 0.0f, &mapped);
+		if ((face && (mapped.xbox_faces & face)) || (button && (mapped.buttons & button)))
+			return (int)glyph;
+	}
+	return action_icon == 16 ? 12 : action_icon == 17 ? 13 : -1;
+}
+
+int wimote_pointer_cursor(int valid, float x, float y, float *cursor_x, float *cursor_y)
+{
+	/* KPAD positions are right/down positive around the screen centre.
+	Reject non-finite samples without relying on a platform math helper. */
+	if (!valid || !(x - x == 0.0f) || !(y - y == 0.0f))
+		return 0;
+	x = 0.5f + x * 0.5f;
+	y = 0.5f + y * 0.5f;
+	*cursor_x = x < 0.0f ? 0.0f : x > 1.0f ? 1.0f : x;
+	*cursor_y = y < 0.0f ? 0.0f : y > 1.0f ? 1.0f : y;
+	return 1;
+}
+
+int wimote_nunchuk_melee(struct wimote_shake *state, float seconds, const float acc[3], int enabled, float threshold)
+{
+	const float magnitude = sqrtf(acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]);
+	float change;
+	if (!enabled || !(seconds > 0.0f && seconds <= 0.25f) || !(magnitude >= 0.0f && magnitude < 8.0f))
+	{
+		memset(state, 0, sizeof(*state));
+		return 0;
+	}
+	state->cooldown = fmaxf(0.0f, state->cooldown - seconds);
+	state->pulse = fmaxf(0.0f, state->pulse - seconds);
+	if (!state->known)
+	{
+		state->known = 1;
+		state->previous = magnitude;
+		return 0;
+	}
+	change = fabsf(magnitude - state->previous);
+	state->previous = magnitude;
+	if (state->ready && state->cooldown == 0.0f && magnitude >= threshold && change >= 0.5f)
+	{
+		state->ready = 0;
+		state->quiet = 0.0f;
+		state->pulse = 0.08f;
+		state->cooldown = 0.65f;
+	}
+	else if (fabsf(magnitude - 1.0f) < 0.25f && change < 0.2f)
+	{
+		state->quiet += seconds;
+		if (state->quiet >= 0.2f && state->cooldown == 0.0f)
+			state->ready = 1;
+	}
+	else
+		state->quiet = 0.0f;
+	return state->pulse > 0.0f;
+}
+
+/* Retained detector entry point for existing tests; hardware uses only Nunchuk. */
+int wimote_shake_melee(struct wimote_shake *state,float seconds,const float acc[3],int enabled)
+{
+    return wimote_nunchuk_melee(state,seconds,acc,enabled,2.0f);
+}

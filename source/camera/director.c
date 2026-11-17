@@ -127,6 +127,8 @@ symbols in this file:
 #include "first_person_camera.h"
 #include "flying_camera.h"
 #include "following_camera.h"
+#include "camera_status.h"
+#include "third_person_camera.h" /* port: scoped shoulder view uses the eye camera */
 #include "passenger_camera.h" /* port: port/linux/game/passenger_camera.c */
 #include "observer.h"
 #include "orbiting_camera.h"
@@ -198,20 +200,11 @@ static boolean director_update_controls(
 
 /* ---------- globals */
 
-static char const *director_camera_mode_names[NUMBER_OF_DIRECTOR_CAMERA_MODES] =
-{
-	"following",
-	"orbiting",
-	"flying",
-	"editor",
-	"first person"
-};
-
 static short const director_game_camera_modes[3] =
 {
 	_camera_first_person,
-	_camera_flying,
-	_camera_following
+	_camera_following,
+	_camera_flying
 };
 
 static short const director_script_camera_record_camera_modes[4] =
@@ -268,6 +261,7 @@ void director_dispose_from_old_map(
 {
 	short local_player_index;
 
+	camera_status_reset();
 	controller_remap_reset(); /* port: release held actions and camera context between maps */
 
 	for (local_player_index = 0; local_player_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS; local_player_index++)
@@ -339,7 +333,7 @@ director_perspective director_get_perspective(
 	}
 	else if (camera->camera_proc == following_camera_update)
 	{
-		camera->perspective = 1;
+		camera->perspective = third_person_camera_scoped(local_player_index) ? 0 : 1;
 	}
 	else if (camera->camera_proc == (director_camera_update_proc)scripted_camera_update)
 	{
@@ -351,6 +345,17 @@ director_perspective director_get_perspective(
 	}
 
 	return camera->perspective;
+}
+
+/* port: direct sensor turning is also available while explicitly controlling
+ * a free camera; player-control mode keeps the normal input path. */
+int director_port_free_camera(short local_player_index)
+{
+    struct director *camera=director_get(local_player_index);
+    return camera->debug_controls &&
+        (camera->camera_proc==(director_camera_update_proc)flying_camera_update ||
+         camera->camera_proc==(director_camera_update_proc)editor_camera_update ||
+         camera->camera_proc==(director_camera_update_proc)orbiting_camera_update);
 }
 
 short director_desired_perspective(
@@ -644,10 +649,9 @@ static void director_rotate_cameras(
 		break;
 	}
 
-	console_printf(
-		FALSE,
-		"%s camera",
-		director_camera_mode_names[camera_modes[director->camera_mode_index]]);
+	/* Manual view changes use a short transition and a viewport-local HUD notice. */
+	director->camera_change_pause = 0.25f;
+	camera_status_post(local_player_index, camera_mode, camera_mode == _camera_flying ? 0 : -1);
 	return;
 }
 
@@ -885,12 +889,10 @@ static boolean director_update_controls(
 		{
 			byte ticks = gamepad->buttons[_gamepad_analog_button_black];
 			/* The hold count is in 30 Hz ticks (input_xbox.c) and this runs
-			once a frame, several frames a tick: switch once per second held,
-			on the frame the count reaches it. */
+			once a frame, several frames a tick: switch once when the hold reaches one second, then require a release. */
 			static byte last_ticks[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
 
-			switch_camera = ticks > 0 && ticks % TICKS_PER_SECOND == 0 &&
-				ticks != last_ticks[local_player_index];
+			switch_camera = ticks >= TICKS_PER_SECOND && last_ticks[local_player_index] < TICKS_PER_SECOND;
 			last_ticks[local_player_index] = ticks;
 		}
 
@@ -904,7 +906,13 @@ static boolean director_update_controls(
 			/* port: separate camera context, with stock input as the fallback. */
 			if (remapped ? (pad_pressed & (1u << PAD_CAMERA_SWITCH)) != 0 :
 				gamepad->buttons[_gamepad_binary_button_right_thumb] == 1)
+			{
 				director->debug_controls = !director->debug_controls;
+				camera_status_post(local_player_index,
+					director->camera_proc == (director_camera_update_proc)orbiting_camera_update ? _camera_orbiting :
+					director->camera_proc == (director_camera_update_proc)editor_camera_update ? _camera_editor : _camera_flying,
+					director->debug_controls);
+			}
 			/* port: the mouse takes priority; menus and chat retain their input. */
 			if (director->debug_controls && !middle &&
 				(!remapped || controller_remap_playing((short)player_index)))

@@ -618,23 +618,23 @@ static void check_lookup(void)
 	/* a pixel key in the pack: its own shader, nothing written down */
 	key_of(fixture_named("cube"), &key);
 	CHECK(!strcmp(pixel(&key, DK_SHADER_FOUND_EXACT), "cube") && !queued_pixel);
-	/* Blood Gulch's key: its canonical key's shader, written down once, said once in the log */
+	/* Blood Gulch's key: its canonical key's shader, not captured, said once in the log */
 	key_of(fixture_named("bg"), &key);
 	log_lines = 0;
 	CHECK(!strcmp(pixel(&key, DK_SHADER_FOUND_EQUIVALENT), "bg's canonical key"));
-	CHECK(queued_pixel == 1 && last_queued == fixture_named("bg")->hash && log_lines == 1);
+	CHECK(queued_pixel == 0 && log_lines == 1);
 	snprintf(equivalent_name, sizeof(equivalent_name), "drawn with the shader of its canonical key, %016llx",
 		(unsigned long long)fixture_named("bg")->canonical);
 	CHECK(strstr(last_log, "pixel key 0702c19a9886244a is not in the pack") && strstr(last_log, equivalent_name));
-	CHECK(!strcmp(pixel(&key, DK_SHADER_FOUND_EQUIVALENT), "bg's canonical key") && queued_pixel == 1 && log_lines == 1);
+	CHECK(!strcmp(pixel(&key, DK_SHADER_FOUND_EQUIVALENT), "bg's canonical key") && queued_pixel == 0 && log_lines == 1);
 	/* the same key with another stale stage: another key, the same canonical key's shader */
 	other = key;
 	other.combiner_state[D3DRS_PSRGBINPUTS0 + 6] = 0x2c0d0c0bu;
-	CHECK(!strcmp(pixel(&other, DK_SHADER_FOUND_EQUIVALENT), "bg's canonical key") && queued_pixel == 2 && last_queued == hash_of(&other));
+	CHECK(!strcmp(pixel(&other, DK_SHADER_FOUND_EQUIVALENT), "bg's canonical key") && queued_pixel == 0);
 	/* the left-out key: skipped though its canonical key's shader is there, not written down, also from the memo */
 	key_of(fixture_named("excluded"), &key);
-	CHECK(!pixel(&key, DK_SHADER_FOUND_LEFT_OUT) && queued_pixel == 2);
-	CHECK(!pixel(&key, DK_SHADER_FOUND_LEFT_OUT) && queued_pixel == 2);
+	CHECK(!pixel(&key, DK_SHADER_FOUND_LEFT_OUT) && queued_pixel == 0);
+	CHECK(!pixel(&key, DK_SHADER_FOUND_LEFT_OUT) && queued_pixel == 0);
 	/* keys whose shader is nowhere: their stand-in, each written down */
 	{
 		static const char *const names[] = { "untextured", "projected_cube", "kill", "volume" };
@@ -643,24 +643,24 @@ static void check_lookup(void)
 		{
 			key_of(fixture_named(names[i]), &key);
 			CHECK(!strcmp(pixel(&key, DK_SHADER_FOUND_FALLBACK), stand_in_name(fixture_named(names[i])->stand_in)));
-			CHECK(queued_pixel == 3 + i && last_queued == fixture_named(names[i])->hash);
+			CHECK(queued_pixel == 1 + i && last_queued == fixture_named(names[i])->hash);
 			CHECK(strstr(last_log, "drawn with its stand-in"));
 		}
 	}
 	/* an alpha test of NEVER: no stand-in, the draw skipped; written down once, looked for each time */
 	key_of(fixture_named("volume"), &key);
 	key.alpha_test_function = D3DCMP_NEVER;
-	CHECK(!pixel(&key, DK_SHADER_FOUND_NONE) && queued_pixel == 7);
-	CHECK(!pixel(&key, DK_SHADER_FOUND_NONE) && queued_pixel == 7);
+	CHECK(!pixel(&key, DK_SHADER_FOUND_NONE) && queued_pixel == 5);
+	CHECK(!pixel(&key, DK_SHADER_FOUND_NONE) && queued_pixel == 5);
 	/* the queue takes no key now: the stand-in drawn all the same, the key written down by the next draw after the queue takes keys again */
 	key_of(fixture_named("volume"), &key);
 	key.fog_enable = !key.fog_enable;
 	refused = 1;
-	CHECK(!strcmp(pixel(&key, DK_SHADER_FOUND_FALLBACK), stand_in_name(fixture_named("volume")->stand_in)) && queued_pixel == 7);
-	CHECK(pixel(&key, DK_SHADER_FOUND_FALLBACK) && queued_pixel == 7);
+	CHECK(!strcmp(pixel(&key, DK_SHADER_FOUND_FALLBACK), stand_in_name(fixture_named("volume")->stand_in)) && queued_pixel == 5);
+	CHECK(pixel(&key, DK_SHADER_FOUND_FALLBACK) && queued_pixel == 5);
 	refused = 0;
-	CHECK(pixel(&key, DK_SHADER_FOUND_FALLBACK) && queued_pixel == 8 && last_queued == hash_of(&key));
-	CHECK(pixel(&key, DK_SHADER_FOUND_FALLBACK) && queued_pixel == 8);
+	CHECK(pixel(&key, DK_SHADER_FOUND_FALLBACK) && queued_pixel == 6 && last_queued == hash_of(&key));
+	CHECK(pixel(&key, DK_SHADER_FOUND_FALLBACK) && queued_pixel == 6);
 	/* the draws made are counted for the key of the last lookup (a repeat of it, answered from the memo, too) and said once, in the window they were made in; a key with its
 	own shader has none */
 	{

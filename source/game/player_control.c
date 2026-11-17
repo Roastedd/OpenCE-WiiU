@@ -845,6 +845,7 @@ static void handle_one_player_input(
 		action.desired_grenade_index = player->desired_grenade_index;
 		action.desired_zoom_level = player->zoom_level;
 		action.throttle = player->throttle;
+		remote_free_aim_movement(local_player_index, &action.throttle.i, &action.throttle.j);
 		action.primary_trigger = player->primary_trigger;
 
 		match_assert_valid_real(
@@ -998,6 +999,7 @@ void player_control_publish_display_facing(
 	void)
 {
 	short local_player_index;
+	remote_free_aim_publish();
 
 	if (!TICK_OWNERS_FEATURE(TICK_FEATURE_FACING))
 		return;
@@ -1020,6 +1022,7 @@ void player_control_sync_display_facing(
 	void)
 {
 	short local_player_index;
+	remote_free_aim_sync();
 
 	for (local_player_index = 0; local_player_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS; local_player_index++)
 	{
@@ -1450,6 +1453,7 @@ static void get_local_player_input_blob(
 								mouse_yaw *= inverse_zoom;
 								mouse_pitch *= inverse_zoom;
 							}
+							remote_free_aim_input(local_player_index, &mouse_yaw, &mouse_pitch, time_delta_sec);
 							input->facing_delta.yaw += mouse_yaw;
 							input->facing_delta.pitch += mouse_pitch;
 						}

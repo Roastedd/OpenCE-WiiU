@@ -137,4 +137,17 @@ headset's microphone), 0 without, -1 before the GamePad has been read; and the m
 int wiiu_input_headset(void);
 unsigned int wiiu_input_mic_status(void);
 
+
+/* Whether MotionPlus free aim owns edge turning for the current player. */
+void wiiu_input_set_remote_free_aim(int enabled);
+
+int wiiu_input_remote_pointer(float *x, float *y, int *valid);
+void wiiu_input_set_shake_melee(int enabled);
+int wiiu_input_melee_gesture(unsigned int port);
+int wiiu_input_prompt_style(unsigned int port);
+int wiiu_input_prompt_icon(unsigned int port, int action_icon);
+
 #endif
+
+int wiiu_input_remote_clutch(unsigned button);
+void wiiu_input_set_melee_threshold(float value);

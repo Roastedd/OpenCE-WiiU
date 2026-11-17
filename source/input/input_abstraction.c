@@ -765,6 +765,14 @@ void input_abstraction_update(
 					error(_error_silent, "unknown joystick preset");
 					break;
 			}
+#ifdef HALO_WIIU
+			{
+				int wiiu_input_melee_gesture(unsigned int port);
+				int port_menus_active(void);
+				if (!port_menus_active() && wiiu_input_melee_gesture((unsigned int)controller_index))
+					state->buttons[_game_control_melee] = MAX(state->buttons[_game_control_melee], 1);
+			}
+#endif
 			/* port: digital movement bindings are independent of stick presets. */
 			controller_remap_movement((short)controller_index, &state->forward_movement, &state->strafe);
 			keyboard_controls_update(controller_index, state);

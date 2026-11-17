@@ -150,7 +150,7 @@ def test_artwork_mapping_transparency_labels_and_regeneration():
     from PIL import Image
     import controller_button_assets as assets
     entries = assets.sources()
-    assert len(entries) == 62
+    assert len(entries) == 90
     assert [e['source'] for e in entries[20:24]] == [f'switch/{b}-switch_simple.png' for b in 'BAYX']
     assert [e['label'] for e in entries if e.get('label')][:4] == ['R1','L1','L2','R2']
     for entry in entries:

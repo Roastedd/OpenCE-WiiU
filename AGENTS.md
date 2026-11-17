@@ -21,7 +21,7 @@ end.
 | `port/include/xdk/` | Stand-ins for the Xbox SDK's headers (declarations only) |
 | `port/windows/` | The Windows build's own files (`win32_*.c`, headers) |
 | `port/android/` | The Android app: the guest runtime, the host library (`host/`), the Java app (`app/`), host imports (`host_imports.list`) |
-| `port/wiiu/` | The Wii U port (groundwork, nothing runs on a console yet): the code generation flags (`abi.mk`), the probe that measures the console (`probe/`), the Wii U's own platform units (`src/`), and the symbols the link still lacks (`stubbed_symbols.txt`) |
+| `port/wiiu/` | The experimental Wii U port (menus and campaign run on hardware; see port/wiiu/README.md for validation limits): the code generation flags (`abi.mk`), the probe that measures the console (`probe/`), the Wii U's own platform units (`src/`), and the symbols the link still lacks (`stubbed_symbols.txt`) |
 | `port/web/` | The web build: its runtime (`src/`: entry, sockets inside the page, memory watch), the page and its service worker (`site/`), the SDL port, tests |
 | `port/assets/` | What the builds embed or ship: high-res HUD (`hud/`), fonts, titles, menus (`menus/`), icons, network brokers and master servers, the dedicated server's web page (`server_ui/`) |
 | `port/third_party/` | Vendored libraries, each with a README naming its upstream, version and checksum |

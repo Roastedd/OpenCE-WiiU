@@ -37,6 +37,7 @@ symbols in this file:
 #include "objects/objects.h"
 #include "rasterizer/rasterizer.h"
 #include "render.h"
+#include "gunner_feedback.h" /* port: bounded local firing feedback */
 #include "render_governor.h" /* port: port/linux/game/render_governor.c */
 #include "tag_files/tag_files.h"
 
@@ -460,7 +461,7 @@ static void render_contrail(
 static void render_contrails(
 	unsigned long render_mode_flags)
 {
-	if (render_contrails_enabled)
+	if (render_contrails_enabled && (render_governor_values()->contrails || gunner_feedback_active()))
 	{
 		long contrail_index;
 
@@ -476,7 +477,8 @@ static void render_contrails(
 			for (instance_index = 0; instance_index < 4; instance_index++)
 			{
 				if (((1 << definition->render_type) & render_mode_flags) &&
-					contrail->contrail_point_counts[instance_index] >= 2)
+					contrail->contrail_point_counts[instance_index] >= 2 &&
+                        (render_governor_values()->contrails || gunner_feedback_take_contrail(contrail->object_index)))
 				{
 					render_contrail(contrail, definition, instance_index);
 				}

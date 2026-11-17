@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The port's settings screen, in the PC version's style (tools/port_settings.py) -->
+<menus>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/wiiu_remote_gestures_screen" width="640" height="480" flags="pass_unhandled_to_focused_child pause_game" bitmap="bitmaps/gradient">
+		<on event="b" back="true"/>
+		<on event="back" back="true"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/header_profile_controller_setting"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/options_menu"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/header_profile_controller_setting" controller="1" left="35" top="11" width="605" height="59" bitmap="main_menu/settings_select/player_setup/player_profile_edit/controller_edit/header_profile_controller_setting">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/help" type="text" controller="1" left="68" top="350" width="482" height="60" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/help_strings" font="ui\large_ui" color="#FFFFFFFF">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/options_menu" type="column_list" width="640" height="480" flags="pass_unhandled_to_focused_child up_down_tabs_children" description="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/help">
+		<data input="port settings help"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/op_wiiu_wiimote_shake_melee" x="54" y="73"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/op_wiiu_nunchuk_melee_threshold" x="54" y="100"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/op_wiiu_wiimote_clutch" x="54" y="127"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/op_wiiu_wiimote_clutch_button" x="54" y="154"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/button_bar" y="414"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/button_bar" type="column_list" width="640" height="28" flags="pass_unhandled_to_focused_child left_right_tabs_items">
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/button_defaults" y="1"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/button_ok" x="380" y="1"/>
+		<child widget="common_button_cancel" x="510" y="1"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/op_wiiu_wiimote_shake_melee" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/wiiu_wiimote_shake_melee_label"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/wiiu_wiimote_shake_melee_spinner" x="320" y="1"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/wiiu_wiimote_shake_melee_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/labels" string_index="0" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/wiiu_wiimote_shake_melee_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="ON|OFF" setting="input.wiiu_wiimote_shake_melee" values="true|false" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
+		<on event="created" run="port setting load"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/op_wiiu_nunchuk_melee_threshold" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/wiiu_nunchuk_melee_threshold_label"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/wiiu_nunchuk_melee_threshold_spinner" x="320" y="1"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/wiiu_nunchuk_melee_threshold_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/labels" string_index="1" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/wiiu_nunchuk_melee_threshold_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="LIGHT|NORMAL|FIRM|STRONG" setting="input.wiiu_nunchuk_melee_threshold" values="1.5|2.0|2.5|3.0" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
+		<on event="created" run="port setting load"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/op_wiiu_wiimote_clutch" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/wiiu_wiimote_clutch_label"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/wiiu_wiimote_clutch_spinner" x="320" y="1"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/wiiu_wiimote_clutch_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/labels" string_index="2" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/wiiu_wiimote_clutch_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="ON|OFF" setting="input.wiiu_wiimote_clutch" values="true|false" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
+		<on event="created" run="port setting load"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/op_wiiu_wiimote_clutch_button" width="512" height="28" flags="pass_unhandled_to_focused_child" bitmap="bitmaps/option_bkds" color="#FF2896FF">
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/wiiu_wiimote_clutch_button_label"/>
+		<child widget="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/wiiu_wiimote_clutch_button_spinner" x="320" y="1"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/wiiu_wiimote_clutch_button_label" type="text" controller="1" width="300" height="22" string_list="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/labels" string_index="3" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="4">
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/wiiu_wiimote_clutch_button_spinner" type="spinner" left="3" top="2" width="147" height="20" flags="pass_unhandled_to_focused_child left_right_tabs_items" strings="REMOTE 2|NUNCHUK C" setting="input.wiiu_wiimote_clutch_button" values="2|c" font="ui\large_ui" color="#FF2896FF" align="center" text_y="1" header_bitmap="bitmaps/arrow_sm_left" footer_bitmap="bitmaps/arrow_sm_right" header_bounds="7 -6 19 0" footer_bounds="7 150 19 156">
+		<on event="created" run="port setting load"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/button_defaults" type="text" width="128" height="24" bitmap="bitmaps/text_button_background" string_list="strings/common_button_captions" string_index="3" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
+		<on event="a" run="port settings defaults"/>
+		<on event="start" run="port settings defaults"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+	</widget>
+	<widget name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/button_ok" type="text" width="128" height="24" bitmap="bitmaps/text_button_background" string_list="strings/common_button_captions" string_index="1" font="ui\small_ui" color="#FFFFFFFF" align="center" text_y="2">
+		<on event="a" run="port settings save" back="true"/>
+		<on event="start" run="port settings save" back="true"/>
+		<on event="left_mouse" run="mouse emit accept event"/>
+	</widget>
+	<strings name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/labels">
+		<string text="NUNCHUK MELEE:"/>
+		<string text="MELEE FORCE:"/>
+		<string text="HOLD TO STEADY:"/>
+		<string text="STEADY BUTTON:"/>
+	</strings>
+	<strings name="main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/wiimote/gestures/help_strings">
+		<string text=""/>
+		<string text="Swing the Nunchuk, then return it to rest.\nThe aiming Remote does not trigger melee."/>
+		<string text="Force needed for the Nunchuk gesture.\nChoose firmer if normal movement triggers it."/>
+		<string text="Hold the chosen button to freeze aiming.\nReplaces that button's usual action in play."/>
+		<string text="2 replaces button melee; C replaces crouch.\nMenu controls are unchanged."/>
+	</strings>
+</menus>

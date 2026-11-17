@@ -181,4 +181,15 @@ void wimote_motion_recentre(struct wimote_motion *motion);
 (about a second and a half), and again only after it has moved. */
 int wimote_motion_still(struct wimote_motion *motion, float seconds, const float rate[3]);
 
+struct wimote_shake
+{
+	float previous, quiet, cooldown, pulse;
+	int known, ready;
+};
+int wimote_shake_melee(struct wimote_shake *state, float seconds, const float acc[3], int enabled);
+int wimote_prompt_icon(int layout, int action_icon);
+int wimote_pointer_cursor(int valid, float x, float y, float *cursor_x, float *cursor_y);
+
+int wimote_nunchuk_melee(struct wimote_shake *state, float seconds, const float acc[3], int enabled, float threshold);
+
 #endif

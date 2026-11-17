@@ -255,15 +255,33 @@ int halo_linux_mouse_aiming(short gamepad_index);
 /* (which aimed last, the gyro or the right stick, counted in the game's polls: halo_linux_mouse_aiming) */
 static unsigned long aim_polls, gyro_aimed_at, stick_aimed_at;
 
+int remote_free_aim_select(int remote);
+void remote_free_aim_recentre(float *yaw, float *pitch);
+void remote_aim_clutch(int held);
+static int remote_clutch_enabled, remote_clutch_button=1;
+void remote_free_aim_pointer_sample(float x, float y, int valid);
+
+/* Menus and chat consume the hardware sample but discard gameplay aim.
+ * Releasing ownership also resets its filter before play resumes. */
+static void remote_aim_discard(void)
+{
+    remote_free_aim_select(0);
+    wiiu_input_set_remote_free_aim(0);
+    remote_aim_clutch(0);
+    remote_free_aim_pointer_sample(0.0f, 0.0f, 0);
+    gyro_aimed_at = 0;
+}
+
 int halo_linux_mouse_look(short gamepad_index, float *yaw, float *pitch)
 {
 	static int mode; /* 0 off, 1 always, 2 only zoomed in */
 	static int pause; /* 0 none, 1 a touch, 2 the right stick */
-	static float sensitivity, invert;
+	static float sensitivity, remote_sensitivity, zoom_sensitivity, invert;
 	static unsigned long read_at = (unsigned long)-1;
 	const float full_turn = 6.2831853f;
 	float turn, tilt, x, y;
-	int remote;
+	int remote, free_aim, pointer, pointer_valid;
+	float pointer_x, pointer_y;
 
 	*yaw = *pitch = 0.0f;
 	if (gamepad_index != 0)
@@ -281,6 +299,12 @@ int halo_linux_mouse_look(short gamepad_index, float *yaw, float *pitch)
 		sensitivity = (float)config_real("input.wiiu_gyro_sensitivity");
 		if (!(sensitivity > 0.0f && sensitivity <= 10.0f))
 			sensitivity = 1.0f;
+		remote_sensitivity = (float)config_real("input.wiiu_wiimote_sensitivity");
+		if (!(remote_sensitivity >= 0.1f && remote_sensitivity <= 10.0f))
+			remote_sensitivity = 0.65f;
+		zoom_sensitivity = (float)config_real("input.wiiu_wiimote_zoom_sensitivity");
+		if (!(zoom_sensitivity >= 0.25f && zoom_sensitivity <= 2.0f))
+			zoom_sensitivity = 0.75f;
 		invert = config_boolean("input.wiiu_gyro_invert_y") ? -1.0f : 1.0f;
 		wiiu_input_set_gyro_space(!strcmp(space, "turn") ? WIIU_GYRO_SPACE_TURN : !strcmp(space, "lean") ? WIIU_GYRO_SPACE_LEAN : WIIU_GYRO_SPACE_PLAYER);
 	}
@@ -294,22 +318,53 @@ int halo_linux_mouse_look(short gamepad_index, float *yaw, float *pitch)
 		turn = x;
 		tilt = y;
 	}
+	pointer = wiiu_input_remote_pointer(&pointer_x, &pointer_y, &pointer_valid);
+	free_aim = remote_free_aim_select(pointer ? 2 : remote);
+	wiiu_input_set_remote_free_aim(free_aim);
+    remote_aim_clutch(remote_clutch_enabled && (remote || pointer) && wiiu_input_remote_clutch((unsigned)remote_clutch_button) && !port_menus_active());
+	remote_free_aim_pointer_sample(pointer_x, pointer_y, pointer_valid);
+	if (pointer)
+	{
+		remote = 1;
+		turn = tilt = 0.0f;
+		if (pointer_valid && free_aim)
+			gyro_aimed_at = aim_polls;
+	}
 	/* (nothing while the chat's keyboard is up on the first port: the view stays where it was) */
 	if ((!mode && !remote) || port_menus_active() || (!remote && mode == 2 && player_control_get_zoom_level(0) < 0) ||
 		(network_chat_keyboard_open() && network_chat_controller() == 0))
-		return 0;
+    {
+        remote_aim_discard();
+        return 0;
+    }
+    if(remote_clutch_enabled && (remote || pointer) && wiiu_input_remote_clutch((unsigned)remote_clutch_button))
+    {
+        return 1;
+    }
 	/* (the stick's: XInputGetState of this poll, which comes first) */
 	if ((pause == 1 && wiiu_input_touch(&x, &y)) || (pause == 2 && stick_aimed_at == aim_polls))
+	{
+		if (free_aim)
+		{
+			remote_free_aim_recentre(yaw, pitch);
+			return 1;
+		}
 		return 0;
-	if (turn == 0.0f && tilt == 0.0f)
+	}
+	if (!free_aim && turn == 0.0f && tilt == 0.0f)
 		return 0;
 	/* (a turn of more than about a fifth of a degree since the last poll, 5 to 10 degrees a second, is aiming, not the hand's tremor) */
 	if (turn * turn + tilt * tilt > 0.0005f * 0.0005f)
 		gyro_aimed_at = aim_polls;
 	/* (the game's yaw and the pad's turn are both left positive, and the game's pitch up positive against the pad's tilt: tried by hand, the pad points the
 	view, its top tilted away looking down, unless input.wiiu_gyro_invert_y) */
-	*yaw = turn * full_turn * sensitivity;
-	*pitch = -tilt * full_turn * sensitivity * invert;
+	if (remote && player_control_get_zoom_level(0) >= 0)
+	{
+		turn *= zoom_sensitivity;
+		tilt *= zoom_sensitivity;
+	}
+	*yaw = turn * full_turn * (remote ? remote_sensitivity : sensitivity);
+	*pitch = -tilt * full_turn * (remote ? remote_sensitivity : sensitivity) * invert;
 	return 1;
 }
 
@@ -489,6 +544,10 @@ static void layout_apply(void)
 		wiiu_input_set_wimote(config_string("input.wiiu_wiimote_layout"), config_string("input.wiiu_wiimote_look"),
 			(float)config_real("input.wiiu_wiimote_pointer_box"), (float)config_real("input.wiiu_wiimote_pointer_speed"),
 			config_boolean("input.wiiu_wiimote_motion_invert_x"));
+		wiiu_input_set_shake_melee(config_boolean("input.wiiu_wiimote_shake_melee"));
+        wiiu_input_set_melee_threshold((float)config_real("input.wiiu_nunchuk_melee_threshold"));
+        remote_clutch_enabled=config_boolean("input.wiiu_wiimote_clutch");
+        remote_clutch_button=!strcmp(config_string("input.wiiu_wiimote_clutch_button"),"c")?2:1;
 		wiiu_input_set_wimote_edge(config_boolean("input.wiiu_wiimote_motion_edge"), (float)config_real("input.wiiu_wiimote_motion_edge_box"),
 			(float)config_real("input.wiiu_wiimote_motion_edge_range"), (float)config_real("input.wiiu_wiimote_motion_edge_speed"));
 	}
@@ -785,6 +844,11 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 	layout_apply();
 	memset(&pad, 0, sizeof(pad));
 	have_pad = wiiu_input_read((unsigned int)port, &pad);
+    if(port==0 && remote_clutch_enabled && !port_menus_active() && wiiu_input_remote_clutch((unsigned)remote_clutch_button))
+    {
+        if(remote_clutch_button==1) pad.xbox_faces &= ~WIIU_XBOX_B;
+        else pad.buttons &= ~WIIU_PAD_STICK_L;
+    }
 	/* the updater's panel at the main menu (wiiu_update.c) is told where the game is, and has the pads' buttons while it is up: the menu
 	under it sees none */
 	if (port == 0)

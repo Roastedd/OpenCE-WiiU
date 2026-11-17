@@ -36,4 +36,20 @@ down, against the game's own pitch rate (1: the game's, slower than its
 turning) */
 real view_gamepad_vertical_look(void);
 
+/* Single-player Wii Remote free aim; tick input is published with camera facing. */
+struct render_camera;
+int remote_free_aim_select(int remote);
+void remote_free_aim_pointer_sample(float x, float y, int valid);
+int remote_free_aim_active(short local_player_index);
+void remote_free_aim_input(short local_player_index, float *yaw, float *pitch, float seconds);
+void remote_free_aim_camera(short local_player_index, struct render_camera *camera);
+void remote_free_aim_weapon_camera(short local_player_index, struct render_camera *camera);
+union real_point3d;
+int remote_free_aim_reticle_target(short local_player_index, union real_point3d *target);
+void remote_free_aim_reset(void);
+void remote_free_aim_publish(void);
+void remote_free_aim_sync(void);
+void remote_free_aim_movement(short local_player_index, float *forward, float *left);
+void remote_free_aim_recentre(float *yaw, float *pitch);
+
 #endif

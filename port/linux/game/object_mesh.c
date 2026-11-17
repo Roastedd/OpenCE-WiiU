@@ -25,8 +25,12 @@ asks: about 400 KB).
 #include "tag_files/tag_files.h"
 
 #include "object_mesh.h"
+#ifdef HALO_WIIU
+#include "object_mesh_vertex_decode.h"
+#endif
 
 #include <xtl.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -102,6 +106,44 @@ static long object_mesh_key(
 	return key == (unsigned long)NONE ? 0 : (long)key;
 }
 
+#ifdef HALO_WIIU
+void *physical_memory_get_tag_cache_base_address(void);
+
+/* Match d3d8_gx2.c's model-stream decision. Only the tag cache can contain
+ * Xbox-order GPU vertices; CPU-made geometry outside it remains native. */
+static boolean object_mesh_cached_range_valid(const void *data, unsigned long bytes)
+{
+    uintptr_t base = (uintptr_t)physical_memory_get_tag_cache_base_address();
+    uintptr_t address = (uintptr_t)data;
+
+    return !base || address < base || address - base >= 0x1600000UL ||
+        bytes <= 0x1600000UL - (address - base);
+}
+
+static boolean object_mesh_vertices_little_endian(const byte *vertices, long stride, long count)
+{
+    uintptr_t base = (uintptr_t)physical_memory_get_tag_cache_base_address();
+    uintptr_t address = (uintptr_t)vertices;
+    long vertex;
+    int little = 0, big = 0;
+
+    if (!base || address < base || address - base >= 0x1600000UL)
+        return FALSE;
+    for (vertex = 0; vertex < count && vertex < 4; vertex++)
+    {
+        short axis;
+        for (axis = 0; axis < 3; axis++)
+        {
+            real le = fabsf(object_mesh_float(vertices + vertex * stride + axis * 4, TRUE));
+            real be = fabsf(object_mesh_float(vertices + vertex * stride + axis * 4, FALSE));
+            little += le == 0.f || (le > 1e-8f && le < 1e8f);
+            big += be == 0.f || (be > 1e-8f && be < 1e8f);
+        }
+    }
+    return little >= big;
+}
+#endif
+
 /* a part's triangles and vertices onto the mesh; FALSE when it can't be read
 (the mesh is then not used) */
 static boolean object_mesh_add_part(
@@ -117,6 +159,9 @@ static boolean object_mesh_add_part(
 	long first_vertex = mesh->vertex_count;
 	long index_count;
 	long index;
+#ifdef HALO_WIIU
+    boolean vertices_little;
+#endif
 
 	/* (only what the game draws, opaque) */
 	if (TEST_FLAG(part->flags, _object_mesh_part_stripped_bit))
@@ -145,13 +190,13 @@ static boolean object_mesh_add_part(
 		stride = sizeof(struct model_vertex_uncompressed);
 	else
 		return TRUE;
-	if (triangle_buffer->type == 1)
+	if (triangle_buffer->type == 1 && triangle_buffer->count <= 65535)
 		index_count = triangle_buffer->count + 2; /* a strip */
-	else if (triangle_buffer->type == 0)
+	else if (triangle_buffer->type == 0 && triangle_buffer->count <= 65535)
 		index_count = triangle_buffer->count * 3; /* a list */
 	else
 		return TRUE;
-	if (mesh->vertex_count + vertex_buffer->count > OBJECT_MESH_MAXIMUM_VERTICES)
+	if (vertex_buffer->count > OBJECT_MESH_MAXIMUM_VERTICES - mesh->vertex_count)
 		return FALSE;
 
 	IDirect3DVertexBuffer8_Lock((IDirect3DVertexBuffer8 *)vertex_buffer->hardware_format, 0, 0, &vertices, D3DLOCK_READONLY);
@@ -165,6 +210,16 @@ static boolean object_mesh_add_part(
 		return TRUE;
 	}
 
+#ifdef HALO_WIIU
+    if (!object_mesh_cached_range_valid(vertices, (unsigned long)vertex_buffer->count * stride) ||
+        !object_mesh_cached_range_valid(indices, (unsigned long)index_count * 2))
+    {
+        IDirect3DVertexBuffer8_Unlock((IDirect3DVertexBuffer8 *)vertex_buffer->hardware_format);
+        IDirect3DIndexBuffer8_Unlock((IDirect3DIndexBuffer8 *)triangle_buffer->hardware_format);
+        return FALSE;
+    }
+    vertices_little = object_mesh_vertices_little_endian(vertices, stride, vertex_buffer->count);
+#endif
 	/* its vertices, with their nodes */
 	for (index = 0; index < vertex_buffer->count; index++)
 	{
@@ -173,6 +228,11 @@ static boolean object_mesh_add_part(
 		long node1;
 		real weight;
 
+#ifdef HALO_WIIU
+        object_mesh_vertex_decode(vertices + index * stride,
+            vertex_buffer->type == _rasterizer_vertex_type_model_compressed, vertices_little,
+            &out->position, &node0, &node1, &weight);
+#else
 		if (vertex_buffer->type == _rasterizer_vertex_type_model_compressed)
 		{
 			struct model_vertex_compressed const *in = (struct model_vertex_compressed const *)(vertices + index * stride);
@@ -191,6 +251,7 @@ static boolean object_mesh_add_part(
 			node1 = in->nodes[1];
 			weight = in->node_weights[0];
 		}
+#endif
 		/* (a part with its own node map, which this build's part doesn't
 		carry: held to the node its middle is on; a tree's trunk, a rock) */
 		if (TEST_FLAG(part->flags, _object_mesh_part_local_nodes_bit))
@@ -214,7 +275,9 @@ static boolean object_mesh_add_part(
 	}
 	mesh->vertex_count += vertex_buffer->count;
 
-	/* its triangles: a strip's every one (turning, its degenerate ones left
+	/* Index buffers are already native-order (the map converter swaps them),
+     * independently of the model vertex stream.
+     * Its triangles: a strip's every one (turning, its degenerate ones left
 	out), or a list's */
 	{
 		unsigned short const *list = (unsigned short const *)indices;

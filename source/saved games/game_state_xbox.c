@@ -1107,7 +1107,7 @@ static boolean game_state_async_begin(
 	}
 
 	start = game_state_async_now_ms();
-	memcpy(image, xbox_game_state_globals.buffer, xbox_game_state_globals.buffer_size);
+	async_save_copy(image, xbox_game_state_globals.buffer, xbox_game_state_globals.buffer_size);
 	copy_ms = game_state_async_now_ms()-start;
 	game_state_image_is_checkpoint = TRUE;
 	game_state_async.number++;

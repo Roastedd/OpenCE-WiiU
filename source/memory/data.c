@@ -447,6 +447,30 @@ void datum_delete(
 }
 #endif
 
+/* port: idempotent deletion for cosmetic cache ownership. The validation and
+ * mutation share the allocator lock; ordinary strict deletion is unchanged. */
+boolean datum_delete_if_alive(struct data_array *data,long index)
+{
+    boolean result=FALSE;
+#ifdef HALO_WIIU
+    DATA_LOCK();
+#endif
+    if(data && data->valid && index!=NONE && (short)(index>>16)!=0 &&
+        (short)index>=0 && (short)index<data->count && datum_try_and_get(data,index))
+    {
+#ifdef HALO_WIIU
+        datum_delete_body(data,index);
+#else
+        datum_delete(data,index);
+#endif
+        result=TRUE;
+    }
+#ifdef HALO_WIIU
+    DATA_UNLOCK();
+#endif
+    return result;
+}
+
 void data_delete_all(
 	struct data_array *data)
 {

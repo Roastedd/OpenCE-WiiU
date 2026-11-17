@@ -82,32 +82,28 @@ boolean first_person_legs_wanted(
 
 /* whether a node's name has part in it, whatever its case (the game's
 characters name theirs "bip01 l thigh", "Bip01 Pelvis") */
-static boolean first_person_legs_name_has(
-	char const *name,
-	char const *part)
+/* Bits 0 and 1 identify pelvis and thigh names; bit 2 identifies the lower body. */
+static unsigned char first_person_legs_classify(char const *name)
 {
+	static char const *const parts[] = { "pelvis", "thigh", "calf", "foot", "toe", "leg" };
 	char lower[TAG_STRING_LENGTH + 1];
 	short index;
+	unsigned char result = 0;
 
 	for (index = 0; index < TAG_STRING_LENGTH && name[index]; index++)
 		lower[index] = (char)(name[index] >= 'A' && name[index] <= 'Z' ? name[index] - 'A' + 'a' : name[index]);
 	lower[index] = 0;
-	return strstr(lower, part) != NULL;
-}
-
-/* a node of the legs: the hips, thighs, calves, feet and toes */
-static boolean first_person_legs_node(
-	char const *name)
-{
-	static char const *const parts[] = { "pelvis", "thigh", "calf", "foot", "toe", "leg" };
-	short index;
-
 	for (index = 0; index < (short)NUMBEROF(parts); index++)
 	{
-		if (first_person_legs_name_has(name, parts[index]))
-			return TRUE;
+		if (strstr(lower, parts[index]))
+			result |= (unsigned char)(4 | (index < 2 ? 1 << index : 0));
 	}
-	return FALSE;
+	return result;
+}
+
+static boolean first_person_legs_node(char const *name)
+{
+	return (first_person_legs_classify(name) & 4) != 0;
 }
 
 /* the middle of the waist's rim in the model's space: the hips' vertices
@@ -147,6 +143,15 @@ static boolean first_person_legs_waist(
 		return first_person_legs_waist_found;
 	}
 	first_person_legs_rim_count = 0;
+    /* A cosmetic waist must never turn malformed CPU-read coordinates into
+     * a huge world-space cap. The model reader validates counts and indices. */
+    for (index = 0; index < mesh->vertex_count; index++)
+    {
+        real_point3d const *p = &mesh->vertices[index].position;
+        if (!(p->x >= -5000.f && p->x <= 5000.f &&
+            p->y >= -5000.f && p->y <= 5000.f && p->z >= -5000.f && p->z <= 5000.f))
+            return FALSE;
+    }
 	for (index = 0; index < mesh->triangle_count; index++)
 	{
 		boolean hips = FALSE;
@@ -217,6 +222,7 @@ real_matrix4x3 const *first_person_legs_node_matrices(
 	real_vector3d back;
 	real_matrix4x3 skin;
 	real set_back;
+	unsigned char node_classes[FIRST_PERSON_LEGS_MAXIMUM_NODES];
 
 	if (!object || !nodes)
 		return NULL;
@@ -225,16 +231,17 @@ real_matrix4x3 const *first_person_legs_node_matrices(
 		return NULL;
 	model = model_definition_get(definition->object.model.index);
 	count = object->object.node_matrices.size / (long)sizeof(real_matrix4x3);
-	if (!model || count <= 0 || count > FIRST_PERSON_LEGS_MAXIMUM_NODES || model->nodes.count < count)
+	if (!model || !model->nodes.address || count <= 0 || count > FIRST_PERSON_LEGS_MAXIMUM_NODES || model->nodes.count != count)
 		return NULL;
 
 	for (index = 0; index < count; index++)
 	{
 		struct model_node const *node = TAG_BLOCK_GET_ELEMENT(&model->nodes, index, struct model_node);
 
-		if (pelvis == NONE && first_person_legs_name_has(node->name, "pelvis"))
+		node_classes[index] = first_person_legs_classify(node->name);
+		if (pelvis == NONE && (node_classes[index] & 1))
 			pelvis = index;
-		if (first_person_legs_name_has(node->name, "thigh"))
+		if (node_classes[index] & 2)
 			thighs++;
 	}
 	if (pelvis == NONE || thighs == 0)
@@ -248,6 +255,9 @@ real_matrix4x3 const *first_person_legs_node_matrices(
 			return NULL;
 		matrix4x3_multiply(&nodes[pelvis], &mesh->inverse[pelvis], &skin);
 		matrix4x3_transform_point(&skin, &middle, &fold);
+        if (!(fold.x >= -5000.f && fold.x <= 5000.f && fold.y >= -5000.f &&
+            fold.y <= 5000.f && fold.z >= -5000.f && fold.z <= 5000.f))
+            return NULL;
 	}
 
 	/* (set back away from the way the eye looks, level) */
@@ -291,12 +301,12 @@ real_matrix4x3 const *first_person_legs_node_matrices(
 
 	for (index = 0; index < count; index++)
 	{
-		struct model_node const *node = TAG_BLOCK_GET_ELEMENT(&model->nodes, index, struct model_node);
 		real_matrix4x3 *matrix = &first_person_legs_matrices[index];
 
 		*matrix = nodes[index];
-		/* (the root kept: it is the body's frame, not a part of it) */
-		if (node->parent_node_index != NONE && !first_person_legs_node(node->name))
+        /* Skinning consumes independent absolute matrices. A non-leg root
+         * can carry upper-body weights too, so it must fold with that body. */
+		if (!(node_classes[index] & 4))
 		{
 			matrix->position = fold;
 			matrix->scale = 0.001f;
@@ -304,6 +314,10 @@ real_matrix4x3 const *first_person_legs_node_matrices(
 		matrix->position.x += back.i * set_back;
 		matrix->position.y += back.j * set_back;
 		matrix->position.z += back.k * set_back;
+        if (!(matrix->position.x >= -5000.f && matrix->position.x <= 5000.f &&
+            matrix->position.y >= -5000.f && matrix->position.y <= 5000.f &&
+            matrix->position.z >= -5000.f && matrix->position.z <= 5000.f))
+            return NULL;
 	}
 	return first_person_legs_matrices;
 }

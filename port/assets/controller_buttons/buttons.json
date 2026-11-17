@@ -619,6 +619,286 @@
    "format": "a8r8g8b8",
    "scale": 8,
    "crc": 0
+  },
+  {
+   "name": "wii_pad_0",
+   "tag": "ui\\controller_buttons\\wii_pad_0",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_pad_1",
+   "tag": "ui\\controller_buttons\\wii_pad_1",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_pad_2",
+   "tag": "ui\\controller_buttons\\wii_pad_2",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_pad_3",
+   "tag": "ui\\controller_buttons\\wii_pad_3",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_pad_4",
+   "tag": "ui\\controller_buttons\\wii_pad_4",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_pad_5",
+   "tag": "ui\\controller_buttons\\wii_pad_5",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_pad_6",
+   "tag": "ui\\controller_buttons\\wii_pad_6",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_pad_7",
+   "tag": "ui\\controller_buttons\\wii_pad_7",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_pad_8",
+   "tag": "ui\\controller_buttons\\wii_pad_8",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_pad_9",
+   "tag": "ui\\controller_buttons\\wii_pad_9",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_pad_10",
+   "tag": "ui\\controller_buttons\\wii_pad_10",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_pad_11",
+   "tag": "ui\\controller_buttons\\wii_pad_11",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_pad_12",
+   "tag": "ui\\controller_buttons\\wii_pad_12",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_pad_13",
+   "tag": "ui\\controller_buttons\\wii_pad_13",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_remote_0",
+   "tag": "ui\\controller_buttons\\wii_remote_0",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_remote_1",
+   "tag": "ui\\controller_buttons\\wii_remote_1",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_remote_2",
+   "tag": "ui\\controller_buttons\\wii_remote_2",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_remote_3",
+   "tag": "ui\\controller_buttons\\wii_remote_3",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_remote_4",
+   "tag": "ui\\controller_buttons\\wii_remote_4",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_remote_5",
+   "tag": "ui\\controller_buttons\\wii_remote_5",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_remote_6",
+   "tag": "ui\\controller_buttons\\wii_remote_6",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_remote_7",
+   "tag": "ui\\controller_buttons\\wii_remote_7",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_remote_8",
+   "tag": "ui\\controller_buttons\\wii_remote_8",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_remote_9",
+   "tag": "ui\\controller_buttons\\wii_remote_9",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_remote_10",
+   "tag": "ui\\controller_buttons\\wii_remote_10",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_remote_11",
+   "tag": "ui\\controller_buttons\\wii_remote_11",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_remote_12",
+   "tag": "ui\\controller_buttons\\wii_remote_12",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
+  },
+  {
+   "name": "wii_remote_13",
+   "tag": "ui\\controller_buttons\\wii_remote_13",
+   "bitmap": 0,
+   "width": 64,
+   "height": 64,
+   "format": "a8r8g8b8",
+   "scale": 8,
+   "crc": 0
   }
  ]
 }

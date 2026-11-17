@@ -277,3 +277,46 @@ a fork of [punpckhdq/halo](https://github.com/punpckhdq/halo). The artists of th
 drawn for this port by `tools/wiiu_app_art.py`. OpenCE is under the GNU Affero General Public License 3.0 or later; third-party code, fonts and art
 keep their own licences, next to them in the repository. The Wii U build uses wut and the devkitPro tools, Mbed TLS and Monocypher (for the updater)
 and Opus (voice chat) under their licences.
+
+### Wii Remote free aim
+
+With MotionPlus or Sensor Bar selected, one local player on foot can aim the weapon and
+reticle within the view. The camera turns gradually in the outer part of the
+aim area. Movement stays relative to the displayed camera. Scoped weapons
+use centered aiming.
+
+Sensor Bar uses filtered absolute pointing and a separate camera-turn area. Set
+`input.wiiu_wiimote_free_aim = false` for direct camera aiming.
+`input.wiiu_wiimote_free_aim_box` controls the horizontal half-width in
+degrees (default 12, range 2–25), with an independently adjustable vertical half-height
+(default 8 degrees, input.wiiu_wiimote_free_aim_vertical_box). `input.wiiu_wiimote_free_aim_speed` sets the camera speed at the
+edge in degrees per second (default 75, range 10–180).
+With gyro pause set to Touch, touching the GamePad recenters the reticle
+while the Remote is repositioned. Vehicles, multiplayer, cinematics and
+other controller types use their usual aiming.
+
+Validate firing at nearby walls and distant targets, weapon switching,
+reloads, zoom transitions and pause/resume on the console before treating
+this mode as gameplay-verified.
+
+Wii Remote tuning is available under Controller Setup, Wii Remote. Aim
+Sensitivity controls MotionPlus gain independently of the GamePad gyro,
+Aim Area controls when camera turning begins, and Turn Speed controls its
+maximum rate. The default MotionPlus sensitivity is 0.65.
+
+Scoped Aim multiplies MotionPlus sensitivity during zoom, on top of Halo's
+weapon magnification scaling. Its default is 0.75. Horizontal Area and
+Vertical Area can be adjusted independently.
+
+With input.auto_button_detection enabled, Wii U button prompts follow the
+last controller used deliberately. GamePad, Pro and Classic controllers
+use Wii U-style artwork. Wii Remote prompts show the actual buttons used
+by its selected layout, including 1, 2, C, Z and D-pad directions.
+Small stick noise does not switch the artwork.
+
+Sensor Bar free aim uses recent IR samples with decreasing weights.
+Sensor Filter chooses 1–8 samples (default 5), and Pointing Range scales
+the pointing coordinates (default 0.9). Camera turning stops when tracking
+is lost. This on-foot implementation uses the separation of pointer aim, camera turning and filtering identified
+in the supplied BO2 executable. Scoped and vehicle
+controls still use Halo's existing paths.

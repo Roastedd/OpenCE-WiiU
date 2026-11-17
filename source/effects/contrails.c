@@ -461,6 +461,14 @@ void contrails_update(
 		real texture_animation_v;
 		short instance_index;
 
+#ifdef HALO_WIIU
+		/* port: a tick deleted the object this contrail hangs on before the queued "object dying" request reached it;
+		the contrail lets go of it (it would verify and read a freed object) */
+		if (contrail->object_index != NONE && !object_header_try_and_get(contrail->object_index))
+		{
+			contrail->object_index = NONE;
+		}
+#endif
 		contrail_verify(contrail_index);
 		contrail->expired_dt = 0.0f;
 

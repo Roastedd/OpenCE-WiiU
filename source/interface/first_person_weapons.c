@@ -385,7 +385,7 @@ static long first_person_weapon_state_from_weapon_message(
 	short message_type);
 static long first_person_animation_type_from_weapon_state(
 	short state);
-static void model_remap_node_matrices_to_match_animation_graph(
+static boolean model_remap_node_matrices_to_match_animation_graph(
 	long model_index,
 	struct real_matrix4x3 *model_node_matrices,
 	long animation_graph_index,
@@ -414,6 +414,15 @@ static struct first_person_weapon *first_person_weapons;
 /* the renderer's own table of what it writes of a first-person weapon (struct first_person_render_fields), used with the
 tick owners' queues on; and the epoch for "drawn since the weapon's unit changed", which the tick advances (a new unit) and
 the renderer answers (a draw), so that neither writes what the other owns */
+/* Render-owned mappings stay tied to the selected model and animation graph
+while the tick thread changes weapons and rebuilds its own tables. */
+static struct
+{
+	boolean initialized, valid;
+	long model_index, graph_index;
+	short nodes[MAXIMUM_NODES_PER_ANIMATION];
+} first_person_draw_mappings[8];
+
 static struct first_person_render_fields first_person_render_side[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
 static long first_person_unit_epoch[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
 static long first_person_drawn_epoch[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
@@ -511,6 +520,10 @@ void first_person_weapons_initialize_for_new_map(
 	void)
 {
 	short local_player_index;
+#ifdef HALO_WIIU
+	remote_free_aim_reset();
+	csmemset(first_person_draw_mappings, 0, sizeof(first_person_draw_mappings));
+#endif
 
 	for (local_player_index=0; local_player_index<MAXIMUM_NUMBER_OF_LOCAL_PLAYERS; local_player_index++)
 	{
@@ -675,14 +688,14 @@ void first_person_weapon_draw(
 					}
 
 					if (first_person_weapon->weapon_node_remapping_table_valid &&
-						weapon_definition->weapon.interface_definition.first_person_model.index!=NONE)
-					{
+						weapon_definition->weapon.interface_definition.first_person_model.index!=NONE &&
 						model_remap_node_matrices_to_match_animation_graph(
 							weapon_definition->weapon.interface_definition.first_person_model.index,
 							model_node_matrices,
 							weapon_definition->weapon.interface_definition.first_person_animations.index,
 							first_person_weapon->node_matrices,
-							first_person_weapon->weapon_node_remapping_table);
+							first_person_weapon->weapon_node_remapping_table))
+					{
 						render_model(
 							weapon_definition->weapon.interface_definition.first_person_model.index,
 							0.0f,
@@ -724,14 +737,14 @@ void first_person_weapon_draw(
 					}
 
 					if (first_person_weapon->hands_node_remapping_table_valid &&
-						first_person_interface->hands.index!=NONE)
-					{
+						first_person_interface->hands.index!=NONE &&
 						model_remap_node_matrices_to_match_animation_graph(
 							first_person_interface->hands.index,
 							model_node_matrices,
 							weapon_definition->weapon.interface_definition.first_person_animations.index,
 							first_person_weapon->node_matrices,
-							first_person_weapon->hands_node_remapping_table);
+							first_person_weapon->hands_node_remapping_table))
+					{
 						render_model(
 							first_person_interface->hands.index,
 							0.0f,
@@ -1287,6 +1300,9 @@ static boolean first_person_weapon_animation_fits(
 static void first_person_weapon_build_node_matrices(
 	short local_player_index)
 {
+	struct render_camera weapon_camera = render.camera;
+	remote_free_aim_weapon_camera(local_player_index, &weapon_camera);
+
 	struct first_person_weapon *first_person_weapon= first_person_weapon_get(local_player_index);
 	long weapon_index;
 
@@ -1620,16 +1636,16 @@ static void first_person_weapon_build_node_matrices(
 			weapon_definition->weapon.interface_definition.first_person_animations.index,
 			first_person_weapon->node_matrices,
 			first_person_weapon->node_orientations,
-			&render.camera.position,
-			&render.camera.forward,
-			&render.camera.up);
+			&weapon_camera.position,
+			&weapon_camera.forward,
+			&weapon_camera.up);
 		/* the pose between the last two ticks (render_interpolation.c) */
 		/* port: no more nodes than the weapon's matrices hold (a map's count) */
 		render_interpolation_first_person(
 			local_player_index,
 			first_person_weapon->node_matrices,
 			(short)MIN(animation_graph->nodes.count, MAXIMUM_NODES_PER_ANIMATION),
-			&render.camera);
+			&weapon_camera);
 	}
 
 	return;
@@ -2498,7 +2514,7 @@ static long first_person_animation_type_from_weapon_state(
 	return NONE;
 }
 
-static void model_remap_node_matrices_to_match_animation_graph(
+static boolean model_remap_node_matrices_to_match_animation_graph(
 	long model_index,
 	struct real_matrix4x3 *model_node_matrices,
 	long animation_graph_index,
@@ -2508,6 +2524,26 @@ static void model_remap_node_matrices_to_match_animation_graph(
 	struct model *model= model_definition_get(model_index);
 	struct animation_graph *animation_graph= animation_graph_definition_get(animation_graph_index);
 	short node_index;
+
+#ifdef HALO_WIIU
+	const unsigned slot = ((unsigned long)model_index ^ ((unsigned long)animation_graph_index >> 4)) & 7;
+	if (!first_person_draw_mappings[slot].initialized ||
+		first_person_draw_mappings[slot].model_index != model_index ||
+		first_person_draw_mappings[slot].graph_index != animation_graph_index)
+	{
+		first_person_draw_mappings[slot].valid =
+			model->nodes.count <= MAXIMUM_NODES_PER_ANIMATION &&
+			animation_graph->nodes.count <= MAXIMUM_NODES_PER_ANIMATION &&
+			model_build_remapping_table_for_animation_graph(model_index, animation_graph_index,
+				first_person_draw_mappings[slot].nodes);
+		first_person_draw_mappings[slot].model_index = model_index;
+		first_person_draw_mappings[slot].graph_index = animation_graph_index;
+		first_person_draw_mappings[slot].initialized = TRUE;
+	}
+	if (!first_person_draw_mappings[slot].valid)
+		return FALSE;
+	node_remapping_table = first_person_draw_mappings[slot].nodes;
+#endif
 
 	/* port: no more nodes than the table and model_node_matrices hold (a
 	map's count) */
@@ -2522,7 +2558,7 @@ static void model_remap_node_matrices_to_match_animation_graph(
 		model_node_matrices[node_index]= node_matrices[animation_graph_node_index];
 	}
 
-	return;
+	return TRUE;
 }
 
 static struct first_person_weapon *first_person_weapon_get(

@@ -1,20 +1,5 @@
-/*
-D3D8_DK.C
-
-The Xbox Direct3D 8 device for the Switch's deko3d renderer
-(port/switch/DEKO3D.md). Linked into the Switch's game image,
-halo_guest.elf, in place of port/linux/src/d3d8_gl.c, which the other builds
-keep unchanged.
-
-The parts of d3d8_gl.c that are not OpenGL are copied here as they are - the
-screen's width, the state the XDK's inline functions keep, the vertical
-blank, the reserved viewport constants, render and texture stage state,
-vertex shaders and their declarations, streams and immediate mode - and are
-to be merged with it later. What d3d8_gl.c does with OpenGL, this file will
-do through the host's deko3d backend (port/switch/host/host_dk.c), to which
-it writes a stream of commands over a frame (dk_commands.h). So far clears
-and presenting go there; a draw and a visibility test do nothing yet.
-*/
+/* Wii U Direct3D 8 frontend. Records the game state and draws into command
+ * streams consumed by the native GX2 backend in wiiu_gx2.c. */
 
 #include "xgpu.h"
 #include "platform.h"
@@ -249,11 +234,10 @@ long halo_screen_ui_offset_current(void)
 }
 
 /* display.shadow_resolution, display.per_pixel_lighting, display.anti_aliasing,
-display.model_detail, display.hdr and the overshield's rise are the OpenGL
+display.hdr and the overshield's rise are the OpenGL
 renderer's (d3d8_gl.c): here the shadow maps stay the Xbox's 128x128, every
 draw is lit as its vertex shader lights it, the 3D view is drawn as it is
-(no tone curve, no HDR calibration's patterns), models choose their detail as
-the Xbox's (stock), and a plasma shader's colors do not fade above a height
+(no tone curve, no HDR calibration's patterns), a plasma shader's colors do not fade above a height
 (an overshield effect shows at once, whole) */
 long halo_shadow_map_scale(void)
 {
@@ -285,9 +269,24 @@ void halo_hdr_calibration_show(int pattern, int paper_white, int peak_brightness
 	(void)pattern; (void)paper_white; (void)peak_brightness;
 }
 
+/* Match the shared model-detail choices; the governor remains independent. */
+static int model_detail_setting(void)
+{
+    static int value = -1;
+    static unsigned long read_at;
+    const unsigned long changes = config_changes();
+    if (value < 0 || read_at != changes)
+    {
+        const char *setting = config_string("display.model_detail");
+        value = !strcmp(setting, "native") ? 1 : !strcmp(setting, "highest") ? 2 : 0;
+        read_at = changes;
+    }
+    return value;
+}
+
 int halo_model_detail_stock(void)
 {
-	return 1;
+    return model_detail_setting() == 0;
 }
 
 /* port/linux/game/render_governor.c's (the Direct3D layer is built without the game's headers): dynamic quality's model level of detail, 1 with it off */
@@ -304,8 +303,20 @@ const char *wiiu_render_pass_longest(double *milliseconds);
 
 float halo_model_detail_scale(int level)
 {
-	/* (level 1: the size the level of detail is chosen by; 0: the size under which a model is not drawn at all, left to the objects' own culling) */
-	return level ? render_governor_lod_scale() : 1.0f;
+    int detail;
+    float scale = 1.0f;
+    /* Keep disappearance distance unchanged. Only geometry selection changes. */
+    if (!level)
+        return 1.0f;
+    detail = model_detail_setting();
+    if (detail)
+    {
+        halo_screen_width();
+        scale = screen_scale[1] > 1.0f ? screen_scale[1] : 1.0f;
+        if (detail == 2)
+            scale = 1.0e6f;
+    }
+    return scale * render_governor_lod_scale();
 }
 
 void d3d8_gl_set_height_fade(float inverse_softness, float height, float offset, float scale)

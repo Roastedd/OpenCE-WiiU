@@ -9,6 +9,7 @@ The thread a checkpoint's write runs on (async_save.h).
 #ifdef HALO_WIIU
 
 #include <pthread.h>
+#include <string.h>
 #include <stdlib.h>
 #include <time.h>
 
@@ -73,7 +74,7 @@ unsigned long async_save_piece_bytes(void)
 {
 	if (!job.piece)
 	{
-		const long kilobytes = wiiu_study_number("async_save_piece_kb.txt", 1024);
+		const long kilobytes = wiiu_study_number("async_save_piece_kb.txt", 128);
 
 		job.piece = (kilobytes < 64 ? 64UL : kilobytes > 4096 ? 4096UL : (unsigned long)kilobytes) * 1024UL;
 	}
@@ -98,6 +99,51 @@ static void *worker(void *unused)
 		job.busy = 0;
 	}
 	return NULL;
+}
+
+/* The checkpoint's 20 MiB copy stalled the game thread ~106 ms (one memcpy, ~190 MB/s). The parts are copied on two more threads at once;
+the caller joins them, so the copy is complete when this returns. Falls back to one memcpy if a thread cannot be made. */
+struct copy_part { void *to; const void *from; size_t bytes; };
+
+static void *copy_part_run(void *argument)
+{
+	struct copy_part *part = argument;
+
+	memcpy(part->to, part->from, part->bytes);
+	return NULL;
+}
+
+void async_save_copy(void *to, const void *from, size_t bytes)
+{
+	struct copy_part parts[2];
+	pthread_t threads[2];
+	int made[2] = { 0, 0 };
+	size_t third = (bytes / 3) & ~(size_t)4095;
+	size_t index;
+
+	if (third < 1024 * 1024)
+	{
+		memcpy(to, from, bytes);
+		return;
+	}
+	for (index = 0; index < 2; index++)
+	{
+		pthread_attr_t attributes;
+
+		parts[index].to = (char *)to + third * (index + 1);
+		parts[index].from = (const char *)from + third * (index + 1);
+		parts[index].bytes = index == 1 ? bytes - third * 2 : third;
+		pthread_attr_init(&attributes);
+		pthread_attr_setstacksize(&attributes, 32 * 1024);
+		made[index] = pthread_create(&threads[index], &attributes, copy_part_run, &parts[index]) == 0;
+		pthread_attr_destroy(&attributes);
+		if (!made[index])
+			memcpy(parts[index].to, parts[index].from, parts[index].bytes);
+	}
+	memcpy(to, from, third);
+	for (index = 0; index < 2; index++)
+		if (made[index])
+			pthread_join(threads[index], NULL);
 }
 
 static int make_thread(void)

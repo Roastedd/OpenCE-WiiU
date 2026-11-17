@@ -30,7 +30,31 @@ symbols in this file:
 #include "units/unit_definitions.h"
 #include "units/units.h"
 #include "view_fov.h" /* port: port/linux/game/view_fov.c */
+#include "gunner_feedback.h" /* port: bounded local firing feedback */
 #include "render_governor.h" /* port: port/linux/game/render_governor.c */
+
+#ifdef HALO_WIIU
+/* port: what hangs on an object (the muzzle flash of a rifle or a Banshee's cannon, a thruster's fire) is what shows a weapon fired. The governor's
+last steps drew 20 particles a frame and kept 1 in 16, which left none of these; up to 96 a view and frame are drawn whatever the step. */
+static int attached_particle_take(struct particle_datum const *particle)
+{
+	static long taken_frame = -1;
+	static short taken_view = -1;
+	static long taken;
+
+	if (particle->object_index == NONE)
+		return 0;
+	if (taken_frame != render.frame_index || taken_view != render.local_player_index)
+	{
+		taken_frame = render.frame_index;
+		taken_view = render.local_player_index;
+		taken = 0;
+	}
+	return taken++ < 96;
+}
+#else
+#define attached_particle_take(particle) 0
+#endif
 
 /* ---------- constants */
 
@@ -148,6 +172,14 @@ void render_particles(
 	{
 		short local_player_index = render.local_player_index;
 		long particle_index;
+
+#ifdef HALO_WIIU
+		{
+			void particle_note_view(short local_player_index, real_point3d const *position, real_vector3d const *forward, real pixels_per_unit);
+
+			particle_note_view(render.local_player_index, &render.camera.position, &render.camera.forward, render.frustum.projection_world_to_screen.j);
+		}
+#endif
 
 		if (local_player_index == NONE ||
 			!local_player_is_first_person(local_player_index))
@@ -341,10 +373,17 @@ void render_particles(
 									(shed->particle_keep < 16 &&
 										(int)(((unsigned int)rendered_particle->particle_index * 2654435761u) >> 28) >= shed->particle_keep) ||
 									(shed->particle_max &&
-										render_governor_budget_used[RENDER_GOVERNOR_BUDGET_PARTICLES] >= (unsigned long)shed->particle_max)))
+										render_governor_budget_used[RENDER_GOVERNOR_BUDGET_PARTICLES] >= (unsigned long)shed->particle_max)) && !gunner_feedback_take_particle(particle->object_index) && !attached_particle_take(particle))
 							{
 								render_governor_counts[RENDER_GOVERNOR_COUNT_PARTICLES_SKIPPED]++;
 								particle->last_rendered_frame_index = render.frame_index;
+#ifdef HALO_WIIU
+								{
+									void particle_note_shed(long particle_index);
+
+									particle_note_shed(rendered_particle->particle_index);
+								}
+#endif
 							}
 							else if (diameter > definition->lod_cutoff)
 							{

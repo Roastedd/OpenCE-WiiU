@@ -61,6 +61,19 @@ real point_physics_definition_get_mass(
 	return definition->runtime_mass_over_radius_cubed * radius * radius * radius;
 }
 
+#ifdef HALO_WIIU
+/* port: who the point physics calls are for, logged with the collision counts (collisions.c): weather particles, things that collide with the level, the rest */
+static unsigned long point_physics_calls[3];
+void platform_log(const char *format, ...);
+
+void point_physics_report_counts(void)
+{
+	platform_log("point physics: %lu calls a 10 s: %lu weather, %lu with level collisions, %lu without", point_physics_calls[0] + point_physics_calls[1] + point_physics_calls[2],
+		point_physics_calls[0], point_physics_calls[1], point_physics_calls[2]);
+	point_physics_calls[0] = point_physics_calls[1] = point_physics_calls[2] = 0;
+}
+#endif
+
 unsigned long point_physics_update(
 	unsigned long flags,
 	struct point_physics_definition const *definition,
@@ -76,6 +89,10 @@ unsigned long point_physics_update(
 {
 	unsigned long result = 0;
 
+#ifdef HALO_WIIU
+	point_physics_calls[TEST_FLAG(flags, _point_physics_ignore_position_bit) ? 0 :
+		TEST_FLAG(definition->flags, _point_physics_structure_collisions_bit) ? 1 : 2]++;
+#endif
 	match_assert_valid_real_point3d("c:\\halo\\SOURCE\\physics\\point_physics.c", 185, position);
 	match_assert_valid_real_vector3d("c:\\halo\\SOURCE\\physics\\point_physics.c", 186, translational_velocity);
 	match_assert("c:\\halo\\SOURCE\\physics\\point_physics.c", 187, !translational_force || valid_real_vector3d(translational_force));
