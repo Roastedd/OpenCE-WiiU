@@ -103,6 +103,7 @@ static struct
 	unsigned long frames, hitches;
 	int over_windows, under_windows, probe_windows;
 	double sum_wait, wait_total_at, window_worst;
+	unsigned long hitch_run; /* frames in a row over the 250 ms of a hitch: a load is a few, a game whose ticks fill the frame is every one */
 	unsigned long window_long; /* frames of the window over worst (80 ms): a hitch is a few of them, a game whose ticks fill the frame is most */
 	double quiet_until;
 	int new_map_pending;
@@ -704,7 +705,10 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 		}
 		/* a hitch (a load, a save, a first use) is not detail's to shed; the rest counts at most three targets */
 		target = settings.target_ms;
-		if (work_ms > 250.0)
+		/* (a game whose frames are all over 250 ms, as a joined co-op game of the Wii U is, has no frame under it, and the governor decided nothing in all of one: 4 frames in a row over
+		it are the game's own, and count as the 3 targets a frame counts at most) */
+		governor.hitch_run = work_ms > 250.0 ? governor.hitch_run + 1 : 0;
+		if (work_ms > 250.0 && governor.hitch_run < 4)
 		{
 			governor.hitches++;
 		}

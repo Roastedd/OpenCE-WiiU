@@ -274,6 +274,7 @@ struct vehicle_suspension
 #include "physics/mass_point_datum.h"
 
 #include "physics/powered_mass_point_datum.h"
+#include "tick_probe.h" /* port: the Wii U's tick parts */
 
 struct scenario_object_permutation;
 struct scenario_unit;
@@ -2644,6 +2645,7 @@ boolean vehicle_update(
 		vehicle_mass_points_fit(vehicle_index, NUMBEROF(mass_points), NUMBEROF(powered_mass_points)))
 	{
 		real_vector3d previous_velocity = vehicle->object.translational_velocity;
+		TICK_PROBE_START(physics_started);
 
 		switch (definition->vehicle_type)
 		{
@@ -2670,10 +2672,15 @@ boolean vehicle_update(
 			break;
 		}
 
-		create_slipping_effects(vehicle_index, powered_mass_points, mass_points);
-		if (!update_suspension(vehicle_index))
-			create_crashing_effects(vehicle_index, &previous_velocity, mass_points);
-		compute_airborne_ticks(vehicle_index, mass_points, powered_mass_points);
+		TICK_PROBE_STOP(physics_started, "veh_physics");
+		{
+			TICK_PROBE_START(effects_started);
+			create_slipping_effects(vehicle_index, powered_mass_points, mass_points);
+			if (!update_suspension(vehicle_index))
+				create_crashing_effects(vehicle_index, &previous_velocity, mass_points);
+			compute_airborne_ticks(vehicle_index, mass_points, powered_mass_points);
+			TICK_PROBE_STOP(effects_started, "veh_effects");
+		}
 
 		if (TEST_FLAG(vehicle->object.flags, _object_at_rest_bit))
 			vehicle->vehicle.stop_time = 15;
@@ -2741,7 +2748,11 @@ animate:
 
 		data.state_desired = _unit_state_idle;
 		data.crouching = FALSE;
-		unit_update_animation(vehicle_index, &data);
+		{
+			TICK_PROBE_START(animation_started);
+			unit_update_animation(vehicle_index, &data);
+			TICK_PROBE_STOP(animation_started, "veh_animation");
+		}
 	}
 
 	{

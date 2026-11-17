@@ -65,6 +65,7 @@ OBJECTS.C
 #include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
 #endif
 #include "units/bipeds.h" /* port: vehicle riding */
+#include "name_cache.h" /* port: port/linux/game/name_cache.c */
 /* port: object_bounds_cache.c's */
 void object_bounds_cache_update(long object_index, real_point3d const *center, real radius);
 /* port: port/linux/game/first_person_legs.c's */
@@ -1243,6 +1244,10 @@ void objects_initialize_for_new_map(
 	data_make_valid(object_header_data);
 	/* port: (zeroed for a new map only: a revert or a load brings them back with the bipeds' snapshots) */
 	vehicle_riding_objects_reset();
+#ifdef HALO_WIIU
+	/* port: the tags are other ones (name_cache.h) */
+	halo_name_cache_new_map();
+#endif
 	object_name_list_clear();
 
 	cluster_partition_make_valid(&collideable_object_cluster_partition);
@@ -4268,12 +4273,26 @@ static boolean object_update_inner(
 #else
 		object_type_update(object_index);
 #endif
+#ifdef HALO_WIIU
+		{
+			long long damage_started = wiiu_tick_part_now();
+
+			if (object_definition->object.collision_model.index!=NONE)
+			{
+				object_damage_update(object_index);
+			}
+
+			object_type_export_function_values(object_index);
+			wiiu_tick_part("obj_damage_functions", damage_started);
+		}
+#else
 		if (object_definition->object.collision_model.index!=NONE)
 		{
 			object_damage_update(object_index);
 		}
 
 		object_type_export_function_values(object_index);
+#endif
 
 		if (!TEST_FLAG(object->object.flags, _object_do_not_recompute_node_matrices_bit))
 		{
@@ -4289,8 +4308,18 @@ static boolean object_update_inner(
 				machine_move_elevator_riders(object_index, &elevator_position);
 		}
 
+#ifdef HALO_WIIU
+		{
+			long long functions_started = wiiu_tick_part_now();
+
+			object_compute_function_values(object_index);
+			object_compute_change_colors(object_index);
+			wiiu_tick_part("obj_functions_colors", functions_started);
+		}
+#else
 		object_compute_function_values(object_index);
 		object_compute_change_colors(object_index);
+#endif
 
 		if (
 			TEST_FLAG(object->object.flags, _object_dynamic_lighting_recompute_bit) &&

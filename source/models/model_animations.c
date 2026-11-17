@@ -155,6 +155,7 @@ symbols in this file:
 #include "objects/objects.h"
 #ifdef HALO_BW_KERNELS
 #include "halo_bw_kernels.h"
+#include "name_cache.h" /* port: port/linux/game/name_cache.c */
 #endif
 
 /* ---------- constants */
@@ -654,6 +655,13 @@ short animation_graph_get_animation_by_name(
 {
 	struct animation_graph const *animation_graph = animation_graph_definition_get(animation_graph_index);
 	short animation_index;
+#ifdef HALO_WIIU
+	/* port: the same few names of the same few graphs every tick (name_cache.h) */
+	short cached;
+
+	if (halo_name_cache_lookup(HALO_NAME_CACHE_ANIMATION, animation_graph_index, animation_name, &cached))
+		return cached;
+#endif
 
 	for (animation_index = 0; animation_index < animation_graph->animations.count; animation_index++)
 	{
@@ -664,10 +672,16 @@ short animation_graph_get_animation_by_name(
 
 		if (!_stricmp(animation_name, animation->name))
 		{
+#ifdef HALO_WIIU
+			halo_name_cache_store(HALO_NAME_CACHE_ANIMATION, animation_graph_index, animation_name, animation_index);
+#endif
 			return animation_index;
 		}
 	}
 
+#ifdef HALO_WIIU
+	halo_name_cache_store(HALO_NAME_CACHE_ANIMATION, animation_graph_index, animation_name, NONE);
+#endif
 	return NONE;
 }
 

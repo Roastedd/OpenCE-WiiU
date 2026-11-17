@@ -680,6 +680,7 @@ symbols in this file:
 #include "models/model_animation_definitions.h"
 #include "models/model_definitions.h"
 #include "models/models.h" /* port: model_find_node (the grenade throw's legs) */
+#include "name_cache.h" /* port: port/linux/game/name_cache.c */
 #include "objects/damage.h"
 #include "objects/damage_effect_definitions.h"
 #include "objects/object_lights.h"
@@ -3389,16 +3390,30 @@ static boolean unit_animation_enhanced_unit(
 	long unit_index)
 {
 	struct unit_datum *unit = unit_get(unit_index);
-	char const *name = tag_name_strip_path(tag_get_name(unit->definition_index));
+	char const *name;
 	long name_index;
+#ifdef HALO_WIIU
+	/* port: asked of every biped every tick in a network game (unit_turns_with_aim); a unit's tag is one of the two or it is not (name_cache.h) */
+	short cached;
+
+	if (halo_name_cache_lookup(HALO_NAME_CACHE_ENHANCED, unit->definition_index, "", &cached))
+		return cached != 0;
+#endif
+	name = tag_name_strip_path(tag_get_name(unit->definition_index));
 
 	for (name_index = 0; name_index < NUMBEROF(enhanced_animation_units); name_index++)
 	{
 		if (!_stricmp(name, enhanced_animation_units[name_index]))
 		{
+#ifdef HALO_WIIU
+			halo_name_cache_store(HALO_NAME_CACHE_ENHANCED, unit->definition_index, "", 1);
+#endif
 			return TRUE;
 		}
 	}
+#ifdef HALO_WIIU
+	halo_name_cache_store(HALO_NAME_CACHE_ENHANCED, unit->definition_index, "", 0);
+#endif
 
 	return FALSE;
 }
