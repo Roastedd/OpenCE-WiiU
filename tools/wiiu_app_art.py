@@ -4,11 +4,11 @@
     python3 tools/wiiu_app_art.py            (writes icon.png, splash-tv.png, splash-drc.png)
     python3 tools/wiiu_app_art.py --check    (does not write: says whether the files in port/wiiu/meta are what this draws)
 
-- icon.png, 128x128, what Aroma's menu shows (--icon);
+- icon.png, 128x128, the original helmet tile on navy (--icon);
 - splash-tv.png, 1280x720, shown on the TV while the app starts (--tv-image);
 - splash-drc.png, 854x480, shown on the GamePad meanwhile (--drc-image).
 
-The look is the Wii U's shell: a bright blue picture with a few soft bubbles, the project's helmet render (port/assets/icon/opence-icon-render.png, the artwork of
+The icon restores the original upstream helmet tile. The splash screens use the Wii U's shell: a bright blue picture with a few soft bubbles, the project's helmet render (port/assets/icon/opence-icon-render.png, the artwork of
 OpenCE's own icon, the same one the earlier Wii U pictures showed) in a round medallion with a white rim and a plain blue band, a bold title with a thick rounded
 outline and a pill for the subtitle. The title is set in Overpass (port/assets/fonts, SIL Open Font License 1.1); the outline is drawn by Pillow's stroke, which has round
 joins. The splash screens say that the port is unofficial and needs the player's own copy (the game and its characters belong to Microsoft).
@@ -146,15 +146,8 @@ def background(size):
 
 
 def icon():
-    size = 128 * SCALE
-    image = background((size, size))
-    medallion(image, (size / 2, size / 2), size * 0.44)
-    # (a tile with round corners, as the Wii U's channels are)
-    mask = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([0, 0, size - 1, size - 1], radius=size * 0.20, fill=255)
-    result = Image.new("RGB", (size, size), SKY_BOTTOM)
-    result.paste(image, (0, 0), mask)
-    return result.resize((128, 128), Image.LANCZOS)
+    """the original Wii U tile, from ORION's upstream artwork"""
+    return Image.open(ROOT / "port/assets/icon/opence-icon.png").convert("RGB").resize((128, 128), Image.LANCZOS)
 
 
 def pill(image, box, fill):

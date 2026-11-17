@@ -1,52 +1,145 @@
+<div align="center">
+
+<img src="port/wiiu/meta/icon.png" alt="OpenCE-WiiU helmet icon" width="128">
+
 # OpenCE-WiiU
 
-Halo: Combat Evolved on Wii U, maintained by [Roastedd](https://github.com/Roastedd).
-Based on [OpenCommunityEdition/OpenCE](https://github.com/OpenCommunityEdition/OpenCE)
-and its Xbox decompilation lineage. This repository preserves their commit
-history and credits. It is an unofficial fan port; no game data is included.
+**Halo: Combat Evolved, running natively on your Wii U.**
 
-## Getting started
+[![Wii U · Aroma](https://img.shields.io/badge/Wii_U-Aroma-009ac7)](port/wiiu/PLAYING.md)
+[![Baseline · rc1](https://img.shields.io/badge/baseline-rc1-6c8c4b)](VALIDATION.md)
+[![Network · 41](https://img.shields.io/badge/network-protocol_41-536b8e)](#online-play)
+[![AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](LICENSE)
 
-You need a Wii U with Aroma, an SD card, and your own copy of Halo: Combat
-Evolved for the original Xbox. See the [player guide](port/wiiu/PLAYING.md)
-for map conversion, installation, and controls. See [building](BUILDING-WIIU.md)
-to build the Wii U application.
+[**Get started**](#installing) ·
+[Features](#what-it-does) ·
+[Controls](#controls) ·
+[Build](BUILDING-WIIU.md) ·
+[Report a problem](https://github.com/Roastedd/OpenCE-WiiU/issues) ·
+[Credits](#credits)
 
-This repository starts from **rc1**, source commit
-`381913d6d843b1a49a17e405d7ab0473d75cf270`. Documentation and build-support
-changes on top of that commit do not change the game code. The original
-source is also marked by the `wiiu-rc1-source` tag.
+<img src="docs/assets/screenshots/menu.png" alt="OpenCE's main menu running on Wii U" width="90%">
 
-rc1 completed a 24-minute hardware session with six online joins and a
-normal exit, without a recorded crash or freeze. This is the tested baseline,
-not a guarantee for every map or mode. See [validation](VALIDATION.md).
+<sub>Captured on Wii U during development. Maintained by <a href="https://github.com/Roastedd">Roastedd</a>, built on <a href="https://github.com/OpenCommunityEdition/OpenCE">OpenCE</a>.</sub>
 
-**Online compatibility:** rc1 uses network protocol **41**. It cannot join
-protocol 44 games from newer OpenCE builds. Fewer compatible servers may be
-available. Full campaign completion, every controller configuration, split
-screen, and long co-op sessions have not all been qualified.
+</div>
 
-Binary downloads will be listed on this repository's
-[Releases page](https://github.com/Roastedd/OpenCE-WiiU/releases) when packaged.
-A playable bundle needs the matching `halo.wuhb`, `shaders.pack`, and
-`brokers.txt`; the source repository alone is not that bundle.
+> [!IMPORTANT]
+> **Bring your own game.** No maps or disc image are included. You need
+> Halo: Combat Evolved for the **original Xbox**. This is an unofficial fan
+> port, with no affiliation to Microsoft or the game's creators.
 
-## Project and upstream
+## What it does
 
-Roastedd maintains the Wii U platform work: the native GX2 renderer,
-big-endian platform support, audio and input integration, performance work,
-and hardware testing. OpenCE provides the underlying port, game features,
-networking, tools, and artwork; the decompilation projects provide the game
-source foundation. Contributor authorship is retained in Git history.
+| | |
+| --- | --- |
+| **Campaign on Wii U** | The original game's code, compiled for the Wii U with a native GX2 renderer. |
+| **Online multiplayer** | Server browser, internet games, and system link with compatible protocol 41 hosts. |
+| **TV and GamePad** | Play on the TV or GamePad, with touch input in the menus. |
+| **Wii U controls** | GamePad, Pro Controller, and Wii Remote/Nunchuk support, including gyro options. See the player guide for controller details. |
+| **Graphics options** | Resolution, smooth motion, graphics presets, and a performance overlay. |
+| **Your own maps and saves** | Game data and saves stay on your SD card. Custom Edition support is described in the player guide. |
 
-The original [upstream overview](README.upstream.md) is preserved for
-reference. Its download links and platform claims describe upstream OpenCE;
-Wii U status and downloads are documented here. The newer merged build is
-not part of this baseline and remains separate development work.
+<img src="docs/assets/screenshots/campaign.png" alt="Campaign gameplay captured on Wii U" width="90%">
 
-Inherited desktop/web release and server-image workflows are archived under
-`.github/upstream-workflows/` so this repository does not automatically
-publish those products. Wii U releases will be managed separately.
+<sub>Hardware capture from a development build. Screenshots show the port in use; they do not qualify every mode or map. [Capture details](docs/assets/screenshots/README.md).</sub>
+
+## Installing
+
+**Source is available now. A complete downloadable rc1 bundle has not been published yet.**
+When packaged, downloads will be on this repository's
+[Releases page](https://github.com/Roastedd/OpenCE-WiiU/releases).
+
+You need Aroma, an SD card with roughly 4 GB free for the converted maps
+and caches, and your own Xbox copy of Halo. The app and maps go here:
+
+```text
+sd:/wiiu/apps/halo/
+├── halo.wuhb
+├── shaders.pack
+├── brokers.txt
+└── data/
+    └── maps/
+        ├── ui.map
+        ├── a10.map
+        └── …the remaining converted Xbox maps
+```
+
+1. Get the matching `halo.wuhb`, `shaders.pack`, and `brokers.txt` from the
+   release bundle. The application and shader pack belong together.
+2. Extract the `maps` folder from your own Xbox disc image, then convert it:
+
+   ```sh
+   python3 tools/wiiu/convert_maps.py /path/to/xbox/maps converted-maps
+   ```
+
+3. Copy all converted maps into `wiiu/apps/halo/data/maps/` on your SD card.
+4. Start **OpenCE-U** from the Wii U Menu.
+
+The [full player guide](port/wiiu/PLAYING.md) covers map extraction,
+controller setup, settings, and troubleshooting. Keep a backup of `data/`
+before changing builds: it contains your saves.
+
+### Can I just drop in an ISO?
+
+**The published rc1 application does not import an ISO on the console yet.**
+It needs converted maps. Direct import on Wii U is the requested next setup
+improvement, and will need a new, tested application build.
+
+The SD card's FAT32 filesystem also limits each file to less than 4 GiB.
+A large full-disc ISO will need a supported split-image workflow; copying
+one large ISO to the SD card is not sufficient.
+
+## Controls
+
+| Action | GamePad / Pro Controller |
+| --- | --- |
+| Move / look | Left stick / right stick |
+| Fire / grenade | ZR / ZL |
+| Jump / melee | B / A |
+| Reload, use / switch weapon | Y / X |
+| Flashlight / switch grenade | L / R |
+| Crouch / zoom | Left stick click / right stick click |
+| Pause | + |
+| Performance overlay | L + R + − |
+
+In menus, **A selects and B goes back**. The touch screen selects items too.
+[All controls and gyro settings →](port/wiiu/PLAYING.md#controls)
+
+## Online play
+
+rc1 uses **network protocol 41**. It cannot join protocol 44 games from
+newer OpenCE builds. You need a compatible host; a visible server is not
+necessarily compatible. Performance depends on the map, host, and player
+count.
+
+## Status and testing
+
+This repository starts from **rc1**, source tag
+[`wiiu-rc1-source`](https://github.com/Roastedd/OpenCE-WiiU/tree/wiiu-rc1-source).
+It completed a 24-minute hardware session with **six online joins**, no
+recorded freeze or crash, and a normal exit. Recorded five-second windows
+averaged **55.9 FPS**. [Per-map results and checksums →](VALIDATION.md)
+
+The port is still experimental. Full campaign completion, every controller
+configuration, split screen, and long co-op sessions have not all been
+qualified. The newer upstream merge has separate join problems and is not
+this baseline.
+
+If something goes wrong, open an [issue](https://github.com/Roastedd/OpenCE-WiiU/issues)
+with the build, map, controller, and what happened. Include the logs described
+in the player guide, and review them for personal information before posting.
+
+## Building and contributing
+
+[Build instructions](BUILDING-WIIU.md) include the Docker toolchain and
+asset-free checks. The application icon can be regenerated with
+`python3 tools/wiiu_app_art.py`; the original helmet tile is restored.
+
+The original [upstream overview](README.upstream.md) is kept for reference.
+Its platform claims and downloads describe upstream OpenCE. Inherited
+publishing workflows are archived under `.github/upstream-workflows/`;
+this repository's Wii U releases are managed separately.
 
 ## Credits
 
