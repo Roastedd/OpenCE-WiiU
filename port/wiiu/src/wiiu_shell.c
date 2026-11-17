@@ -57,7 +57,8 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 
 #define GAME_STACK_BYTES (8u * 1024u * 1024u)
 #define MONITOR_STACK_BYTES (128u * 1024u)
-#define BLACKBOX_PERIOD_MS 5000u
+/* (one second: a freeze of the whole console that the five second record cannot place; the record is a few lines) */
+#define BLACKBOX_PERIOD_MS 1000u
 #define HEARTBEAT_PERIOD_MS 5000u
 /* ProcUI runs the callbacks of the higher priority first; ours runs before SDL's (100) and the like */
 #define RELEASE_PRIORITY 2000

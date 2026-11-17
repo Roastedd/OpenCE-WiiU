@@ -66,7 +66,7 @@ NEGATIVE_CONTROLS = {
                               'doppler-stereo'),
  'frequency-upper-unbounded': (('if (target_step * OUTPUT_RATE > VOICE_FREQUENCY_MAXIMUM)', 'if (0)'),
                                'doppler-limits'),
- 'frequency-lower-unbounded': (('if (target_step * OUTPUT_RATE < VOICE_FREQUENCY_MINIMUM)', 'if (0)'),
+ 'frequency-lower-unbounded': (('if (!(target_step * OUTPUT_RATE >= VOICE_FREQUENCY_MINIMUM))', 'if (0)'),
                                'doppler-limits')}
 
 # ours: a voice waiting for its decoded packet

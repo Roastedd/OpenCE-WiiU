@@ -85,6 +85,7 @@ skips opening a device; audio.channels chooses stereo or 5.1
 
 #ifdef HALO_WIIU
 #include <coreinit/time.h>
+#include <coreinit/thread.h>
 #include "../../wiiu/src/wiiu_shell.h"
 #include "../../wiiu/src/wiiu_decoder_profile.h"
 #include "../../wiiu/src/wiiu_mixer_profile.h"
@@ -1792,7 +1793,8 @@ static void mix_voice(struct sdl_stream *stream, float *output, float *send, uns
 		doppler_heard(stream);
 	if (target_step * OUTPUT_RATE > VOICE_FREQUENCY_MAXIMUM)
 		target_step = VOICE_FREQUENCY_MAXIMUM / OUTPUT_RATE;
-	if (target_step * OUTPUT_RATE < VOICE_FREQUENCY_MINIMUM)
+	/* (not "<": a step that is not a number is held too, or the loops below that count it would not end) */
+	if (!(target_step * OUTPUT_RATE >= VOICE_FREQUENCY_MINIMUM))
 		target_step = VOICE_FREQUENCY_MINIMUM / OUTPUT_RATE;
 	/* (the step ramps from the last mix's to it, as the gains do) */
 	step = stream->gains_valid ? stream->current_step : target_step;
@@ -2150,6 +2152,9 @@ static void mix_voice(struct sdl_stream *stream, float *output, float *send, uns
 		room_lowpass += ramp_room_lowpass;
 		stream->phase += step;
 		step += ramp_step;
+		/* (a phase that is not a number or is absurd would count for ever) */
+		if (!(stream->phase < 65536.0))
+			stream->phase = 0.0;
 		while (stream->phase >= 1.0)
 		{
 			stream->phase -= 1.0;
@@ -2447,8 +2452,22 @@ static void mix(float *output, unsigned long frames)
 					profile_lock_started = OSGetSystemTime();
 #endif
 				pthread_mutex_unlock(&mixer_lock);
-				while (__atomic_load_n(&mixer_lock_wanted, __ATOMIC_ACQUIRE))
-					sched_yield();
+				{
+					/* (a few yields, then short sleeps: a yield lets only a thread of this one's priority or higher run, and the game thread
+					that wants the lock is lower than the audio thread, so a thread on this core that does not get the core would be waited
+					for for ever) */
+					unsigned spins = 0;
+
+					while (__atomic_load_n(&mixer_lock_wanted, __ATOMIC_ACQUIRE))
+					{
+#ifdef HALO_WIIU
+						if (++spins > 16)
+							OSSleepTicks(OSMicrosecondsToTicks(100));
+						else
+#endif
+							sched_yield();
+					}
+				}
 				pthread_mutex_lock(&mixer_lock);
 #ifdef HALO_WIIU
 				if (profile_mix)
