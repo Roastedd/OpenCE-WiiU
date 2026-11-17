@@ -148,6 +148,10 @@ boolean game_state_read_header_from_persistent_storage(
 	long header_size,
 	long buffer_size,
 	boolean *corrupted);
+/* port: the saved game's header alone, with no check of the rest of the file (which a read of the whole of it, from the card, takes seconds for) */
+boolean game_state_read_header_only_from_persistent_storage(
+	void *header,
+	long header_size);
 void game_state_write_to_persistent_storage(
 	void *buffer,
 	unsigned long *header_checksum,

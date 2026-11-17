@@ -11,6 +11,8 @@ The port's functions that the game's sources call, declared for them.
 /* the record of a client's join, written to the card by the thread that is at each step (port/wiiu/src/wiiu_join_trace.c) */
 void wiiu_join_step(char const *name);
 void wiiu_join_frame_step(char const *name);
+/* the Wii U's HUD sheet builder thread rests while a client loads the map it joined (port/wiiu/src/xbox_textures_gx2.c) */
+void wiiu_hud_builder_hold(int on);
 #define JOIN_STEP(name) wiiu_join_step(name)
 #define JOIN_FRAME_STEP(name) wiiu_join_frame_step(name)
 #else

@@ -1222,6 +1222,10 @@ static void main_queue_map_private(
 		cache_files_precache_map_end();
 	if (!cache_files_precache_in_progress())
 	{
+#ifdef HALO_WIIU
+		/* port: the HUD sheets' builder thread rests while a map loads (xbox_textures_gx2.c) */
+		wiiu_hud_builder_hold(1);
+#endif
 		cache_files_precache_map_begin(main_globals.queued_map_name, FALSE);
 		main_globals.queue_map = FALSE;
 	}

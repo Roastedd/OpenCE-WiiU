@@ -2071,7 +2071,13 @@ static void mix_voice(struct sdl_stream *stream, float *output, float *send, uns
 		dB at 44.1 kHz) */
 		if (room || ramp_room)
 		{
+#ifdef HALO_WIIU
+			/* port: the voice's own resampled frame, as the send was made before the Xbox's send resampler (send_frame): that is eight more taps a
+			frame for each voice that has a room send, on a core that has no vectors, and the mixer's time in a game was twice what it was */
+			float mono = stream->channels == 1 ? sample_left : 0.5f * (sample_left + sample_right);
+#else
 			float mono = send_frame(stream);
+#endif
 
 			room_state = flush_denormal(mono + room_lowpass * (room_state - mono));
 			send[frame] += room_state * room;

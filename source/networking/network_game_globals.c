@@ -556,8 +556,10 @@ boolean network_game_client_start_frame(
 					break;
 				case _network_game_client_state_ingame:
 					if (player_action_collection_definition.previous_client_state != state)
+					{
 						JOIN_STEP("client signalled to begin loading");
 						network_event("client signalled to begin loading for network game");
+					}
 					break;
 				case _network_game_client_state_postgame:
 					if (player_action_collection_definition.previous_client_state != state)

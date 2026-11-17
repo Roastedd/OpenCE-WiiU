@@ -467,17 +467,29 @@ boolean game_state_test_persistent_storage(
 {
 	struct game_state_header header;
 	boolean success;
+	boolean other_layout = FALSE;
 
-	if (game_state_read_header_from_persistent_storage(
+	if (corrupted)
+		*corrupted = FALSE;
+	/* port: a saved game of another build's layout (an older build's: the biped's datum grew) cannot be loaded, but its level and difficulty are
+	still the player's: it is offered as it was, Continue starts that level from its beginning (the level takes no saved game that does not fit,
+	game_state_header_valid), and this header's read, which does not check the rest of the file, is all it takes (the whole file's check took
+	five seconds of the card, and Continue failed with that for a answer) */
+	if (game_state_read_header_only_from_persistent_storage(&header, sizeof(*game_state_globals.header)) &&
+		header.allocation_size_checksum != (unsigned long)game_state_globals.allocation_size_checksum)
+	{
+		other_layout = TRUE;
+		error(_error_silent, "the saved game is of another build's layout (allocations %08lx, this build's %08lx): Continue starts its level, '%s', from the beginning",
+			(unsigned long)header.allocation_size_checksum, (unsigned long)game_state_globals.allocation_size_checksum, header.map_name);
+	}
+	if (other_layout ||
+		game_state_read_header_from_persistent_storage(
 		&header,
 		&header.checksum,
 		sizeof(*game_state_globals.header),
 		/* the whole of the native builds' larger game state */
 		GAME_STATE_SIZE,
-		corrupted) &&
-		/* port: a saved game of another build's layout is not offered (the
-		level would refuse it and start from its beginning) */
-		header.allocation_size_checksum == (unsigned long)game_state_globals.allocation_size_checksum)
+		corrupted))
 	{
 		*difficulty = header.difficulty;
 		csstrncpy(map_name, header.map_name, sizeof(header.map_name));
@@ -1220,6 +1232,14 @@ void game_state_try_and_load_from_persistent_storage(
 {
 	struct game_state_header header;
 
+	/* port: a saved game of another layout is not read through (its file's check is seconds of the card) to be refused */
+	if (game_state_read_header_only_from_persistent_storage(&header, sizeof(header)) &&
+		header.allocation_size_checksum != (unsigned long)game_state_globals.allocation_size_checksum)
+	{
+		error(_error_silent, "the saved game is not taken: it is of another build's layout (allocations %08lx, this build's %08lx)",
+			(unsigned long)header.allocation_size_checksum, (unsigned long)game_state_globals.allocation_size_checksum);
+		return;
+	}
 	if (game_state_read_header_from_persistent_storage(
 			&header,
 			&header.checksum,
