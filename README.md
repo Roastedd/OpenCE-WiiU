@@ -53,7 +53,7 @@ Legend: ✅ played on a Wii U · 🧪 built and tested on a computer, not yet tr
 ### Playing the game
 
 - ✅ **Single-player campaign**, every level, with checkpoints and saves on your SD card. Hold B, + or tap the touch screen for a second to skip a cutscene.
-- ✅ **Two-player split screen**, in multiplayer and in the co-op campaign. 🧪 Three and four players.
+- ✅ **Two-player split screen** in multiplayer. 🧪 The two-player co-op campaign, and three and four players.
 - ✅ **TV or GamePad.** Play on the TV, and the GamePad can show player 1's own view while the TV is split.
 - ✅ **Online and system link**: a server browser, internet games found through the servers in `brokers.txt` (with UPnP to open the port for you), and games on your own network. 🧪 Hosting from the Wii U and very large games (24 players and up).
 - 🧪 **Voice chat** through the GamePad's microphone or a headset in its jack (push to talk with the TV button, or open mic).
@@ -66,7 +66,7 @@ Legend: ✅ played on a Wii U · 🧪 built and tested on a computer, not yet tr
 - ✅ **Touch screen** in the menus.
 - 🧪 **Wii Remote with a Nunchuk**, including a **pointer** (with a sensor bar, or the GamePad as one) and **Wii Remote Plus motion aiming**.
 - 🧪 **Gyro aiming** on the GamePad (always, or only when zoomed), with a thumb on the screen to hold the view still.
-- ✅ Classic Controllers and, through Bloopair, other pads, for the extra split-screen players.
+- 🧪 **Classic Controllers** and, through Bloopair, other pads, for the extra split-screen players.
 
 ### Picture and speed
 
