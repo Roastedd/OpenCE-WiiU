@@ -35,7 +35,33 @@ The helper is AGPL-3.0-or-later; see LICENSE and the project's credits.
 """
 
 
-def package(destination):
+BUNDLE_README = """# OpenCE-WiiU
+
+Halo: Combat Evolved on the Wii U. This download has the game and the setup program in one place.
+
+You need:
+- a Wii U running Aroma, and an SD card with about 4 GB free,
+- your own Xbox copy of Halo as a disc image (.iso),
+- a computer with Python 3.10 or newer (https://www.python.org/downloads/).
+
+1. Unzip this folder anywhere.
+2. Windows: double-click "Setup Wii U.bat". Mac: double-click "Setup Wii U.command"
+   (the first time, Control-click it, choose Open, and confirm).
+3. Choose your Xbox ISO and your SD card, then press Prepare SD card.
+4. When it says it is ready, eject the card, put it in the Wii U and start OpenCE-U
+   from the Wii U Menu.
+
+The setup program puts the game in sd:/wiiu/apps/halo/ and converts the maps from
+your disc image, on your computer. Nothing is uploaded. If the card already has its
+maps, run it again without an ISO to update the game only.
+
+More help: docs/ISO_SETUP.md. Project and source: https://github.com/Roastedd/OpenCE-WiiU
+The setup program is AGPL-3.0-or-later; see LICENSE.
+"""
+
+
+def package(destination, app=None, readme=README):
+    """the zip: the helper, and with app (a folder holding halo.wuhb, shaders.pack and brokers.txt) the game files in a folder called app"""
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     records = []
@@ -44,7 +70,12 @@ def package(destination):
             data = (ROOT / name).read_bytes()
             records.append(f"{hashlib.sha256(data).hexdigest()}  {name}")
             archive.write(ROOT / name, name)
-        archive.writestr("README.md", README)
+        if app:
+            for name in ("halo.wuhb", "shaders.pack", "brokers.txt"):
+                data = (Path(app) / name).read_bytes()
+                records.append(f"{hashlib.sha256(data).hexdigest()}  app/{name}")
+                archive.write(Path(app) / name, f"app/{name}")
+        archive.writestr("README.md", readme)
         archive.writestr("SHA256SUMS", "\n".join(records) + "\n")
     return destination
 
@@ -52,4 +83,6 @@ def package(destination):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", nargs="?", default=ROOT / "build/opence-wiiu-setup.zip")
-    print(package(parser.parse_args().output))
+    parser.add_argument("--app", help="a folder with halo.wuhb, shaders.pack and brokers.txt: makes the one-download release bundle")
+    args = parser.parse_args()
+    print(package(args.output, args.app, BUNDLE_README if args.app else README))

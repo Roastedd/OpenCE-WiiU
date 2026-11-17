@@ -53,6 +53,8 @@ refuses to clear it automatically.
 
 ## Option 2: prepare the SD card on a computer
 
+If you downloaded the release zip (`opence-wiiu.zip`), it already holds the game files in its `app` folder. The setup program copies `halo.wuhb`, `shaders.pack` and `brokers.txt` to `sd:/wiiu/apps/halo/` for you (an older `halo.wuhb` or `shaders.pack` is kept beside the new one as `.backup`, and an existing `brokers.txt` is left alone), then converts your maps. On a card that already has all its maps, run it again with the new zip and leave the ISO empty to update the game only.
+
 Install **Python 3.10 or later** from [python.org](https://www.python.org/downloads/).
 No separate extractor or Python packages are required. The window uses Tk,
 included with the standard Windows/macOS Python installers; Linux may need
