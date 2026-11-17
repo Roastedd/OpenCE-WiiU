@@ -1370,6 +1370,7 @@ boolean network_game_client_game_settings_updated(
 			&previous_game.local_data,
 			sizeof(client->game.local_data));
 
+		JOIN_STEP("game settings updated");
 		network_event(
 			"received updated game settings from the server; there are %d players on %d machines in the game",
 			message_packet->player_count,
@@ -1572,6 +1573,7 @@ boolean network_game_client_add_player(
 	player.team_index = NONE;
 	player.player_list_index = NONE;
 
+	JOIN_STEP("player addition requested");
 	network_event(
 		"requesting a player addition (controller index #%d)",
 		player.controller_index);
@@ -1775,14 +1777,18 @@ boolean network_game_client_game_has_started(
 					NULL,
 					1))
 				{
+					JOIN_STEP("loaded: ready to play");
 					network_event("local machine is loaded & ready to play");
 
 					client->state = _network_game_client_state_ingame;
 					client->next_update_number = 0;
 					client->connection_silent = FALSE;
 
+					JOIN_STEP("ui widgets closing");
 					ui_widgets_close_all();
+					JOIN_STEP("game time starting");
 					game_time_start();
+					JOIN_STEP("game time started");
 					/* (a game in progress: the host's time when it said to start,
 					and the ticks this machine spent loading it) */
 					if (network_game_client_late_join_time > 0)
@@ -1795,13 +1801,16 @@ boolean network_game_client_game_has_started(
 						network_event("joined the game in progress at game tick #%ld",
 							network_game_client_late_join_time + ticks);
 					}
+					JOIN_STEP("clock set");
 					network_game_client_late_join_time = 0;
 					/* (the clock waits for the host's first game update, which
 					brings the host's time, game_time_update: at a start the host
 					ticks only once every machine has loaded) */
 					network_game_client_late_join_clock_pending =
 						game_connection() == _game_connection_network_client;
+					JOIN_STEP("initial pulse");
 					game_initial_pulse();
+					JOIN_STEP("initial pulse done");
 				}
 				else
 				{

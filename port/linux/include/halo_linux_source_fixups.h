@@ -8,6 +8,17 @@ The port's functions that the game's sources call, declared for them.
 #define __HALO_LINUX_SOURCE_FIXUPS_H
 
 #ifdef HALO_WIIU
+/* the record of a client's join, written to the card by the thread that is at each step (port/wiiu/src/wiiu_join_trace.c) */
+void wiiu_join_step(char const *name);
+void wiiu_join_frame_step(char const *name);
+#define JOIN_STEP(name) wiiu_join_step(name)
+#define JOIN_FRAME_STEP(name) wiiu_join_frame_step(name)
+#else
+#define JOIN_STEP(name) ((void)0)
+#define JOIN_FRAME_STEP(name) ((void)0)
+#endif
+
+#ifdef HALO_WIIU
 /* port: authoritative game-thread clock/menu activity for optional shader-file capture (port/wiiu/src/wiiu_missing_keys.c). */
 void wiiu_missing_keys_gameplay(int active);
 /* port: main-menu transitions project the game-thread clock state before changing file eligibility (source/game/game_time.c). */

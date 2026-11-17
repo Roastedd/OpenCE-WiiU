@@ -797,6 +797,8 @@ static long game_time_run_ticks(
 	long maximum_possible_server_time;
 	long ticks_run = 0;
 
+	JOIN_FRAME_STEP("ticks: run begins");
+
 #ifdef HALO_WIIU
 	long long cost_started = game_connection() == _game_connection_network_client ? wiiu_microseconds_now() : 0;
 #endif

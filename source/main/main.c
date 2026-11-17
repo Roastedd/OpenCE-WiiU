@@ -4294,6 +4294,7 @@ static boolean main_loop_iteration(
 		input_frame_begin();
 		input_update();
 		input_abstraction_update();
+		JOIN_FRAME_STEP("frame: input done");
 		profile_scope_exit(main_input_section)
 		profile_scope_enter(main_platform_events_section)
 		shell_idle();
@@ -4460,6 +4461,7 @@ static boolean main_loop_iteration(
 					network_distributed_time_end();
 					profile_scope_exit(main_network_end_frame_section)
 
+					JOIN_FRAME_STEP("frame: game time update begins");
 #ifdef HALO_WIIU
 					/* port: the frame's time in the game's ticks and in its rendering, for the Wii U's log (port/wiiu/src/d3d8_gx2.c) */
 					{
@@ -4514,6 +4516,7 @@ static boolean main_loop_iteration(
 #endif
 				if (render_frame && !debug_no_drawing)
 				{
+					JOIN_FRAME_STEP("frame: render begins");
 					profile_render_start();
 					render_interpolation_frame_begin();
 #ifdef HALO_WIIU
@@ -4535,6 +4538,7 @@ static boolean main_loop_iteration(
 					}
 #endif
 					render_interpolation_frame_end();
+					JOIN_FRAME_STEP("frame: render done");
 					profile_render_end();
 #ifdef HALO_WIIU
 					/* port: the frame's work is done but for the throttle and the present: its time, for the overlap's log */

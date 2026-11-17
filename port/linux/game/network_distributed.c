@@ -5004,12 +5004,17 @@ static void distributed_advance_checkpoint(void)
 
 static void distributed_restore_checkpoint(void)
 {
+	JOIN_STEP("checkpoint restore begins");
 	distributed_reset_checkpoint_state(TRUE);
+	JOIN_STEP("checkpoint: state reset");
 	network_objects_discard_client_effects();
+	JOIN_STEP("checkpoint: effects discarded");
 	network_objects_reverted();
+	JOIN_STEP("checkpoint: objects reverted");
 	network_damage_new_game();
 	network_actors_new_game();
 	network_coop_reset_recovery();
+	JOIN_STEP("checkpoint restore done");
 }
 
 void network_distributed_reverted(void)
@@ -6529,6 +6534,21 @@ void network_distributed_handle_message(
 			return;
 		break;
 	}
+#ifdef HALO_WIIU
+	{
+		/* (the join's record: the first message of each type, and each kind of one that is refused) */
+		static byte seen[256];
+
+		if (!seen[header.type])
+		{
+			char text[40];
+
+			seen[header.type] = 1;
+			snprintf(text, sizeof(text), "first message type %d", (int)header.type);
+			JOIN_FRAME_STEP(text);
+		}
+	}
+#endif
 	if (!distributed_message_epoch_valid(machine_index, &header, size))
 		return;
 	/* Readiness can name an earlier world; it requests the current boundary

@@ -19,6 +19,7 @@ CoffeeFlix and CoffeeUnlocked have this lifecycle on this console (the ProcUI ca
 close, the black box); this is that, in C, for the game. Not run on a console.
 */
 
+#include "wiiu_join_trace.h"
 #include "wiiu_shell.h"
 
 #include "wiiu_crash.h"
@@ -1013,6 +1014,16 @@ static void *blackbox_main(void *unused)
 		const uint32_t now = shell_ms();
 
 		sleep_ms(100);
+		/* (the join's record, a line a second while its window is open: wiiu_join_trace.c) */
+		{
+			static uint32_t beat_last;
+
+			if (now - beat_last >= 1000u)
+			{
+				beat_last = now;
+				wiiu_join_heartbeat();
+			}
+		}
 		if (box_stopping)
 			continue;
 		if (box_wanted || shell_ms() - last >= BLACKBOX_PERIOD_MS)
