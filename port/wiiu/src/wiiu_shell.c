@@ -144,9 +144,8 @@ static void sleep_ms(uint32_t milliseconds)
 /* is p somewhere a pointer in another thread's fields can point? (a stale or garbled one must not fault the reader) */
 static int in_app_memory(const void *p, uintptr_t from)
 {
-	/* port: in the app's range AND mapped now (OSIsAddressValid): another thread's fields (a running thread's lock, queue or name) can hold an
-	address in the range that is not mapped, and the reader's fault then took the whole app down (a CRASH DSI in the black box thread while a
-	client joined a game, 2026-11-16: dar 4ED0D71B) */
+	/* port: in the app's range AND mapped now (OSIsAddressValid): another thread's fields can hold an address in the range that is not
+	mapped, and the reader's fault then took the whole app down (a CRASH DSI in the black box thread, 2026-11-16) */
 	return (uintptr_t)p >= from && (uintptr_t)p < 0x50000000u && OSIsAddressValid((uint32_t)(uintptr_t)p) &&
 		OSIsAddressValid((uint32_t)((uintptr_t)p + 15u));
 }
