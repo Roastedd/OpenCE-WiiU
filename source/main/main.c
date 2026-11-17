@@ -4521,6 +4521,9 @@ static boolean main_loop_iteration(
 				if (render_frame && !debug_no_drawing)
 				{
 					JOIN_FRAME_STEP("frame: render begins");
+#ifdef HALO_WIIU
+					wiiu_join_render_frame_begin();
+#endif
 					profile_render_start();
 					render_interpolation_frame_begin();
 #ifdef HALO_WIIU

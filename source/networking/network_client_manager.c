@@ -1778,6 +1778,9 @@ boolean network_game_client_game_has_started(
 					1))
 				{
 					JOIN_STEP("loaded: ready to play");
+#ifdef HALO_WIIU
+					wiiu_join_safe_arm();
+#endif
 					network_event("local machine is loaded & ready to play");
 
 					client->state = _network_game_client_state_ingame;

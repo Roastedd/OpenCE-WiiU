@@ -326,6 +326,12 @@ static void render_window(
 {
 	struct rasterizer_window_begin_parameters parameters;
 	short rendered_cluster_index;
+#ifdef HALO_WIIU
+	/* port: the first windows of a joined game draw the world alone (halo/join_safe_frames.txt): no objects, shadows, decals, particles, contrails or lens flares */
+	const boolean join_safe = wiiu_join_safe_window();
+#else
+	const boolean join_safe = FALSE;
+#endif
 
 	profile_render_window_start(TRUE);
 	render.scene_index++;
@@ -356,19 +362,23 @@ static void render_window(
 		first_person_weapon_render_update();
 		lights_preprocess_scene();
 		RENDER_PASS(3);
-		render_objects();
+		if (!join_safe)
+			render_objects();
 		RENDER_PASS(4);
 		structure_render_preprocess();
 		structure_render_lightmaps();
 		RENDER_PASS(5);
-		rasterizer_lens_flares_submit_occlusion_tests();
-		render_object_shadows();
+		if (!join_safe)
+		{
+			rasterizer_lens_flares_submit_occlusion_tests();
+			render_object_shadows();
+		}
 		lights_render_diffuse();
 
 		RENDER_PASS(6);
 		rasterizer_decals_begin(_decal_layer_light);
 		for (rendered_cluster_index = 0;
-			rendered_cluster_index < render.rendered_cluster_count;
+			rendered_cluster_index < (join_safe ? 0 : render.rendered_cluster_count);
 			rendered_cluster_index++)
 		{
 			rasterizer_decals_draw(rendered_cluster_get(rendered_cluster_index)->cluster_index);
@@ -377,7 +387,7 @@ static void render_window(
 
 		rasterizer_decals_begin(_decal_layer_alpha_tested);
 		for (rendered_cluster_index = 0;
-			rendered_cluster_index < render.rendered_cluster_count;
+			rendered_cluster_index < (join_safe ? 0 : render.rendered_cluster_count);
 			rendered_cluster_index++)
 		{
 			rasterizer_decals_draw(rendered_cluster_get(rendered_cluster_index)->cluster_index);
@@ -388,7 +398,7 @@ static void render_window(
 
 		rasterizer_decals_begin(_decal_layer_primary);
 		for (rendered_cluster_index = 0;
-			rendered_cluster_index < render.rendered_cluster_count;
+			rendered_cluster_index < (join_safe ? 0 : render.rendered_cluster_count);
 			rendered_cluster_index++)
 		{
 			rasterizer_decals_draw(rendered_cluster_get(rendered_cluster_index)->cluster_index);
@@ -397,7 +407,7 @@ static void render_window(
 
 		rasterizer_decals_begin(_decal_layer_secondary);
 		for (rendered_cluster_index = 0;
-			rendered_cluster_index < render.rendered_cluster_count;
+			rendered_cluster_index < (join_safe ? 0 : render.rendered_cluster_count);
 			rendered_cluster_index++)
 		{
 			rasterizer_decals_draw(rendered_cluster_get(rendered_cluster_index)->cluster_index);
@@ -415,15 +425,18 @@ static void render_window(
 		structure_render_fog();
 		game_engine_post_rasterize_objects();
 		RENDER_PASS(9);
-		weather_particle_systems_render();
-		render_particles();
-		particle_systems_render();
-		render_contrails_normal();
+		if (!join_safe)
+		{
+			weather_particle_systems_render();
+			render_particles();
+			particle_systems_render();
+			render_contrails_normal();
+		}
 		rasterizer_transparent_geometry_draw(TRUE);
 
 		rasterizer_decals_begin(_decal_layer_water);
 		for (rendered_cluster_index = 0;
-			rendered_cluster_index < render.rendered_cluster_count;
+			rendered_cluster_index < (join_safe ? 0 : render.rendered_cluster_count);
 			rendered_cluster_index++)
 		{
 			rasterizer_decals_draw(rendered_cluster_get(rendered_cluster_index)->cluster_index);
@@ -435,7 +448,8 @@ static void render_window(
 		rasterizer_transparent_geometry_draw(FALSE);
 		rasterizer_transparent_geometry_stop();
 		structure_render_fog_screen();
-		rasterizer_lens_flares_draw();
+		if (!join_safe)
+			rasterizer_lens_flares_draw();
 		RENDER_PASS(11);
 		/* port: the 3D view tone mapped (display.hdr) and antialiased
 		(display.anti_aliasing), before the HUD and menus are drawn over it */

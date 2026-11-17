@@ -13,6 +13,10 @@ void wiiu_join_step(char const *name);
 void wiiu_join_frame_step(char const *name);
 /* the Wii U's HUD sheet builder thread rests while a client loads the map it joined (port/wiiu/src/xbox_textures_gx2.c) */
 void wiiu_hud_builder_hold(int on);
+/* a joined game's first frames drawn safe (port/wiiu/src/wiiu_join_trace.c): armed at the load, taken by each window of rendering */
+void wiiu_join_render_frame_begin(void);
+void wiiu_join_safe_arm(void);
+int wiiu_join_safe_window(void);
 #define JOIN_STEP(name) wiiu_join_step(name)
 #define JOIN_FRAME_STEP(name) wiiu_join_frame_step(name)
 #else
