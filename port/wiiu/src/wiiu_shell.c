@@ -38,6 +38,7 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 #include <coreinit/memdefaultheap.h>
 #include <coreinit/memexpheap.h>
 #include <coreinit/memheap.h>
+#include <coreinit/memorymap.h>
 #include <coreinit/mutex.h>
 #include <coreinit/thread.h>
 #include <coreinit/time.h>
@@ -143,7 +144,11 @@ static void sleep_ms(uint32_t milliseconds)
 /* is p somewhere a pointer in another thread's fields can point? (a stale or garbled one must not fault the reader) */
 static int in_app_memory(const void *p, uintptr_t from)
 {
-	return (uintptr_t)p >= from && (uintptr_t)p < 0x50000000u;
+	/* port: in the app's range AND mapped now (OSIsAddressValid): another thread's fields (a running thread's lock, queue or name) can hold an
+	address in the range that is not mapped, and the reader's fault then took the whole app down (a CRASH DSI in the black box thread while a
+	client joined a game, 2026-11-16: dar 4ED0D71B) */
+	return (uintptr_t)p >= from && (uintptr_t)p < 0x50000000u && OSIsAddressValid((uint32_t)(uintptr_t)p) &&
+		OSIsAddressValid((uint32_t)((uintptr_t)p + 15u));
 }
 
 static size_t thread_where(void *handle, char *out, size_t capacity)
@@ -163,7 +168,12 @@ static size_t thread_where(void *handle, char *out, size_t capacity)
 		(unsigned)thread->context.lr);
 	if (used >= capacity)
 		used = capacity - 1;
-	if (in_app_memory(thread->mutex, 0x10000000u))
+	/* (a lock, a queue or a name is only the thread's while it waits: a running thread's fields are stale) */
+	if (state != 'W')
+	{
+		/* nothing more to say */
+	}
+	else if (in_app_memory(thread->mutex, 0x10000000u))
 	{
 		const OSMutex *lock = thread->mutex;
 		OSThread *owner = lock->owner;
