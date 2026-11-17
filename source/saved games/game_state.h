@@ -76,6 +76,8 @@ void game_state_tick_hash(
 boolean game_state_usage(
 	unsigned long *used_kib,
 	unsigned long *capacity_kib);
+/* port: checked MCC sidecar storage uses the otherwise-unused CPU tail. */
+void *game_state_port_cpu_region(unsigned long *used, unsigned long *capacity);
 void *game_state_malloc(
 	const char *name,
 	const char *type,

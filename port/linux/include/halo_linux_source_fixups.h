@@ -47,6 +47,12 @@ int tick_snapshot_director_inhibited_facing(short local_player_index, int *inhib
 int tick_snapshot_player_unit(short local_player_index, long *unit_index);
 int tick_snapshot_player_facing(short local_player_index, union real_vector3d *facing);
 #endif
+/* Discard measured listener motion at camera cuts and lifecycle boundaries
+(source/sound/sound_manager.c). NONE resets every local listener. */
+void sound_listener_motion_reset(short local_player_index);
+
+/* MCC weapon-deletion notification (port/linux/game/mcc_first_person.inl). */
+void mcc_first_person_weapon_deleted(long weapon_index);
 
 /* frames between the 30 Hz ticks (port/linux/game/render_interpolation.c);
 the platform layer reads the display.interpolation setting */
@@ -66,8 +72,8 @@ struct real_matrix4x3 *render_interpolation_object_node_matrices(long object_ind
 void render_interpolation_object_point(long object_index, union real_point3d *point);
 struct observer_result const *render_interpolation_camera(short local_player_index,
 	struct observer_result const *observer);
-void render_interpolation_first_person(short local_player_index, struct real_matrix4x3 *node_matrices,
-	short node_count, struct render_camera const *camera);
+void render_interpolation_first_person(short local_player_index, long weapon_index, long animation_graph_index,
+	struct real_matrix4x3 *node_matrices, short node_count, struct render_camera const *camera);
 float render_interpolation_game_time_sec(long ticks);
 
 /* whether the map being loaded, by the name it was loaded by, is a
@@ -164,6 +170,15 @@ void server_console_output(const char *text);
 int halo_server_debug_echo(void);
 /* ... the level its rotation plays next, NULL if none (game_engine.c) */
 char const *server_director_first_level(void);
+/* the deflection of a stick (0 the left, 1 the right) read as none, of
+32767: input.left_stick_dead_zone and input.right_stick_dead_zone, else the
+game's own (port/linux/src/xinput_sdl.c) */
+#ifdef HALO_WIIU
+/* (port: the console's own input path sets its dead zones: the game's, here) */
+#define halo_stick_dead_range(stick) ((short)9000)
+#else
+short halo_stick_dead_range(short stick);
+#endif
 /* the mouse in the menus (source/interface/ui_widget.c) */
 #include "halo_ui_pointer.h"
 /* the debug camera's mouse and keys (source/camera/director.c): whether the

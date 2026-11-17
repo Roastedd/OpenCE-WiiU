@@ -89,6 +89,7 @@ def generated(fault=None):
         structure(players, "player_action"),
         statistics(game), structure(game, "game_statistics"),
         structure(source, "distributed_player_input"), structure(source, "distributed_relayed_action"),
+        enum_with(source, "NUMBER_OF_DISTRIBUTED_POSE_VECTORS"),
         enum_with(source, "DISTRIBUTED_RELAYED_ACTION_MINIMUM_SIZE = "),
         structure(source, "distributed_pickup"), structure(source, "distributed_player_statistics"),
         structure(source, "distributed_player_ping"), structure(source, "distributed_structure_bsp"),
