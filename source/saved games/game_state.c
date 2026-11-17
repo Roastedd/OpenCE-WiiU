@@ -460,6 +460,15 @@ void game_state_save_to_persistent_storage(
 	return;
 }
 
+/* port: whether the last test found a saved game of another build's layout (it begins its level again: the menus say so) */
+static boolean game_state_saved_game_layout_other;
+
+boolean game_state_saved_game_other_layout(
+	void)
+{
+	return game_state_saved_game_layout_other;
+}
+
 boolean game_state_test_persistent_storage(
 	char *map_name,
 	short *difficulty,
@@ -471,6 +480,7 @@ boolean game_state_test_persistent_storage(
 
 	if (corrupted)
 		*corrupted = FALSE;
+	game_state_saved_game_layout_other = FALSE;
 	/* port: a saved game of another build's layout (an older build's: the biped's datum grew) cannot be loaded, but its level and difficulty are
 	still the player's: it is offered as it was, Continue starts that level from its beginning (the level takes no saved game that does not fit,
 	game_state_header_valid), and this header's read, which does not check the rest of the file, is all it takes (the whole file's check took
@@ -479,6 +489,7 @@ boolean game_state_test_persistent_storage(
 		header.allocation_size_checksum != (unsigned long)game_state_globals.allocation_size_checksum)
 	{
 		other_layout = TRUE;
+		game_state_saved_game_layout_other = TRUE;
 		error(_error_silent, "the saved game is of another build's layout (allocations %08lx, this build's %08lx): Continue starts its level, '%s', from the beginning",
 			(unsigned long)header.allocation_size_checksum, (unsigned long)game_state_globals.allocation_size_checksum, header.map_name);
 	}

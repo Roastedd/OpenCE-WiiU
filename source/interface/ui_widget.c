@@ -5659,6 +5659,8 @@ static void widget_instance_render_text_box(
 	}
 	/* port: MCC owns these text boxes; wrap their instance copies to the panel
 	 * width without changing the map's objective strings or other menus. */
+#ifndef HALO_WIIU
+	/* (none on the Wii U, which has no MCC map: these two lookups were made for every text box every frame) */
 	{
 		if (mcc_pause_text_wrap_needed(widget->definition_tag_index))
 		{
@@ -5674,6 +5676,7 @@ static void widget_instance_render_text_box(
 	if (mcc_menu_text_draw(widget->definition_tag_index, widget->parameters.text_box.string_list_index,
 		*text, font_index, justification, &color, &bounds, &clip))
 		return;
+#endif
 	/* port: the feature may center the identified PC join line as one unit. */
 	if (menu_functions_glyph_text(widget, &bounds))
 		return;
@@ -7400,7 +7403,11 @@ static void widget_instance_render_recursive(
 	frame_index = widget->animation.current_frame_index;
 	/* port: MCC display indices never enter the CE provider. A failed MCC
 	 * preview retains the existing unknown frame in every menu style. */
+#ifdef HALO_WIIU
+	mcc_picture_index = NONE; /* (no MCC map on the console) */
+#else
 	mcc_picture_index = mcc_menu_preview_index(definition->background_bitmap.index, frame_index);
+#endif
 	if (mcc_picture_index != NONE)
 	{
 		frame_index = 13;

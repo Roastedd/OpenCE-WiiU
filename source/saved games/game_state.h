@@ -148,6 +148,9 @@ boolean game_state_read_header_from_persistent_storage(
 	long header_size,
 	long buffer_size,
 	boolean *corrupted);
+/* port: whether the last test of the saved game found one of another build's layout (its level begins again) */
+boolean game_state_saved_game_other_layout(
+	void);
 /* port: the saved game's header alone, with no check of the rest of the file (which a read of the whole of it, from the card, takes seconds for) */
 boolean game_state_read_header_only_from_persistent_storage(
 	void *header,

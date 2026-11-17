@@ -269,7 +269,9 @@ def test_entry_points_are_off_by_default():
     assert re.search(r"if \(!screens_enabled\(\)\)\s*return;", toast[start:start + 700])
     # the default of the setting
     config = (ROOT / "port/linux/src/port_config.c").read_text()
-    assert re.search(r'"screens\.enable", _config_integer, "0"', config)
+    # (0 in the other builds, 2 on the Wii U: SCREENS_ENABLE)
+    assert re.search(r'"screens\.enable", _config_integer, SCREENS_ENABLE', config)
+    assert re.search(r'#else\n#define SOCIAL_ENABLED "false"\n#define SCREENS_ENABLE "0"', config)
     # the lobby's own texts are untouched with it off: the team in the row's text, and no tag
     functions = (ROOT / "port/linux/game/menu_functions.c").read_text()
     assert "!scr_enabled()" in functions

@@ -126,6 +126,16 @@ loading screen the console was measured with) */
 #define TRUE_UNLESS_WIIU "true"
 #endif
 
+/* the friends and the social screens: on in the Wii U's release (the card file halo/social.txt with a 0, or screens.enable 0, turns them off; the friends
+need network.online, and with none nothing of them is started); off in the other builds until they have tried them */
+#ifdef HALO_WIIU
+#define SOCIAL_ENABLED "true"
+#define SCREENS_ENABLE "2"
+#else
+#define SOCIAL_ENABLED "false"
+#define SCREENS_ENABLE "0"
+#endif
+
 /* debug.network_statistics's default: on the Wii U, whose network is the
 one still being measured */
 #ifdef HALO_WIIU
@@ -811,7 +821,7 @@ static const struct config_setting config_settings[] =
 	{ "bots.teams", _config_string, "\"even\"", "HALO_BOT_TEAMS", _environment_value, _platform_all,
 		"In team games: \"even\" puts the bots on both teams, evening them with\n"
 		"the players; \"against\" puts them all on the team the players are not on." },
-	{ "screens.enable", _config_integer, "0", "HALO_SCREENS", _environment_value, _platform_all,
+	{ "screens.enable", _config_integer, SCREENS_ENABLE, "HALO_SCREENS", _environment_value, _platform_all,
 		"The social screens (Players page, bot settings, Friends, toasts, the GamePad's social view):\n"
 		"0 none (nothing of them exists in the menus or the game), 1 the screens with made-up players,\n"
 		"friends, a party and toasts (for looking at them with no network), 2 the screens fed by the\n"
@@ -1528,11 +1538,11 @@ static const struct config_setting config_settings[] =
 		"Sentry project (port/windows/src/win32_crash.c): \"yes\" sends them, \"no\"\n"
 		"never does, \"ask\" asks at the next crash and writes the answer here." },
 
-	{ "social.enabled", _config_boolean, "false", "HALO_SOCIAL", _environment_value, _platform_all,
+	{ "social.enabled", _config_boolean, SOCIAL_ENABLED, "HALO_SOCIAL", _environment_value, _platform_all,
 		"Friends, invites and parties over the public MQTT brokers internet play uses\n"
 		"(port/linux/src/social_core.h): a friend code to give out and to type, a list of\n"
 		"up to 50 friends who show where they are, join and invite, a party of up to 8.\n"
-		"Off until it has been tried on the Wii U; a card file social.txt beside\n"
+		"On by default on the Wii U, off elsewhere; a card file social.txt beside\n"
 		"config.toml (a 1 or a 0) overrides this. Needs network.online. Friends are only\n"
 		"found by those whose build has this and who share a broker (network.brokers_file)." },
 	{ "social.name", _config_string, "\"\"", "HALO_SOCIAL_NAME", _environment_value, _platform_all,

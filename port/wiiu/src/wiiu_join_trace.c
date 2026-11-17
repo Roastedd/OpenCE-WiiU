@@ -46,8 +46,22 @@ static uint32_t join_now_ms(void)
 	return (uint32_t)(OSTicksToMilliseconds(OSGetSystemTime()));
 }
 
+long wiiu_study_number(const char *name, long fallback);
+
+/* off unless halo/join_steps.txt holds a 1: every line is a write to the card that the thread waits for */
+static int join_enabled(void)
+{
+	static int enabled = -1;
+
+	if (enabled < 0)
+		enabled = wiiu_study_number("join_steps.txt", 0) > 0;
+	return enabled;
+}
+
 static void join_write(char const *kind, unsigned number, char const *name)
 {
+	if (!join_enabled())
+		return;
 	if (!join_file)
 	{
 		join_file = fopen(JOIN_FILE, "a");

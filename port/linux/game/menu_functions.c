@@ -941,6 +941,18 @@ static void level_description(struct widget_instance *description, char const *p
 		wchar_t text[ROW_TEXT_LENGTH];
 
 		string_get("pc\\main_menu\\player_profiles_select\\difficulty_names", saved_difficulty, text);
+		/* port: a saved game of an older build cannot be loaded: the level begins again, and the row says so */
+		if (game_state_saved_game_other_layout())
+		{
+			static char const restart[] = " - RESTARTS";
+			size_t at = 0, index;
+
+			while (at < ROW_TEXT_LENGTH && text[at])
+				at++;
+			for (index = 0; restart[index] && at + 1 < ROW_TEXT_LENGTH; index++)
+				text[at++] = (wchar_t)restart[index];
+			text[at] = 0;
+		}
 		text_set(widget, text);
 	}
 	else if (widget)
