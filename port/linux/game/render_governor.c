@@ -103,6 +103,7 @@ static struct
 	unsigned long frames, hitches;
 	int over_windows, under_windows, probe_windows;
 	double sum_wait, wait_total_at, window_worst;
+	unsigned long window_long; /* frames of the window over worst (80 ms): a hitch is a few of them, a game whose ticks fill the frame is most */
 	double quiet_until;
 	int new_map_pending;
 	int up_backoff;
@@ -623,6 +624,7 @@ static void governor_set_step(int step, double now_ms, char const *why)
 	governor.frames = 0;
 	governor.late = governor.late_with_step_up = 0;
 	governor.window_worst = 0.0;
+		governor.window_long = 0;
 	governor.window_start = now_ms;
 	governor_publish();
 	governor_log(now_ms);
@@ -660,6 +662,7 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 		governor.frames = 0;
 		governor.late = governor.late_with_step_up = 0;
 		governor.window_worst = 0.0;
+		governor.window_long = 0;
 		return;
 	}
 	if (!governor.up_backoff)
@@ -697,6 +700,7 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 			governor.frames = 0;
 			governor.late = governor.late_with_step_up = 0;
 			governor.window_worst = 0.0;
+		governor.window_long = 0;
 		}
 		/* a hitch (a load, a save, a first use) is not detail's to shed; the rest counts at most three targets */
 		target = settings.target_ms;
@@ -721,6 +725,8 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 			governor.log_late += work_ms > 17.5;
 			if (work_ms > governor.window_worst)
 				governor.window_worst = work_ms;
+			if (work_ms > settings.worst_ms)
+				governor.window_long++;
 			governor.log_work += work_ms;
 			governor.log_tick += tick_ms;
 			governor.log_render += render_ms;
@@ -731,13 +737,15 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 	}
 	if (now_ms < governor.window_start)
 		governor.window_start = governor.last_log = governor.last_change = now_ms;
-	if (settings.forced < 0 && now_ms - governor.window_start >= settings.window_ms)
+	/* (a window of 8 frames: a game at under 16 frames a second, as a joined co-op game of the Wii U is, takes 2 seconds for it to hold 3, and decides then) */
+	if (settings.forced < 0 && now_ms - governor.window_start >= settings.window_ms && (governor.frames >= 8 || now_ms - governor.window_start >= 4.0 * settings.window_ms))
 	{
-		if (now_ms < governor.quiet_until || governor.window_worst > settings.worst_ms)
+		/* (a window with one long frame in it decides nothing: a hitch. One in which most frames are long is the game itself: the ticks fill the frame, and what is drawn is what can be shed) */
+		if (now_ms < governor.quiet_until || (governor.window_worst > settings.worst_ms && governor.window_long * 2 <= governor.frames))
 		{
 			/* (the first seconds of a map, or a window with a long frame in it: no evidence either way) */
 		}
-		else if (governor.frames >= 8)
+		else if (governor.frames >= 3)
 		{
 			const double wait = governor.sum_wait / (double)governor.frames;
 			const double saving = (double)save_ms[governor.step];
@@ -807,6 +815,7 @@ void render_governor_frame(double work_ms, double tick_ms, double render_ms, dou
 		governor.frames = 0;
 		governor.late = governor.late_with_step_up = 0;
 		governor.window_worst = 0.0;
+		governor.window_long = 0;
 	}
 	governor_publish();
 	if (settings.log_ms > 0.0 && now_ms - governor.last_log >= settings.log_ms)

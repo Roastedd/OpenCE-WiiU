@@ -594,6 +594,74 @@ static long game_time_catchup_cap(
 	return cap;
 }
 
+#ifdef HALO_WIIU
+/* port: a joined client whose ticks cost more than a frame can hold. The ticks of a joined co-op game of the Wii U cost 17 to 34 ms each (the objects of nine players' worth of
+ground: tick parts in the log), and a frame owes what the last one took: 6 ticks of 27 ms and the 50 ms of drawing are 210 ms, which owes 6 ticks more, and the recovery of a
+deficit below doubled that. The frame was never shorter than that, at 4 frames a second. Here the frame runs only the ticks that fit a budget (halo/catchup_budget_ms.txt, 75 ms
+by default, at least 2 ticks), the time not run stays owed up to the second the clock already keeps, and the extra ticks of the recovery are for ticks that are cheap. The game then
+runs a little slow, as it did, but a frame in 12 to 13 a second rather than 4. Nothing here changes what a tick does, only how many a frame runs. The cost is the mean of the
+last frames' ticks (the game thread's, or the tick thread's), in microseconds. */
+long long wiiu_microseconds_now(void);
+long wiiu_study_number(const char *name, long fallback);
+void platform_log(char const *format, ...);
+
+#define GAME_TIME_COSTLY_TICK_MICROSECONDS 12000.0
+
+static double game_time_tick_cost_microseconds = 0.0;
+static long game_time_catchup_logged = -1;
+static long long game_time_catchup_logged_at = 0;
+
+static long game_time_wiiu_tick_budget(
+	void)
+{
+	static long budget_ms = -1;
+	long allowed = TICKS_PER_SECOND;
+
+	if (budget_ms < 0)
+	{
+		budget_ms = wiiu_study_number("catchup_budget_ms.txt", 75);
+		if (budget_ms < 0)
+			budget_ms = 75;
+	}
+	/* (0 is off: as it was) */
+	if (budget_ms > 0 && game_time_tick_cost_microseconds > GAME_TIME_COSTLY_TICK_MICROSECONDS)
+	{
+		allowed = (long)((double)budget_ms * 1000.0 / game_time_tick_cost_microseconds);
+		if (allowed < 2)
+			allowed = 2;
+		if (allowed > TICKS_PER_SECOND)
+			allowed = TICKS_PER_SECOND;
+	}
+	if (allowed != game_time_catchup_logged)
+	{
+		const long long now = wiiu_microseconds_now();
+
+		/* (said when it changes, at most every 2 seconds) */
+		if (now - game_time_catchup_logged_at > 2000000)
+		{
+			game_time_catchup_logged = allowed;
+			game_time_catchup_logged_at = now;
+			platform_log("catch-up: ticks cost %.1f ms, a frame runs at most %ld of them (budget %ld ms, halo/catchup_budget_ms.txt)",
+				game_time_tick_cost_microseconds / 1000.0, allowed, budget_ms);
+		}
+	}
+	return allowed;
+}
+
+/* the cost of a tick after a frame that ran ticks_run of them in microseconds */
+static void game_time_wiiu_tick_cost(
+	long ticks_run,
+	long long microseconds)
+{
+	if (ticks_run > 0 && microseconds >= 0)
+	{
+		const double each = (double)microseconds / (double)ticks_run;
+
+		game_time_tick_cost_microseconds = game_time_tick_cost_microseconds > 0.0 ? game_time_tick_cost_microseconds * 0.75 + each * 0.25 : each;
+	}
+}
+#endif
+
 /* The clock's decision for a frame of time_delta_sec: how many ticks it runs, and the time left over after them. One function for the serial update and
 the overlap's (which makes the decision for a frame before the tick thread runs it: tick_overlap.h). Returns FALSE (no tick, the leftover as it
 was) when the clock is stopped or the speed is nothing. */
@@ -669,6 +737,14 @@ static boolean game_time_clock_step(
 		{
 			long cap = game_time_catchup_cap();
 
+#ifdef HALO_WIIU
+			{
+				const long budget = game_time_wiiu_tick_budget();
+
+				if (budget < cap)
+					cap = budget;
+			}
+#endif
 			if (ticks_elapsed > cap)
 			{
 				real owed = ticks_elapsed/ticks_per_second;
@@ -689,6 +765,9 @@ static boolean game_time_clock_step(
 		/* port: recover a small clock deficit by simulating, not skipping, ticks. Keep the fractional time and the frame's existing cap;
 		at most double its normal work, never extrapolating the host's time. */
 		if (network_game_distributed_client() && !game_time_held() && !game_time_menu_scene() && game_time_globals->local_time >= 0 &&
+#ifdef HALO_WIIU
+			game_time_tick_cost_microseconds <= GAME_TIME_COSTLY_TICK_MICROSECONDS && /* (ticks that cost more are what the deficit comes of: a double frame of them is the spiral) */
+#endif
 			game_time_distributed_target > game_time_globals->local_time)
 		{
 			long ticks_behind = game_time_distributed_target - game_time_globals->local_time;
@@ -717,6 +796,10 @@ static long game_time_run_ticks(
 	long final_local_time;
 	long maximum_possible_server_time;
 	long ticks_run = 0;
+
+#ifdef HALO_WIIU
+	long long cost_started = game_connection() == _game_connection_network_client ? wiiu_microseconds_now() : 0;
+#endif
 
 	final_local_time = game_time_globals->local_time + ticks_elapsed;
 	switch (game_connection())
@@ -788,6 +871,10 @@ static long game_time_run_ticks(
 		}
 	}
 
+#ifdef HALO_WIIU
+	if (cost_started)
+		game_time_wiiu_tick_cost(ticks_run, wiiu_microseconds_now() - cost_started);
+#endif
 	/* (none while a client's clock waits: a frame that runs no tick
 	reports none) */
 	game_time_globals->last_local_time_elapsed = game_time_held() ? 0 : (short)ticks_elapsed;
