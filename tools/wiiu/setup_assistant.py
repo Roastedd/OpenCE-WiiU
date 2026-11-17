@@ -112,6 +112,55 @@ def prepare_maps(source, sd_card, progress=lambda *_: None):
     return target
 
 
+def check_source(source):
+    """say early, before anything is written to the card, whether source is a usable Xbox ISO or maps folder"""
+    source = Path(source).expanduser().resolve()
+    if not source.exists():
+        raise SetupError("Choose your original-Xbox Halo ISO/XISO or extracted maps folder.")
+    if source.is_dir():
+        have = {p.name.lower() for p in source.iterdir() if p.is_file()}
+        missing = sorted(set(RETAIL_MAPS) - have)
+        if missing:
+            raise SetupError("The Xbox maps folder is incomplete. Missing: " + ", ".join(missing))
+    else:
+        with DiscImage(source) as disc:
+            disc.maps()
+
+
+def setup_card(source, sd_card, progress=lambda *_: None):
+    """the whole card setup: the release's app files (when this helper came with them), then the maps converted from the Xbox ISO. A card that
+    already has all its maps keeps them, so the same download also updates the game without the ISO."""
+    card = Path(sd_card).expanduser().resolve()
+    if not card.is_dir():
+        raise SetupError("Choose the SD card's existing root folder.")
+    have_maps = setup_extras.maps_complete(card)
+    bundle = setup_extras.bundle_dir()
+    if source:
+        if not have_maps:
+            check_source(source)
+    elif not (bundle and have_maps):
+        raise SetupError("Choose your original-Xbox Halo ISO/XISO or extracted maps folder.")
+    if not have_maps:
+        problem = setup_extras.space_problem(card)
+        if problem:
+            raise SetupError(problem)
+    installed = setup_extras.install_app(card, progress) if bundle else []
+    if have_maps:
+        progress("The maps are already on the card, so they were left as they are.", 1, 1)
+    else:
+        prepare_maps(source, card, progress)
+    setup_extras.clean_metadata(card / "wiiu/apps/halo")
+    note = setup_extras.filesystem_warning(card)
+    if installed and have_maps:
+        done = "Maps ready. The game is updated. Eject the SD card, put it in the Wii U and start OpenCE-U from the Wii U Menu."
+    elif installed:
+        done = "Maps ready. The game and the maps are on the card. Eject it, put it in the Wii U and start OpenCE-U from the Wii U Menu."
+    else:
+        done = "Maps ready. Eject the SD card, put it in the Wii U and start OpenCE-U from the Wii U Menu."
+    progress(done + (" Note: " + note if note else ""), 1, 1)
+    return card / "wiiu/apps/halo"
+
+
 def stage_image(source, sd_card, progress=lambda *_: None):
     """Copy a validated disc for console setup, splitting large images for FAT32."""
     source, card = Path(source).expanduser().resolve(), Path(sd_card).expanduser().resolve()
@@ -203,10 +252,13 @@ def graphical_setup(initial="", console=False):
     ttk.Entry(frame, textvariable=card).grid(row=2, column=1, sticky="ew", padx=10, pady=8)
     card_button = ttk.Button(frame, text="Choose…", command=choose_card)
     card_button.grid(row=2, column=2)
-    options = ttk.Frame(frame)
-    options.grid(row=3, column=0, columnspan=3, sticky="w", pady=(10, 0))
-    ttk.Radiobutton(options, text="Convert maps on this computer", variable=mode, value="maps").pack(anchor="w")
-    ttk.Radiobutton(options, text="Copy ISO for import on Wii U", variable=mode, value="console").pack(anchor="w")
+    if console:
+        options = ttk.Frame(frame)
+        options.grid(row=3, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        ttk.Radiobutton(options, text="Convert maps on this computer", variable=mode, value="maps").pack(anchor="w")
+        ttk.Radiobutton(options, text="Copy ISO for import on Wii U", variable=mode, value="console").pack(anchor="w")
+    elif setup_extras.bundle_dir():
+        ttk.Label(frame, text="Updating the game on a card that already has its maps? You can leave the ISO empty.", wraplength=580).grid(row=3, column=0, columnspan=3, sticky="w", pady=(10, 0))
     bar = ttk.Progressbar(frame, maximum=len(RETAIL_MAPS))
     bar.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(18, 10))
     ttk.Label(frame, textvariable=status, wraplength=580).grid(row=5, column=0, columnspan=3, sticky="w")
@@ -216,14 +268,14 @@ def graphical_setup(initial="", console=False):
         messages.put(("progress", text, done, total))
     def work(chosen_source, chosen_card, chosen_mode):
         try:
-            operation = stage_image if chosen_mode == "console" else prepare_maps
+            operation = stage_image if chosen_mode == "console" else setup_card
             operation(chosen_source, chosen_card, update)
             messages.put(("done", "Ready. Eject the SD card safely. Console import needs the new importer build." if chosen_mode == "console" else "Maps are ready. Eject the SD card safely.", 1, 1))
         except Exception as error:
             messages.put(("error", str(error), 0, 1))
     def start():
         nonlocal running
-        if not source.get() or not card.get():
+        if not card.get() or (not source.get() and not (setup_extras.bundle_dir() and setup_extras.maps_complete(card.get()))):
             messagebox.showinfo("Choose your files", "Choose your Xbox ISO and the SD card's root folder first.")
             return
         running = True
@@ -267,14 +319,20 @@ def graphical_setup(initial="", console=False):
 def text_setup(initial="", console=False):
     """the same setup by questions in a terminal, for a computer that cannot show the window (or when the window is not wanted)"""
     print("\nOpenCE-WiiU setup\nYour game stays on this computer and the SD card. Nothing is uploaded.\n")
-    source = initial or setup_extras.ask_path("Drag your Xbox Halo ISO (or its extracted maps folder) into this window and press Return:")
+    if initial:
+        source = initial
+    elif setup_extras.bundle_dir():
+        answer = input("Drag your Xbox Halo ISO into this window and press Return (or just press Return if the card already has its maps and you are updating): ")
+        source = setup_extras.clean_path(answer)
+    else:
+        source = setup_extras.ask_path("Drag your Xbox Halo ISO (or its extracted maps folder) into this window and press Return:")
     found = setup_extras.sd_card_candidates()
     if len(found) == 1:
         answer = input(f"Found an SD card at {found[0]}. Use it? [Y/n] ").strip().lower()
         card = str(found[0]) if answer in ("", "y", "yes") else setup_extras.ask_path("Drag the SD card's folder into this window and press Return:")
     else:
         card = setup_extras.ask_path("Drag the SD card (its top folder) into this window and press Return:")
-    (stage_image if console else prepare_maps)(source, card, lambda text, *_: print(text, flush=True) if not text.startswith(("Reading", "Writing")) else None)
+    (stage_image if console else setup_card)(source, card, lambda text, *_: print(text, flush=True) if not text.startswith(("Reading", "Writing")) else None)
 
 
 def main(argv=None):
@@ -302,9 +360,9 @@ def main(argv=None):
                 card = found[0]
                 print(f"Using the SD card at {card}", flush=True)
         if card:
-            if not args.source:
+            if not args.source and (args.copy_iso or not setup_extras.bundle_dir()):
                 parser.error("give an ISO or maps folder with --sd-card")
-            (stage_image if args.copy_iso else prepare_maps)(args.source, card, lambda text, *_: print(text, flush=True) if not text.startswith(("Reading", "Writing")) else None)
+            (stage_image if args.copy_iso else setup_card)(args.source or "", card, lambda text, *_: print(text, flush=True) if not text.startswith(("Reading", "Writing")) else None)
         elif args.text:
             text_setup(args.source or "", args.copy_iso)
         else:

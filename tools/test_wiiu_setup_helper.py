@@ -8,7 +8,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools/wiiu"))
 
+import setup_assistant  # noqa: E402
 import setup_extras  # noqa: E402
+from disc_image import SetupError  # noqa: E402
 from disc_image import RETAIL_MAPS  # noqa: E402
 
 
@@ -76,6 +78,55 @@ class PathsTest(unittest.TestCase):
             self.assertIsNone(setup_extras.space_problem(card, needed=1))
             problem = setup_extras.space_problem(card, needed=10**18)
             self.assertIn("GB free", problem)
+
+ 
+
+class BundleTest(unittest.TestCase):
+    def fake_release(self, root):
+        app = Path(root) / "app"
+        app.mkdir()
+        (app / "halo.wuhb").write_bytes(b"new app")
+        (app / "shaders.pack").write_bytes(b"new pack")
+        (app / "brokers.txt").write_text("new brokers")
+        return app
+
+    def test_a_card_that_has_its_maps_is_updated_without_an_iso(self):
+        with tempfile.TemporaryDirectory() as release, tempfile.TemporaryDirectory() as card:
+            self.fake_release(release)
+            app = make_card(card)
+            (app / "halo.wuhb").write_bytes(b"old app")
+            (app / "brokers.txt").write_text("my brokers")
+            old_root, setup_extras.ROOT = setup_extras.ROOT, Path(release)
+            try:
+                messages = []
+                setup_assistant.setup_card("", card, lambda text, *_: messages.append(text))
+            finally:
+                setup_extras.ROOT = old_root
+            self.assertEqual((app / "halo.wuhb").read_bytes(), b"new app")
+            self.assertEqual((app / "halo.wuhb.backup").read_bytes(), b"old app")
+            self.assertEqual((app / "shaders.pack").read_bytes(), b"new pack")
+            self.assertEqual((app / "brokers.txt").read_text(), "my brokers")
+            self.assertTrue(messages[-1].startswith("Maps ready. The game is updated."))
+
+    def test_a_card_without_maps_and_no_iso_is_refused_before_anything_is_written(self):
+        with tempfile.TemporaryDirectory() as release, tempfile.TemporaryDirectory() as card:
+            self.fake_release(release)
+            old_root, setup_extras.ROOT = setup_extras.ROOT, Path(release)
+            try:
+                with self.assertRaises(SetupError):
+                    setup_assistant.setup_card("", card)
+            finally:
+                setup_extras.ROOT = old_root
+            self.assertFalse((Path(card) / "wiiu").exists())
+
+    def test_without_a_release_folder_nothing_is_installed(self):
+        with tempfile.TemporaryDirectory() as release, tempfile.TemporaryDirectory() as card:
+            old_root, setup_extras.ROOT = setup_extras.ROOT, Path(release)
+            try:
+                self.assertIsNone(setup_extras.bundle_dir())
+                self.assertEqual(setup_extras.install_app(card), [])
+            finally:
+                setup_extras.ROOT = old_root
 
 
 if __name__ == "__main__":

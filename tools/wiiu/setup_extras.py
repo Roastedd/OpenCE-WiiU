@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from disc_image import RETAIL_MAPS
+from disc_image import RETAIL_MAPS, SetupError
 
 # What the converted maps need on the card (they total about 1.7 GB), and what the game adds on its first start (about 0.8 GB of cache files).
 MAPS_BYTES = 2 * 1024**3
@@ -147,3 +147,56 @@ def ask_path(question, must_exist=True):
             print("  That path does not exist. Try again (you can drag the file or folder into this window).")
             continue
         return answer
+
+
+# ---------- the app files that come in the release download (a folder called app next to setup_wiiu.py)
+
+ROOT = Path(__file__).resolve().parent.parent.parent
+APP_FILES = ("halo.wuhb", "shaders.pack", "brokers.txt")
+# (halo.wuhb and shaders.pack belong together, so both are always replaced; brokers.txt may have been edited, so an existing one stays)
+REPLACED = ("halo.wuhb", "shaders.pack")
+
+
+def bundle_dir():
+    """the folder holding the release's app files, or None when the helper was not unzipped from a release (a source checkout)"""
+    folder = ROOT / "app"
+    return folder if (folder / "halo.wuhb").is_file() and (folder / "shaders.pack").is_file() else None
+
+
+def maps_complete(card):
+    maps = Path(card) / "wiiu/apps/halo/data/maps"
+    if not maps.is_dir():
+        return False
+    have = {p.name.lower() for p in maps.iterdir() if p.is_file()}
+    return all(name in have for name in RETAIL_MAPS)
+
+
+def install_app(card, progress=lambda *_: None):
+    """put the release's halo.wuhb, shaders.pack and brokers.txt into sd:/wiiu/apps/halo/. A halo.wuhb or shaders.pack that is there and
+    differs is kept beside the new one as NAME.backup. Returns the names written."""
+    source = bundle_dir()
+    if source is None:
+        return []
+    card = Path(card)
+    for part in (card / "wiiu", card / "wiiu/apps", card / "wiiu/apps/halo"):
+        if part.is_symlink():
+            raise SetupError("The SD card's Halo folders must not be symbolic links.")
+    app = card / "wiiu/apps/halo"
+    app.mkdir(parents=True, exist_ok=True)
+    written = []
+    for name in APP_FILES:
+        origin, target = source / name, app / name
+        if not origin.is_file():
+            continue
+        if target.exists() and name not in REPLACED:
+            continue
+        if target.exists() and target.read_bytes() == origin.read_bytes():
+            continue
+        progress(f"Copying {name}", 0, 1)
+        if target.exists():
+            shutil.copyfile(target, app / (name + ".backup"))
+        temporary = app / (name + ".new")
+        shutil.copyfile(origin, temporary)
+        os.replace(temporary, target)
+        written.append(name)
+    return written
