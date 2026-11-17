@@ -11,7 +11,12 @@ from contextlib import nullcontext
 from pathlib import Path
 
 import convert_maps
+import setup_extras
 from disc_image import DiscImage, RETAIL_MAPS, SetupError
+
+class NoWindow(SetupError):
+    """the computer cannot show the setup window (no Tk): the terminal questions are used instead"""
+
 
 FAT32_FILE_LIMIT = 2**32
 ISO_PART_BYTES = 1024**3
@@ -30,6 +35,9 @@ def prepare_maps(source, sd_card, progress=lambda *_: None):
                 raise SetupError("The SD card's Halo folders must not be symbolic links.")
     if target.exists():
         raise SetupError("data/maps already exists. Keep your current installation, or back it up and move that folder aside first.")
+    problem = setup_extras.space_problem(sd_card)
+    if problem:
+        raise SetupError(problem)
     context = nullcontext(None) if source.is_dir() else DiscImage(source)
     with context as disc:
         if disc:
@@ -98,7 +106,9 @@ def prepare_maps(source, sd_card, progress=lambda *_: None):
             if target.exists():
                 raise SetupError("data/maps appeared during setup. It was left untouched.")
             ready.rename(target)
-    progress("Maps ready. Eject the SD card safely, then start OpenCE-U.", len(RETAIL_MAPS), len(RETAIL_MAPS))
+    setup_extras.clean_metadata(sd_card / "wiiu/apps/halo")
+    note = setup_extras.filesystem_warning(sd_card)
+    progress("Maps ready. Eject the SD card safely, then start OpenCE-U." + (" Note: " + note if note else ""), len(RETAIL_MAPS), len(RETAIL_MAPS))
     return target
 
 
@@ -161,17 +171,18 @@ def graphical_setup(initial="", console=False):
         import tkinter as tk
         from tkinter import filedialog, messagebox, ttk
     except ImportError as error:
-        raise SetupError("This Python installation has no Tk window support. Use: python3 setup_wiiu.py YOUR.iso --sd-card SD_CARD_ROOT") from error
+        raise NoWindow("This Python has no Tk window support.") from error
     try:
         root = tk.Tk()
     except tk.TclError as error:
-        raise SetupError("Cannot open a setup window. Use: python3 setup_wiiu.py YOUR.iso --sd-card SD_CARD_ROOT") from error
+        raise NoWindow("Cannot open a setup window.") from error
     root.title("OpenCE-WiiU setup")
     root.geometry("640x390")
     root.minsize(640, 390)
     frame = ttk.Frame(root, padding=24)
     frame.pack(fill="both", expand=True)
-    source, card, status = tk.StringVar(value=initial), tk.StringVar(), tk.StringVar(value="Your game stays on this computer and SD card. Nothing is uploaded.")
+    found = setup_extras.sd_card_candidates()
+    source, card, status = tk.StringVar(value=initial), tk.StringVar(value=str(found[0]) if len(found) == 1 else ""), tk.StringVar(value="Your game stays on this computer and SD card. Nothing is uploaded.")
     messages, cancel = queue.Queue(), threading.Event()
     mode = tk.StringVar(value="console" if console else "maps")
     running = False
@@ -253,19 +264,55 @@ def graphical_setup(initial="", console=False):
     root.mainloop()
 
 
+def text_setup(initial="", console=False):
+    """the same setup by questions in a terminal, for a computer that cannot show the window (or when the window is not wanted)"""
+    print("\nOpenCE-WiiU setup\nYour game stays on this computer and the SD card. Nothing is uploaded.\n")
+    source = initial or setup_extras.ask_path("Drag your Xbox Halo ISO (or its extracted maps folder) into this window and press Return:")
+    found = setup_extras.sd_card_candidates()
+    if len(found) == 1:
+        answer = input(f"Found an SD card at {found[0]}. Use it? [Y/n] ").strip().lower()
+        card = str(found[0]) if answer in ("", "y", "yes") else setup_extras.ask_path("Drag the SD card's folder into this window and press Return:")
+    else:
+        card = setup_extras.ask_path("Drag the SD card (its top folder) into this window and press Return:")
+    (stage_image if console else prepare_maps)(source, card, lambda text, *_: print(text, flush=True) if not text.startswith(("Reading", "Writing")) else None)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", nargs="?", help="your Xbox ISO/XISO, its .0 part, or an extracted maps folder")
     parser.add_argument("--copy-iso", action="store_true", help="copy/split the ISO for the Wii U importer instead of converting here")
-    parser.add_argument("--sd-card", type=Path, help="SD card root; with a source, runs without a window")
+    parser.add_argument("--sd-card", type=Path, help="SD card root; with a source, runs without a window (found by itself when only one is plugged in)")
+    parser.add_argument("--check", action="store_true", help="look at the SD card and say what is there and what is missing; changes nothing")
+    parser.add_argument("--text", action="store_true", help="ask in the terminal instead of opening the window")
     args = parser.parse_args(argv)
     try:
-        if args.sd_card:
+        if args.check:
+            card = args.sd_card
+            if card is None:
+                found = setup_extras.sd_card_candidates()
+                if len(found) != 1:
+                    raise SetupError("Say which card to look at: python3 setup_wiiu.py --check --sd-card PATH" +
+                                     (" (found: " + ", ".join(str(p) for p in found) + ")" if found else " (no Wii U SD card was found)"))
+                card = found[0]
+            return 0 if setup_extras.print_check(card) else 2
+        card = args.sd_card
+        if args.source and card is None and not args.text:
+            found = setup_extras.sd_card_candidates()
+            if len(found) == 1:
+                card = found[0]
+                print(f"Using the SD card at {card}", flush=True)
+        if card:
             if not args.source:
                 parser.error("give an ISO or maps folder with --sd-card")
-            (stage_image if args.copy_iso else prepare_maps)(args.source, args.sd_card, lambda text, *_: print(text, flush=True) if not text.startswith(("Reading", "Writing")) else None)
+            (stage_image if args.copy_iso else prepare_maps)(args.source, card, lambda text, *_: print(text, flush=True) if not text.startswith(("Reading", "Writing")) else None)
+        elif args.text:
+            text_setup(args.source or "", args.copy_iso)
         else:
-            graphical_setup(args.source or "", args.copy_iso)
+            try:
+                graphical_setup(args.source or "", args.copy_iso)
+            except NoWindow as error:
+                print(f"{error} Switching to questions in this window instead.")
+                text_setup(args.source or "", args.copy_iso)
     except (SetupError, OSError, zlib.error, KeyboardInterrupt) as error:
         print(f"Setup stopped: {error}")
         return 1

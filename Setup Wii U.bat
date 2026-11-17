@@ -7,6 +7,8 @@ if not errorlevel 1 (
     python setup_wiiu.py %*
 )
 if errorlevel 1 (
-    echo Install Python 3.10 or later from python.org if Python was not found.
+    echo.
+    echo If Python was not found, install version 3.10 or newer from https://www.python.org/downloads/
+    echo and tick "Add python.exe to PATH" in the installer, then open this file again.
     pause
 )

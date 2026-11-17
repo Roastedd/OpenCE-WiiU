@@ -70,6 +70,21 @@ settings, and saves intact. Existing maps are never overwritten. The app,
 shader pack, and broker list come from the game release; the helper does
 not download or install an executable. These converted maps work with rc1.
 
+The helper also does these small things for you:
+
+- **Finds the SD card** by itself when one Wii U card (one with a `wiiu` folder)
+  is plugged in, and fills it in. Otherwise you choose the folder.
+- **Checks there is room** (about 2 GB for the maps, plus about 1 GB the game adds
+  on its first start) before it starts, and says so plainly if there is not.
+- **Cleans up after a Mac**: it removes the `._` files and `.DS_Store` that macOS
+  scatters across a card, inside `wiiu/apps/halo/` only.
+- **Falls back to questions in the terminal** when the setup window cannot open
+  (for example a Python without Tk). Drag the ISO and the card into the Terminal
+  window to fill in their paths. `--text` asks for this on purpose.
+- **Has a check mode**: `python3 setup_wiiu.py --check` (add `--sd-card PATH` to
+  name the card) lists what is on the card and what is missing, and changes
+  nothing.
+
 For a computer without a setup window:
 
 ```sh
@@ -86,6 +101,26 @@ python3 setup_wiiu.py "/path/to/Halo.iso" --sd-card "/path/to/SD card" --copy-is
 The helper checks the image's file table and map set, prepares the files in
 a temporary folder, then installs the complete maps directory. Cancelling
 or failing before installation removes the helper's temporary output.
+
+## On a Mac
+
+1. **Python.** Install the macOS installer from [python.org](https://www.python.org/downloads/).
+   The Python that comes with Apple's developer tools can be too old or lack the
+   window; the helper then asks its questions in the Terminal instead, which also works.
+2. **The first open.** macOS may refuse `Setup Wii U.command` the first time
+   ("unidentified developer"). Control-click it, choose **Open**, then **Open** again.
+   Or run `python3 setup_wiiu.py` from a Terminal in the unzipped folder.
+3. **The SD card.** In **Disk Utility**, select the card (the device, not just its
+   volume), choose **Erase**, Format **MS-DOS (FAT)**, Scheme **Master Boot Record**.
+   This erases the card, so back it up first. The Wii U reads FAT32 most reliably.
+4. **Finder copies.** If you copy files to the card in Finder, macOS adds `._` files
+   beside them. The helper removes the ones inside `wiiu/apps/halo/`; to clean a
+   whole folder yourself run `dot_clean /Volumes/YOURCARD/wiiu`.
+5. **Eject** the card (the eject button in Finder) before pulling it out.
+
+The same helper works on Linux with `python3 setup_wiiu.py`; it may need your
+distribution's Python Tk package for the window, and falls back to questions
+without it.
 
 ## Validation and console trial
 

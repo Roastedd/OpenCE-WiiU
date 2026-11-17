@@ -11,91 +11,136 @@
 [![Network · 41](https://img.shields.io/badge/network-protocol_41-536b8e)](#online-play)
 [![AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](LICENSE)
 
-[**Get started**](#installing) ·
-[Setup helper](https://github.com/Roastedd/OpenCE-WiiU/releases/tag/setup-helper-v0.1.0) ·
-[Features](#what-it-does) ·
+[**Get started**](#get-it-running) ·
+[Windows and Mac setup](#step-2-prepare-your-sd-card) ·
 [Controls](#controls) ·
-[Build](BUILDING-WIIU.md) ·
-[Report a problem](https://github.com/Roastedd/OpenCE-WiiU/issues) ·
-[Credits](#credits)
+[Questions](#questions-people-ask) ·
+[Build it yourself](BUILDING-WIIU.md) ·
+[Report a problem](https://github.com/Roastedd/OpenCE-WiiU/issues)
 
 <img src="docs/assets/screenshots/menu.png" alt="OpenCE's main menu running on Wii U" width="90%">
 
-<sub>Captured on Wii U during development. Maintained by <a href="https://github.com/Roastedd">Roastedd</a>, built on <a href="https://github.com/OpenCommunityEdition/OpenCE">OpenCE</a>.</sub>
+<sub>Captured on a Wii U during development. Maintained by <a href="https://github.com/Roastedd">Roastedd</a>, built on <a href="https://github.com/OpenCommunityEdition/OpenCE">OpenCE</a>.</sub>
 
 </div>
 
+## What is this?
+
+This is the original Halo game, built to run on a Nintendo Wii U. It is not
+an emulator: the game's own code has been compiled for the console, with a
+renderer written for the Wii U's GPU. You play the campaign on your TV or on
+the GamePad, and you can join online games.
+
+It was made by fans and it is still experimental, but it is playable: a
+24-minute test session with six online games ran at about 56 frames a
+second on average, without a crash.
+
 > [!IMPORTANT]
-> **Bring your own game.** No maps or disc image are included. You need
-> Halo: Combat Evolved for the **original Xbox**. This is an unofficial fan
-> port, with no affiliation to Microsoft or the game's creators.
-
-## What it does
-
-| | |
-| --- | --- |
-| **Campaign on Wii U** | The original game's code, compiled for the Wii U with a native GX2 renderer. |
-| **Online multiplayer** | Server browser, internet games, and system link with compatible protocol 41 hosts. |
-| **TV and GamePad** | Play on the TV or GamePad, with touch input in the menus. |
-| **Wii U controls** | GamePad, Pro Controller, and Wii Remote/Nunchuk support, including gyro options. See the player guide for controller details. |
-| **Graphics options** | Resolution, smooth motion, graphics presets, and a performance overlay. |
-| **Your own maps and saves** | Game data and saves stay on your SD card. Custom Edition support is described in the player guide. |
+> **You need your own copy of the game.** No maps, discs or game files are
+> included, and none are downloaded for you. You need Halo: Combat Evolved
+> for the **original Xbox** (the disc or a disc image of it). This is an
+> unofficial fan project with no connection to Microsoft or the game's
+> creators.
 
 <img src="docs/assets/screenshots/campaign.png" alt="Campaign gameplay captured on Wii U" width="90%">
 
-<sub>Hardware capture from a development build. Screenshots show the port in use; they do not qualify every mode or map. [Capture details](docs/assets/screenshots/README.md).</sub>
+<sub>A capture from a development build. It shows the port in use; it does not promise that every map and mode is perfect. [Capture details](docs/assets/screenshots/README.md).</sub>
 
-## Installing
+## What you can do with it
 
-**Source is available now. A complete downloadable rc1 bundle has not been published yet.**
-When packaged, downloads will be on this repository's
-[Releases page](https://github.com/Roastedd/OpenCE-WiiU/releases).
+- **Play the campaign** on the TV or the GamePad (touch works in the menus).
+- **Play online**: a server browser, internet games and system link with
+  compatible hosts (see [Online play](#online-play) for what "compatible" means).
+- **Use the controller you like**: the GamePad, a Pro Controller, or a Wii
+  Remote with a Nunchuk, with gyro aiming options.
+- **Change the picture**: resolution, smoother motion, graphics presets and
+  a small performance overlay.
+- **Keep everything on your SD card**: your maps and saves never leave it.
 
-You need Aroma, an SD card with roughly 4 GB free for the converted maps
-and caches, and your own Xbox copy of Halo. The app and maps go here:
+## Get it running
+
+You will need:
+
+- a Wii U that runs **Aroma** (the homebrew environment),
+- an SD card with about **4 GB free** (the maps take about 1.7 GB and the game
+  makes roughly 0.8 GB of cache files on its first start),
+- your Xbox copy of Halo, as a disc image (`.iso`),
+- a Windows PC or a Mac to prepare the card (a Linux PC works too).
+
+It is three steps.
+
+### Step 1: get the game files
+
+Download `halo.wuhb`, `shaders.pack` and `brokers.txt` from this repository's
+[Releases page](https://github.com/Roastedd/OpenCE-WiiU/releases). Keep the
+first two together: a `halo.wuhb` only works with the `shaders.pack` that came
+with it. Copy all three to this folder on the SD card:
 
 ```text
 sd:/wiiu/apps/halo/
 ├── halo.wuhb
 ├── shaders.pack
-├── brokers.txt
-└── data/
-    └── maps/
-        ├── ui.map
-        ├── a10.map
-        └── …the remaining converted Xbox maps
+└── brokers.txt
 ```
 
-1. Get the matching `halo.wuhb`, `shaders.pack`, and `brokers.txt` from the
-   release bundle. The application and shader pack belong together.
-2. Download and extract the [computer setup helper](https://github.com/Roastedd/OpenCE-WiiU/releases/tag/setup-helper-v0.1.0), then open **`Setup Wii U.bat`** (Windows) or **`Setup Wii U.command`**
-   (macOS), choose your Xbox ISO and SD card, and select **Convert maps on
-   this computer**. This helper requires Python 3.10 or later and runs locally.
-   [Both setup methods →](docs/ISO_SETUP.md)
+> A complete downloadable bundle has not been published yet. Until it is, the
+> source and the setup helper below are available, and you can build the app
+> yourself with [these instructions](BUILDING-WIIU.md).
 
-3. The helper extracts and converts all maps into `wiiu/apps/halo/data/maps/`.
-   If you prefer manual conversion, the [player guide](port/wiiu/PLAYING.md)
-   retains those instructions.
-4. Start **OpenCE-U** from the Wii U Menu.
+### Step 2: prepare your SD card
 
-The [full player guide](port/wiiu/PLAYING.md) covers map extraction,
-controller setup, settings, and troubleshooting. Keep a backup of `data/`
-before changing builds: it contains your saves.
+Your Xbox disc holds the game's maps in a form the Wii U cannot read directly,
+so they have to be converted once. The **setup helper** does it for you on your
+computer. It runs only on your machine, needs nothing but Python, and never
+uploads anything.
 
-### Can I just drop in an ISO?
+1. Install **Python 3.10 or newer** from [python.org](https://www.python.org/downloads/)
+   if you do not have it. (On a Mac, use the installer from python.org rather
+   than the Python that comes with Xcode: it has the window the helper uses.)
+2. Download the [setup helper](https://github.com/Roastedd/OpenCE-WiiU/releases/tag/setup-helper-v0.1.0)
+   and unzip it.
+3. Open the helper:
+   - **Windows:** double-click **`Setup Wii U.bat`**.
+   - **Mac:** double-click **`Setup Wii U.command`**. The first time, macOS may
+     say it is from an unidentified developer: Control-click the file, choose
+     **Open**, and confirm.
+4. Choose your Xbox ISO and the SD card, then press **Prepare SD card**. It
+   takes a few minutes. When it says the maps are ready, eject the card safely.
 
-**On a computer: yes.** The setup helper reads your ISO, extracts the maps,
-converts them and puts them on the SD card. There is no separate extraction
-step. It can also copy and split the ISO for later console import.
+The helper finds your card by itself when one Wii U card is plugged in, checks
+that there is enough room, and cleans up the stray `._` and `.DS_Store` files
+a Mac leaves behind. If the window cannot open, it carries on with questions in
+the terminal instead.
 
-**On the Wii U: a new importer build is under development.** It detects
-`halo.iso` at first launch and prepares the maps before starting the game.
-Its converter has passed host tests, but the setup screen and full first-run
-flow still need a hardware trial. The original rc1 executable does not gain
-this feature from an icon update. [Instructions and validation →](docs/ISO_SETUP.md)
+Want to see whether the card is ready? Run
+`python3 setup_wiiu.py --check` and it lists what is in place and what is
+missing, in plain words. It changes nothing.
 
-FAT32 limits each file to less than 4 GiB; the helper splits large full-disc
-images automatically when **Copy ISO for import on Wii U** is selected.
+More detail, command-line use and the Mac tips (formatting the card, ejecting
+it) are in the [setup guide](docs/ISO_SETUP.md). You can also convert the maps by
+hand: the [player guide](port/wiiu/PLAYING.md) keeps those instructions.
+
+### Step 3: play
+
+Put the card in the Wii U, start **OpenCE-U** from the Wii U Menu, and you are
+in. The first start makes some cache files and takes a little longer; after that
+it opens quickly. Your saves live in `wiiu/apps/halo/data/`, so back that folder
+up before you try a different build.
+
+### Can I just put the ISO on the card?
+
+**On a computer, yes.** The helper reads the ISO directly, so there is no
+separate step to extract it first.
+
+**On the Wii U itself, soon.** An importer build is being tested: it finds
+`halo.iso` on the card at the first start and prepares the maps on the console.
+It builds and its converter passes its tests, but its screens and full first-run
+flow have not been tried on a console yet, so the original rc1 build does not
+do this. [Details and test plan →](docs/ISO_SETUP.md)
+
+An SD card is FAT32, which cannot hold a single file of 4 GB or more. When the
+helper copies a large ISO for the console to import, it splits it into parts
+for you.
 
 ## Controls
 
@@ -110,43 +155,70 @@ images automatically when **Copy ISO for import on Wii U** is selected.
 | Pause | + |
 | Performance overlay | L + R + − |
 
-In menus, **A selects and B goes back**. The touch screen selects items too.
-[All controls and gyro settings →](port/wiiu/PLAYING.md#controls)
+In menus, **A selects and B goes back**, and the touch screen works too. The
+[player guide](port/wiiu/PLAYING.md#controls) has every control, the Wii Remote
+layout and the gyro settings.
 
 ## Online play
 
-rc1 uses **network protocol 41**. It cannot join protocol 44 games from
-newer OpenCE builds. You need a compatible host; a visible server is not
-necessarily compatible. Performance depends on the map, host, and player
-count.
+This version speaks **network protocol 41**. It can join games hosted by other
+protocol 41 builds, and it cannot join games from newer OpenCE builds that use
+protocol 44. A server showing in the list is not always one you can join, so if
+a game will not connect, that is the first thing to check. How smooth a game
+feels depends on the map, the host and how many players are in it.
 
-## Status and testing
+## Questions people ask
 
-This repository starts from **rc1**, source tag
+**Does my Wii U need to be modded?** It needs Aroma, which loads homebrew apps
+from the SD card. That is the only requirement. Nothing is installed to the
+console's own storage.
+
+**Which Halo do I need?** The **original Xbox** release of Halo: Combat Evolved.
+The PC release, Custom Edition, Anniversary and the Master Chief Collection are
+different formats and will not work for the setup.
+
+**Why can't I just download the maps?** The maps belong to Microsoft, so this
+project cannot give them out. Converting your own copy on your own computer is
+the way around that.
+
+**It will not start, or the maps are missing.** Run
+`python3 setup_wiiu.py --check` and fix what it marks with `FIX`. The most common
+causes are a `shaders.pack` that does not match the `halo.wuhb`, and an SD card
+that is not formatted as FAT32 (the Mac section of the
+[setup guide](docs/ISO_SETUP.md#on-a-mac) shows how to format one).
+
+**Will it run at 60 fps?** In our tests it mostly sits between 50 and 60, with
+the biggest fights and some online games dipping lower. It is not a locked 60
+yet. The performance overlay (L + R + −) shows what the game is doing.
+
+**I found a bug.** Please [open an issue](https://github.com/Roastedd/OpenCE-WiiU/issues)
+with the build, the map, your controller and what happened. Include the logs the
+[player guide](port/wiiu/PLAYING.md) describes, after reading them for anything
+personal.
+
+## How well does it work?
+
+This repository starts from **rc1**, the source tag
 [`wiiu-rc1-source`](https://github.com/Roastedd/OpenCE-WiiU/tree/wiiu-rc1-source).
 It completed a 24-minute hardware session with **six online joins**, no
-recorded freeze or crash, and a normal exit. Recorded five-second windows
-averaged **55.9 FPS**. [Per-map results and checksums →](VALIDATION.md)
+recorded freeze or crash, and a normal exit. Five-second windows averaged
+**55.9 FPS**. [Per-map results and checksums →](VALIDATION.md)
 
-The port is still experimental. Full campaign completion, every controller
-configuration, split screen, and long co-op sessions have not all been
-qualified. The newer upstream merge has separate join problems and is not
-this baseline.
-
-If something goes wrong, open an [issue](https://github.com/Roastedd/OpenCE-WiiU/issues)
-with the build, map, controller, and what happened. Include the logs described
-in the player guide, and review them for personal information before posting.
+It is still experimental. Finishing the whole campaign, every controller
+configuration, split screen and long co-op sessions have not all been tested.
+A newer merge with upstream OpenCE (protocol 44) is in progress and still has
+joining problems, so it is not part of this baseline.
 
 ## Building and contributing
 
-[Build instructions](BUILDING-WIIU.md) include the Docker toolchain and
-asset-free checks. The application icon can be regenerated with
-`python3 tools/wiiu_app_art.py`; the original helmet tile is restored.
+[Build instructions](BUILDING-WIIU.md) cover the Docker toolchain and checks that
+need no game files. The app icon and start-up pictures can be redrawn with
+`python3 tools/wiiu_app_art.py`.
 
-The original [upstream overview](README.upstream.md) is kept for reference.
-Its platform claims and downloads describe upstream OpenCE. Inherited
-publishing workflows are archived under `.github/upstream-workflows/`;
-this repository's Wii U releases are managed separately.
+The original [upstream overview](README.upstream.md) is kept for reference. Its
+platform claims and downloads describe upstream OpenCE. Publishing workflows
+inherited from it are archived under `.github/upstream-workflows/`; this
+repository's Wii U releases are managed separately.
 
 ## Credits
 

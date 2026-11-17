@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 FILES = (
     "setup_wiiu.py", "Setup Wii U.bat", "Setup Wii U.command", "LICENSE", "AUTHORS.md",
-    "docs/ISO_SETUP.md", "tools/wiiu/disc_image.py", "tools/wiiu/setup_assistant.py",
+    "docs/ISO_SETUP.md", "tools/wiiu/disc_image.py", "tools/wiiu/setup_assistant.py", "tools/wiiu/setup_extras.py",
     "tools/wiiu/convert_maps.py", "tools/wiiu/map_convert.py",
     "tools/wiiu/map_schema/tag_schema.json.gz", "tools/wiiu/map_schema/tag_layouts.json.gz",
     "tools/wiiu/map_schema/schema_dump.nm.gz",
