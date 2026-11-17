@@ -31,3 +31,11 @@ original/
 
 # CI build outputs (tools/ci_build.py)
 dist/
+
+# User-owned disc images and maps; first-run setup output stays local.
+*.iso
+*.xiso
+*.iso.[0-9]*
+*.xiso.[0-9]*
+*.map
+/build-import.log

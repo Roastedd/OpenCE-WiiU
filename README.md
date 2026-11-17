@@ -67,13 +67,14 @@ sd:/wiiu/apps/halo/
 
 1. Get the matching `halo.wuhb`, `shaders.pack`, and `brokers.txt` from the
    release bundle. The application and shader pack belong together.
-2. Extract the `maps` folder from your own Xbox disc image, then convert it:
+2. Open **`Setup Wii U.bat`** (Windows) or **`Setup Wii U.command`**
+   (macOS), choose your Xbox ISO and SD card, and select **Convert maps on
+   this computer**. This helper requires Python 3.10 or later and runs locally.
+   [Both setup methods →](docs/ISO_SETUP.md)
 
-   ```sh
-   python3 tools/wiiu/convert_maps.py /path/to/xbox/maps converted-maps
-   ```
-
-3. Copy all converted maps into `wiiu/apps/halo/data/maps/` on your SD card.
+3. The helper extracts and converts all maps into `wiiu/apps/halo/data/maps/`.
+   If you prefer manual conversion, the [player guide](port/wiiu/PLAYING.md)
+   retains those instructions.
 4. Start **OpenCE-U** from the Wii U Menu.
 
 The [full player guide](port/wiiu/PLAYING.md) covers map extraction,
@@ -82,13 +83,18 @@ before changing builds: it contains your saves.
 
 ### Can I just drop in an ISO?
 
-**The published rc1 application does not import an ISO on the console yet.**
-It needs converted maps. Direct import on Wii U is the requested next setup
-improvement, and will need a new, tested application build.
+**On a computer: yes.** The setup helper reads your ISO, extracts the maps,
+converts them and puts them on the SD card. There is no separate extraction
+step. It can also copy and split the ISO for later console import.
 
-The SD card's FAT32 filesystem also limits each file to less than 4 GiB.
-A large full-disc ISO will need a supported split-image workflow; copying
-one large ISO to the SD card is not sufficient.
+**On the Wii U: a new importer build is under development.** It detects
+`halo.iso` at first launch and prepares the maps before starting the game.
+Its converter has passed host tests, but the setup screen and full first-run
+flow still need a hardware trial. The original rc1 executable does not gain
+this feature from an icon update. [Instructions and validation →](docs/ISO_SETUP.md)
+
+FAT32 limits each file to less than 4 GiB; the helper splits large full-disc
+images automatically when **Copy ISO for import on Wii U** is selected.
 
 ## Controls
 
