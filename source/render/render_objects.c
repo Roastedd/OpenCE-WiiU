@@ -1234,7 +1234,7 @@ static long object_get_cached_render_state(
 	return render_state_index;
 }
 
-#ifdef HALO_WIIU
+#ifdef HALO_WIIU_OBJECT_PROBE
 /* port: where the objects pass spends its time, by the kind of object (halo/log.txt "objects pass:" every 10 s): the cull and
 state, the lighting, and the model's draw. Four clock reads an object drawn */
 #include <time.h>
@@ -1327,7 +1327,7 @@ static void render_object(
 	{
 		struct object_datum *object = object_get(data->object_index);
 		boolean needs_lighting;
-#ifdef HALO_WIIU
+#ifdef HALO_WIIU_OBJECT_PROBE
 		double probe_t0 = render_probe_now_ms(), probe_t1 = probe_t0, probe_t2 = probe_t0;
 		short probe_type = (short)object->object.type & 15;
 #endif
@@ -1391,7 +1391,7 @@ static void render_object(
 			{
 				data->lighting = NULL;
 			}
-#ifdef HALO_WIIU
+#ifdef HALO_WIIU_OBJECT_PROBE
 			probe_t1 = render_probe_now_ms();
 #endif
 
@@ -1413,7 +1413,7 @@ static void render_object(
 
 				render_object_list(data, &model_effect, data->object_index);
 			}
-#ifdef HALO_WIIU
+#ifdef HALO_WIIU_OBJECT_PROBE
 			probe_t2 = render_probe_now_ms();
 			render_probe_ms[probe_type][0] += probe_t1 - probe_t0;
 			render_probe_ms[probe_type][2] += probe_t2 - probe_t1;
