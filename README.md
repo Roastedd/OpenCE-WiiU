@@ -12,6 +12,7 @@
 [![AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](LICENSE)
 
 [**Get started**](#installing) ·
+[Setup helper](https://github.com/Roastedd/OpenCE-WiiU/releases/tag/setup-helper-v0.1.0) ·
 [Features](#what-it-does) ·
 [Controls](#controls) ·
 [Build](BUILDING-WIIU.md) ·
@@ -67,7 +68,7 @@ sd:/wiiu/apps/halo/
 
 1. Get the matching `halo.wuhb`, `shaders.pack`, and `brokers.txt` from the
    release bundle. The application and shader pack belong together.
-2. Open **`Setup Wii U.bat`** (Windows) or **`Setup Wii U.command`**
+2. Download and extract the [computer setup helper](https://github.com/Roastedd/OpenCE-WiiU/releases/tag/setup-helper-v0.1.0), then open **`Setup Wii U.bat`** (Windows) or **`Setup Wii U.command`**
    (macOS), choose your Xbox ISO and SD card, and select **Convert maps on
    this computer**. This helper requires Python 3.10 or later and runs locally.
    [Both setup methods →](docs/ISO_SETUP.md)
