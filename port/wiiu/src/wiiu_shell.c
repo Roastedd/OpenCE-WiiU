@@ -19,6 +19,7 @@ CoffeeFlix and CoffeeUnlocked have this lifecycle on this console (the ProcUI ca
 close, the black box); this is that, in C, for the game. Not run on a console.
 */
 
+#include "../include/wut_clang_compat.h"
 #include "wiiu_shell.h"
 
 #include "wiiu_crash.h"

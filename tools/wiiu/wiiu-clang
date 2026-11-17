@@ -21,7 +21,7 @@ for argument in "$@"; do
 	[ "$argument" = -c ] && compile=1
 	previous=$argument
 done
-clang --target=powerpc-unknown-eabi -mcpu=750 -mhard-float -fno-addrsig -fno-pic -fno-stack-protector \
+clang --target=powerpc-unknown-eabi -mcpu=750 -mhard-float -Wno-error=incompatible-function-pointer-types -fno-addrsig -fno-pic -fno-stack-protector \
 	-isystem "$DEVKITPPC/powerpc-eabi/include" -isystem "$WUT_ROOT/include" -D__WIIU__ -D__WUT__ \
 	$WIIU_CLANG_EXTRA "$@"
 if [ -n "$compile" ] && [ -n "$output" ] && [ -f "$output" ]; then

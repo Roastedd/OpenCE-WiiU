@@ -1,3 +1,4 @@
+#include "../include/wut_clang_compat.h"
 #include "wiiu_uniform_runs.h"
 /*
 WIIU_GX2.C

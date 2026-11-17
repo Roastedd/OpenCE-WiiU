@@ -8,6 +8,7 @@ server's signals and use of the processor: the Wii U runs no dedicated server, a
 Not run on a console.
 */
 
+#include "../include/wut_clang_compat.h"
 #include <coreinit/core.h>
 #include <coreinit/memexpheap.h>
 #include <coreinit/memheap.h>

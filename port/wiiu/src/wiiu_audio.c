@@ -10,6 +10,7 @@ The same samples go to the TV and to the GamePad.
 The pacing and resampler paths have native console measurements under reports/reviews.
 */
 
+#include "../include/wut_clang_compat.h"
 #include "wiiu_shell.h"
 #include "wiiu_audio_ring.h"
 #include "wiiu_mixer_profile.h"
