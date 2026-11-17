@@ -97,7 +97,7 @@ uploads anything.
 1. Install **Python 3.10 or newer** from [python.org](https://www.python.org/downloads/)
    if you do not have it. (On a Mac, use the installer from python.org rather
    than the Python that comes with Xcode: it has the window the helper uses.)
-2. Download the [setup helper](https://github.com/Roastedd/OpenCE-WiiU/releases/tag/setup-helper-v0.1.0)
+2. Download the [setup helper](https://github.com/Roastedd/OpenCE-WiiU/releases/tag/setup-helper-v0.2.0)
    and unzip it.
 3. Open the helper:
    - **Windows:** double-click **`Setup Wii U.bat`**.
