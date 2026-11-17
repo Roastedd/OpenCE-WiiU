@@ -15,7 +15,7 @@
 /* ---------- voices */
 
 /* A fixture voice owns one already-decoded packet. */
-static void voice_packet_taken(struct sdl_stream *stream) { stream->packet_count = 1; }
+static void voice_packet_taken(struct sdl_stream *stream) { stream->packet_count = 1; stream->packets[0].ready = TRUE; /* (the Wii U's decoder thread sets it) */ }
 
 /* a voice of frames frames of channels channels at rate, played at frequency
 (0: its rate), a 2D voice heard at full volume in both speakers */

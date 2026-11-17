@@ -681,6 +681,19 @@ static float doppler_ratio(const struct sdl_stream *stream)
 	float offset[3], distance, source_speed, listener_speed = 0.0f, ratio, limit = DOPPLER_SPEED_OF_SOUND;
 	int axis;
 
+#ifdef HALO_WIIU
+	/* port: rc1's mixer had no Doppler shift (audio.doppler, off on the Wii U): a shifted voice's step is never the source's rate, so its low pass is narrowed (the slow
+	per-tap path) when the shift takes it past the output rate, and each voice pays its position's distance and square root every mix */
+	{
+		static int doppler_on = -1;
+
+		if (doppler_on < 0)
+			doppler_on = config_boolean("audio.doppler") ? 1 : 0;
+		if (!doppler_on)
+			return 1.0f;
+	}
+#endif
+
 	if (stereo_doppler_enabled && !stream->has_3d && stream->stereo_positioned)
 	{
 		ratio = 1.0f + stream->stereo_approach * listener.distance_factor * listener.doppler_factor / DOPPLER_SPEED_OF_SOUND;
@@ -1746,6 +1759,9 @@ static BOOL voice_has_frames(struct sdl_stream *stream)
 
 /* mixes one voice into output (frames of output_channels floats), and into
 the reverb's send (frames of mono) */
+/* set by voice_mix_limited (under the mixer's lock): the voice's frames are taken and its phase moves on, nothing is resampled or mixed */
+static BOOL voice_dropping;
+
 static void mix_voice(struct sdl_stream *stream, float *output, float *send, unsigned long frames)
 {
 	double step, target_step, ramp_step;
@@ -1973,7 +1989,7 @@ static void mix_voice(struct sdl_stream *stream, float *output, float *send, uns
 		if (waiting || stream->silence > (unsigned long)(2 * width))
 			break;
 
-		if (!left && !right && !room && !ramp_left && !ramp_right && !ramp_room && !surround_heard)
+		if (voice_dropping || (!left && !right && !room && !ramp_left && !ramp_right && !ramp_room && !surround_heard))
 		{
 			/* a voice turned all the way down (out of earshot), and not
 			sending to the reverb, only moves on */
@@ -2426,22 +2442,83 @@ static void mix_buffers(float *output, unsigned long frames)
 	}
 }
 
-/* port: the most voices mixed in a chunk on the Wii U (the mixer's core is shared: a joined game starts dozens at once, and each costs a chunk's resampling); the voices beyond it wait a chunk
-(their packets are not taken: they play late, not wrong), those started first being the ones that go on. 0: no limit. */
+/* port: the most voices mixed in a chunk on the Wii U (the mixer's core is shared: a joined game starts dozens at once, and each costs a chunk's resampling). The voices beyond it
+are not delayed (a voice that waits a chunk plays late, and a sound on two voices, the host's and the relayed, then comes twice, an echo): they go on through their packets and
+phase silent (mix_voice's voice_dropping: the frames taken, none resampled), the quietest ones, by the gains of their last mix, a voice not yet mixed counting as the loudest so
+that no sound starts late. 0: no limit. */
 #ifdef HALO_WIIU
 #define VOICE_MIX_LIMIT 28
 #else
 #define VOICE_MIX_LIMIT 0
 #endif
 
-static BOOL voice_may_mix(struct sdl_stream const *stream, unsigned *mixed)
+static float voice_loudness_floor;
+
+static float voice_loudness(struct sdl_stream const *stream)
 {
-	if (!VOICE_MIX_LIMIT || stream->paused || !stream->packet_count)
-		return TRUE;
-	if (*mixed >= VOICE_MIX_LIMIT)
-		return FALSE;
-	(*mixed)++;
-	return TRUE;
+	float loudest;
+
+	if (!stream->gains_valid)
+		return 1.0e30f;
+	loudest = stream->current_left > stream->current_right ? stream->current_left : stream->current_right;
+	if (stream->current_room > loudest)
+		loudest = stream->current_room;
+	return loudest;
+}
+
+/* the loudness the VOICE_MIX_LIMITth loudest voice has (under the mixer's lock), 0 when no voice needs to be dropped */
+static void voice_limit_prepare(void)
+{
+	float loudness[VOICE_MIX_LIMIT ? 256 : 1];
+	const struct sdl_stream *stream;
+	unsigned count = 0, at, other;
+
+	voice_loudness_floor = 0.0f;
+	if (!VOICE_MIX_LIMIT)
+		return;
+	for (stream = streams; stream; stream = stream->next)
+	{
+		if (stream->paused || !stream->packet_count)
+			continue;
+		if (count < sizeof(loudness) / sizeof(loudness[0]))
+			loudness[count] = voice_loudness(stream);
+		count++;
+	}
+	if (count <= VOICE_MIX_LIMIT || count > sizeof(loudness) / sizeof(loudness[0]))
+		return;
+	/* (the limit's largest: a partial selection sort) */
+	for (at = 0; at < VOICE_MIX_LIMIT; at++)
+	{
+		unsigned best = at;
+
+		for (other = at + 1; other < count; other++)
+			if (loudness[other] > loudness[best])
+				best = other;
+		{
+			const float swap = loudness[at];
+
+			loudness[at] = loudness[best];
+			loudness[best] = swap;
+		}
+	}
+	voice_loudness_floor = loudness[VOICE_MIX_LIMIT - 1];
+}
+
+/* mixes the voice, or drops it (silently on through its frames) when the chunk has its limit of louder voices */
+static void voice_mix_limited(struct sdl_stream *stream, float *output, float *send, unsigned long frames, unsigned *mixed)
+{
+	if (VOICE_MIX_LIMIT && !stream->paused && stream->packet_count)
+	{
+		if (voice_loudness_floor > 0.0f && (*mixed >= VOICE_MIX_LIMIT || voice_loudness(stream) < voice_loudness_floor))
+		{
+			voice_dropping = TRUE;
+			mix_voice(stream, output, send, frames);
+			voice_dropping = FALSE;
+			return;
+		}
+		(*mixed)++;
+	}
+	mix_voice(stream, output, send, frames);
 }
 
 static void mix(float *output, unsigned long frames)
@@ -2468,6 +2545,7 @@ static void mix(float *output, unsigned long frames)
 #endif
 	pthread_mutex_lock(&mixer_lock);
 	enabled = reverb_enabled;
+	voice_limit_prepare();
 #ifdef HALO_WIIU
 	if (profile_mix)
 		pressure.lock_wait += OSGetSystemTime() - profile_lock_started;
@@ -2486,8 +2564,7 @@ static void mix(float *output, unsigned long frames)
 					pressure.queued++;
 			}
 #endif
-			if (voice_may_mix(stream, &voices_mixed))
-				mix_voice(stream, output, reverb.send, frames);
+			voice_mix_limited(stream, output, reverb.send, frames, &voices_mixed);
 			mix_cut(stream, output, reverb.send, frames);
 			next = stream->next;
 			/* (the game thread waits: the lock is let go until it has had it) */
@@ -2527,8 +2604,7 @@ static void mix(float *output, unsigned long frames)
 #else
 	for (stream = streams; stream; stream = stream->next)
 	{
-		if (voice_may_mix(stream, &voices_mixed))
-			mix_voice(stream, output, reverb.send, frames);
+		voice_mix_limited(stream, output, reverb.send, frames, &voices_mixed);
 		mix_cut(stream, output, reverb.send, frames);
 	}
 #endif

@@ -106,14 +106,18 @@ network"): it downloads maps, and sends the files it holds only as its host asks
 #define MAP_SEED "true"
 #endif
 
-/* audio.hrtf and audio.resampler's defaults: on the Wii U the mixer keeps what its audio core was measured with (the windowed sinc, tuned
+/* audio.hrtf, audio.reverb and audio.resampler's defaults (the reverb: rc1 had none, and it costs the mixer a convolution-like network on every chunk that something reverberates; a setting for whoever wants it): on the Wii U the mixer keeps what its audio core was measured with (the windowed sinc, tuned
 there by the coefficient cache and the paired dots, and the pan, not the HRTF's convolution of each 3D voice); the Xbox's resampler and the
 HRTF are there for whoever sets them */
 #ifdef HALO_WIIU
 #define AUDIO_HRTF "false"
+#define AUDIO_REVERB "false"
+#define AUDIO_DOPPLER "false"
 #define AUDIO_RESAMPLER "\"sinc\""
 #else
 #define AUDIO_HRTF "true"
+#define AUDIO_REVERB "true"
+#define AUDIO_DOPPLER "true"
 #define AUDIO_RESAMPLER "\"xbox\""
 #endif
 
@@ -478,7 +482,7 @@ static const struct config_setting config_settings[] =
 		"for 5.1 when the sound device has six or more channels." },
 	{ "audio.hrtf", _config_boolean, AUDIO_HRTF, "HALO_HRTF", _environment_value, _platform_all,
 		"Use the measured Xbox spatial filters for 3D sounds on stereo and surround outputs." },
-	{ "audio.reverb", _config_boolean, "true", "HALO_REVERB", _environment_value, _platform_all,
+	{ "audio.reverb", _config_boolean, AUDIO_REVERB, "HALO_REVERB", _environment_value, _platform_all,
 		"Reverberate the world's sounds as the place the player is in does (the\n"
 		"maps' sound environments, as the Xbox's I3DL2 reverb did); false keeps\n"
 		"them dry." },
@@ -487,6 +491,10 @@ static const struct config_setting config_settings[] =
 		"\"sinc\" uses a "
 		"band-limited low pass; \"linear\" between neighbouring samples,\n"
 		"brighter for the aliasing it lets through." },
+	{ "audio.doppler", _config_boolean, AUDIO_DOPPLER, "HALO_DOPPLER", _environment_value, _platform_all,
+		"Shift the pitch of 3D sounds that move towards or away from the player,\n"
+		"as the Xbox did (off by default on the Wii U, whose mixer has no room\n"
+		"for it)." },
 	{ "audio.stereo_doppler", _config_boolean, "false", "HALO_STEREO_DOPPLER", _environment_value, _platform_all,
 		"Shift the pitch of a stereo sound placed in the world (an engine, a\n"
 		"rocket's flight) as it comes towards or goes away from the player, as\n"

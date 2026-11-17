@@ -112,6 +112,32 @@ static void resampler_report(void)
 			status.selftest_cases, status.failed_case);
 }
 
+/* port: the ring is played round and round by the voices, so a mixer that falls behind the voices leaves them playing what the ring held a revolution ago (85 ms): that same
+sound again, an echo. The frames past the write cursor are kept silent (SILENCE_GUARD_FRAMES of them), and a cursor the voices have run past is moved to ahead of them, the part
+between silenced, so that an underrun is a gap, never a repeat. */
+#define SILENCE_GUARD_FRAMES 256u
+static uint32_t silenced; /* frames of the ring silent beyond `written`, counted without wrapping, up to */
+static unsigned ring_resyncs;
+
+static void ring_silence(uint32_t from, uint32_t frames)
+{
+	uint32_t done = 0;
+
+	while (done < frames)
+	{
+		const uint32_t at = (from + done) % RING_FRAMES;
+		uint32_t count = frames - done;
+
+		if (count > RING_FRAMES - at)
+			count = RING_FRAMES - at;
+		memset(rings[0] + at, 0, count * sizeof(int16_t));
+		memset(rings[1] + at, 0, count * sizeof(int16_t));
+		DCFlushRange(rings[0] + at, count * sizeof(int16_t));
+		DCFlushRange(rings[1] + at, count * sizeof(int16_t));
+		done += count;
+	}
+}
+
 static int audio_thread(int argc, const char **argv)
 {
 	float mixed[CHUNK_FRAMES * 2];
@@ -150,6 +176,19 @@ static int audio_thread(int argc, const char **argv)
 		const uint32_t ahead = (write + RING_FRAMES - play) % RING_FRAMES;
 		const OSTime now = OSGetSystemTime();
 
+		if (have_poll && ahead >= AHEAD_HIGH + 2 * CHUNK_FRAMES)
+		{
+			/* the voices have run past the write cursor (a cursor ahead of them is at most AHEAD_HIGH + a chunk): what they play is a revolution old. Move the cursor to
+			AHEAD_LOW ahead of them, the frames between silent. */
+			const uint32_t target = (play + AHEAD_LOW) % RING_FRAMES;
+			const uint32_t skip = (target + RING_FRAMES - write) % RING_FRAMES;
+
+			ring_silence(play, AHEAD_LOW);
+			written += skip;
+			silenced = written;
+			ring_resyncs++;
+			continue;
+		}
 		if (have_poll)
 		{
 			if (mixer_profile_enabled)
@@ -159,10 +198,11 @@ static int audio_thread(int argc, const char **argv)
 				now - last_poll >= (OSTime)OSMillisecondsToTicks(85));
 			if (now - last_report >= (OSTime)OSMillisecondsToTicks(10000))
 			{
-				wiiu_log("Audio ring: %u apparent overtakes, %u at deadline, %u long polling gaps, %u overload sleeps (10 s)",
+				wiiu_log("Audio ring: %u apparent overtakes, %u at deadline, %u long polling gaps, %u overload sleeps, %u underrun resyncs (10 s)",
 					(unsigned)observations.apparent_overtakes, (unsigned)observations.at_deadline,
-					(unsigned)observations.long_gaps, overload_sleeps);
+					(unsigned)observations.long_gaps, overload_sleeps, ring_resyncs);
 				overload_sleeps = 0;
+				ring_resyncs = 0;
 				observations.apparent_overtakes = observations.at_deadline = observations.long_gaps = 0;
 				if (mixer_profile_enabled)
 				{
@@ -231,6 +271,14 @@ static int audio_thread(int argc, const char **argv)
 				at = (at + 1) % RING_FRAMES;
 			}
 			written += CHUNK_FRAMES;
+			/* (the frames past the cursor stay silent: the guard) */
+			if ((int32_t)(silenced - written) < 0)
+				silenced = written;
+			if ((int32_t)(silenced - (written + SILENCE_GUARD_FRAMES)) < 0)
+			{
+				ring_silence(silenced, written + SILENCE_GUARD_FRAMES - silenced);
+				silenced = written + SILENCE_GUARD_FRAMES;
+			}
 			/* (the part of the ring written, flushed for the voices: a chunk never wraps, the ring being a whole number of them) */
 			DCFlushRange(rings[0] + write, CHUNK_FRAMES * sizeof(int16_t));
 			DCFlushRange(rings[1] + write, CHUNK_FRAMES * sizeof(int16_t));
@@ -348,6 +396,7 @@ static int voices_start(void)
 	AXVoiceEnd(voices[1]);
 	/* the ring starts AHEAD_LOW frames ahead of where the voices are */
 	written = AHEAD_LOW;
+	silenced = written;
 	return 1;
 }
 
