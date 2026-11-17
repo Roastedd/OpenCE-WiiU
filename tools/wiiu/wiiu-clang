@@ -1,0 +1,29 @@
+#!/bin/sh
+# clang as the Wii U's C compiler (the opence-wiiu image; $WIIU_CLANG_EXTRA for more flags).
+#
+# Why clang and not devkitPPC's GCC: the Linux ports, and the big-endian loop that has validated
+# the game (tools/ppc-be), are built with clang 19; the game takes its meaning from it (MSVC
+# extensions, the order function arguments are evaluated in, which the AI's random draws depend
+# on), and the same front end on every target keeps the netcode's determinism where it is.
+# devkitPPC supplies what is Wii U's: newlib, wut, the linker, elf2rpl.
+#
+#   --target=powerpc-unknown-eabi -mcpu=750   Espresso is a 750-class core: no fsqrt, paired
+#                                             singles unused, hard float
+#   -fno-addrsig                              no .llvm_addrsig for elf2rpl to trip on
+#   .note.GNU-stack                           removed from the object: wut.ld has no place for
+#                                             it and elf2rpl refuses the section
+set -e
+output=
+compile=
+previous=
+for argument in "$@"; do
+	[ "$previous" = -o ] && output=$argument
+	[ "$argument" = -c ] && compile=1
+	previous=$argument
+done
+clang --target=powerpc-unknown-eabi -mcpu=750 -mhard-float -fno-addrsig -fno-pic -fno-stack-protector \
+	-isystem "$DEVKITPPC/powerpc-eabi/include" -isystem "$WUT_ROOT/include" -D__WIIU__ -D__WUT__ \
+	$WIIU_CLANG_EXTRA "$@"
+if [ -n "$compile" ] && [ -n "$output" ] && [ -f "$output" ]; then
+	llvm-objcopy --remove-section=.note.GNU-stack "$output"
+fi

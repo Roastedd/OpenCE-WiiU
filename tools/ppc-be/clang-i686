@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# The x86 build's compiler on a machine that is not x86 (configure.py
+# --linux-cc=clang-i686), for comparing the big-endian build with an x86 one
+# under qemu-i386: -march=native would be this machine's, so it is the
+# portable build's baseline, -march=x86-64; the i686 cross GCC installation
+# leads clang to Debian's i686 headers and libraries (/usr/i686-linux-gnu, which
+# its libc.so names by absolute path, so it is not a --sysroot); and lld links
+# (the system's ld is this machine's).
+args=()
+link=1
+for arg in "$@"; do
+	case "$arg" in
+	-march=native) args+=(-march=x86-64) ;;
+	-c|-E|-S|-M|-MM) link=0; args+=("$arg") ;;
+	*) args+=("$arg") ;;
+	esac
+done
+args+=(--gcc-install-dir=/usr/lib/gcc-cross/i686-linux-gnu/14)
+[ $link = 1 ] && args+=(-fuse-ld=lld)
+exec clang "${args[@]}"
