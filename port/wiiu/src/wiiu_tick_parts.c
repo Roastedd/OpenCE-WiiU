@@ -19,7 +19,7 @@ void wiiu_bw_tick_report(unsigned long ticks);
 /* objects.c: the objects in use, by type, in a line of the log */
 void objects_wiiu_census(void);
 
-#define PART_LIMIT 64
+#define PART_LIMIT 32
 
 static struct
 {

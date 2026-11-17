@@ -262,7 +262,6 @@ symbols in this file:
 #include "units/bipeds.h"
 #include "units/vehicle_definitions.h"
 #include "units/vehicles.h"
-#include "tick_probe.h" /* port: the Wii U's tick parts */
 #include "vehicle_riding_bipeds.h" /* port: port/linux/game/vehicle_riding_bipeds.c */
 #include "physics/breakable_surfaces.h"
 #include "physics/collision_bsp.h"
@@ -2580,7 +2579,6 @@ static void biped_update_physics(
 	}
 	else
 	{
-		TICK_PROBE_START(pill_started);
 		collision_count = collision_move_pill(
 			collision_flags,
 			&position,
@@ -2592,7 +2590,6 @@ static void biped_update_physics(
 			&clipped_velocity,
 			16,
 			collisions);
-		TICK_PROBE_STOP(pill_started, "bp_pill");
 	}
 
 	if (debug_biped_physics &&
@@ -3979,11 +3976,7 @@ static void biped_update_moving(
 	}
 	physics.in_flags = in_flags;
 
-	{
-		TICK_PROBE_START(physics_started);
-		biped_update_physics(&physics);
-		TICK_PROBE_STOP(physics_started, "bp_physics");
-	}
+	biped_update_physics(&physics);
 
 	if (physics.elevator_object_index == NONE)
 	{
@@ -4330,20 +4323,12 @@ boolean biped_update(
 		biped_verify_object_vectors(biped_index, "pre-turning");
 		if (!TEST_FLAG(biped->object.damage_flags, _object_dead_bit))
 		{
-			TICK_PROBE_START(turning_started);
 			biped_update_turning(biped_index, &animation);
-			TICK_PROBE_STOP(turning_started, "bp_turning");
 			biped_verify_object_vectors(biped_index, "post-turning");
 		}
 
-		{
-			TICK_PROBE_START(moving_started);
-			biped_update_moving(biped_index, &animation);
-			TICK_PROBE_STOP(moving_started, "bp_moving");
-		}
+		biped_update_moving(biped_index, &animation);
 		biped_verify_object_vectors(biped_index, "post-moving");
-		{
-		TICK_PROBE_START(state_started);
 
 		if (TEST_FLAG(biped->object.damage_flags, _object_dead_bit))
 		{
@@ -4424,25 +4409,13 @@ boolean biped_update(
 			--biped->biped.player_melee_ticks;
 		}
 
-		TICK_PROBE_STOP(state_started, "bp_state");
-		}
-		{
-			TICK_PROBE_START(footsteps_started);
-			biped_try_to_make_footsteps(biped_index);
-			biped_falling_danger(biped_index);
-			biped_check_discard(biped_index);
-			TICK_PROBE_STOP(footsteps_started, "bp_footsteps");
-		}
+		biped_try_to_make_footsteps(biped_index);
+		biped_falling_danger(biped_index);
+		biped_check_discard(biped_index);
 	}
 
-	{
-		TICK_PROBE_START(animation_started);
-		const boolean jumped = unit_update_animation(biped_index, &animation)==1;
-
-		TICK_PROBE_STOP(animation_started, "bp_animation");
-		if (jumped)
-			biped_jump(biped_index);
-	}
+	if (unit_update_animation(biped_index, &animation)==1)
+		biped_jump(biped_index);
 
 	if (TEST_FLAG(biped->object.damage_flags, _object_dead_bit) &&
 		TEST_FLAG(biped->object.flags, _object_at_rest_bit))

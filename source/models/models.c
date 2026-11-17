@@ -242,7 +242,6 @@ typedef char verify_rasterizer_model_begin_parameters_size[sizeof(struct rasteri
 /* ---------- prototypes */
 
 #include "rasterizer/rasterizer_models.h"
-#include "name_cache.h" /* port: port/linux/game/name_cache.c */
 
 static void render_model_parts(
 	struct model const *model,
@@ -857,13 +856,6 @@ short model_find_marker(
 		struct model *model = model_definition_get(model_index);
 		short lower_bound = 0;
 		short upper_bound = (short)model->markers.count - 1;
-#ifdef HALO_WIIU
-		/* port: (name_cache.h) */
-		short cached;
-
-		if (halo_name_cache_lookup(HALO_NAME_CACHE_MARKER, model_index, name, &cached))
-			return cached;
-#endif
 
 		while (lower_bound <= upper_bound)
 		{
@@ -876,9 +868,6 @@ short model_find_marker(
 
 			if (comparison == 0)
 			{
-#ifdef HALO_WIIU
-				halo_name_cache_store(HALO_NAME_CACHE_MARKER, model_index, name, marker_index);
-#endif
 				return marker_index;
 			}
 			if (comparison < 0)
@@ -890,9 +879,6 @@ short model_find_marker(
 				lower_bound = marker_index + 1;
 			}
 		}
-#ifdef HALO_WIIU
-		halo_name_cache_store(HALO_NAME_CACHE_MARKER, model_index, name, NONE);
-#endif
 	}
 
 	return NONE;
@@ -915,13 +901,6 @@ short model_find_node(
 	{
 		short node_index;
 		struct model *model = model_definition_get(model_index);
-#ifdef HALO_WIIU
-		/* port: (name_cache.h) */
-		short cached;
-
-		if (halo_name_cache_lookup(HALO_NAME_CACHE_NODE, model_index, name, &cached))
-			return cached;
-#endif
 
 		for (node_index = 0; node_index<model->nodes.count; node_index++)
 		{
@@ -929,15 +908,9 @@ short model_find_node(
 
 			if (!csstrcmp(node->name, name))
 			{
-#ifdef HALO_WIIU
-				halo_name_cache_store(HALO_NAME_CACHE_NODE, model_index, name, node_index);
-#endif
 				return node_index;
 			}
 		}
-#ifdef HALO_WIIU
-		halo_name_cache_store(HALO_NAME_CACHE_NODE, model_index, name, NONE);
-#endif
 	}
 
 	return NONE;
