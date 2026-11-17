@@ -182,13 +182,6 @@ static char const *source_text(int source)
 	}
 }
 
-/* whether the reason a map is not one for the smooth settings is only that it is a network game (smooth_defaults_reason): the governor is for those */
-static int net_game_reason(char const *reason)
-{
-	return !strcmp(reason, "a joined network co-op game") || !strcmp(reason, "a joined network game") || !strcmp(reason, "a hosted network co-op game") ||
-		!strcmp(reason, "a hosted network game") || !strcmp(reason, "a network game");
-}
-
 static void decide(int mid_map)
 {
 	char const *reason;
@@ -199,13 +192,12 @@ static void decide(int mid_map)
 	cards_once();
 	reason = main_smooth_defaults_reason();
 	smooth_defaults_resolve(&decided, sd.now.card, reason, 1);
-	/* (the governor sheds only what is drawn, and a joined or hosted network game is where the drawing is dearest: the ticks of a co-op game on the Wii U were 100 ms or more of a
-	frame, the rendering 40 to 60 ms of the rest. It is on for a network game, as for a map of one player, unless its card file holds 0. The other three stay off for a game that
-	the overlap's rule (halo/net_overlap.txt) keeps out: the reason says why. render_governor.c holds an online map to step 3, so that the players far away are still drawn) */
-	if (reason && net_game_reason(reason) && decided.card[SMOOTH_GOVERNOR] != SMOOTH_CARD_OFF)
+	/* (a network game that halo/net_overlap.txt lets in gets the overlap, not the governor: the governor sheds what is drawn by the mean of the frames and was never tuned for a joined game,
+	where it would also confound the comparison of the overlap with the serial loop. Its own card file and its own study) */
+	if (!reason && main_smooth_defaults_net_game())
 	{
-		decided.value[SMOOTH_GOVERNOR] = decided.card[SMOOTH_GOVERNOR] > 0 ? decided.card[SMOOTH_GOVERNOR] : 1;
-		decided.source[SMOOTH_GOVERNOR] = decided.card[SMOOTH_GOVERNOR] > 0 ? SMOOTH_SOURCE_CARD_ON : SMOOTH_SOURCE_DEFAULT_ON;
+		decided.value[SMOOTH_GOVERNOR] = 0;
+		decided.source[SMOOTH_GOVERNOR] = SMOOTH_SOURCE_MAP_OFF;
 	}
 	sd.now = decided;
 	sd.decided = 1;

@@ -72,14 +72,14 @@ class SmoothDefaultsTests(unittest.TestCase):
             result = build_and_run((fixture, [mutated], flags))
             self.assertNotEqual(result.returncode, 0)
 
-    def test_a_governor_switched_off_in_a_network_game_is_detected(self):
+    def test_a_governor_switched_on_in_a_network_game_is_detected(self):
         fixture, sources, flags = SMOOTH
         with tempfile.TemporaryDirectory(prefix='halo-smooth-fault-') as directory:
             source = (ROOT / 'port/linux/game/smooth_defaults.c').read_text()
-            before = 'if (reason && net_game_reason(reason) &&'
+            before = 'if (!reason && main_smooth_defaults_net_game())'
             self.assertEqual(source.count(before), 1)
             mutated = Path(directory) / 'smooth_defaults.c'
-            mutated.write_text(source.replace(before, 'if (reason && net_game_reason(reason) && 0 &&', 1))
+            mutated.write_text(source.replace(before, 'if (0)', 1))
             result = build_and_run((fixture, [mutated], flags))
             self.assertNotEqual(result.returncode, 0)
 

@@ -4192,12 +4192,6 @@ boolean object_force_inside_bsp(
 
 static boolean object_update_inner(
 	long object_index);
-#ifdef HALO_WIIU
-long long wiiu_tick_part_now(void);
-void wiiu_tick_part(const char *name, long long started);
-/* port: objects updated by type since the census line last said (objects_wiiu_census) */
-static unsigned long objects_wiiu_updated[NUMBER_OF_OBJECT_TYPES];
-#endif
 
 /* port: an object is updated every tick whether or not anything about it changes; what the update does to its block is compared with what it was (tick_snapshot.c),
 so that the tick snapshot copies the objects that changed and not every one that was updated */
@@ -4251,23 +4245,7 @@ static boolean object_update_inner(
 		elevator = object->object.type == _object_type_machine &&
 			machine_get_elevator_position(object_index, &elevator_position);
 
-#ifdef HALO_WIIU
-		{
-			/* port: where an objects pass goes, by type (the tick parts line, wiiu_tick_parts.c): a joined co-op game's ticks were 30 ms in the objects part alone */
-			static const char *const type_parts[NUMBER_OF_OBJECT_TYPES] =
-			{
-				"obj_biped", "obj_vehicle", "obj_weapon", "obj_equipment", "obj_other", "obj_projectile", "obj_other", "obj_machine", "obj_other", "obj_other", "obj_other", "obj_other",
-			};
-			long long part_started = wiiu_tick_part_now();
-
-			object_type_update(object_index);
-			wiiu_tick_part(type_parts[object->object.type], part_started);
-			if (object->object.type < NUMBER_OF_OBJECT_TYPES)
-				objects_wiiu_updated[object->object.type]++;
-		}
-#else
 		object_type_update(object_index);
-#endif
 		if (object_definition->object.collision_model.index!=NONE)
 		{
 			object_damage_update(object_index);
@@ -4277,13 +4255,7 @@ static boolean object_update_inner(
 
 		if (!TEST_FLAG(object->object.flags, _object_do_not_recompute_node_matrices_bit))
 		{
-#ifdef HALO_WIIU
-			long long nodes_started = wiiu_tick_part_now();
-#endif
 			object_compute_node_matrices(object_index);
-#ifdef HALO_WIIU
-			wiiu_tick_part("obj_nodes", nodes_started);
-#endif
 			/* port: carry by this tick's movement, after its collision nodes. */
 			if (elevator)
 				machine_move_elevator_riders(object_index, &elevator_position);
@@ -6032,20 +6004,6 @@ void objects_wiiu_census(void)
 	}
 	line[used] = 0;
 	platform_log("objects in use: %ld of %d (%s)", total, (int)object_header_data->maximum_count, used ? line : "none");
-	{
-		/* (the updates a tick, by type, since the last line: an object that is in use but not updated is asleep or out of the players' clusters) */
-		char updated[200];
-		long written = 0;
-
-		for (type = 0; type < NUMBER_OF_OBJECT_TYPES; type++)
-		{
-			if (objects_wiiu_updated[type] && (size_t)written < sizeof(updated) - 24)
-				written += (long)sprintf(updated + written, "%s%s %.1f", written ? ", " : "", names[type], (double)objects_wiiu_updated[type] / 150.0);
-			objects_wiiu_updated[type] = 0;
-		}
-		updated[written] = 0;
-		platform_log("objects updated a tick: %s", written ? updated : "none");
-	}
 
 	return;
 }

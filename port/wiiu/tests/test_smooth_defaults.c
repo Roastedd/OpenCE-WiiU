@@ -294,7 +294,7 @@ static void test_decisions(void)
 	CHECK(smooth_defaults_value(SMOOTH_TICK_THREAD) == 1 && smooth_defaults_value(SMOOTH_TICK_SNAPSHOT) == 1 && smooth_defaults_value(SMOOTH_TICK_OVERLAP) == 1 && smooth_defaults_value(SMOOTH_GOVERNOR) == 1);
 	CHECK(strcmp(smooth_defaults_label(), "smooth defaults on") == 0);
 
-	/* a network game that the card lets in (the rule says NULL for it): the overlap's three on, and the governor too */
+	/* a network game that the card lets in (the rule says NULL for it): the overlap's three on, the governor not */
 	reset_log();
 	reason_now = NULL;
 	net_game_now = 1;
@@ -302,8 +302,8 @@ static void test_decisions(void)
 	net_game_now = 0;
 	CHECK(smooth_defaults_map_ok());
 	CHECK(logged("a network game: halo/net_overlap.txt"));
-	CHECK(last_governor_on == 1);
-	CHECK(smooth_defaults_value(SMOOTH_TICK_THREAD) == 1 && smooth_defaults_value(SMOOTH_TICK_SNAPSHOT) == 1 && smooth_defaults_value(SMOOTH_TICK_OVERLAP) == 1 && smooth_defaults_value(SMOOTH_GOVERNOR) == 1);
+	CHECK(last_governor_on == 0);
+	CHECK(smooth_defaults_value(SMOOTH_TICK_THREAD) == 1 && smooth_defaults_value(SMOOTH_TICK_SNAPSHOT) == 1 && smooth_defaults_value(SMOOTH_TICK_OVERLAP) == 1 && smooth_defaults_value(SMOOTH_GOVERNOR) == 0);
 
 	/* the next map is a hosted game: everything off again, nothing left over */
 	reset_log();
@@ -311,13 +311,8 @@ static void test_decisions(void)
 	smooth_defaults_new_map();
 	CHECK(!smooth_defaults_map_ok());
 	CHECK(logged("OFF for this map: a hosted network game"));
-	CHECK(smooth_defaults_value(SMOOTH_TICK_THREAD) == 0 && smooth_defaults_value(SMOOTH_TICK_SNAPSHOT) == 0 && smooth_defaults_value(SMOOTH_TICK_OVERLAP) == 0 && smooth_defaults_value(SMOOTH_GOVERNOR) == 1);
-	CHECK(last_governor_on == 1);
-	/* a joined co-op game too, and a card file that holds 0 still turns the governor off */
-	reset_log();
-	reason_now = "a joined network co-op game";
-	smooth_defaults_new_map();
-	CHECK(smooth_defaults_value(SMOOTH_TICK_OVERLAP) == 0 && smooth_defaults_value(SMOOTH_GOVERNOR) == 1);
+	CHECK(smooth_defaults_value(SMOOTH_TICK_THREAD) == 0 && smooth_defaults_value(SMOOTH_TICK_SNAPSHOT) == 0 && smooth_defaults_value(SMOOTH_TICK_OVERLAP) == 0 && smooth_defaults_value(SMOOTH_GOVERNOR) == 0);
+	CHECK(last_governor_on == 0);
 
 	/* and a split screen game, then a level of one player again */
 	reset_log();
@@ -328,7 +323,7 @@ static void test_decisions(void)
 	reason_now = NULL;
 	smooth_defaults_new_map();
 	CHECK(smooth_defaults_value(SMOOTH_TICK_OVERLAP) == 1 && smooth_defaults_value(SMOOTH_GOVERNOR) == 1);
-	CHECK(smooth_defaults_map_count() == 7);
+	CHECK(smooth_defaults_map_count() == 6);
 	/* a map that stops being one in the middle of it: decided again, with the owners' queues left as they are */
 	reset_log();
 	reason_now = "a network session is open (system link or internet)";
@@ -352,7 +347,7 @@ static void test_owner_card(void)
 	reset_log();
 	reason_now = "a hosted network game";
 	smooth_defaults_new_map();
-	CHECK(smooth_defaults_value(SMOOTH_TICK_OVERLAP) == 0 && smooth_defaults_value(SMOOTH_TICK_THREAD) == 0 && smooth_defaults_value(SMOOTH_TICK_SNAPSHOT) == 0 && smooth_defaults_value(SMOOTH_GOVERNOR) == 1);
+	CHECK(smooth_defaults_value(SMOOTH_TICK_OVERLAP) == 0 && smooth_defaults_value(SMOOTH_TICK_THREAD) == 0 && smooth_defaults_value(SMOOTH_TICK_SNAPSHOT) == 0 && smooth_defaults_value(SMOOTH_GOVERNOR) == 0);
 	CHECK(logged("a card file that holds 1 is on only for the maps the smooth settings are for"));
 	reset_log();
 	reason_now = "split screen";

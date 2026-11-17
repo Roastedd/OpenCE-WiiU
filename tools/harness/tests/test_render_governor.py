@@ -371,24 +371,6 @@ int main(int argc, char **argv)
 		run(60, 40, 0);
 		printf("RESULT step %d cull_unit %.0f\n", render_governor_step(), render_governor_values()->cull_unit_pixels);
 	}
-	else if (!strcmp(scenario, "online_slow"))
-	{
-		/* a joined co-op game of the Wii U: frames of 200 ms, nearly all of it the ticks (4 to 5 frames a second, every one over 80 ms): the governor still sheds, to the online step 3 */
-		int index;
-
-		config_on = 1;
-		performance_mode = 1;
-		render_governor_set_online(1);
-		render_governor_new_map();
-		for (index = 0; index < 600; index++)
-		{
-			const double work = 200.0 - saved_up_to[render_governor_step()];
-
-			render_governor_frame(work, work * 0.8, work * 0.2, now_ms);
-			now_ms += work;
-		}
-		printf("RESULT step %d cull_unit %.0f\n", render_governor_step(), render_governor_values()->cull_unit_pixels);
-	}
 	else if (!strcmp(scenario, "new_map"))
 	{
 		/* a map starts: the cold start's slow frames for 20 s decide nothing */
@@ -714,12 +696,6 @@ def test_the_performance_mode_in_another_game_stops_at_step_3_and_keeps_the_unit
     assert results["step"] == 3 and results["cull_unit"] == 0
 
 
-def test_a_game_of_slow_frames_is_shed_for_to_the_online_step(tmp_path):
-    # (frames of 200 ms, every one over the 80 ms that make a window a hitch: most frames long is the game itself, not a hitch)
-    _, results, _ = run_scenario(tmp_path, "online_slow")
-    assert results["step"] == 3 and results["cull_unit"] == 0
-
-
 def test_the_first_seconds_of_a_map_decide_nothing(tmp_path):
     transitions, _, _ = run_scenario(tmp_path, "new_map")
     # (the map starts at 30 s of the run, +1 ms: nothing for 20 s after it, then the heavy scene is shed)
@@ -815,7 +791,7 @@ def test_negative_controls(tmp_path, fault):
         "no_hysteresis": [("predicted < target * settings.up_margin) ?", "mean + 0 * predicted < target) ?"),
                           ("governor.probe_windows >= (int)(settings.probe_ms / settings.window_ms)", "0")],
         # (a load's frame counts, and a window of one frame is a window)
-        "no_hitch_filter": [("if (work_ms > 250.0)", "if (work_ms > 2.5e9)"), ("else if (governor.frames >= 3)", "else if (governor.frames >= 1)"),
+        "no_hitch_filter": [("if (work_ms > 250.0)", "if (work_ms > 2.5e9)"), ("if (governor.frames >= 8)", "if (governor.frames >= 1)"),
                             ("governor.window_worst > settings.worst_ms", "0")],
         # (an up taken back soon waits no longer)
         "no_backoff": [("governor.up_backoff *= 2;", "governor.up_backoff *= 1;")],
