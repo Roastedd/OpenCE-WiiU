@@ -256,8 +256,11 @@ void render_frame_pregame(
 
 	render.frame_index++;
 
+	JOIN_FRAME_STEP("render_frame: rasterizer_frame_begin");
 	rasterizer_frame_begin(&parameters);
+	JOIN_FRAME_STEP("render_frame: rasterizer_windows_begin");
 	rasterizer_windows_begin();
+	JOIN_FRAME_STEP("render_frame: windows begun");
 	profile_render_window_start(FALSE);
 
 	memset(&rasterizer_parameters, 0, sizeof(rasterizer_parameters));
@@ -286,8 +289,11 @@ void render_frame_pregame(
 
 	rasterizer_window_end();
 	profile_render_window_end();
+	JOIN_FRAME_STEP("render_frame: rasterizer_windows_end");
 	rasterizer_windows_end();
+	JOIN_FRAME_STEP("render_frame: rasterizer_frame_end");
 	rasterizer_frame_end();
+	JOIN_FRAME_STEP("render_frame: done");
 
 	return;
 }
@@ -333,6 +339,7 @@ static void render_window(
 	const boolean join_safe = FALSE;
 #endif
 
+	JOIN_FRAME_STEP("render_window: begins");
 	profile_render_window_start(TRUE);
 	render.scene_index++;
 	memset(&parameters, 0, sizeof(parameters));
@@ -502,13 +509,16 @@ static void render_player_frame(
 	camera = &window->render_camera;
 	has_mirror = FALSE;
 
+	JOIN_FRAME_STEP("player frame: structure_visibility_find_camera");
 	structure_visibility_find_camera(camera);
+	JOIN_FRAME_STEP("player frame: scenario_get_atmospheric_fog");
 	render.fog.runtime_flags = 0;
 	scenario_get_atmospheric_fog(
 		window->local_player_index,
 		(word)render.visible_sky_index,
 		&camera->position,
 		&render.fog);
+	JOIN_FRAME_STEP("player frame: structure_get_planar_fog");
 	structure_get_planar_fog((short)render.cluster_index, &render.fog);
 
 	if (render.fog.atmospheric_maximum_distance != 0.0f &&
@@ -558,6 +568,7 @@ static void render_player_frame(
 			&window->rasterizer_camera.window_bounds,
 			sizeof(rectangle2d)));
 
+	JOIN_FRAME_STEP("player frame: frustum bounds");
 	render_camera_build_frustum_bounds(camera, &frustum_bounds);
 
 	if (screenshot_combined_index != NULL)
@@ -583,6 +594,7 @@ static void render_player_frame(
 		}
 	}
 
+	JOIN_FRAME_STEP("player frame: render_camera_build_frustum");
 	render_camera_build_frustum(camera, &frustum_bounds, &frustum, TRUE);
 	render_camera_build_frustum(
 		&window->rasterizer_camera,
@@ -590,6 +602,7 @@ static void render_player_frame(
 		&rasterizer_frustum,
 		TRUE);
 
+	JOIN_FRAME_STEP("player frame: structure_visibility_find_mirror");
 	if (main_get_window_count() == 1)
 	{
 		if (structure_visibility_find_mirror(camera, &frustum, &mirror))
@@ -627,6 +640,7 @@ static void render_player_frame(
 		}
 	}
 
+	JOIN_FRAME_STEP("player frame: render_window begins");
 	render_window(
 		window->local_player_index,
 		camera,
@@ -635,6 +649,7 @@ static void render_player_frame(
 		&rasterizer_frustum,
 		_render_target_primary,
 		has_mirror);
+	JOIN_FRAME_STEP("player frame: render_window done");
 
 	return;
 }
@@ -680,9 +695,11 @@ void render_frame(
 					screenshot_page_index->y * global_screenshot_size + screenshot_index->y;
 			}
 
+			JOIN_FRAME_STEP("render_frame: render_player_frame begins");
 			render_player_frame(
 				window,
 				screenshot_index != NULL ? &screenshot_combined_index : NULL);
+			JOIN_FRAME_STEP("render_frame: render_player_frame done");
 			continue;
 		}
 		else
@@ -690,8 +707,11 @@ void render_frame(
 			window_type = 1;
 		}
 
+		JOIN_FRAME_STEP("render_frame: render_nonplayer_frame begins");
 		render_nonplayer_frame(window, window_type);
+		JOIN_FRAME_STEP("render_frame: render_nonplayer_frame done");
 	}
+	JOIN_FRAME_STEP("render_frame: windows done");
 
 	halo_screen_ui_offset(TRUE);
 	progress_bar_eachframe();

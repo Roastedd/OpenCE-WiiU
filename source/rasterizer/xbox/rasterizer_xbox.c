@@ -2218,22 +2218,31 @@ void _rasterizer_frame_begin(
 		global_d3d_device);
 	rasterizer_globals.near_clip_distance = rasterizer_get_near_clip_distance();
 	global_frame_parameters.game_time_sec = parameters->game_time_sec;
+	JOIN_FRAME_STEP("frame begin: profile and statistics");
 	rasterizer_profile_frame_begin();
 	rasterizer_frame_statistics_begin();
+	JOIN_FRAME_STEP("frame begin: water visibility");
 	rasterizer_water_set_visibility_for_frame(FALSE);
+	JOIN_FRAME_STEP("frame begin: lights for the new frame");
 	rasterizer_lights_begin_for_new_frame();
+	JOIN_FRAME_STEP("frame begin: texture_cache_idle");
 	texture_cache_idle();
+	JOIN_FRAME_STEP("frame begin: render state");
 	IDirect3DDevice8_SetRenderState(
 		global_d3d_device,
 		D3DRS_DXT1NOISEENABLE,
 		rasterizer_debug_options.DXTC_noise_enabled);
 	if (rasterizer_debug_options.draw_environment_decals)
 	{
+		JOIN_FRAME_STEP("frame begin: decals_repair_cache");
 		decals_repair_cache(); /* port: recover both cosmetic pools outside eviction callbacks */
 		rasterizer_decal_vertices_begin_update();
+		JOIN_FRAME_STEP("frame begin: decals_update");
 		decals_update();
+		JOIN_FRAME_STEP("frame begin: decals_repair_cache after");
         decals_repair_cache();
 		rasterizer_decal_vertices_end_update();
+		JOIN_FRAME_STEP("frame begin: decals done");
 	}
 	return;
 }

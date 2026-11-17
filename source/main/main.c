@@ -3865,7 +3865,9 @@ static void main_game_render(
 			window->local_player_index = NONE;
 		}
 
+		JOIN_FRAME_STEP("render: set_window_camera_values");
 		set_window_camera_values(window, observer);
+		JOIN_FRAME_STEP("render: the window's camera values set");
 		window->console_window = FALSE;
 	}
 
@@ -3878,6 +3880,7 @@ static void main_game_render(
 	window->local_player_index = NONE;
 	window->console_window = TRUE;
 	set_window_camera_values(window, NULL);
+	JOIN_FRAME_STEP("render: the console window set, render_frame next");
 
 	/* port: the study's HALO_RENDER_SKIP_FRAME=1: the frame's cameras and
 	sound done, its world not drawn (main_render_repeat) */

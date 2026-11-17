@@ -23,7 +23,7 @@ JOIN_FRAME_LINES of them only, so that the writes do not take the game's frames 
 
 #define JOIN_FILE WIIU_DATA_DIRECTORY "/join-steps.txt"
 #define JOIN_WINDOW_MS 25000u
-#define JOIN_FRAME_LINES 420u
+#define JOIN_FRAME_LINES 700u
 #define JOIN_MAXIMUM_LINES 1200u
 
 volatile unsigned wiiu_thread_beats[5];
