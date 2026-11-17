@@ -46,16 +46,44 @@ second on average, without a crash.
 
 <sub>A capture from a development build. It shows the port in use; it does not promise that every map and mode is perfect. [Capture details](docs/assets/screenshots/README.md).</sub>
 
-## What you can do with it
+## Features
 
-- **Play the campaign** on the TV or the GamePad (touch works in the menus).
-- **Play online**: a server browser, internet games and system link with
-  compatible hosts (see [Online play](#online-play) for what "compatible" means).
-- **Use the controller you like**: the GamePad, a Pro Controller, or a Wii
-  Remote with a Nunchuk, with gyro aiming options.
-- **Change the picture**: resolution, smoother motion, graphics presets and
-  a small performance overlay.
-- **Keep everything on your SD card**: your maps and saves never leave it.
+Legend: ✅ played on a Wii U · 🧪 built and tested on a computer, not yet tried on a console · ⚙️ in the build, switched off until you turn it on
+
+### Playing the game
+
+- ✅ **Single-player campaign**, every level, with checkpoints and saves on your SD card. Hold B, + or tap the touch screen for a second to skip a cutscene.
+- ✅ **Two-player split screen**, in multiplayer and in the co-op campaign. 🧪 Three and four players.
+- ✅ **TV or GamePad.** Play on the TV, and the GamePad can show player 1's own view while the TV is split.
+- ✅ **Online and system link**: a server browser, internet games found through the servers in `brokers.txt` (with UPnP to open the port for you), and games on your own network. 🧪 Hosting from the Wii U and very large games (24 players and up).
+- 🧪 **Voice chat** through the GamePad's microphone or a headset in its jack (push to talk with the TV button, or open mic).
+- 🧪 **Halo Custom Edition maps** from your PC copy, with automatic download from a host that has the map.
+- ⚙️ **Bots, friends and parties, the players page and a GamePad keyboard** are in the code and off by default while they are tested.
+
+### Controllers
+
+- ✅ **GamePad** and **Pro Controller**, with the buttons where the Xbox's sit (the on-screen prompts use the Wii U's letters).
+- ✅ **Touch screen** in the menus.
+- 🧪 **Wii Remote with a Nunchuk**, including a **pointer** (with a sensor bar, or the GamePad as one) and **Wii Remote Plus motion aiming**.
+- 🧪 **Gyro aiming** on the GamePad (always, or only when zoomed), with a thumb on the screen to hold the view still.
+- ✅ Classic Controllers and, through Bloopair, other pads, for the extra split-screen players.
+
+### Picture and speed
+
+- ✅ **A native Wii U renderer** (GX2) with a matching shader pack.
+- ✅ **Graphics modes**: Balanced (720 lines at 60 frames a second, the default), Performance (frame rate first), Quality (up to 1080 lines at 30 with dynamic resolution) and Custom.
+- ✅ **Resolution** from 480 to 1080 lines, **dynamic resolution**, and **smooth motion** (a frame for every refresh of the TV, not only the game's 30 a second).
+- ✅ **Detail switches** for grass, decals, particles, object shadows, lens flares, specular shine and bump mapping.
+- ✅ **Auto detail**: when frames run long, the game leaves out small and far extras a step at a time and puts them back when there is room. The game itself plays the same.
+- ✅ **A performance overlay** (L + R + −) with a compact strip and a detailed panel: frame time, CPU and GPU share, where the frame's time goes, memory pools.
+- ✅ **Sharper menus and HUD** from the community's high-resolution redraws (see the credits).
+
+### Looking after your data
+
+- ✅ **Everything stays on your SD card**: maps, saves, profiles and settings (`config.toml`). The game saves in the background so a checkpoint does not stall it.
+- ✅ **Setup on your computer** with the helper: it converts your maps, finds the card, checks the space, and works on Windows, Mac and Linux.
+- 🧪 **Setup on the Wii U itself** with an importer build that reads `halo.iso` from the card (under test).
+- ⚙️ **Automatic updates** are built, with nothing published to update from yet.
 
 ## Get it running
 
