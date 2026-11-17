@@ -12,8 +12,7 @@
   sniper zoom labels (2x, 10x) use artwork supplied by the project owner
   (`port/assets/hud/corrections`); original artist attribution is unverified.
 - **The Wii U app's icon** (`port/wiiu/meta/icon.png`): the original helmet tile from ORION's OpenCE artwork (`port/assets/icon/opence-icon.png`), restored for this port.
-- **The Wii U start-up pictures** (`port/wiiu/meta/splash-*.png`): composed for the Wii U port by `tools/wiiu_app_art.py` from the helmet render of the game's
-  icon by ORION (`port/assets/icon`) and Overpass (`port/assets/fonts`); the game and its characters belong to Microsoft.
+- **The Wii U start-up pictures** (`port/wiiu/meta/splash-*.png`): the helmet render by ORION (`port/assets/icon/opence-icon-render.png`) on a navy background, composed by `tools/wiiu_app_art.py`. Both screens contain artwork only. The game and its characters belong to Microsoft.
 - **The menus' mouse cursor** (the blue arrow the menus show for the
   mouse): by pugzysixtyfour (`port/assets/cursor`).
 

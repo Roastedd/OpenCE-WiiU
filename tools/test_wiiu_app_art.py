@@ -26,11 +26,11 @@ class AppArtTest(unittest.TestCase):
             self.assertEqual(on_disk.size, sizes[name], name)
             self.assertTrue(wiiu_app_art.same_picture(on_disk, image), f"{name}: run tools/wiiu_app_art.py")
 
-    def test_the_font_the_titles_are_set_in_is_in_the_checkout(self):
+    def test_the_credited_source_artwork_is_in_the_checkout(self):
         import wiiu_app_art
 
-        self.assertTrue(wiiu_app_art.BLACK_FONT.is_file())
-        self.assertTrue(wiiu_app_art.MEDIUM_FONT.is_file())
+        self.assertTrue(wiiu_app_art.ICON_SOURCE.is_file())
+        self.assertTrue(wiiu_app_art.RENDER.is_file())
 
 
 class BuildNamesTest(unittest.TestCase):
