@@ -16,6 +16,9 @@ $XDG_DATA_HOME/halo-linux or ~/.local/share/halo-linux. Path components are
 matched case-insensitively, like the Xbox's FATX volumes.
 */
 
+#ifdef HALO_WIIU
+void *memalign(unsigned long alignment, unsigned long size); /* newlib's, malloc.h */
+#endif
 #include "platform.h"
 #include "posix.h"
 #include "port_config.h"
@@ -30,7 +33,6 @@ matched case-insensitively, like the Xbox's FATX volumes.
 #include <stdlib.h>
 #include <pthread.h>
 #include <string.h>
-#include <malloc.h>
 #include <time.h>
 #include <unistd.h>
 
