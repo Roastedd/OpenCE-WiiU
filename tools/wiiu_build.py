@@ -395,7 +395,10 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
     # the Wii U's own units, as they are written
     wiiu_src = WIIU_DIR / "src"
     for source in sorted(wiiu_src.glob("*.c")):
-        if source.name.startswith(WIIU_NATIVE_PREFIX):
+        if source.name == "wiiu_usb.c":
+            # (the USB drive for the checkpoint file: libmocha's header, when the build is made with WIIU_MOCHA=1)
+            add_object(source, f"{posix_cflags} -ffp-contract=off -I{wiiu_src} -I{platform_dir} " + " ".join(wiiu_usb_flags()))
+        elif source.name.startswith(WIIU_NATIVE_PREFIX):
             # (-ffp-contract=off: the objects are checked for fused multiply-adds whether or not they touch the simulation)
             extra = f" {mbedtls_include} -I{MONOCYPHER_DIR} {update_defines(release)}" if source.name in WIIU_UPDATE_UNITS else ""
             if source.name in ("wiiu_bw_kernels.c", "wiiu_gx2.c", "wiiu_keyboard.c", "wiiu_keyboard_font.c", "wiiu_social_view.c"):
