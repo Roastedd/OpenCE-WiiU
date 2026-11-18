@@ -10,9 +10,14 @@ payload serves, makes the folder and keeps savegame.bin in it. Without the file 
 (WIIU_MOCHA=1 at the build, tools/wiiu_build.py) the file is refused with a line in the log. Any failure leaves the file on the card, as before.
 */
 
+#include <fcntl.h>
+#include <malloc.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 
 #ifdef HALO_WIIU_USB
 #include <mocha/mocha.h>
@@ -21,6 +26,87 @@ payload serves, makes the folder and keeps savegame.bin in it. Without the file 
 void platform_log(const char *format, ...);
 
 #define CHECKPOINT_FILE "/vol/external01/wiiu/apps/halo/checkpoint_dir.txt"
+
+
+/* how fast a folder takes writes: bytes written in pieces to a new file (optionally after making it its full size first, as the game state's file is
+made), in ms, logged. A test of the USB drive against the card (halo/checkpoint_dir.txt). */
+static double bench_now_ms(void)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (double)now.tv_sec * 1000.0 + (double)now.tv_nsec / 1000000.0;
+}
+
+static void bench_write(const char *folder, const char *label, unsigned long total, unsigned long piece, int preallocate)
+{
+	char path[256];
+	char *buffer = memalign(64, piece);
+	int fd;
+	unsigned long done = 0;
+	double start, wrote_ms, read_ms = 0.0;
+
+	if (!buffer)
+		return;
+	memset(buffer, 0x5a, piece);
+	snprintf(path, sizeof(path), "%s/bench.tmp", folder);
+	unlink(path);
+	fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0666);
+	if (fd < 0)
+	{
+		platform_log("bench %s: %s could not be opened", label, path);
+		free(buffer);
+		return;
+	}
+	start = bench_now_ms();
+	if (preallocate)
+		ftruncate(fd, (off_t)total);
+	while (done < total)
+	{
+		ssize_t wrote = write(fd, buffer, piece < total - done ? piece : total - done);
+
+		if (wrote <= 0)
+			break;
+		done += (unsigned long)wrote;
+	}
+	wrote_ms = bench_now_ms() - start;
+	start = bench_now_ms();
+	fsync(fd);
+	{
+		const double sync_ms = bench_now_ms() - start;
+
+		lseek(fd, 0, SEEK_SET);
+		start = bench_now_ms();
+		for (done = 0; done < total;)
+		{
+			ssize_t got = read(fd, buffer, piece);
+
+			if (got <= 0)
+				break;
+			done += (unsigned long)got;
+		}
+		read_ms = bench_now_ms() - start;
+		platform_log("bench %s: %lu KB in pieces of %lu KB: written in %.0f ms (%.2f MB/s), fsync %.0f ms, read back in %.0f ms (%.2f MB/s)", label, total / 1024,
+			piece / 1024, wrote_ms, wrote_ms > 0 ? total / 1048576.0 / (wrote_ms / 1000.0) : 0.0, sync_ms, read_ms, read_ms > 0 ? total / 1048576.0 / (read_ms / 1000.0) : 0.0);
+	}
+	close(fd);
+	unlink(path);
+	free(buffer);
+}
+
+static void bench_folder(const char *folder, const char *name)
+{
+	char label[64];
+
+	snprintf(label, sizeof(label), "%s 128K", name);
+	bench_write(folder, label, 2 * 1024 * 1024, 128 * 1024, 0);
+	snprintf(label, sizeof(label), "%s 128K prealloc", name);
+	bench_write(folder, label, 2 * 1024 * 1024, 128 * 1024, 1);
+	snprintf(label, sizeof(label), "%s 32K", name);
+	bench_write(folder, label, 2 * 1024 * 1024, 32 * 1024, 0);
+	snprintf(label, sizeof(label), "%s 1M", name);
+	bench_write(folder, label, 2 * 1024 * 1024, 1024 * 1024, 0);
+}
 
 static char checkpoint_folder[160];
 static int checkpoint_state; /* 0 not asked yet, 1 on, -1 off */
@@ -76,6 +162,8 @@ const char *wiiu_checkpoint_dir(void)
 			platform_log("checkpoint dir: %s could not be made on the USB drive; the checkpoint stays on the card", checkpoint_folder);
 			return NULL;
 		}
+		bench_folder("/vol/external01/wiiu/apps/halo", "sd card");
+		bench_folder(checkpoint_folder, "usb drive");
 		platform_log("checkpoint dir: the checkpoint file is on the USB drive, in %s", checkpoint_folder);
 		checkpoint_state = 1;
 		return checkpoint_folder;
