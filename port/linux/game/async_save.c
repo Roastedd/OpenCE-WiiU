@@ -56,6 +56,20 @@ int async_save_verify(void)
 	return job.verify;
 }
 
+int async_save_delta(void)
+{
+	static int delta = -1;
+
+	if (delta < 0)
+	{
+		/* (-1 and no file: off) */
+		delta = wiiu_study_number("async_save_delta.txt", 0) > 0;
+		if (delta)
+			platform_log("checkpoint: only the parts of the game state that changed since the last checkpoint are written (halo/async_save_delta.txt)");
+	}
+	return delta;
+}
+
 int async_save_revert_image(void)
 {
 	static int revert_image = -1;

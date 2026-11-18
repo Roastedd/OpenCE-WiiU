@@ -188,6 +188,106 @@ static struct
 	unsigned long number;
 	double write_ms; /* the writer thread's */
 } game_state_async;
+
+/* what the file z:\\savegame.bin holds after the last write that ended well (the writer thread's; halo/async_save_delta.txt): the next checkpoint writes only
+the blocks that differ from it. Any other write to the file, or the file made again, makes it not valid (game_state_delta_invalidate) and the next write is whole. */
+#define DELTA_BLOCK 4096UL
+#define DELTA_GAP_BLOCKS 8UL /* changed blocks this near each other are written as one run, the blocks between them too */
+static unsigned char *game_state_baseline;
+static unsigned long game_state_baseline_size;
+static HANDLE game_state_baseline_file;
+static volatile int game_state_baseline_valid;
+
+static void game_state_delta_invalidate(void)
+{
+	game_state_baseline_valid = 0;
+}
+
+static boolean game_state_block_same(const unsigned char *image, unsigned long block, unsigned long size)
+{
+	const unsigned long at = block*DELTA_BLOCK;
+	const unsigned long length = size-at < DELTA_BLOCK ? size-at : DELTA_BLOCK;
+
+	return memcmp(image+at, game_state_baseline+at, length)==0;
+}
+
+/* the writer thread's: the image to the file. With the delta switch on and a valid baseline, only the runs of blocks that differ; else all of it (and the
+baseline is made from it). TRUE if the file holds the image. */
+static boolean game_state_write_image(HANDLE file, void *snapshot, unsigned long size, unsigned long *bytes_written)
+{
+	const unsigned char *image = snapshot;
+	const unsigned long piece = async_save_piece_bytes();
+	const double start = game_state_async_now_ms();
+
+	DWORD whole = 0;
+
+	*bytes_written = 0;
+	if (async_save_delta())
+	{
+		if (!game_state_baseline || game_state_baseline_size!=size)
+		{
+			free(game_state_baseline);
+			game_state_baseline = malloc(size);
+			game_state_baseline_size = game_state_baseline ? size : 0;
+			game_state_baseline_valid = 0;
+		}
+		if (game_state_baseline && game_state_baseline_valid && game_state_baseline_file==file)
+		{
+			const unsigned long blocks = (size+DELTA_BLOCK-1)/DELTA_BLOCK;
+			unsigned long runs = 0, written = 0, block = 0;
+
+			game_state_baseline_valid = 0;
+			while (block<blocks)
+			{
+				unsigned long last_changed, next, end, at, length;
+				DWORD wrote = 0;
+
+				if (game_state_block_same(image, block, size))
+				{
+					block++;
+					continue;
+				}
+				last_changed = block;
+				for (next = block+1; next<blocks && next-last_changed<=DELTA_GAP_BLOCKS; next++)
+				{
+					if (!game_state_block_same(image, next, size))
+						last_changed = next;
+				}
+				end = last_changed+1;
+				at = block*DELTA_BLOCK;
+				length = (end*DELTA_BLOCK<size ? end*DELTA_BLOCK : size)-at;
+				if (SetFilePointer(file, (LONG)at, NULL, FILE_BEGIN)==INVALID_SET_FILE_POINTER ||
+					!platform_write_file_in_pieces(file, image+at, length, piece, &wrote) || wrote!=length)
+				{
+					return FALSE;
+				}
+				memcpy(game_state_baseline+at, image+at, length);
+				written += length;
+				runs++;
+				block = end;
+			}
+			game_state_baseline_valid = 1;
+			*bytes_written = size;
+			platform_log("checkpoint %lu: only what changed was written: %lu KB in %lu runs of the %lu KB, in %.0f ms", game_state_async.number, written/1024, runs, size/1024,
+				game_state_async_now_ms()-start);
+			return TRUE;
+		}
+	}
+	game_state_baseline_valid = 0;
+	if (SetFilePointer(file, 0, NULL, FILE_BEGIN)!=INVALID_SET_FILE_POINTER &&
+		platform_write_file_in_pieces(file, snapshot, size, piece, &whole) && whole==size)
+	{
+		*bytes_written = whole;
+		if (async_save_delta() && game_state_baseline)
+		{
+			memcpy(game_state_baseline, image, size);
+			game_state_baseline_file = file;
+			game_state_baseline_valid = 1;
+		}
+		return TRUE;
+	}
+	return FALSE;
+}
 #endif
 
 /* ---------- globals */
@@ -290,6 +390,9 @@ void game_state_create_or_open_file(
 	/* (a new game's file: whatever the image holds is the last game's) */
 	game_state_image_is_checkpoint = FALSE;
 #endif
+#ifdef HALO_WIIU
+	game_state_delta_invalidate();
+#endif
 	xbox_game_state_globals.handle = CreateFileA("z:\\savegame.bin",
 		GENERIC_READ|GENERIC_WRITE, 0, NULL, OPEN_ALWAYS,
 		FILE_FLAG_NO_BUFFERING|FILE_FLAG_SEQUENTIAL_SCAN, NULL);
@@ -329,6 +432,9 @@ void game_state_close_file(
 		return;
 	}
 #endif
+#ifdef HALO_WIIU
+	game_state_delta_invalidate();
+#endif
 	CloseHandle(xbox_game_state_globals.handle);
 	xbox_game_state_globals.file_open = FALSE;
 
@@ -367,6 +473,9 @@ boolean game_state_write_to_file(
 #ifdef HALO_WIIU
 	/* (written here from the game state itself: the image holds an older checkpoint's bytes, or none) */
 	game_state_image_is_checkpoint = FALSE;
+#endif
+#ifdef HALO_WIIU
+	game_state_delta_invalidate();
 #endif
 	if (SetFilePointer(xbox_game_state_globals.handle, 0, NULL, FILE_BEGIN) !=
 			INVALID_SET_FILE_POINTER &&
@@ -1057,8 +1166,7 @@ static void game_state_async_write(
 		error = 0xFA17;
 		snprintf(note, sizeof(note), " - error %lu", error);
 	}
-	else if (SetFilePointer(file, 0, NULL, FILE_BEGIN)!=INVALID_SET_FILE_POINTER &&
-		platform_write_file_in_pieces(file, snapshot, size, async_save_piece_bytes(), &bytes_written) &&
+	else if (game_state_write_image(file, snapshot, size, &bytes_written) &&
 		bytes_written==size)
 	{
 		ok = TRUE;
@@ -1186,6 +1294,7 @@ static boolean game_state_async_settle(
 		void *snapshot = game_state_image_get_keeping(xbox_game_state_globals.buffer_size);
 
 		platform_log("checkpoint %lu: its write failed on the writer thread: written again on the game thread", game_state_async.number);
+		game_state_delta_invalidate();
 		if (snapshot &&
 			!(game_state_async_fault()==2 && (game_state_async.number&1)==0) &&
 			SetFilePointer(xbox_game_state_globals.handle, 0, NULL, FILE_BEGIN)!=INVALID_SET_FILE_POINTER &&
