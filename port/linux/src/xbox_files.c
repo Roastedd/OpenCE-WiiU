@@ -418,6 +418,11 @@ static int find_entry_case_insensitive(const char *directory, const char *name, 
 static unsigned long drive_known[26];
 #endif
 
+#ifdef HALO_WIIU
+/* port/wiiu/src/wiiu_usb.c: where the checkpoint file is kept when halo/checkpoint_dir.txt says (a folder on a USB drive), else NULL */
+const char *wiiu_checkpoint_dir(void);
+#endif
+
 void platform_translate_path(const char *xbox_path, char *host_path, unsigned long host_path_size)
 {
 	char resolved[1024];
@@ -425,6 +430,20 @@ void platform_translate_path(const char *xbox_path, char *host_path, unsigned lo
 	unsigned long length;
 
 	FILE_COUNT(FILE_COUNT_TRANSLATE, 1);
+#ifdef HALO_WIIU
+	/* (the game state's file, z:\savegame.bin, on a USB drive: a test, halo/checkpoint_dir.txt) */
+	if ((xbox_path[0] == 'z' || xbox_path[0] == 'Z') && xbox_path[1] == ':' && (xbox_path[2] == '\\' || xbox_path[2] == '/') &&
+		names_match(xbox_path + 3, "savegame.bin", 13))
+	{
+		const char *folder = wiiu_checkpoint_dir();
+
+		if (folder)
+		{
+			snprintf(host_path, host_path_size, "%s/savegame.bin", folder);
+			return;
+		}
+	}
+#endif
 	snprintf(resolved, sizeof(resolved), "%s", platform_data_root());
 	if (((cursor[0] >= 'a' && cursor[0] <= 'z') || (cursor[0] >= 'A' && cursor[0] <= 'Z')) && cursor[1] == ':')
 	{
