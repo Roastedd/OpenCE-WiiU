@@ -118,6 +118,16 @@ WIIU_LINK_FLAGS = ["-g", "-specs=$$WUT_ROOT/share/wut.specs", WIIU_MARCH, "-meab
 WIIU_LIBS = ["-L$$WUT_ROOT/lib", "-lwut", "-lm"]
 
 
+def wiiu_usb_flags():
+    """WIIU_MOCHA=1 in the environment: the build can mount a USB drive for the checkpoint file (port/wiiu/src/wiiu_usb.c), with libmocha's headers
+    from build/libmocha (the library is LGPL-3.0, wiiu-env/libmocha; not kept in this repository)"""
+    return ["-DHALO_WIIU_USB", "-Ibuild/libmocha/include"] if os.environ.get("WIIU_MOCHA") == "1" else []
+
+
+def wiiu_usb_libs():
+    return ["-Lbuild/libmocha/lib", "-lmocha", "-lstdc++"] if os.environ.get("WIIU_MOCHA") == "1" else []
+
+
 # the app's names in Aroma's menu (wuhbtool --name, --short-name, --author): OpenCE-U, the OpenCE project's port to the Wii U
 WUHB_NAME = "OpenCE-U"
 WUHB_SHORT_NAME = "OpenCE-U"
@@ -299,7 +309,7 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
     # (no stack protector: newlib has no guard; no -mcpu twice: the compiler adds it)
     # (HALO_WIIU: the Xbox memory window is at the top of MEM2, not at 0x80000000: halo_port_capacity.h)
     # (HALO_BW_KERNELS: the Broadway kernels, port/wiiu/src/bw, which the game's sources call once halo/broadway.txt turns them on)
-    abi = " ".join(wiiu_flags(LINUX_ABI_FLAGS) + [WIIU_MARCH, WIIU_TLS, "-DHALO_WIIU", "-DHALO_BW_KERNELS"] + configuration_defines(sln))
+    abi = " ".join(wiiu_flags(LINUX_ABI_FLAGS) + [WIIU_MARCH, WIIU_TLS, "-DHALO_WIIU", "-DHALO_BW_KERNELS"] + configuration_defines(sln) + wiiu_usb_flags())
     port_include = LINUX_DIR / "include"
     sdk_flags = f"-idirafter {XDK_INCLUDE}"
     objects: List[Path] = []
@@ -385,7 +395,10 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
     # the Wii U's own units, as they are written
     wiiu_src = WIIU_DIR / "src"
     for source in sorted(wiiu_src.glob("*.c")):
-        if source.name.startswith(WIIU_NATIVE_PREFIX):
+        if source.name == "wiiu_usb.c":
+            # (the USB drive for the checkpoint file: libmocha's header, when the build is made with WIIU_MOCHA=1)
+            add_object(source, f"{posix_cflags} -ffp-contract=off -I{wiiu_src} -I{platform_dir} " + " ".join(wiiu_usb_flags()))
+        elif source.name.startswith(WIIU_NATIVE_PREFIX):
             # (-ffp-contract=off: the objects are checked for fused multiply-adds whether or not they touch the simulation)
             extra = f" {mbedtls_include} -I{MONOCYPHER_DIR} {update_defines(release)}" if source.name in WIIU_UPDATE_UNITS else ""
             if source.name in ("wiiu_bw_kernels.c", "wiiu_gx2.c", "wiiu_keyboard.c", "wiiu_keyboard_font.c", "wiiu_social_view.c"):
@@ -434,7 +447,7 @@ def generate_wiiu_build(n: Writer, sln: Any) -> None:
 
     # what is still undefined, defined as functions that name themselves and stop
     ldflags = " ".join(WIIU_LINK_FLAGS)
-    libs = " ".join(WIIU_LIBS)
+    libs = " ".join(WIIU_LIBS + wiiu_usb_libs())
     stubs_source = build_dir / "wiiu_stubs.c"
     stubs_list = build_dir / "wiiu_stubs.txt"
     n.build(
