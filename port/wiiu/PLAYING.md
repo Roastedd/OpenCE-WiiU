@@ -146,6 +146,12 @@ Saves, profiles and the settings live in `wiiu/apps/halo/data/` and `config.toml
 is written to the card while you play; do not take the card out or turn the console off while the game is running, and leave through HOME and **Close
 Software**, or the pause menu's Quit. If the card or the console is changed, copy the whole `wiiu/apps/halo/` folder back.
 
+The game keeps one step of safety for the files that hold your progress. Before it writes over your saved game (`savegame.bin` in your profile's folder,
+written when you Save and Quit) or your profile (`NN.sav`), it keeps the last good copy beside it as `savegame.bin.bak` or `NN.sav.bak`. If a freeze or a
+pulled card leaves the new file cut short, or the game finds the file failing its check, the next start tries the `.bak` once, and `log.txt` says what it did
+(lines that start `saves:`). A `.bak` is only replaced by a file that was good, and the saved game's takes another 20 MB of the card per profile. Leave the
+`.bak` files where they are. `halo/save_backup.txt` with 0 turns this off.
+
 ## Halo Custom Edition maps
 
 The game can play maps made for Halo Custom Edition on PC (`.map` files of cache version 609), as OpenCE on PC does
@@ -196,7 +202,12 @@ found that no Custom Edition map was available on the development machines, so t
   was working and does not now, take away any card files you made (see below) and try again.
 - **A freeze or a halt**: the game writes why into `data/debug.txt` (a line that starts `EXCEPTION halt` says which check stopped it). Do not
   open the game again before you copy the files below: the next start renames them.
-- To report a problem, include these files from `wiiu/apps/halo/` on the SD card: `log.txt`, `log-previous.txt`, `crash.txt`, `blackbox.txt`,
+- **The easy way to report a problem**: after the run that went wrong, close the game, make a file called `make_report.txt` in `wiiu/apps/halo/` that holds
+  the number `1` (the card files below say how), and start the game once more. At the start it gathers the last run's log (its top, which names the build,
+  and its last 400 lines), crash note, black box, close trail and the last 100 lines of `data/debug.txt` into one text file, `wiiu/apps/halo/report.txt`
+  (under 200 KB), and removes `make_report.txt`; `log.txt` says where it is. Send that one file, and say which release and which settings and card files you
+  used. It holds only what those files hold. (Free space on the card is not in it: reading it takes seconds on a big card.)
+- Or include these files from `wiiu/apps/halo/` on the SD card: `log.txt`, `log-previous.txt`, `crash.txt`, `blackbox.txt`,
   `exit-trail.txt` and `data/debug.txt`, and say which release and which settings and card files you used. Take them after the game is closed.
   The log says what the game was doing in the last seconds, and the performance overlay's numbers help for a slow place.
 - A map missing from `data/maps/` stops the game at the end of the level before it. Make sure every converted map is there.
@@ -230,8 +241,11 @@ Small text files in `wiiu/apps/halo/` that change what the game does. Each holds
 | `shader_capture.txt` | off | `always`: the shaders a level needs are written down during play, for making a new pack (a tester's) |
 | `profile.txt` | absent | its presence starts the sampling profiler (a tester's; delete the file to stop) |
 | `broadway.txt` | 0 | the Broadway kernels: **stays 0** (one failed its self-test on a console) |
+| `save_backup.txt` | 1 | 0: no `.bak` of the saved game and the profiles is kept or tried (see Saves) |
+| `checkpoint_writes.txt` | 0 | when a checkpoint's 20 MB copy is written to the card (`z/savegame.bin`, the run's own scratch file; your saved game is not it): 0 at every checkpoint, 1 only when you pause or the game ends, 2 only when it ends. The checkpoint is always copied in memory and a revert takes it from there, so a death costs no card write; a freeze loses nothing a run would read again. Needs `async_save.txt` and `async_save_revert_image.txt` on (they are) |
+| `make_report.txt` | absent | 1: at the next start the last run's files are gathered into `report.txt`, and this file is removed (see If something goes wrong) |
 
-Files the game writes there: `log.txt`, `log-previous.txt`, `blackbox.txt`, `crash.txt`, `exit-trail.txt`, `shader-misses-*.txt`, and `data/debug.txt`.
+Files the game writes there: `log.txt`, `log-previous.txt`, `blackbox.txt`, `crash.txt`, `exit-trail.txt`, `report.txt` (when asked), `shader-misses-*.txt`, `.bak` copies of the saved game and the profiles beside them, and `data/debug.txt`.
 
 ## Updates
 

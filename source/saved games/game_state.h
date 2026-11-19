@@ -52,6 +52,9 @@ boolean game_state_port_save_lost(
 	void);
 int game_state_port_save_wait(
 	unsigned long timeout_ms);
+/* the pause menu opens (ending 0) or the game ends (1): a checkpoint kept in memory without its write is written (halo/checkpoint_writes.txt) */
+void game_state_port_flush_checkpoint(
+	int ending);
 #endif
 void game_state_save_to_persistent_storage(
 	void);

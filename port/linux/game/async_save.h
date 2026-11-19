@@ -17,6 +17,8 @@ Switches (halo/<name> on the console, HALO_<NAME> in the environment of the host
   async_save_piece_kb.txt  the size of the pieces the write is made in (128 by default): the card is not held by one 20 MiB request
   async_save_revert_image.txt  0: a revert reads the 20 MiB back from the card, as it always did; 1 or absent: it takes the game state from the copy of the last checkpoint
                          that is still in memory (the image), which holds the file's bytes (game_state_xbox.c), and does not read the card
+  checkpoint_writes.txt  0 or absent: every checkpoint is written to the card (z:\\savegame.bin); 1: only when the player pauses the game or it ends (the checkpoint is still
+                         copied into memory, a revert takes it from there); 2: only when it ends. Needs async_save.txt and async_save_revert_image.txt on (the default)
 */
 
 #ifndef __ASYNC_SAVE_H
@@ -31,6 +33,7 @@ int async_save_verify(void);
 int async_save_revert_image(void);
 int async_save_delta(void);
 int async_save_exit(void);
+int async_save_checkpoint_writes(void);
 unsigned long async_save_piece_bytes(void);
 
 /* memcpy of the checkpoint's image on three threads (the game thread waits for all of them) */

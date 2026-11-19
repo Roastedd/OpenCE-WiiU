@@ -1152,6 +1152,29 @@ boolean saved_game_file_open(
 	return success;
 }
 
+#ifdef HALO_WIIU
+/* port: the path of the file saved_game_file_open opens (the profile's .sav), for the backup beside it (halo/save_backup.txt); the saved game files' mutex is held, as it is for the open */
+boolean saved_game_file_port_get_path(
+	long profile_index,
+	char *path,
+	long path_size)
+{
+	struct enumerated_saved_game_file file;
+	long memory_unit = SAVED_GAME_FILE_INDEX_MEMORY_UNIT(profile_index);
+	long n = SAVED_GAME_FILE_INDEX_FILE_INDEX(profile_index);
+
+	if (memory_unit==_memory_unit_hard_drive && n>=0 && n<MAXIMUM_ENUMERATED_SAVED_GAME_FILES_ANY_TYPE_PER_MEMORY_UNIT &&
+		get_nth_entry_in_mapfile(memory_unit, n, &file) && (long)strlen(file.path)<path_size)
+	{
+		strcpy(path, file.path);
+
+		return TRUE;
+	}
+
+	return FALSE;
+}
+#endif
+
 boolean synchronize_metadata_display_name_with_profile_name(
 	long profile_index,
 	wchar_t *game_display_name)
