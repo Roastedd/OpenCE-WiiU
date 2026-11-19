@@ -162,8 +162,16 @@ const char *wiiu_checkpoint_dir(void)
 			platform_log("checkpoint dir: %s could not be made on the USB drive; the checkpoint stays on the card", checkpoint_folder);
 			return NULL;
 		}
-		bench_folder("/vol/external01/wiiu/apps/halo", "sd card");
-		bench_folder(checkpoint_folder, "usb drive");
+		{
+			extern long wiiu_study_number(const char *name, long fallback);
+
+			/* (halo/usb_bench.txt 1: time writes to the card and the drive at start-up, which holds the game up for some seconds) */
+			if (wiiu_study_number("usb_bench.txt", 0) > 0)
+			{
+				bench_folder("/vol/external01/wiiu/apps/halo", "sd card");
+				bench_folder(checkpoint_folder, "usb drive");
+			}
+		}
 		platform_log("checkpoint dir: the checkpoint file is on the USB drive, in %s", checkpoint_folder);
 		checkpoint_state = 1;
 		return checkpoint_folder;

@@ -969,6 +969,17 @@ static unsigned read_trace_count;
 static unsigned long long read_trace_offset;
 void platform_log(const char *format, ...);
 static double write_yielded_ms;
+static unsigned long write_pieces;
+static double write_call_ms, write_pause_ms, write_slowest_ms;
+long wiiu_study_number(const char *name, long fallback);
+static int write_yield_enabled(void)
+{
+	static int enabled = -1;
+
+	if (enabled < 0)
+		enabled = wiiu_study_number("write_yield.txt", 1) != 0;
+	return enabled;
+}
 static volatile double last_read_end_ms;
 #endif
 
@@ -1093,19 +1104,36 @@ BOOL platform_write_file_in_pieces(HANDLE handle, LPCVOID buffer, DWORD count, D
 	start_ms = file_io_now_ms();
 #ifdef HALO_WIIU
 	write_yielded_ms = 0.0;
+	write_pieces = 0;
+	write_call_ms = 0.0;
+	write_pause_ms = 0.0;
+	write_slowest_ms = 0.0;
 #endif
 	while (done < count)
 	{
 		DWORD wrote = 0;
 		const DWORD size = count - done < piece ? count - done : piece;
+#ifdef HALO_WIIU
+		const double call_start = file_io_now_ms();
+#endif
 
 		result = write_at(file, (const char *)buffer + done, size, &wrote, FALSE, 0);
+#ifdef HALO_WIIU
+		{
+			const double took = file_io_now_ms() - call_start;
+
+			write_pieces++;
+			write_call_ms += took;
+			if (took > write_slowest_ms)
+				write_slowest_ms = took;
+		}
+#endif
 		done += wrote;
 		if (!result)
 			break;
 #ifdef HALO_WIIU
-		/* Give queued map reads a chance between checkpoint pieces. */
-		if (done < count)
+		/* Give queued map reads a chance between checkpoint pieces (halo/write_yield.txt 0: do not). */
+		if (done < count && write_yield_enabled())
 		{
 			const struct timespec pause = { 0, 2000000 };
 			const double begun = file_io_now_ms();
@@ -1119,9 +1147,16 @@ BOOL platform_write_file_in_pieces(HANDLE handle, LPCVOID buffer, DWORD count, D
 				(__atomic_load_n(&reads_in_flight, __ATOMIC_SEQ_CST) > 0 || file_io_now_ms() - last_read_end_ms < 40.0))
 				nanosleep(&pause, NULL);
 			write_yielded_ms += file_io_now_ms() - begun;
+			write_pause_ms += file_io_now_ms() - begun;
 		}
 #endif
 	}
+#ifdef HALO_WIIU
+	if (done >= 1024 * 1024)
+		platform_log("write: %lu KB in %lu pieces of %lu KB, %.0f ms in all: %.0f ms inside the write calls, %.0f ms waiting for reads, the slowest piece %.0f ms (%s)",
+			(unsigned long)(done / 1024), write_pieces, (unsigned long)(piece / 1024), file_io_now_ms() - start_ms, write_call_ms, write_pause_ms, write_slowest_ms,
+			strncmp(file->path, "storage_usb:", 12) == 0 ? "USB drive" : "SD card");
+#endif
 	file_io_note(file, 1, done, start_ms);
 	if (bytes_written)
 		*bytes_written = done;

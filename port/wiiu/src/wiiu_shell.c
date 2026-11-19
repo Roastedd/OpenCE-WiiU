@@ -518,6 +518,23 @@ void wiiu_thread_off_game_core(void)
 /* The checkpoint's writer (port/linux/game/async_save.c): on core 0, named, and below the game thread's priority like the other workers (setup_thread): it waits for the card
 most of its time, and what it has to do on a core is a piece of the file at a time. */
 void wiiu_thread_background(const char *name);
+/* the same with the priority below the game's by offset (a smaller number is a higher priority; 0 is the game's own) */
+void wiiu_thread_background_offset(const char *name, int offset);
+void wiiu_thread_background_offset(const char *name, int offset)
+{
+	OSThread *self = OSGetCurrentThread();
+	int priority = (int)main_priority + offset;
+
+	if (priority < 0)
+		priority = 0;
+	if (priority > 31)
+		priority = 31;
+	wiiu_thread_off_game_core();
+	OSSetThreadName(self, name);
+	OSSetThreadPriority(self, priority);
+	wiiu_tag_thread(name);
+}
+
 void wiiu_thread_background(const char *name)
 {
 	OSThread *self = OSGetCurrentThread();

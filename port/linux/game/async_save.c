@@ -18,6 +18,7 @@ void platform_log(char const *format, ...);
 long wiiu_study_number(const char *name, long fallback);
 #ifdef __WIIU__
 void wiiu_thread_background(const char *name);
+void wiiu_thread_background_offset(const char *name, int offset);
 #endif
 
 static struct
@@ -131,7 +132,15 @@ static void *worker(void *unused)
 	(void)unused;
 #ifdef __WIIU__
 	/* (core 0, below the game thread: it waits for the card, and has no work worth the game's core) */
-	wiiu_thread_background("save");
+	{
+		/* (halo/async_save_priority.txt: how far below the game's priority the writer runs, 4 by default; 0 is the game's own) */
+		const long offset = wiiu_study_number("async_save_priority.txt", 4);
+
+		if (offset == 4)
+			wiiu_thread_background("save");
+		else
+			wiiu_thread_background_offset("save", (int)offset);
+	}
 #endif
 	pthread_mutex_lock(&job.lock);
 	for (;;)
