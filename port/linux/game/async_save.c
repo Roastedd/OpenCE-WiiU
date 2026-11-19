@@ -98,6 +98,23 @@ int async_save_revert_image(void)
 	return revert_image;
 }
 
+int async_save_checkpoint_writes(void)
+{
+	static int mode = -1;
+
+	if (mode < 0)
+	{
+		const long number = wiiu_study_number("checkpoint_writes.txt", 0);
+
+		/* (-1 and no file: 0) */
+		mode = number < 1 ? 0 : number > 2 ? 2 : (int)number;
+		if (mode)
+			platform_log("checkpoint: the checkpoint's copy on the card is written %s (halo/checkpoint_writes.txt %d); a revert takes it from memory",
+				mode == 1 ? "only when the game is paused or ends" : "only when the game ends", mode);
+	}
+	return mode;
+}
+
 unsigned long async_save_piece_bytes(void)
 {
 	if (!job.piece)

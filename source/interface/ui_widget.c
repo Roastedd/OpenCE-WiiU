@@ -8851,6 +8851,15 @@ void process_ui_widgets(
 		}
 	}
 	pause_pressed = ui_check_for_pause_game();
+#ifdef HALO_WIIU
+	/* port: a checkpoint kept in memory without its write to the card is written when the game is paused (halo/checkpoint_writes.txt 1) */
+	if (pause_pressed)
+	{
+		void game_state_port_flush_checkpoint(int ending);
+
+		game_state_port_flush_checkpoint(0);
+	}
+#endif
 	any_modal_widget_active = FALSE;
 	for (widget_index = 0;
 		widget_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS;

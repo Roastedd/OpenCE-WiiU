@@ -24,6 +24,7 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 #include "wiiu_crash.h"
 #include "wiiu_debug.h"
 #include "wiiu_shell_blackbox.h"
+#include "wiiu_shell_report.h"
 #include "wiiu_shell_log.h"
 #include "wiiu_missing_keys.h"
 #include "wiiu_shell_watch.h"
@@ -73,6 +74,8 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 #define BLACKBOX_PREVIOUS_FILE WIIU_DATA_DIRECTORY "/blackbox-previous.txt"
 #define CRASH_FILE WIIU_DATA_DIRECTORY "/crash.txt"
 #define CRASH_PREVIOUS_FILE WIIU_DATA_DIRECTORY "/crash-previous.txt"
+#define REPORT_REQUEST_FILE WIIU_DATA_DIRECTORY "/make_report.txt"
+#define REPORT_FILE WIIU_DATA_DIRECTORY "/report.txt"
 
 /* Everything is static and never destroyed: a thread may still be using it as the process ends. */
 static wiiu_shell_log shell_log;
@@ -103,6 +106,9 @@ static int (*game_main_function)(void);
 static OSThread game_thread;
 static uint8_t *game_stack;
 static char last_beat[240];
+/* halo/make_report.txt: what became of the one-file report made at the start (-1 not asked, else wiiu_shell_report_make's answer) and its size */
+static int report_result = -1;
+static size_t report_bytes;
 
 /* ---------- time and threads */
 
@@ -826,6 +832,34 @@ static void make_directories(void)
 	mkdir(WIIU_DATA_DIRECTORY, 0755);
 }
 
+/* halo/make_report.txt (the number 1): the last run's log, crash note, black box, close trail and debug.txt into one file, report.txt, for a bug report. Called before
+this run's log replaces the last run's; the request is removed once it is answered (a failure is told in the log). */
+static void make_report_if_asked(void)
+{
+	FILE *request = fopen(REPORT_REQUEST_FILE, "r");
+	int asked = 0;
+
+	if (!request)
+		return;
+	if (fscanf(request, "%d", &asked) != 1)
+		asked = 0;
+	fclose(request);
+	unlink(REPORT_REQUEST_FILE);
+	if (asked == 1)
+	{
+		wiiu_shell_report_config config;
+
+		memset(&config, 0, sizeof(config));
+		config.output = REPORT_FILE;
+		config.log = LOG_FILE;
+		config.crash = CRASH_FILE;
+		config.blackbox = BLACKBOX_FILE;
+		config.exit_trail = EXIT_TRAIL_PREVIOUS_FILE; /* (put away by the start of this run) */
+		config.debug = ERROR_FILE;
+		report_result = wiiu_shell_report_make(&config, &report_bytes);
+	}
+}
+
 /* the last run's file out of the way, and its lines into this run's log; 1 if it had any */
 static int report_file(const char *previous, const char *what);
 
@@ -1245,6 +1279,7 @@ int wiiu_shell_run(int (*game_main)(void))
 	ProcUIRegisterCallback(PROCUI_CALLBACK_NET_IO_START, on_network_start, NULL, ACQUIRE_PRIORITY);
 
 	make_directories();
+	make_report_if_asked(); /* (before the log, the black box and the crash note of the last run are put away, and debug.txt rolled) */
 	unlink(LOG_PREVIOUS_FILE);
 	rename(LOG_FILE, LOG_PREVIOUS_FILE);
 	{
@@ -1301,6 +1336,10 @@ int wiiu_shell_run(int (*game_main)(void))
 	wiiu_log("OpenCE for the Wii U starting: main thread on core %u at priority %d", (unsigned)OSGetCoreId(), (int)main_priority);
 	if (memory_line(text, sizeof(text)))
 		wiiu_log("%s", text);
+	if (report_result == 0)
+		wiiu_log("The report for a bug report is made: " REPORT_FILE " (%u KB): send that one file; halo/make_report.txt is removed", (unsigned)((report_bytes + 1023) / 1024));
+	else if (report_result > 0)
+		wiiu_log("The report (halo/make_report.txt) could not be made (error %d): the six files are the report", report_result);
 	report_file(EXIT_TRAIL_PREVIOUS_FILE, "close trail");
 	report_previous(BLACKBOX_FILE, BLACKBOX_PREVIOUS_FILE, "black box");
 	crash_note = report_previous(CRASH_FILE, CRASH_PREVIOUS_FILE, "crash note");

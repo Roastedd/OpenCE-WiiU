@@ -107,6 +107,7 @@ symbols in this file:
 #include <xtl.h>
 #ifdef HALO_WIIU
 #include "async_save.h"
+#include "save_backup.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -169,6 +170,8 @@ static double game_state_async_now_ms(
 void platform_log(char const *format, ...);
 long wiiu_study_number(const char *name, long fallback);
 BOOL platform_write_file_in_pieces(HANDLE handle, LPCVOID buffer, DWORD count, DWORD piece, LPDWORD bytes_written);
+static void game_state_backup_persistent_storage(
+	const char *why);
 static boolean game_state_async_begin(
 	void);
 static boolean game_state_async_settle(
@@ -188,6 +191,17 @@ static struct
 	unsigned long number;
 	double write_ms; /* the writer thread's */
 } game_state_async;
+
+/* halo/checkpoint_writes.txt (1, 2): a checkpoint's copy is kept in the image and its write to the card is left for later (game_state_deferred_flush): at the pause (1) and when
+the game ends. The file on the card holds an older complete image, or none (file_valid_for_read says a revert can be had: from the image; anything that reads the file or
+takes the image for another use writes the checkpoint first). */
+static struct
+{
+	boolean pending; /* the image holds a checkpoint that is not on the card */
+	unsigned long skipped; /* writes left out since the last one made */
+} game_state_deferred;
+static void game_state_deferred_flush(
+	const char *why);
 
 /* what the file z:\\savegame.bin holds after the last write that ended well (the writer thread's; halo/async_save_delta.txt): the next checkpoint writes only
 the blocks that differ from it. Any other write to the file, or the file made again, makes it not valid (game_state_delta_invalidate) and the next write is whole. */
@@ -280,6 +294,7 @@ static boolean game_state_persist_async(void *buffer, unsigned long *header_chec
 	game_state_persist_settle();
 	if (!game_state_async_settle(15000, "Save and Quit"))
 		return FALSE;
+	game_state_backup_persistent_storage("Save and Quit");
 	file = game_state_open_persistent_storage(NULL);
 	if (file==INVALID_HANDLE_VALUE)
 		return TRUE;
@@ -471,6 +486,7 @@ void game_state_free_buffer(
 		xbox_game_state_globals.buffer_allocated);
 #ifdef HALO_WIIU
 	/* port: a checkpoint's write is over before the game state goes (the thread works from a copy, but the file is closed next) */
+	game_state_port_flush_checkpoint(1);
 	game_state_async_settle(10000, "the game state is freed");
 #endif
 	XPhysicalFree(xbox_game_state_globals.buffer);
@@ -494,6 +510,8 @@ void game_state_create_or_open_file(
 #ifdef HALO_WIIU
 	/* (a new game's file: whatever the image holds is the last game's) */
 	game_state_image_is_checkpoint = FALSE;
+	game_state_deferred.pending = FALSE;
+	game_state_deferred.skipped = 0;
 #endif
 #ifdef HALO_WIIU
 	game_state_delta_invalidate();
@@ -578,6 +596,7 @@ boolean game_state_write_to_file(
 #ifdef HALO_WIIU
 	/* (written here from the game state itself: the image holds an older checkpoint's bytes, or none) */
 	game_state_image_is_checkpoint = FALSE;
+	game_state_deferred.pending = FALSE;
 #endif
 #ifdef HALO_WIIU
 	game_state_delta_invalidate();
@@ -875,7 +894,68 @@ static void game_state_header_terminate(
 	}
 }
 
+#ifdef HALO_WIIU
+/* port: the saved game's file (the profile's directory and its name), for the backup beside it (halo/save_backup.txt) */
+static boolean game_state_persistent_file_path(
+	char *path)
+{
+	if (!game_state_get_persistent_storage_path(path))
+		return FALSE;
+	strcat(path, game_state_get_persistent_storage_filename());
+
+	return TRUE;
+}
+
+/* (a saved game's header is zeroed while its write is under way and written last: a header of zeroes is a write that did not end, or no saved game) */
+static void game_state_backup_persistent_storage(
+	const char *why)
+{
+	char path[512];
+
+	(void)why;
+	if (save_backup_enabled() && game_state_persistent_file_path(path))
+	{
+		save_backup_keep(path, 1, GAME_STATE_FILE_SIZE, 2048, NULL, "saved game");
+	}
+
+	return;
+}
+#endif
+
+static boolean game_state_read_header_from_persistent_storage_once(
+	void *header,
+	unsigned long *header_checksum,
+	long header_size,
+	long buffer_size,
+	boolean *corrupted);
+
 boolean game_state_read_header_from_persistent_storage(
+	void *header,
+	unsigned long *header_checksum,
+	long header_size,
+	long buffer_size,
+	boolean *corrupted)
+{
+	boolean result = game_state_read_header_from_persistent_storage_once(header, header_checksum, header_size, buffer_size, corrupted);
+
+#ifdef HALO_WIIU
+	/* port: a saved game that fails its checksum (or cannot be read) is put away and the one before it tried, once (halo/save_backup.txt) */
+	if (!result && save_backup_enabled())
+	{
+		char path[512];
+
+		if (game_state_persistent_file_path(path) && save_backup_swap_in(path, "the saved game"))
+		{
+			result = game_state_read_header_from_persistent_storage_once(header, header_checksum, header_size, buffer_size, corrupted);
+			save_backup_swap_out(path, result != FALSE, "the saved game");
+		}
+	}
+#endif
+
+	return result;
+}
+
+static boolean game_state_read_header_from_persistent_storage_once(
 	void *header,
 	unsigned long *header_checksum,
 	long header_size,
@@ -970,6 +1050,7 @@ void game_state_write_to_persistent_storage(
 	{
 		return;
 	}
+	game_state_backup_persistent_storage("Save and Quit");
 #endif
 	file = game_state_open_persistent_storage(NULL);
 	if (file != INVALID_HANDLE_VALUE)
@@ -1101,7 +1182,11 @@ static void *game_state_image_get(
 	unsigned long size)
 {
 #ifdef HALO_WIIU
-	void *image = game_state_image_get_keeping(size);
+	void *image;
+
+	/* (a checkpoint kept in the image for the pause is on the card before the image is another's: halo/checkpoint_writes.txt) */
+	game_state_deferred_flush("the image is wanted");
+	image = game_state_image_get_keeping(size);
 
 	/* (what the caller puts in it is its own) */
 	game_state_image_is_checkpoint = FALSE;
@@ -1306,6 +1391,50 @@ static void game_state_async_write(
 	return;
 }
 
+/* a checkpoint kept in memory without its write (halo/checkpoint_writes.txt) is written now: handed to the writer thread, or made here if that cannot be. Nothing if none is kept. */
+static void game_state_deferred_flush(
+	const char *why)
+{
+	unsigned long bytes_written = 0;
+	const unsigned long size = xbox_game_state_globals.buffer_size;
+
+	if (!game_state_deferred.pending)
+		return;
+	if (!xbox_game_state_globals.file_open || !game_state_image_is_checkpoint || !game_state_image || game_state_image_size < size)
+	{
+		game_state_deferred.pending = FALSE;
+		platform_log("checkpoint %lu: kept in memory and not written to the card (%s): the file is not open or the image is not the checkpoint any more", game_state_async.number, why);
+		return;
+	}
+	if (!game_state_async_settle(15000, why))
+		return; /* (a write is stuck: the checkpoint stays pending, the image and the file are left alone) */
+	game_state_deferred.pending = FALSE;
+	game_state_async.job_handle = xbox_game_state_globals.handle;
+	game_state_async.result = -1;
+	game_state_async_fault();
+	game_state_verify_piece_make();
+	if (async_save_start(game_state_async_write, NULL))
+	{
+		game_state_async.pending = TRUE;
+		platform_log("checkpoint %lu: written to the card now (%s), %lu earlier write%s skipped; on the writer thread", game_state_async.number, why, game_state_deferred.skipped-1,
+			game_state_deferred.skipped==2 ? "" : "s");
+		game_state_deferred.skipped = 0;
+		return;
+	}
+	game_state_deferred.skipped = 0;
+	if (game_state_write_image(xbox_game_state_globals.handle, game_state_image, size, &bytes_written) && bytes_written==size)
+	{
+		platform_log("checkpoint %lu: written to the card now (%s), on the game thread", game_state_async.number, why);
+	}
+	else
+	{
+		game_state_async.lost = TRUE;
+		game_state_image_is_checkpoint = FALSE;
+		xbox_game_state_globals.file_valid_for_read = FALSE;
+		platform_log("checkpoint %lu: LOST: it could not be written to the card (%s, error %lu)", game_state_async.number, why, (unsigned long)GetLastError());
+	}
+}
+
 /* copies the game state and hands the write over: FALSE if that cannot be done, and nothing is changed (the caller writes as it always did) */
 static boolean game_state_async_begin(
 	void)
@@ -1325,12 +1454,13 @@ static boolean game_state_async_begin(
 		platform_log("checkpoint: the last write is still running: written on the game thread");
 		return FALSE;
 	}
-	image = game_state_image_get(xbox_game_state_globals.buffer_size);
+	image = game_state_image_get_keeping(xbox_game_state_globals.buffer_size);
 	if (!image)
 	{
 		platform_log("checkpoint: no image to copy the game state to: written on the game thread");
 		return FALSE;
 	}
+	game_state_image_is_checkpoint = FALSE; /* (until the copy is whole) */
 
 	start = game_state_async_now_ms();
 	async_save_copy(image, xbox_game_state_globals.buffer, xbox_game_state_globals.buffer_size);
@@ -1343,6 +1473,20 @@ static boolean game_state_async_begin(
 			game_state_async_crc(image, xbox_game_state_globals.buffer_size), (unsigned long)xbox_game_state_globals.buffer_size,
 			memcmp(image, xbox_game_state_globals.buffer, xbox_game_state_globals.buffer_size)==0 ? "the same as the game state" : "DIFFERENT FROM THE GAME STATE");
 	}
+	if (async_save_checkpoint_writes() && async_save_revert_image())
+	{
+		/* (halo/checkpoint_writes.txt: the copy is the checkpoint, a revert takes the game state from it; the card is written at the pause (1) and when the game ends) */
+		if (game_state_deferred.pending)
+			platform_log("checkpoint %lu: the one before it (%lu) was never written to the card: this one replaces it", game_state_async.number, game_state_async.number-1);
+		game_state_deferred.pending = TRUE;
+		game_state_deferred.skipped++;
+		game_state_async.lost = FALSE;
+		xbox_game_state_globals.file_valid_for_read = TRUE;
+		platform_log("checkpoint %lu: the game state copied in %.1f ms (%lu KB); the write to the card is skipped (halo/checkpoint_writes.txt %d), it is kept in memory",
+			game_state_async.number, copy_ms, (unsigned long)xbox_game_state_globals.buffer_size/1024, async_save_checkpoint_writes());
+		return TRUE;
+	}
+	game_state_deferred.pending = FALSE;
 	game_state_async_fault(); /* (read here, on the game thread) */
 	game_state_verify_piece_make();
 	game_state_async.job_handle = xbox_game_state_globals.handle;
@@ -1442,6 +1586,16 @@ void game_state_port_wait_for_save(
 	return;
 }
 
+/* the pause menu opens (ui_widget.c) or the game ends: a checkpoint kept in memory is written (halo/checkpoint_writes.txt 1: at the pause too, 2: only when the game ends) */
+void game_state_port_flush_checkpoint(
+	int ending)
+{
+	if (game_state_deferred.pending && (ending || async_save_checkpoint_writes()==1))
+		game_state_deferred_flush(ending ? "the game ends" : "the game is paused");
+
+	return;
+}
+
 /* whether the last checkpoint is not on the card (its write failed twice) */
 boolean game_state_port_save_lost(
 	void)
@@ -1453,10 +1607,20 @@ boolean game_state_port_save_lost(
 int game_state_port_save_wait(
 	unsigned long timeout_ms)
 {
+	game_state_port_flush_checkpoint(1);
+
 	return async_save_wait(timeout_ms);
 }
 #else
 /* (the checkpoint's write on a thread of its own is the Wii U's: elsewhere the write is made where it always was, and none is waited for) */
+void game_state_port_flush_checkpoint(
+	int ending)
+{
+	(void)ending;
+
+	return;
+}
+
 void game_state_port_wait_for_save(
 	const char *why)
 {
