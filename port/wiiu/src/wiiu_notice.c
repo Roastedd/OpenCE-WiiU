@@ -7,6 +7,7 @@ The slow SD card message, the saving mark and the loading bar's state (wiiu_noti
 #include "wiiu_notice.h"
 
 #include <fcntl.h>
+#include <malloc.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -85,7 +86,8 @@ int wiiu_notice_card_bench(const char *folder, float *write_mbs, float *read_mbs
 	unsigned long done = 0;
 	double start, write_ms, sync_ms, read_ms = 0.0;
 
-	if (posix_memalign((void **)&buffer, 64, PIECE) || !buffer)
+	buffer = memalign(64, PIECE); /* (newlib's: posix_memalign is not in this C library, and the link would make a stub that stops the game) */
+	if (!buffer)
 		return 0;
 	memset(buffer, 0x5a, PIECE);
 	snprintf(path, sizeof(path), "%s/bench.tmp", folder);
