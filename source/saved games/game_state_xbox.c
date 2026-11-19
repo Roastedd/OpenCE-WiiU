@@ -346,7 +346,8 @@ static boolean game_state_write_image(HANDLE file, void *snapshot, unsigned long
 	{
 		if (!game_state_baseline || game_state_baseline_size!=size)
 		{
-			free(game_state_baseline);
+			if (game_state_baseline)
+				free(game_state_baseline); /* (the debug memory stops the game on free(NULL)) */
 			game_state_baseline = malloc(size);
 			game_state_baseline_size = game_state_baseline ? size : 0;
 			game_state_baseline_valid = 0;

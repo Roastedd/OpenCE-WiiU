@@ -231,6 +231,8 @@ int async_save_prepare(void)
 	if (!async_save_enabled())
 		return 0;
 	async_save_verify();
+	async_save_delta();
+	async_save_exit();
 	async_save_piece_bytes();
 	return make_thread();
 }
