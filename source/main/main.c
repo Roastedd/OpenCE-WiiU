@@ -1535,10 +1535,28 @@ boolean main_menu_is_loaded(
 }
 #endif
 
+#ifdef HALO_WIIU
+/* port: the loading bar of a campaign level load (port/wiiu/src/wiiu_notice.c, halo/loading_bar.txt): the load makes no frames of its own after the cache file's copy, so
+the stages present the last frame again, with the bar on it (a quarter of a second apart at most) */
+void wiiu_loading_begin(void);
+void wiiu_loading_stage(int percent);
+void wiiu_loading_end(void);
+void main_loading_present(void);
+
+void main_loading_present(
+	void)
+{
+	main_present_frame();
+}
+#endif
+
 static void main_new_map(
 	struct game_options *options)
 {
 	input_flush();
+#ifdef HALO_WIIU
+	wiiu_loading_stage(40);
+#endif
 	if (game_load(options))
 	{
 		game_initialize_for_new_map();
@@ -1575,6 +1593,9 @@ static void main_new_map(
 	if (main_globals.allow_persistent_storage)
 		game_state_try_and_load_from_persistent_storage();
 	ui_widgets_disable_pause_game(30);
+#ifdef HALO_WIIU
+	wiiu_loading_end();
+#endif
 
 	return;
 }
@@ -1630,6 +1651,9 @@ static void main_change_map_name(
 			options.map_name[NUMBEROF(options.map_name) - 1] = 0;
 			options.difficulty = global_difficulty_level;
 			game_dispose_from_old_map();
+#ifdef HALO_WIIU
+			wiiu_loading_begin();
+#endif
 			game_precache_new_map(options.map_name, TRUE);
 			game_unload();
 			main_new_map(&options);
@@ -2981,6 +3005,9 @@ static void main_setup_connection(
 			NUMBEROF(options.map_name) - 1);
 		options.map_name[NUMBEROF(options.map_name) - 1] = 0;
 		options.difficulty = global_difficulty_level;
+#ifdef HALO_WIIU
+		wiiu_loading_begin();
+#endif
 		game_precache_new_map(options.map_name, TRUE);
 		game_dispose_from_old_map();
 		main_new_map(&options);
