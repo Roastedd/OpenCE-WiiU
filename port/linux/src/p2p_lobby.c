@@ -808,7 +808,7 @@ static int listing_wanted(const unsigned char *payload, int size, int retained, 
 
 	if (!listing_read(payload, size, &listing))
 		return 0;
-	if (listing.version != HALO_PORT_NETWORK_VERSION)
+	if (!p2p_lobby_version_shown(listing.version, config_boolean("network.show_incompatible_games")))
 	{
 		if (listing.version > HALO_PORT_NETWORK_VERSION && !(listing.flags & _listing_closed))
 			newer_heard(key_hash);
@@ -839,7 +839,8 @@ static void update_browsing(void)
 		/* (listing_wanted let it in; its key and its time are checked
 		again here, where its signature is: the time it was queued at may
 		have run out) */
-		if (!listing_read(queued.payload, queued.size, &listing) || listing.version != HALO_PORT_NETWORK_VERSION ||
+		if (!listing_read(queued.payload, queued.size, &listing) ||
+			!p2p_lobby_version_shown(listing.version, config_boolean("network.show_incompatible_games")) ||
 			!signing_key_hash(listing.key, key_hash) || memcmp(key_hash, queued.key_hash, P2P_KEY_HASH_SIZE) ||
 			!listing_current(&listing, queued.retained))
 		{
@@ -1256,6 +1257,11 @@ static const char *const sort_names[NUMBER_OF_P2P_LOBBY_SORTS] =
 	"servers", "players", "name", "map", "type", "locked",
 };
 
+int p2p_lobby_version_shown(int version, int show_incompatible)
+{
+	return version == HALO_PORT_NETWORK_VERSION || show_incompatible;
+}
+
 int p2p_lobby_filter(struct p2p_listing *games, int count, const struct p2p_lobby_choices *choices,
 	int (*map_state)(const char *map))
 {
@@ -1266,6 +1272,8 @@ int p2p_lobby_filter(struct p2p_listing *games, int count, const struct p2p_lobb
 		const struct p2p_listing *game = &games[read];
 		int state = map_state ? map_state(game->map) : P2P_LOBBY_MAP_INSTALLED;
 
+		if (!p2p_lobby_version_shown(game->network_version, choices->show_incompatible))
+			continue;
 		if ((choices->source == P2P_LOBBY_SOURCE_DEDICATED && !game->dedicated) ||
 			(choices->source == P2P_LOBBY_SOURCE_PLAYERS && game->dedicated))
 		{

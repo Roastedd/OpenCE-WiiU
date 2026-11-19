@@ -637,6 +637,8 @@ SCREENS["network_setup/server_browser"] = {
          "The master servers' dedicated servers, the games\nplayers host (through the brokers), or all of them.", None),
         ("SHOW EMPTY SERVERS:", "network.browser_show_empty", YES_NO, "List games no one is playing yet.", None),
         ("SHOW FULL SERVERS:", "network.browser_show_full", YES_NO, "List games with no room left.", None),
+        ("SHOW INCOMPATIBLE:", "network.show_incompatible_games", YES_NO,
+         "List games on a newer or older network version,\nwhich cannot be joined.", None),
         ("SHOW MISSING MAPS:", "network.browser_maps",
          [("NO", "no"), ("YES", "yes"), ("IF DOWNLOADABLE", "downloadable")],
          "List games on maps you do not have: IF\nDOWNLOADABLE, those Map Sharing can download.", None),
@@ -1659,6 +1661,9 @@ BROWSER_WORDS = [
     "The host refused: your Discord account is in the game",
     "The host blocks VPNs: link Discord with its master (Settings > Network Setup)",
     "The host refused: too many players from your address",
+    # (the games of another network version, hidden; and a join of one refused)
+    "Games on another network version are hidden (Network Setup > Server Browser):",
+    "Cannot join: this game is on another network version",
 ]
 
 

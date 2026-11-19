@@ -375,11 +375,18 @@ struct p2p_lobby_choices
 	0 any */
 	int engine_type;
 	int maps;
+	/* games of another network version too (network.show_incompatible_games) */
+	int show_incompatible;
 };
+/* the one rule for network versions: whether a game of that network version
+is listed, which is when it is this build's (HALO_PORT_NETWORK_VERSION) or
+show_incompatible is set. A listing's, a master server's and a LAN
+advertisement's all pass through it */
+int p2p_lobby_version_shown(int version, int show_incompatible);
 /* the games the choices show, kept at the front in their order; returns
 how many. map_state tells what a game's map is to this machine (NULL: every
-map installed). A game of another network version is kept: shown, greyed,
-not joinable */
+map installed). A game of another network version is dropped unless
+choices->show_incompatible, then kept: shown, greyed, not joinable */
 int p2p_lobby_filter(struct p2p_listing *games, int count, const struct p2p_lobby_choices *choices,
 	int (*map_state)(const char *map));
 /* the games in the order's (reverse: the other way), those of another

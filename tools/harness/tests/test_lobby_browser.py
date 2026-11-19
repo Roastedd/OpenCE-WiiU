@@ -25,7 +25,7 @@ def generated(fault=None):
     source = read('port/linux/src/p2p_lobby.c')
     names = re.search(r'static const char \*const sort_names\[NUMBER_OF_P2P_LOBBY_SORTS\] =.*?\};', source,
                       re.S).group(0)
-    code = '\n'.join([names, function(source, 'p2p_lobby_filter'), function(source, 'text_order'),
+    code = '\n'.join([names, function(source, 'p2p_lobby_version_shown'), function(source, 'p2p_lobby_filter'), function(source, 'text_order'),
                       function(source, 'sort_order'), function(source, 'p2p_lobby_sort'),
                       function(source, 'p2p_lobby_sort_parse'), function(source, 'p2p_lobby_sort_text')])
     if fault:
@@ -33,7 +33,7 @@ def generated(fault=None):
     return (('enums.inc', enums), ('under_test.inc', code))
 
 
-CASES = ['source', 'empty_full', 'game_type', 'maps', 'servers_default', 'sort_each_way', 'other_version',
+CASES = ['source', 'empty_full', 'game_type', 'maps', 'servers_default', 'sort_each_way', 'other_version', 'hide_other_version',
          'sort_text']
 
 

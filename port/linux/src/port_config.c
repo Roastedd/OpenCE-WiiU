@@ -952,6 +952,12 @@ static const struct config_setting config_settings[] =
 		"The server browser: public games are listed through the signalling\n"
 		"brokers, and Join Game > Server Browser shows them. False lists no\n"
 		"game of this machine's and shows none." },
+	{ "network.show_incompatible_games", _config_boolean, "false", "HALO_NET_SHOW_INCOMPATIBLE_GAMES",
+		_environment_value, _platform_all,
+		"The server browser and the system link list hide games hosted on\n"
+		"another network version than this build's (a newer or older build),\n"
+		"which it cannot join. True lists them too, greyed and marked NEWER or\n"
+		"OLDER; choosing one says why it cannot be joined." },
 	{ "network.host_public", _config_boolean, "true", "HALO_NET_HOST_PUBLIC", _environment_value, _platform_all,
 		"Whether a new game of Create Game > Internet starts as PUBLIC (listed\n"
 		"in everyone's server browser: anyone can see and join it) or, false,\n"

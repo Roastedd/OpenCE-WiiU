@@ -3325,6 +3325,18 @@ boolean network_game_client_advertised_game_in_progress(
 		(network_game_client_advertised_versions[game_index].flags & HALO_PORT_ADVERTISED_IN_PROGRESS_FLAG) != 0;
 }
 
+/* port: the network version the advertised game's host sent (0: a build
+that sent none), for the system link list's rule (p2p_lobby_version_shown) */
+unsigned int network_game_client_advertised_game_version(
+	struct network_game_client *client,
+	struct network_advertised_game const *game)
+{
+	long game_index = client ? game - client->available_games : NONE;
+
+	return game_index >= 0 && game_index < MAXIMUM_NETWORK_ADVERTISED_GAMES ?
+		network_game_client_advertised_versions[game_index].version : 0;
+}
+
 /* port: whether the advertised game's host is a dedicated server
 (HALO_PORT_ADVERTISED_DEDICATED_FLAG), for the lobby's line */
 boolean network_game_client_advertised_game_dedicated(

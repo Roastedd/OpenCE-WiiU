@@ -46,6 +46,7 @@ static struct p2p_lobby_choices all_choices(void)
 	choices.source = P2P_LOBBY_SOURCE_ALL;
 	choices.show_empty = choices.show_full = 1;
 	choices.maps = P2P_LOBBY_MAPS_YES;
+	choices.show_incompatible = 1;
 	return choices;
 }
 
@@ -177,6 +178,18 @@ int main(int argc, char **argv)
 		CHECK(!strcmp(games[shown - 1].name, "Golf newer"), "last the other way too");
 		CHECK(!strcmp(games[0].name, "Charlie empty") || !strcmp(games[0].name, "Echo dedicated empty"),
 			"the fewest first");
+	} else CASE("hide_other_version") {
+		add("Golf newer", "bloodgulch", 1, 15, 16, 1, 0);
+		games[count - 1].network_version = HALO_PORT_NETWORK_VERSION + 3;
+		add("Hotel older", "bloodgulch", 1, 4, 16, 0, 0);
+		games[count - 1].network_version = HALO_PORT_NETWORK_VERSION - 1;
+		CHECK(p2p_lobby_version_shown(HALO_PORT_NETWORK_VERSION, 0), "this build's: shown");
+		CHECK(!p2p_lobby_version_shown(HALO_PORT_NETWORK_VERSION + 3, 0), "another's: hidden");
+		CHECK(p2p_lobby_version_shown(HALO_PORT_NETWORK_VERSION + 3, 1), "another's: shown when asked");
+		choices.show_incompatible = 0;
+		shown = p2p_lobby_filter(games, count, &choices, NULL);
+		CHECK(shown == 5 && !has(shown, "Golf newer") && !has(shown, "Hotel older"), "by default: both left out");
+		CHECK(has(shown, "Bravo dedicated"), "this build's kept");
 	} else CASE("sort_text") {
 		int reverse;
 		char text[32];
