@@ -100,13 +100,22 @@ In Settings → your profile → **Video Settings**, kept in `config.toml`:
 - **Performance overlay**: **L + R + −** goes round off, a compact strip (frame rate, frame time, CPU and GPU share) and a detailed panel (where the
   frame's time goes, the governor's step, how full the memory pools are). `overlay.txt` (see "Card files") starts the game in one of them.
 
-## Smoother fights (optional, off by default)
+## Smoother fights (Performance row)
 
-The release candidates of this port were played with five small files that put the game's ticks on a second processor core beside the drawing, and the blends
-cheaper. They are off unless you make them (the game then plays as it did before them): in `wiiu/apps/halo/` make `tick_thread.txt`,
-`tick_snapshot.txt`, `tick_overlap.txt` and `gpu_offload.txt` each holding `1`, and `governor.txt` holding `on`. Take them away (or write `-1` in each)
-to go back. They work in the campaign and in a game of one player on this console; a network game and split screen stay on the plain loop on
-purpose. They are still being qualified: if the game halts with them on, take them away and send the logs (see "If something goes wrong").
+The release candidates of this port were played with five small files that put the game's ticks on a second processor core beside the drawing, and the
+blends cheaper (see "Card files"). Video Settings → **Detail** has a row, **Performance**, for the same switches, so that nobody has to make files:
+
+- **Default** (as it ships): nothing is changed. The switches are as the build and the card files make them: with no card file, the build (see
+  `port/linux/game/smooth_defaults.h`) has the ticks beside the drawing and the governor on for a game of one player. The log's `smooth defaults:` lines say
+  what a run did.
+- **Smoother**: turns on every switch that has no card file: the ticks on their own thread, the snapshot, the overlap, the governor (auto detail) and the cheaper
+  blends (`gpu_offload.txt` 1, which have no other way to be on except the file).
+- **Off**: turns off every switch that has no card file.
+
+A card file that is there always wins over the row. The row is `display.wiiu_performance` in `config.toml` (`"default"`, `"smoother"` or `"off"`), is
+read at each map start (so a change in the menu applies to the next map you start, not the one you are in), and only ever changes a game of one local
+player with no network: split screen, network games and saved films stay on the plain loop. The log says what the row did (`display.wiiu_performance is ...`).
+They are still being qualified: if the game halts with Smoother, set the row to Default and send the logs (see "If something goes wrong").
 
 ## Split screen (two to four players)
 
@@ -139,6 +148,18 @@ player even when you play alone; **Merged** is the old behaviour (the first cont
   microphone also picks up its own speaker). The Pro Controller has no microphone or jack; USB headsets do not work. **Voice chat has not been tried
   on a console yet.**
 - A network game plays on the plain loop: it is not faster for the files in "Smoother fights".
+
+## Continue where you left off at the start
+
+`game.wiiu_auto_continue = true` in `config.toml` (the default is `false`) makes the game, once the main menu is up, go straight to Campaign → Continue on
+the last campaign save, as if you had chosen it. It does nothing, and says so in the log (`Auto continue:` lines), when:
+
+- there is no valid campaign save to continue;
+- a controller button is held, or pressed, between the start and the moment it would go (**hold B as the game starts to cancel it**, on any controller);
+- the last run left a crash note (the log said `The last run left a crash note`): the menu stays so that you can look at what happened.
+
+It happens at most once a run, about one and a half seconds after the main menu appears. It continues the save of the profile that Campaign → Continue
+would use (the one last used).
 
 ## Saves
 
@@ -212,11 +233,11 @@ Small text files in `wiiu/apps/halo/` that change what the game does. Each holds
 | --- | --- | --- |
 | `overlay.txt` | 0 | 0 no performance overlay, 1 the compact strip, 2 the detailed panel (L + R + − goes round them any time) |
 | `governor.txt` | as Graphics mode says | text: `on` or `off` for auto detail; `target 25` the frame time it aims for in ms (at least 20), `max_step 2` the deepest step (0 to 3), `step 2` hold one step (a test), `blend 1500` the milliseconds a step change takes to reach its sizes (small and far props go first, the rest follow; 0: all at once) |
-| `tick_thread.txt` | 0 | 1: the game's ticks run on a thread of their own |
-| `tick_snapshot.txt` | 0 | 1: the drawing reads a copy of the objects (needed by the overlap) |
-| `tick_overlap.txt` | 0 | 1: the ticks run beside the drawing (needs the two above); campaign and one-player games only |
+| `tick_thread.txt` | no file: as Performance says (on for a one-player game in this build) | 1: the game's ticks run on a thread of their own; 0: never |
+| `tick_snapshot.txt` | as above | 1: the drawing reads a copy of the objects (needed by the overlap); 0: never |
+| `tick_overlap.txt` | as above | 1: the ticks run beside the drawing (needs the two above); campaign and one-player games only; 0: never |
 | `tick_core.txt` | 2 with the overlap | which core runs the ticks: 0, 1 or 2 |
-| `gpu_offload.txt` | 0 | 1: the interpolation's blends are cheaper (no correctly rounded square roots; the picture is the same to the eye) |
+| `gpu_offload.txt` | 0 (1 when Video Settings → Detail → Performance is Smoother) | 1: the interpolation's blends are cheaper (no correctly rounded square roots; the picture is the same to the eye) |
 | `stream.txt` | 0 | 1: texture streaming (the game draws from a bitmap's small tail while the rest is read from the card) |
 | `memcpy_touch.txt` | 0 | 1: the port's memory copy also asks the cache for the source ahead (faster or slower depending on the scene; for timing tests) |
 | `hotpaths.txt` | 0 | 1: the ticks ask the cache for the next objects ahead (for timing tests) |

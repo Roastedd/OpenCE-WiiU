@@ -428,6 +428,9 @@ SCREENS["video_settings/detail"] = {
              "The shine of lights on the level's surfaces,\nand its reflections and mirrors.", None),
             ("BUMP MAPPING:", "display.bump_mapping", ON_OFF,
              "The relief of rock and metal in the level's\nlighting; off lights its surfaces flat.", None),
+            # (the smoother-fights switches, once only halo/*.txt card files: port/linux/game/smooth_defaults.c; read at the next map start)
+            ("PERFORMANCE:", "display.wiiu_performance", [("DEFAULT", "default"), ("SMOOTHER", "smoother"), ("OFF", "off")],
+             "Smoother: the ticks beside the drawing and cheaper\nblends, in a game of one player. Off: none of it. Next map.", None),
     ],
 }
 

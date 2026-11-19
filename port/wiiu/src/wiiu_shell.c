@@ -28,6 +28,7 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 #include "wiiu_missing_keys.h"
 #include "wiiu_shell_watch.h"
 #include "wiiu_update.h"
+#include "wiiu_auto_continue.h"
 #include "wiiu_map_summary.h"
 #include "../../linux/game/smooth_defaults.h" /* the cards and the map (smooth_defaults.c): whether the ticks run beside the drawing */
 
@@ -1305,6 +1306,8 @@ int wiiu_shell_run(int (*game_main)(void))
 	report_previous(BLACKBOX_FILE, BLACKBOX_PREVIOUS_FILE, "black box");
 	crash_note = report_previous(CRASH_FILE, CRASH_PREVIOUS_FILE, "crash note");
 	wiiu_crash_install(CRASH_FILE, &shell_watch.phase, last_beat);
+	/* (game.wiiu_auto_continue: not after a run that crashed) */
+	wiiu_auto_continue_start(crash_note);
 
 	if (start_monitor(watchdog_main) || start_monitor(blackbox_main))
 		wiiu_log("A monitor thread could not be started");
