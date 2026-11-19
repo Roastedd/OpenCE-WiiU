@@ -229,6 +229,9 @@ Small text files in `wiiu/apps/halo/` that change what the game does. Each holds
 | `debug_server.txt` | 0 | 1 starts the debug server (screenshots, button presses, the log) for anyone on the network: leave it off unless you are testing |
 | `shader_capture.txt` | off | `always`: the shaders a level needs are written down during play, for making a new pack (a tester's) |
 | `profile.txt` | absent | its presence starts the sampling profiler (a tester's; delete the file to stop) |
+| `card_check.txt` | 1 | 0: no speed check of the SD card. A 2 MB file is written and read in `wiiu/apps/halo/bench.tmp` a few seconds after the main menu first shows (never while a save is being written; the file is removed), the speeds go to the log (`SD card: write X MB/s, read Y MB/s`) and the detailed overlay, and a card under 4 MB/s write or 8 MB/s read gets a message at the main menu, once a run |
+| `saving_mark.txt` | 1 | 0: no "Saving..." mark. It shows in a corner while a checkpoint or Save and Quit write runs, and for a second after, so that a pause is explained |
+| `loading_bar.txt` | 1 | 0: no loading bar. A campaign level load shows "Loading..." and a bar on the black screen, from the stage the load has reached |
 | `broadway.txt` | 0 | the Broadway kernels: **stays 0** (one failed its self-test on a console) |
 
 Files the game writes there: `log.txt`, `log-previous.txt`, `blackbox.txt`, `crash.txt`, `exit-trail.txt`, `shader-misses-*.txt`, and `data/debug.txt`.

@@ -1264,6 +1264,14 @@ boolean scenario_load(
 
 	check_memory_status(scenario_memory_status_attributed, "scenario_load");
 	global_scenario_index = scenario_tags_load(name);
+#ifdef HALO_WIIU
+	{
+		/* port: the loading bar's stage (port/wiiu/src/wiiu_notice.c): the tags are in */
+		void wiiu_loading_stage(int percent);
+
+		wiiu_loading_stage(70);
+	}
+#endif
 	if (global_scenario_index != NONE)
 	{
 		global_scenario = scenario_definition_get(global_scenario_index);
@@ -1273,6 +1281,13 @@ boolean scenario_load(
 				tag_loaded(GAME_GLOBALS_TAG, "globals\\globals"));
 			if (scenario_switch_structure_bsp(0))
 				result = TRUE;
+#ifdef HALO_WIIU
+			{
+				void wiiu_loading_stage(int percent);
+
+				wiiu_loading_stage(80);
+			}
+#endif
 		}
 		else
 		{

@@ -709,6 +709,14 @@ void game_initialize_for_new_map(
 	game_engine_initialize(&game_variant_global);
 	real_math_reset_precision();
 	rasterizer_initialize_for_new_map();
+#ifdef HALO_WIIU
+	{
+		/* port: the loading bar's stages (port/wiiu/src/wiiu_notice.c; nothing when it is off or no campaign load is going) */
+		void wiiu_loading_stage(int percent);
+
+		wiiu_loading_stage(85);
+	}
+#endif
 	game_state_initialize_for_new_map();
 	game_time_initialize_for_new_map();
 	interface_initialize_for_new_map();
@@ -737,6 +745,13 @@ void game_initialize_for_new_map(
 	contrails_initialize_for_new_map();
 	particles_initialize_for_new_map();
 	effects_initialize_for_new_map();
+#ifdef HALO_WIIU
+	{
+		void wiiu_loading_stage(int percent);
+
+		wiiu_loading_stage(92);
+	}
+#endif
 	particle_systems_initialize_for_new_map();
 	sound_initialize_for_new_map();
 	sound_classes_initialize_for_new_map();
@@ -756,6 +771,13 @@ void game_initialize_for_new_map(
 	hs_initialize_for_new_map();
 	recorded_animations_initialize_for_new_map();
 	cheats_initialize_for_new_map();
+#ifdef HALO_WIIU
+	{
+		void wiiu_loading_stage(int percent);
+
+		wiiu_loading_stage(98);
+	}
+#endif
 
 	game_globals->active = TRUE;
 	objects_place();
@@ -922,6 +944,14 @@ void game_precache_new_map(
 			{
 				map_status = cache_files_precache_map_status(
 					&game_globals->loading_progress);
+#ifdef HALO_WIIU
+				{
+					/* port: the loading bar (wiiu_notice.c) takes the first part of its length from the copy's progress */
+					void wiiu_loading_precache(float fraction);
+
+					wiiu_loading_precache(game_globals->loading_progress);
+				}
+#endif
 				main_pregame_render();
 				main_rasterizer_throttle();
 				main_present_frame();
