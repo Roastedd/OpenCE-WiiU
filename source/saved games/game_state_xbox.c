@@ -203,6 +203,111 @@ static void game_state_delta_invalidate(void)
 	game_state_baseline_valid = 0;
 }
 
+static void delete_persistent_storage(
+	void);
+
+/* Save and Quit's write of the saved game (halo/async_save_exit.txt), on the writer thread */
+static struct
+{
+	boolean pending;
+	HANDLE file;
+	unsigned char *image;
+	unsigned long checksum_offset;
+	unsigned long header_size;
+	unsigned long buffer_size;
+	unsigned long game_state_size;
+	volatile int result; /* -1 running, 1 written, 0 failed */
+	double write_ms;
+} game_state_persist;
+
+static void game_state_persist_job(void *argument)
+{
+	const double start = game_state_async_now_ms();
+	byte saved_header[2048];
+	unsigned long checksum;
+	DWORD bytes_written = 0;
+	unsigned long *header_checksum = (unsigned long *)(game_state_persist.image + game_state_persist.checksum_offset);
+
+	(void)argument;
+	*header_checksum = 0;
+	crc_new(&checksum);
+	crc_checksum_buffer(&checksum, game_state_persist.image, game_state_persist.game_state_size);
+	*header_checksum = checksum;
+	memcpy(saved_header, game_state_persist.image, game_state_persist.header_size);
+	memset(game_state_persist.image, 0, game_state_persist.header_size);
+	if (SetFilePointer(game_state_persist.file, 0, NULL, FILE_BEGIN)!=INVALID_SET_FILE_POINTER &&
+		platform_write_file_in_pieces(game_state_persist.file, game_state_persist.image, game_state_persist.buffer_size, async_save_piece_bytes(), &bytes_written) &&
+		bytes_written==game_state_persist.buffer_size &&
+		SetFilePointer(game_state_persist.file, 0, NULL, FILE_BEGIN)!=INVALID_SET_FILE_POINTER &&
+		WriteFile(game_state_persist.file, saved_header, game_state_persist.header_size, &bytes_written, NULL) &&
+		bytes_written==game_state_persist.header_size)
+	{
+		game_state_persist.result = 1;
+	}
+	else
+	{
+		game_state_persist.result = 0;
+	}
+	CloseHandle(game_state_persist.file);
+	game_state_persist.write_ms = game_state_async_now_ms()-start;
+	platform_log("save and quit: the saved game %s on the writer thread in %.0f ms", game_state_persist.result==1 ? "written" : "NOT written", game_state_persist.write_ms);
+}
+
+/* waits for Save and Quit's write, if one is running, and takes the saved game away if it failed. Called before anything reads or makes the saved game, and before
+the next checkpoint's copy. */
+static void game_state_persist_settle(void)
+{
+	if (!game_state_persist.pending)
+		return;
+	async_save_wait(0);
+	game_state_persist.pending = FALSE;
+	if (game_state_persist.result!=1)
+	{
+		platform_log("save and quit: the write failed: the saved game is removed");
+		delete_persistent_storage();
+	}
+}
+
+/* Save and Quit's write on the writer thread: the game state is copied (a few frames), the checksum and the 20 MiB are the writer's. FALSE if that cannot be done
+and nothing was changed (the caller writes it itself). */
+static boolean game_state_persist_async(void *buffer, unsigned long *header_checksum, long header_size, long buffer_size)
+{
+	HANDLE file;
+	void *image;
+
+	if (!async_save_enabled() || !async_save_exit() || header_size>2048 || buffer_size!=(long)GAME_STATE_SIZE)
+		return FALSE;
+	game_state_persist_settle();
+	if (!game_state_async_settle(15000, "Save and Quit"))
+		return FALSE;
+	file = game_state_open_persistent_storage(NULL);
+	if (file==INVALID_HANDLE_VALUE)
+		return TRUE;
+	image = game_state_image_get((unsigned long)buffer_size);
+	if (!image)
+	{
+		CloseHandle(file);
+		return FALSE;
+	}
+	async_save_copy(image, buffer, (size_t)buffer_size);
+	game_state_image_is_checkpoint = FALSE;
+	game_state_persist.file = file;
+	game_state_persist.image = image;
+	game_state_persist.checksum_offset = (unsigned long)((unsigned char *)header_checksum-(unsigned char *)buffer);
+	game_state_persist.header_size = (unsigned long)header_size;
+	game_state_persist.buffer_size = (unsigned long)buffer_size;
+	game_state_persist.game_state_size = GAME_STATE_SIZE;
+	game_state_persist.result = -1;
+	if (!async_save_start(game_state_persist_job, NULL))
+	{
+		CloseHandle(file);
+		return FALSE;
+	}
+	game_state_persist.pending = TRUE;
+	platform_log("save and quit: the game state copied; the saved game is written on the writer thread");
+	return TRUE;
+}
+
 static boolean game_state_block_same(const unsigned char *image, unsigned long block, unsigned long size)
 {
 	const unsigned long at = block*DELTA_BLOCK;
@@ -777,6 +882,9 @@ boolean game_state_read_header_from_persistent_storage(
 	long buffer_size,
 	boolean *corrupted)
 {
+#ifdef HALO_WIIU
+	game_state_persist_settle();
+#endif
 	byte buffer[128*1024];
 	HANDLE file;
 	unsigned long checksum;
@@ -857,6 +965,12 @@ void game_state_write_to_persistent_storage(
 	unsigned long checksum;
 	unsigned long bytes_written;
 
+#ifdef HALO_WIIU
+	if (game_state_persist_async(buffer, header_checksum, header_size, buffer_size))
+	{
+		return;
+	}
+#endif
 	file = game_state_open_persistent_storage(NULL);
 	if (file != INVALID_HANDLE_VALUE)
 	{
@@ -901,6 +1015,9 @@ void game_state_read_from_persistent_storage(
 	void *buffer,
 	long buffer_size)
 {
+#ifdef HALO_WIIU
+	game_state_persist_settle();
+#endif
 	HANDLE file;
 	unsigned long bytes_read;
 
@@ -1201,6 +1318,7 @@ static boolean game_state_async_begin(
 	{
 		return FALSE;
 	}
+	game_state_persist_settle();
 	if (!game_state_async_settle(15000, "the next checkpoint"))
 	{
 		/* (the last write has not ended: this one is made here, from the game state, to this file) */

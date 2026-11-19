@@ -12,6 +12,8 @@ Switches (halo/<name> on the console, HALO_<NAME> in the environment of the host
                          the copy's CRC is logged (the host tests compare the two paths with it); 0 or absent: not
   async_save_delta.txt   1: a checkpoint writes only the 4 KB blocks of the game state that differ from what the last checkpoint wrote (the file already holds the rest);
                          0 or absent: the whole 20 MiB, as it was
+  async_save_exit.txt    1: Save and Quit copies the game state (a few frames) and writes the saved game (its checksum, 20 MiB) on the writer thread; the next read of it
+                         waits for the write; 0 or absent: on the game thread, as it was (about 2 s)
   async_save_piece_kb.txt  the size of the pieces the write is made in (128 by default): the card is not held by one 20 MiB request
   async_save_revert_image.txt  0: a revert reads the 20 MiB back from the card, as it always did; 1 or absent: it takes the game state from the copy of the last checkpoint
                          that is still in memory (the image), which holds the file's bytes (game_state_xbox.c), and does not read the card
@@ -28,6 +30,7 @@ int async_save_enabled(void);
 int async_save_verify(void);
 int async_save_revert_image(void);
 int async_save_delta(void);
+int async_save_exit(void);
 unsigned long async_save_piece_bytes(void);
 
 /* memcpy of the checkpoint's image on three threads (the game thread waits for all of them) */

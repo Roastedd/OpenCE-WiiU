@@ -56,6 +56,20 @@ int async_save_verify(void)
 	return job.verify;
 }
 
+int async_save_exit(void)
+{
+	static int exit_save = -1;
+
+	if (exit_save < 0)
+	{
+		/* (-1 and no file: off) */
+		exit_save = wiiu_study_number("async_save_exit.txt", 0) > 0;
+		if (exit_save)
+			platform_log("checkpoint: Save and Quit writes the saved game on the writer thread, beside the menus (halo/async_save_exit.txt)");
+	}
+	return exit_save;
+}
+
 int async_save_delta(void)
 {
 	static int delta = -1;
