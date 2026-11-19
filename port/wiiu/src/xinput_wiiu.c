@@ -64,6 +64,7 @@ GamePad's gyro, which it replaces while the first player has such a Remote), as 
 #include "wiiu_virtual_pads.h"
 #include "wiiu_update.h"
 #include "wiiu_notice.h"
+#include "wiiu_auto_continue.h"
 #include "test_input_bot.h"
 
 #include <coreinit/time.h>
@@ -858,6 +859,10 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 		/* (and the SD card's speed check starts at the first main menu: wiiu_notice.c) */
 		wiiu_notice_menus(port_main_menu_active());
 	}
+	/* game.wiiu_auto_continue (wiiu_auto_continue.c): any button held on any controller cancels it; the first controller's poll counts the main menu's frames */
+	wiiu_auto_continue_pad((unsigned)port, have_pad ? panel_buttons(&pad) : 0u);
+	if (port == 0)
+		wiiu_auto_continue_poll(port_main_menu_active());
 	if (wiiu_update_panel_input((unsigned int)port, have_pad ? panel_buttons(&pad) : 0u))
 	{
 		memset(&pad, 0, sizeof(pad));

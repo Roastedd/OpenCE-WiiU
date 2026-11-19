@@ -200,6 +200,16 @@ static const struct config_setting config_settings[] =
 		"resolution) or \"custom\" (the settings as they are). The menus write a\n"
 		"mode's values when it is chosen; changing one of them there makes it\n"
 		"custom." },
+	{ "display.wiiu_performance", _config_string, "\"default\"", "HALO_WIIU_PERFORMANCE", _environment_value, _platform_wiiu,
+		"The Performance row of Video Settings > Detail: the smoother-fights switches\n"
+		"(port/linux/game/smooth_defaults.c): the ticks on a second core beside the\n"
+		"drawing, the tick snapshot and overlap, the governor, and the cheap blends.\n"
+		"Each has a card file in halo/ (tick_thread.txt, tick_snapshot.txt,\n"
+		"tick_overlap.txt, governor.txt, gpu_offload.txt), and a file that is there\n"
+		"always wins. \"default\" leaves the build's own defaults; \"smoother\" turns on\n"
+		"those with no file (the cheap blends are on only this way); \"off\" turns them\n"
+		"off. Only a game of one local player and no network is ever changed. Read at\n"
+		"each map start, so a change applies to the next map." },
 	{ "display.dynamic_quality", _config_boolean, "false", "HALO_DYNAMIC_QUALITY", _environment_value, _platform_wiiu,
 		"Leave out optional drawing while the frames take longer than 22 ms (45 a\n"
 		"second), a step at a time, the least noticeable first: small and far objects,\n"
@@ -884,6 +894,13 @@ static const struct config_setting config_settings[] =
 		"profile starts at The Pillar of Autumn and opens each level as the one\n"
 		"before it is finished, as on the Xbox. Profiles already made keep their\n"
 		"progress; the console's profile_reset_campaign starts one over." },
+
+	{ "game.wiiu_auto_continue", _config_boolean, "false", "HALO_WIIU_AUTO_CONTINUE", _environment_value, _platform_wiiu,
+		"true: when the game starts, once the main menu is up, go straight to\n"
+		"Campaign > Continue on the last campaign save, as if you had chosen it. It does\n"
+		"nothing when there is no save to continue, when a controller button is held as\n"
+		"the game starts (hold B at the start to cancel it), or when the last run\n"
+		"left a crash note. The log says what it did." },
 
 	{ "game.downloaded_maps", _config_string, "\"\"", "HALO_DOWNLOADED_MAPS", _environment_value, _platform_all,
 		"Maps played as downloaded ones, besides those map sharing downloaded:\n"
@@ -2463,6 +2480,7 @@ static const struct
 	{ "audio.resampler", { "sinc", "linear", NULL }, NULL },
 	{ "audio.voice_chat", { "push_to_talk", "open_mic", "off", NULL }, NULL },
 	{ "input.touch_controls", { "auto", "on", "off", NULL }, NULL },
+	{ "display.wiiu_performance", { "default", "smoother", "off", NULL }, NULL },
 	{ "game.console_log", { "important", "all", "none", NULL }, NULL },
 	{ "game.language", { "", "ja", "de", "fr", "es", "it", NULL }, NULL },
 	{ "network.text_chat", { "on", "links", "off", NULL }, NULL },

@@ -34,6 +34,11 @@ class SmoothDefaultsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('all checks passed', result.stdout)
 
+    def test_the_performance_row_sets_only_what_the_card_files_leave_open(self):
+        result = build_and_run(SMOOTH, ['performance'])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('all checks passed', result.stdout)
+
     def test_the_owners_card_of_ones_is_not_an_order_for_a_map_that_is_not_one(self):
         result = build_and_run(SMOOTH, ['owner'])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

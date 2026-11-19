@@ -993,6 +993,21 @@ static boolean campaign_continue(short controller)
 	return TRUE;
 }
 
+/* game.wiiu_auto_continue (port/wiiu/src/wiiu_auto_continue.c): Campaign > Continue, chosen by the game itself at the main menu. 1 if the game goes on with
+player 1's saved game; 0, quietly (no error sound, nothing changed), if there is no profile or no valid campaign save */
+int port_auto_continue(void);
+
+int port_auto_continue(void)
+{
+	struct player_profile profile;
+	char const *map_name;
+	short level, difficulty;
+
+	if (!campaign_profile(0, &profile) || !ui_widget_port_saved_game(&map_name, &level, &difficulty))
+		return 0;
+	return campaign_continue(0) ? 1 : 0;
+}
+
 /* ---- the map lists (New Game's and the Map screen's): their first row's
 chooser of SINGLEPLAYER (the campaign's levels), MULTIPLAYER maps (the
 Xbox's), CUSTOM SINGLEPLAYER or CUSTOM MULTIPLAYER maps (the Custom Edition
