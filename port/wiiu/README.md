@@ -1359,6 +1359,15 @@ game thread the first time the HUD drew one (the decoding, the levels, the copie
 The log: `hud sheets: ...` (the switch, the builder's core, what the map asked for, what the map's end freed) and for every sheet `high-res hud: image N made for ... in X ms on
 the game thread: decode, levels, send; K held, M KB`, and when it was made ahead `was made ahead on the builder thread in X ms ..., Y ms after it was asked for`.
 
+### The menus' large pictures (`halo/menu_smooth.txt`, default on)
+
+The console's logs of the main menu (rc1, 2026-11-17) have hitches of 0.8 to 1.4 s in the "hud" part of the rendering (next to no draws, no file time) each time a menu
+screen's large background is first drawn: the picture was not among those the preload thread made ahead (32 MB, the main menu's screens first), so the game thread decoded
+and made its levels. A menu picture of 65,536 pixels or more is now asked of the HUD sheets' builder thread, the game's own transparent bitmap is drawn meanwhile, and the
+picture appears once it is made (a frame after, with its copies the game thread's). `halo/menu_smooth.txt` `0` puts back the game thread's making of them. Smaller pictures are
+made on the game thread as before. The log: `menus: the large pictures are made ...` and, for the first 48, `menus: NAME made ahead on the builder thread / on the game thread,
+X ms of the game thread's`. Not run on a console; the pop-in (a background a moment late after a screen opens) is the cost.
+
 ### Geometry range cache
 
 The GX2 renderer keeps 256 vertex-range results for index lists inside the watched game-memory window. A changed memory generation, a different address or index count, or a vertex-cache flush makes the result unusable. Lists outside the watched window are scanned normally.
