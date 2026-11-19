@@ -11,7 +11,7 @@ Switches (halo/<name> on the console, HALO_<NAME> in the environment of the host
   async_save_verify.txt  1: each checkpoint is checked: the copy against the game state it was taken from, the file against the copy once written, and
                          the copy's CRC is logged (the host tests compare the two paths with it); 0 or absent: not
   async_save_delta.txt   1: a checkpoint writes only the 4 KB blocks of the game state that differ from what the last checkpoint wrote (the file already holds the rest);
-                         0 or absent: the whole 20 MiB, as it was
+                         1 or absent: on; 0: the whole 20 MiB at every checkpoint, as it was
   async_save_exit.txt    1: Save and Quit copies the game state (a few frames) and writes the saved game (its checksum, 20 MiB) on the writer thread; the next read of it
                          waits for the write; 0 or absent: on the game thread, as it was (about 2 s)
   async_save_piece_kb.txt  the size of the pieces the write is made in (128 by default): the card is not held by one 20 MiB request

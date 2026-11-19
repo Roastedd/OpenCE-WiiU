@@ -77,10 +77,10 @@ int async_save_delta(void)
 
 	if (delta < 0)
 	{
-		/* (-1 and no file: off) */
-		delta = wiiu_study_number("async_save_delta.txt", 0) > 0;
+		/* (no file: on; 0: the whole file at every checkpoint. Four checkpoints on b40 wrote 348 to 520 KB of the 20,480 KB and read back the same, 2026-11-19) */
+		delta = wiiu_study_number("async_save_delta.txt", 1) > 0;
 		if (delta)
-			platform_log("checkpoint: only the parts of the game state that changed since the last checkpoint are written (halo/async_save_delta.txt)");
+			platform_log("checkpoint: only the parts of the game state that changed since the last checkpoint are written (halo/async_save_delta.txt: 0 writes the whole file)");
 	}
 	return delta;
 }
