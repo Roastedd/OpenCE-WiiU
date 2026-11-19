@@ -76,6 +76,10 @@ cannot be joined (the server browser's rows of another version too) */
 void network_game_client_tell_version(
 	unsigned int theirs,
 	boolean distributed);
+/* port: the network version the advertised game's host sent */
+unsigned int network_game_client_advertised_game_version(
+	struct network_game_client *client,
+	struct network_advertised_game const *game);
 /* port: whether the advertised game's host is a dedicated server */
 boolean network_game_client_advertised_game_dedicated(
 	struct network_game_client *client,

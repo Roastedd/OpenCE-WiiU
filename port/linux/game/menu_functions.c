@@ -4265,6 +4265,16 @@ static boolean advertised_in_progress(struct advertised_game *game)
 	return network_game_client_advertised_game_in_progress(global_network_game_client_get(), game);
 }
 
+static unsigned int advertised_version(struct advertised_game *game)
+{
+	return network_game_client_advertised_game_version(global_network_game_client_get(), game);
+}
+
+/* when the system link and Direct Link lists were told of a game of another
+network version that cannot be joined (the line below the rows says so) */
+static unsigned long lan_refused_time;
+static unsigned int lan_refused_version;
+
 static void browser_games_read(void)
 {
 	void *client = global_network_game_client_get();
@@ -4282,6 +4292,7 @@ static void browser_games_read(void)
 			struct advertised_game *game = &games[index];
 
 			if (network_game_client_advertised_game_is_valid(game) && !advertised_in_progress(game) == (pass == 0) &&
+				p2p_lobby_version_shown((int)advertised_version(game), config_boolean("network.show_incompatible_games")) &&
 				game_from_peer(game) == (multiplayer.mode == _multiplayer_mode_direct_link))
 			{
 				multiplayer.games[multiplayer.game_count++] = game;
@@ -4644,6 +4655,8 @@ enum
 	_browser_word_refused_link_in_use,
 	_browser_word_refused_vpn_master,
 	_browser_word_refused_address_full,
+	_browser_word_hidden_games,
+	_browser_word_cannot_join_version,
 };
 
 /* the words p2p_join_progress gives a join that failed, and the browser's
@@ -4696,6 +4709,8 @@ static struct
 	/* the games shown (of those found), the first on the rows, the one last
 	focused (Join's) */
 	short count, found, first, chosen;
+	/* of those found, the games of another network version left out */
+	short hidden;
 	/* whether it has shown a game (the first has the focus) */
 	boolean shown;
 	unsigned long begin_time;
@@ -4984,6 +4999,7 @@ static void lobby_browser_choices(struct p2p_lobby_choices *choices, short sourc
 		if (!strcmp(engine, engines[index]))
 			choices->engine_type = index;
 	}
+	choices->show_incompatible = config_boolean("network.show_incompatible_games");
 	choices->maps = !strcmp(maps, "no") ? P2P_LOBBY_MAPS_NO :
 		!strcmp(maps, "downloadable") ? P2P_LOBBY_MAPS_DOWNLOADABLE : P2P_LOBBY_MAPS_YES;
 }
@@ -5282,8 +5298,13 @@ static void lobby_browser_game_lines(struct p2p_listing const *game, wchar_t *pl
 	rules[0] = 0;
 	if (game->network_version != HALO_PORT_NETWORK_VERSION)
 	{
+		wchar_t versions[TICKER_TEXT_LENGTH];
+
 		text_append_word(rules, size, game->network_version > HALO_PORT_NETWORK_VERSION ?
 			_browser_word_newer_build : _browser_word_older_build);
+		usnprintf(versions, NUMBEROF(versions) - 1, L" [network version %d, yours %d]", game->network_version,
+			HALO_PORT_NETWORK_VERSION);
+		text_append(rules, size, versions);
 		return;
 	}
 	if (game->dedicated && game->master)
@@ -5332,6 +5353,17 @@ static void lobby_browser_update(struct widget_instance *list)
 	lobby_browser.found = lobby_browser_valid_games(lobby_browser.games,
 		(short)p2p_lobby_games(lobby_browser.games, LOBBY_BROWSER_GAMES));
 	lobby_browser_choices(&choices, lobby_browser_source(list));
+	/* (the games of another network version the filter leaves out: said in the line below when none is left) */
+	{
+		short read;
+
+		lobby_browser.hidden = 0;
+		for (read = 0; read < lobby_browser.found; read++)
+		{
+			if (!p2p_lobby_version_shown(lobby_browser.games[read].network_version, choices.show_incompatible))
+				lobby_browser.hidden++;
+		}
+	}
 	lobby_browser.count = (short)p2p_lobby_filter(lobby_browser.games, lobby_browser.found, &choices,
 		lobby_browser_map_state);
 	p2p_lobby_sort(lobby_browser.games, lobby_browser.count, lobby_browser.order, lobby_browser.reverse);
@@ -5522,6 +5554,12 @@ static void lobby_browser_update(struct widget_instance *list)
 
 			if (now - lobby_browser.begin_time < LOBBY_BROWSER_LOOK_TIME)
 				browser_word(_browser_word_looking, text, NUMBEROF(text));
+			else if (lobby_browser.hidden)
+			{
+				browser_word(_browser_word_hidden_games, text, NUMBEROF(text));
+				usnprintf(name, NUMBEROF(name) - 1, L" %d", lobby_browser.hidden);
+				text_append(text, NUMBEROF(text), name);
+			}
 			else if (newer)
 			{
 				browser_word(_browser_word_newer_games, text, NUMBEROF(text));
@@ -5701,7 +5739,12 @@ static boolean lobby_browser_select(struct widget_instance *widget, short contro
 	game = &lobby_browser.games[index];
 	if (game->network_version != HALO_PORT_NETWORK_VERSION)
 	{
+		/* (the Wii U has no message box: the line below the rows says it) */
 		network_game_client_tell_version(game->network_version, TRUE);
+		memcpy(lobby_browser.failed_name, game->name, sizeof(lobby_browser.failed_name));
+		lobby_browser.failed_name[sizeof(lobby_browser.failed_name) - 1] = 0;
+		lobby_browser.failed_time = system_milliseconds() ? system_milliseconds() : 1;
+		lobby_browser.failed_word = _browser_word_cannot_join_version;
 		return campaign_fail();
 	}
 	if (!game->open || !config_boolean("network.online"))
@@ -5866,6 +5909,16 @@ static void browser_update(struct widget_instance *list)
 		browser_row_marked[index] = browser_row_greyed[index] = FALSE;
 		usnprintf(text, ROW_TEXT_LENGTH - 1, L"%d", ping);
 		text_set(named(row, "server_item_ping", 0), ping >= 0 ? text : advertised_in_progress(game) ? L"LIVE" : L"");
+		/* (a game of another network version, shown because network.show_incompatible_games is on: greyed, with
+		its status as the server browser's) */
+		if (advertised_version(game) != HALO_PORT_NETWORK_VERSION)
+		{
+			browser_row_pings[index] = -1;
+			browser_row_marked[index] = browser_row_greyed[index] = TRUE;
+			browser_word(advertised_version(game) > HALO_PORT_NETWORK_VERSION ? _browser_word_newer : _browser_word_older,
+				text, ROW_TEXT_LENGTH);
+			text_set(named(row, "server_item_ping", 0), text);
+		}
 		visible_set(named(row, "server_item_locked", 0), FALSE);
 		visible_set(named(row, "server_item_dedicated", 0), FALSE);
 		visible_set(named(row, "server_item_classic", 0), FALSE);
@@ -5885,10 +5938,21 @@ static void browser_update(struct widget_instance *list)
 				L"Copy an invite link and PASTE LINK, or accept a Discord invite" :
 				L"Looking for games on your LAN...");
 		}
+		else if (lan_refused_time && system_milliseconds() - lan_refused_time < LOBBY_BROWSER_FAILED_TIME)
+		{
+			usnprintf(text, NUMBEROF(text) - 1, L"Cannot join: network version %u, yours %d", lan_refused_version,
+				HALO_PORT_NETWORK_VERSION);
+		}
 		else
 		{
 			struct advertised_game *game = multiplayer.games[multiplayer.game_chosen];
 
+			if (advertised_version(game) != HALO_PORT_NETWORK_VERSION)
+			{
+				usnprintf(text, NUMBEROF(text) - 1, L"Another network version: %u, yours %d", advertised_version(game),
+					HALO_PORT_NETWORK_VERSION);
+			}
+			else
 			usnprintf(text, NUMBEROF(text) - 1, L"%d players of %d, on %d machines%s", game->player_count,
 				game->maximum_player_count, game->machine_count, advertised_in_progress(game) ? L": under way" : L"");
 		}
@@ -5948,6 +6012,14 @@ static boolean browser_join(struct widget_instance *widget, short controller, bo
 		return campaign_fail();
 	if (!multiplayer_player(controller))
 		return FALSE;
+	if (advertised_version(multiplayer.games[multiplayer.game_chosen]) != HALO_PORT_NETWORK_VERSION)
+	{
+		/* (refused here, with its reason on the line below the rows: the message box is the desktop's) */
+		lan_refused_version = advertised_version(multiplayer.games[multiplayer.game_chosen]);
+		lan_refused_time = system_milliseconds() ? system_milliseconds() : 1;
+		network_game_client_tell_version(lan_refused_version, TRUE);
+		return campaign_fail();
+	}
 	lobby_dedicated_set(multiplayer.games[multiplayer.game_chosen], FALSE);
 	return ui_widget_port_join(widget, multiplayer.games[multiplayer.game_chosen], LOBBY_NAME, widget_deleted);
 }

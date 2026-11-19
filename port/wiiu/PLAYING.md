@@ -131,6 +131,11 @@ player even when you play alone; **Merged** is the old behaviour (the first cont
 - **System Link** (Multiplayer menu) finds and hosts games on your local network, with other Wii Us and with OpenCE on a computer built from the same
   network version (the Wii U port speaks protocol 41, the same as upstream OpenCE's PC builds of that version). A game that tells you the version is
   different is from another build: update that side.
+- **Games from other versions are hidden.** The server browser and the System Link list show only games that this build can join. A game hosted on a
+  newer or older network version (the Wii U speaks 41; newer OpenCE builds speak 44) is left out; when only such games exist, the line under the list
+  says how many are hidden. To see them anyway, set `network.show_incompatible_games = true` in `config.toml`, or **SHOW INCOMPATIBLE** in Settings →
+  Network Setup → Server Browser. They then appear greyed and marked NEWER or OLDER, and choosing one does not join: the line under the list says it is on
+  another network version (and which).
 - **Internet games** find each other through the servers in `brokers.txt` and use UPnP on your router to open a port. Playing over the internet, hosting
   one from the Wii U, and large games (24 players and more) have **not been tried on a console**; a system link game with a computer standing in for the second
   player has. The console has room for 27 network connections in all.
