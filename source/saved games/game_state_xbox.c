@@ -232,7 +232,13 @@ static struct
 	unsigned long game_state_size;
 	volatile int result; /* -1 running, 1 written, 0 failed */
 	double write_ms;
+	char directory[256]; /* the profile's directory and the saved game's file, taken on the game thread: the writer thread makes the backup and opens the file (a file made new is 20 MiB to allocate, seconds on a card) */
+	char backup_path[512];
 } game_state_persist;
+static boolean game_state_get_persistent_storage_path(
+	char *path);
+static boolean game_state_persistent_file_path(
+	char *path);
 
 static void game_state_persist_job(void *argument)
 {
@@ -243,6 +249,18 @@ static void game_state_persist_job(void *argument)
 	unsigned long *header_checksum = (unsigned long *)(game_state_persist.image + game_state_persist.checksum_offset);
 
 	(void)argument;
+	if (game_state_persist.backup_path[0])
+	{
+		save_backup_keep(game_state_persist.backup_path, 1, GAME_STATE_FILE_SIZE, 2048, NULL, "saved game");
+	}
+	game_state_persist.file = game_state_open_persistent_storage(game_state_persist.directory);
+	if (game_state_persist.file==INVALID_HANDLE_VALUE)
+	{
+		game_state_persist.result = 0;
+		game_state_persist.write_ms = game_state_async_now_ms()-start;
+		platform_log("save and quit: the saved game's file could not be opened on the writer thread");
+		return;
+	}
 	*header_checksum = 0;
 	crc_new(&checksum);
 	crc_checksum_buffer(&checksum, game_state_persist.image, game_state_persist.game_state_size);
@@ -286,7 +304,6 @@ static void game_state_persist_settle(void)
 and nothing was changed (the caller writes it itself). */
 static boolean game_state_persist_async(void *buffer, unsigned long *header_checksum, long header_size, long buffer_size)
 {
-	HANDLE file;
 	void *image;
 
 	if (!async_save_enabled() || !async_save_exit() || header_size>2048 || buffer_size!=(long)GAME_STATE_SIZE)
@@ -294,19 +311,19 @@ static boolean game_state_persist_async(void *buffer, unsigned long *header_chec
 	game_state_persist_settle();
 	if (!game_state_async_settle(15000, "Save and Quit"))
 		return FALSE;
-	game_state_backup_persistent_storage("Save and Quit");
-	file = game_state_open_persistent_storage(NULL);
-	if (file==INVALID_HANDLE_VALUE)
-		return TRUE;
+	game_state_persist.backup_path[0] = 0;
+	if (!game_state_get_persistent_storage_path(game_state_persist.directory))
+		return FALSE;
+	if (save_backup_enabled() && !game_state_persistent_file_path(game_state_persist.backup_path))
+		game_state_persist.backup_path[0] = 0;
 	image = game_state_image_get((unsigned long)buffer_size);
 	if (!image)
 	{
-		CloseHandle(file);
 		return FALSE;
 	}
 	async_save_copy(image, buffer, (size_t)buffer_size);
 	game_state_image_is_checkpoint = FALSE;
-	game_state_persist.file = file;
+	game_state_persist.file = INVALID_HANDLE_VALUE;
 	game_state_persist.image = image;
 	game_state_persist.checksum_offset = (unsigned long)((unsigned char *)header_checksum-(unsigned char *)buffer);
 	game_state_persist.header_size = (unsigned long)header_size;
@@ -315,7 +332,6 @@ static boolean game_state_persist_async(void *buffer, unsigned long *header_chec
 	game_state_persist.result = -1;
 	if (!async_save_start(game_state_persist_job, NULL))
 	{
-		CloseHandle(file);
 		return FALSE;
 	}
 	game_state_persist.pending = TRUE;

@@ -63,8 +63,8 @@ int async_save_exit(void)
 
 	if (exit_save < 0)
 	{
-		/* (-1 and no file: off) */
-		exit_save = wiiu_study_number("async_save_exit.txt", 0) > 0;
+		/* (-1: not read yet; no file: on) */
+		exit_save = wiiu_study_number("async_save_exit.txt", 1) > 0;
 		if (exit_save)
 			platform_log("checkpoint: Save and Quit writes the saved game on the writer thread, beside the menus (halo/async_save_exit.txt)");
 	}
