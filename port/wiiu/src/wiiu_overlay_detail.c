@@ -407,4 +407,19 @@ void overlay_render_detail(const struct perf_view *view, uint8_t *pixels)
 	for (pool = 0; pool < PERF_POOL_COUNT; pool++)
 		draw_pool(&canvas, view, pool, 99 + pool * 8);
 	draw_text(&canvas, 3, 156, dim, "PALE = IN USE NOW (TEX, SOUND COLOUR BY IT); GREY = FIXED");
+
+	/* the SD card, as the start-up check found it (the slow ones are amber) */
+	x = 3;
+	y = 164;
+	put(&canvas, &x, y, grey, "SD CARD WRITE/READ ");
+	if (view->state.sd_write_mbs > 0.0f)
+	{
+		const color tint = view->state.sd_write_mbs < 4.0f || view->state.sd_read_mbs < 8.0f ? amber : white;
+
+		put(&canvas, &x, y, tint, "%.1f/%.1f", (double)(view->state.sd_write_mbs > 999.0f ? 999.0f : view->state.sd_write_mbs),
+			(double)(view->state.sd_read_mbs > 999.0f ? 999.0f : view->state.sd_read_mbs));
+		put(&canvas, &x, y, grey, " MB/S");
+	}
+	else
+		put(&canvas, &x, y, dim, "NOT MEASURED");
 }

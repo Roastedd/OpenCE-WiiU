@@ -81,6 +81,7 @@ struct perf_state
 	int drs_on, drs_step;
 	int interpolation;                   /* the game draws 60 frames a second (display.interpolation) */
 	int governor_step, governor_max;     /* -1: no governor in this build or none running */
+	float sd_write_mbs, sd_read_mbs;     /* the SD card's speeds from the start-up check (wiiu_notice.h); 0: not measured */
 };
 
 /* one frame presented by the GX2 thread */

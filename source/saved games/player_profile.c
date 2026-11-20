@@ -123,6 +123,10 @@ symbols in this file:
 #include "interface/player_ui.h"
 #include "saved games/saved_game_files.h"
 #include "saved games/player_profile.h"
+#ifdef HALO_WIIU
+#include "save_backup.h"
+#include <string.h>
+#endif
 
 #include <xtl.h>
 
@@ -279,6 +283,22 @@ void player_profile_delete(
 	return;
 }
 
+#ifdef HALO_WIIU
+/* port: whether a profile's block (512 bytes) agrees with its checksum, for the backup beside the file (halo/save_backup.txt) */
+static int player_profile_block_good(
+	const unsigned char *head,
+	unsigned long got)
+{
+	XCALCSIG_SIGNATURE checksum;
+
+	if (got < SAVED_GAME_FILE_BLOCK_SIZE)
+		return 0;
+	saved_game_file_generate_checksum((void *)head, sizeof(struct player_profile), &checksum);
+
+	return !csmemcmp(&checksum, head+sizeof(struct player_profile), sizeof(checksum));
+}
+#endif
+
 boolean player_profile_get_from_path(
 	char *full_path,
 	struct player_profile *profile)
@@ -305,6 +325,14 @@ boolean player_profile_get_from_path(
 			else
 			{
 				error(_error_silent, "checksum failed on player profile file");
+#ifdef HALO_WIIU
+				/* port: the profile's backup is tried, once (halo/save_backup.txt) */
+				if (save_backup_read(full_path, block, SAVED_GAME_FILE_BLOCK_SIZE, "a player profile") && player_profile_block_good(block, SAVED_GAME_FILE_BLOCK_SIZE))
+				{
+					csmemcpy(profile, block, sizeof(struct player_profile));
+					succeeded = TRUE;
+				}
+#endif
 			}
 		}
 		else
@@ -687,6 +715,9 @@ static boolean player_profile_read(
 	struct file_reference file;
 	XCALCSIG_SIGNATURE checksum;
 	struct player_profile sanitized_profile;
+#ifdef HALO_WIIU
+	char backup_path[1024];
+#endif
 
 	match_vassert("c:\\halo\\SOURCE\\saved games\\player_profile.c", 0x261, profile, "profile");
 
@@ -716,6 +747,16 @@ static boolean player_profile_read(
 					{
 						csmemcpy(profile, block, sizeof(struct player_profile));
 					}
+#ifdef HALO_WIIU
+					/* port: the profile's backup is tried, once, before the profile is made over (halo/save_backup.txt) */
+					else if (saved_game_file_port_get_path(player_profile_index, backup_path, sizeof(backup_path)) &&
+						save_backup_read(backup_path, block, SAVED_GAME_FILE_BLOCK_SIZE, "a player profile") &&
+						player_profile_block_good(block, SAVED_GAME_FILE_BLOCK_SIZE))
+					{
+						csmemcpy(profile, block, sizeof(struct player_profile));
+						error(_error_silent, "checksum failed on player profile file, the backup is taken");
+					}
+#endif
 					else
 					{
 						error(
@@ -812,6 +853,15 @@ static unsigned long __stdcall player_profile_write_thread_proc(
 		boolean failed = FALSE;
 		struct player_profile *profile = &request->profile;
 
+#ifdef HALO_WIIU
+		/* port: the profile as it is, if it is good, is kept as NAME.sav.bak before it is written over (halo/save_backup.txt) */
+		{
+			char backup_path[1024];
+
+			if (saved_game_file_port_get_path(player_profile_index, backup_path, sizeof(backup_path)))
+				save_backup_keep(backup_path, 0, 0, SAVED_GAME_FILE_BLOCK_SIZE, player_profile_block_good, "player profile");
+		}
+#endif
 		if (saved_game_file_open(&file, player_profile_index))
 		{
 			csmemcpy(&block.profile, profile, sizeof(struct player_profile));

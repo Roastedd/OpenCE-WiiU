@@ -28,6 +28,12 @@ a time, and only the atlas's rows that changed are sent again.
 #include "xgpu.h"
 #include "halo_startup.h"
 #include "port_config.h"
+
+#ifndef JOIN_BEAT
+/* the join record's thread counters (wiiu_join_trace.c) */
+extern volatile unsigned wiiu_thread_beats[5];
+#define JOIN_BEAT(index) (wiiu_thread_beats[index]++)
+#endif
 #include "dk_commands.h"
 #include "dk_textures.h"
 #include "hud_hires.h"
@@ -527,6 +533,9 @@ struct texture_entry
 	unsigned long menu_serial;
 	uint32_t menu_id;
 	unsigned long menu_levels;
+	/* the image was still being made when it was looked up (halo/menu_smooth.txt): looked up again when the builder has finished one since (hud_built_seen) */
+	unsigned char menu_pending;
+	unsigned long menu_built_seen;
 };
 
 #define TEXTURE_BUCKET_COUNT 4096
@@ -775,6 +784,9 @@ static unsigned long prepared_bytes;
 static pthread_mutex_t prepared_lock;
 static pthread_cond_t prepared_changed;
 static volatile int prepared_ready_to_use;
+/* the images the builder (and the menus' preload thread) have finished: the frame's begin looks every texture up again when it has grown (hud_built_seen) */
+static volatile unsigned long hud_built_count;
+static unsigned long hud_built_seen;
 
 static void prepared_init(void)
 {
@@ -848,6 +860,8 @@ static int prewarm_png(const void *png, unsigned long size, unsigned long bytes_
 	}
 	pthread_cond_broadcast(&prepared_changed);
 	pthread_mutex_unlock(&prepared_lock);
+	if (made)
+		__sync_fetch_and_add(&hud_built_count, 1);
 	return made;
 }
 
@@ -1035,30 +1049,105 @@ static uint32_t atlas_image(unsigned long data)
 	return id;
 }
 
-/* a menu's art (menu_files.h), by its file: made on first use, and kept */
+/* a menu's art (menu_files.h), by its file: made on first use, and kept.
+
+A picture of 65,536 pixels or more is not decoded on the game thread when the menu first draws it (halo/menu_smooth.txt, 1 by default; 0 puts back the game thread's
+making of them): the 700 to 1,400 ms hitches of the console's logs, in the "hud" part of the rendering, with next to no draws and no file time, each time a menu
+screen's large background was first drawn and the preload thread (dk_texture_prewarm_png) had not made it (it holds 32 MB and the main menu's screens first). The
+lookup asks the builder thread (the HUD's: menu_request) and answers 0 meanwhile, so the game's own bitmap, a transparent 4 by 4, is drawn and the picture appears
+when the builder has finished it, a frame after (xgpu_texture_cache_begin_frame looks the textures up again; the copies into pieces and the sending stay the game
+thread's). A picture the builder could not make is made on the game thread, as before. */
 #define MAXIMUM_MENU_IMAGES 256
+#define MENU_ASYNC_MIN_PIXELS 65536ul
 
 static struct
 {
 	char *name;
 	uint32_t id;
 	unsigned long levels;
+	/* the PNG, while the image is not made */
+	const unsigned char *png;
+	unsigned long size;
+	unsigned char pending, big;
+	long request;
+	unsigned long asked_at;
 } menu_images[MAXIMUM_MENU_IMAGES];
 static long menu_image_count;
+/* whether menu_image's last answer was 0 because the picture is being made (the lookup is made again when the builder has finished one) */
+static int menu_image_pending;
+/* the pictures made on the game thread though they are large, and the ones the builder made ahead (for the log line) */
+static unsigned menu_image_here, menu_image_ahead;
+
+static int menu_async_on(void);
+static long menu_request(const void *png, unsigned long size);
+static int menu_request_done(long request);
+
+/* the image made (1), or still to be (0); the game thread's */
+static int menu_image_make(long index)
+{
+	const unsigned long started = system_milliseconds();
+	int ahead = 0;
+	const int asked = menu_images[index].request >= 0;
+
+	switch (wiiu_hud_sheet_next(menu_images[index].big, menu_images[index].big, prepared_state(menu_images[index].png, menu_images[index].size), asked,
+		asked ? menu_request_done(menu_images[index].request) : 0))
+	{
+	case WIIU_HUD_SHEET_TAKE_AHEAD:
+		ahead = 1;
+		break;
+	case WIIU_HUD_SHEET_ASK:
+		menu_images[index].request = menu_request(menu_images[index].png, menu_images[index].size);
+		menu_images[index].asked_at = started;
+		if (menu_images[index].request >= 0)
+			return 0;
+		break;
+	case WIIU_HUD_SHEET_WAIT:
+		return 0;
+	default:
+		break;
+	}
+	menu_images[index].id = png_image(menu_images[index].png, menu_images[index].size, &menu_images[index].levels, NULL, NULL);
+	menu_images[index].pending = 0;
+	if (!menu_images[index].id)
+		platform_log("menus: could not draw %s", menu_images[index].name);
+	else if (menu_images[index].big)
+	{
+		static unsigned told;
+
+		if (ahead)
+			menu_image_ahead++;
+		else
+			menu_image_here++;
+		if (told < 48)
+		{
+			told++;
+			platform_log("menus: %s made %s, %lu ms of the game thread's (%lu ms after it was asked for; %u made ahead, %u here so far)", menu_images[index].name,
+				ahead ? "ahead on the builder thread" : "on the game thread", system_milliseconds() - started,
+				menu_images[index].asked_at ? started - menu_images[index].asked_at : 0ul, menu_image_ahead, menu_image_here);
+		}
+	}
+	return 1;
+}
 
 static uint32_t menu_image(unsigned long data, unsigned long *levels)
 {
 	const char *name = menu_art_name(data);
-	const unsigned char *png;
 	unsigned long size = 0;
 	long index;
 
+	menu_image_pending = 0;
 	if (!name)
 		return 0;
 	for (index = 0; index < menu_image_count; index++)
 	{
 		if (!strcmp(menu_images[index].name, name))
 		{
+			if (menu_images[index].pending && !menu_image_make(index))
+			{
+				menu_image_pending = 1;
+				*levels = 1;
+				return 0;
+			}
 			*levels = menu_images[index].levels;
 			return menu_images[index].id;
 		}
@@ -1069,12 +1158,33 @@ static uint32_t menu_image(unsigned long data, unsigned long *levels)
 	menu_images[menu_image_count].name = strdup(name);
 	if (!menu_images[menu_image_count].name)
 		return 0;
-	png = menu_art_png(name, &size);
-	menu_images[menu_image_count].id = png ? png_image(png, size, &menu_images[menu_image_count].levels, NULL, NULL) : 0;
-	if (!menu_images[menu_image_count].id)
+	menu_images[menu_image_count].request = -1;
+	menu_images[menu_image_count].png = menu_art_png(name, &size);
+	menu_images[menu_image_count].size = size;
+	if (!menu_images[menu_image_count].png)
+	{
 		platform_log("menus: could not draw %s", name);
-	*levels = menu_images[menu_image_count].levels;
-	return menu_images[menu_image_count++].id;
+		*levels = menu_images[menu_image_count].levels;
+		return menu_images[menu_image_count++].id;
+	}
+	{
+		/* (the PNG's header says its size: width and height, 4 bytes each, from byte 16) */
+		const unsigned char *header = menu_images[menu_image_count].png;
+		const unsigned long width = size >= 24 ? (unsigned long)header[16] << 24 | (unsigned long)header[17] << 16 | (unsigned long)header[18] << 8 | header[19] : 0;
+		const unsigned long height = size >= 24 ? (unsigned long)header[20] << 24 | (unsigned long)header[21] << 16 | (unsigned long)header[22] << 8 | header[23] : 0;
+
+		menu_images[menu_image_count].big = menu_async_on() && width && height && width <= 16384 && height <= 16384 && width * height >= MENU_ASYNC_MIN_PIXELS;
+	}
+	menu_images[menu_image_count].pending = 1;
+	index = menu_image_count++;
+	if (!menu_image_make(index))
+	{
+		menu_image_pending = 1;
+		*levels = 1;
+		return 0;
+	}
+	*levels = menu_images[index].levels;
+	return menu_images[index].id;
 }
 
 /* a high-res HUD bitmap (hud_hires.h): made on first use, and kept until the map goes (wiiu_hud_map_unloaded) */
@@ -1128,8 +1238,6 @@ static long hud_queue[HUD_QUEUE];
 static unsigned hud_queue_head, hud_queue_count;
 /* (the game thread's) 0 not started, 1 the builder runs, -1 it could not be made */
 static int hud_queue_state;
-static volatile unsigned long hud_built_count;
-static unsigned long hud_built_seen;
 
 static int hud_async_on(void)
 {
@@ -1143,9 +1251,32 @@ static int hud_async_on(void)
 	return on;
 }
 
+/* the menus' pictures asked of the builder (menu_image; the queue holds -1 - the index): the PNG, and whether the builder has finished with it */
+#define MENU_REQUESTS 128
+static struct menu_request
+{
+	const void *png;
+	unsigned long size;
+	volatile unsigned char done;
+	unsigned long builder_ms;
+} menu_requests[MENU_REQUESTS];
+static unsigned long menu_request_next;
+
 static int hud_sheet_is_big(const struct hud_hires_embedded *embedded)
 {
 	return !embedded->title && (unsigned long)embedded->width * embedded->height >= HUD_ASYNC_MIN_PIXELS;
+}
+
+/* the builder rests while a client loads a map it joined (wiiu_hud_builder_hold: on when a map's precache begins, off when its HUD list comes): the sheets' decoding takes the memory and the card's reads
+that the load wants, and the freezes of a join all had it running. It goes on 6 s after the load; the HUD draws the game's own bitmaps meanwhile */
+static volatile unsigned long hud_hold_until;
+
+void wiiu_hud_builder_hold(int on);
+
+/* on: a map load has begun (a minute at most: a load that never says it is done must not keep the HUD's sheets away for good); off: it is done, six seconds more */
+void wiiu_hud_builder_hold(int on)
+{
+	hud_hold_until = system_milliseconds() + (on ? 60000ul : 6000ul);
 }
 
 static void *hud_builder_main(void *unused)
@@ -1160,6 +1291,12 @@ static void *hud_builder_main(void *unused)
 		long asset;
 		int made;
 
+		JOIN_BEAT(4);
+		while ((long)(hud_hold_until - system_milliseconds()) > 0)
+		{
+			JOIN_BEAT(4);
+			usleep(20000);
+		}
 		pthread_mutex_lock(&hud_queue_lock);
 		while (!hud_queue_count)
 			pthread_cond_wait(&hud_queue_wake, &hud_queue_lock);
@@ -1167,6 +1304,19 @@ static void *hud_builder_main(void *unused)
 		hud_queue_head = (hud_queue_head + 1) % HUD_QUEUE;
 		hud_queue_count--;
 		pthread_mutex_unlock(&hud_queue_lock);
+		if (asset < 0)
+		{
+			/* (a menu's picture: menu_request) */
+			struct menu_request *request = &menu_requests[-1 - asset];
+
+			started = system_milliseconds();
+			prewarm_png(request->png, request->size, prepared_bytes + HUD_ASYNC_HOLD, PREPARED_LIMIT);
+			request->builder_ms = system_milliseconds() - started;
+			__sync_synchronize();
+			request->done = 1;
+			__sync_fetch_and_add(&hud_built_count, 1);
+			continue;
+		}
 		embedded = &hud_hires_embedded[asset];
 		started = system_milliseconds();
 		made = prewarm_png(embedded->png, embedded->png_size, prepared_bytes + HUD_ASYNC_HOLD, PREPARED_LIMIT);
@@ -1178,8 +1328,8 @@ static void *hud_builder_main(void *unused)
 	return NULL;
 }
 
-/* (the game thread) the sheet handed to the builder; FALSE if it could not be (the game thread then makes it) */
-static BOOL hud_request(long asset)
+/* (the game thread) an entry handed to the builder (an HUD asset, or -1 - a menu request); FALSE if it could not be */
+static BOOL builder_enqueue(long entry)
 {
 	if (hud_queue_state == 0)
 	{
@@ -1203,13 +1353,53 @@ static BOOL hud_request(long asset)
 		pthread_mutex_unlock(&hud_queue_lock);
 		return FALSE;
 	}
-	hud_queue[(hud_queue_head + hud_queue_count++) % HUD_QUEUE] = asset;
+	hud_queue[(hud_queue_head + hud_queue_count++) % HUD_QUEUE] = entry;
 	pthread_cond_signal(&hud_queue_wake);
 	pthread_mutex_unlock(&hud_queue_lock);
+	return TRUE;
+}
+
+/* (the game thread) the sheet handed to the builder; FALSE if it could not be (the game thread then makes it) */
+static BOOL hud_request(long asset)
+{
+	if (!builder_enqueue(asset))
+		return FALSE;
 	hud_images[asset].asked = 1;
 	hud_images[asset].built = 0;
 	hud_images[asset].asked_at = system_milliseconds();
 	return TRUE;
+}
+
+static int menu_async_on(void)
+{
+	static int on = -1;
+
+	if (on < 0)
+	{
+		on = wiiu_study_number("menu_smooth.txt", 1) > 0;
+		platform_log("menus: the large pictures are made %s (halo/menu_smooth.txt)", on ? "on the builder thread, nothing drawn in their place until one is ready" : "by the game thread when first drawn");
+	}
+	return on;
+}
+
+/* (the game thread) a menu's picture handed to the builder: its request, or -1 if it could not be (the game thread makes it) */
+static long menu_request(const void *png, unsigned long size)
+{
+	const long request = (long)(menu_request_next++ % MENU_REQUESTS);
+
+	menu_requests[request].png = png;
+	menu_requests[request].size = size;
+	menu_requests[request].done = 0;
+	menu_requests[request].builder_ms = 0;
+	__sync_synchronize();
+	if (!builder_enqueue(-1 - request))
+		return -1;
+	return request;
+}
+
+static int menu_request_done(long request)
+{
+	return menu_requests[request].done != 0;
 }
 
 static BOOL hud_images_ensure(void)
@@ -1376,6 +1566,7 @@ static void hud_prefetch(const long *assets, long count)
 	long index, asked = 0;
 	int pass;
 
+	wiiu_hud_builder_hold(0);
 	if (!hud_images_ensure())
 		return;
 	for (pass = 0; pass < 2; pass++)
@@ -1489,11 +1680,13 @@ static uint32_t texture_entry_result(struct texture_entry *entry, int *kind, str
 	}
 	/* (looked up again only when the art registered has changed: the search
 	was 1.3% of the game thread, for every texture of every draw) */
-	if (entry->menu_serial != menu_art_serial())
+	if (entry->menu_serial != menu_art_serial() || (entry->menu_pending && entry->menu_built_seen != hud_built_seen))
 	{
 		entry->menu_serial = menu_art_serial();
 		entry->menu_levels = 1;
 		entry->menu_id = menu_image(entry->data, &entry->menu_levels);
+		entry->menu_pending = (unsigned char)menu_image_pending;
+		entry->menu_built_seen = hud_built_seen;
 	}
 	levels = entry->menu_levels;
 	if ((id = entry->menu_id) != 0)

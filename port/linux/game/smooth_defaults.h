@@ -104,6 +104,21 @@ feature off, and the others' default is then off too (a half of it would be a st
 alone is the ticks on another thread while the game waits) is as it has always been. The governor is its own. */
 void smooth_defaults_resolve(struct smooth_defaults *out, long const card[NUMBER_OF_SMOOTH_SWITCHES], char const *reason, long snapshot_default);
 
+/* display.wiiu_performance (the Video Settings menu's Performance row, config.toml): "default" leaves the four card files to say what they say, and a file that is absent (or -1) gives
+the build's default; "smoother" makes an absent file mean 1 (the governor: on); "off" makes it mean 0. A card file that is there always wins. Read at each map start, so a change in
+the menus applies at the next map. The same word decides halo/gpu_offload.txt's blends where that file is absent (wiiu_gpu_offload_set_default). */
+enum
+{
+	SMOOTH_PERFORMANCE_DEFAULT,
+	SMOOTH_PERFORMANCE_SMOOTHER,
+	SMOOTH_PERFORMANCE_OFF
+};
+
+/* the mode a setting's text names (anything but "smoother" and "off", or no text, is the default) */
+int smooth_defaults_performance_parse(char const *text);
+/* The pure part: card words as the files gave them, with the mode's words in place of those that are SMOOTH_CARD_DEFAULT */
+void smooth_defaults_performance_apply(long card[NUMBER_OF_SMOOTH_SWITCHES], int mode);
+
 /* The cards, read once (the platform's: wiiu_study_number, tick_snapshot.c's card, render_governor.c's text). */
 void smooth_defaults_read_cards(long card[NUMBER_OF_SMOOTH_SWITCHES]);
 

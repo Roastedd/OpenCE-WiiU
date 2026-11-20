@@ -419,6 +419,7 @@ symbols in this file:
 #include "rasterizer/xbox/rasterizer_xbox_pixel_shader.h"
 #include "rasterizer_xbox_internal.h"
 #include "rasterizer_xbox_vertex_shaders.h"
+#include "mcc_cache.h" /* port: port/linux/game/mcc_cache.c */
 
 /* ---------- constants */
 
@@ -1310,6 +1311,13 @@ void rasterizer_model_part_skinning(
 	if (!many_node_matrices)
 		return;
 	node_count = custom_edition_part_palette(vertex_buffer, &nodes);
+	/* port: and an MCC map's part's (mcc_cache.c) */
+	{
+		short mcc_count = mcc_cache_part_palette(vertex_buffer, &nodes);
+
+		if (mcc_count)
+			node_count = mcc_count;
+	}
 	for (node_index = 0; node_index < node_count && node_index < RASTERIZER_MAXIMUM_NODES_PER_MODEL - 1; node_index++)
 	{
 		node_matrix_constants(vsh_constants__nodematrices[node_index],
@@ -2210,22 +2218,31 @@ void _rasterizer_frame_begin(
 		global_d3d_device);
 	rasterizer_globals.near_clip_distance = rasterizer_get_near_clip_distance();
 	global_frame_parameters.game_time_sec = parameters->game_time_sec;
+	JOIN_FRAME_STEP("frame begin: profile and statistics");
 	rasterizer_profile_frame_begin();
 	rasterizer_frame_statistics_begin();
+	JOIN_FRAME_STEP("frame begin: water visibility");
 	rasterizer_water_set_visibility_for_frame(FALSE);
+	JOIN_FRAME_STEP("frame begin: lights for the new frame");
 	rasterizer_lights_begin_for_new_frame();
+	JOIN_FRAME_STEP("frame begin: texture_cache_idle");
 	texture_cache_idle();
+	JOIN_FRAME_STEP("frame begin: render state");
 	IDirect3DDevice8_SetRenderState(
 		global_d3d_device,
 		D3DRS_DXT1NOISEENABLE,
 		rasterizer_debug_options.DXTC_noise_enabled);
 	if (rasterizer_debug_options.draw_environment_decals)
 	{
+		JOIN_FRAME_STEP("frame begin: decals_repair_cache");
 		decals_repair_cache(); /* port: recover both cosmetic pools outside eviction callbacks */
 		rasterizer_decal_vertices_begin_update();
+		JOIN_FRAME_STEP("frame begin: decals_update");
 		decals_update();
+		JOIN_FRAME_STEP("frame begin: decals_repair_cache after");
         decals_repair_cache();
 		rasterizer_decal_vertices_end_update();
+		JOIN_FRAME_STEP("frame begin: decals done");
 	}
 	return;
 }

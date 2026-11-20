@@ -16,12 +16,17 @@ $XDG_DATA_HOME/halo-linux or ~/.local/share/halo-linux. Path components are
 matched case-insensitively, like the Xbox's FATX volumes.
 */
 
+#ifdef HALO_WIIU
+void *memalign(unsigned long alignment, unsigned long size); /* newlib's, malloc.h */
+#endif
 #include "platform.h"
 #include "posix.h"
 #include "port_config.h"
 #include "server_mode.h"
 #include "halo_startup.h"
 #include "halo_file_counts.h"
+#include "steam_workshop.h"
+#include "mcc_local_package.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -330,6 +335,54 @@ static BOOL names_match(const char *a, const char *b, unsigned long length)
 	return TRUE;
 }
 
+/* mcc_maps\<Workshop item id>\... where the data root has no such package folder: the item's maps folder in the
+player's Steam library (steam_workshop.h). The rest of the path after the id in rest */
+static int translate_workshop(const char *cursor, char *resolved, unsigned long size, const char **rest)
+{
+	char id[STEAM_WORKSHOP_ID_SIZE], package[1024], data_folder[1100], local_name[256];
+	unsigned long length = 0;
+
+	while (*cursor == '\\' || *cursor == '/')
+		cursor++;
+	/* MCC-owned local layout resolution is independent of Steam discovery. */
+	if (mcc_local_package_path(cursor, platform_data_root(), resolved, size))
+	{
+		*rest = cursor + strlen(cursor);
+		return 1;
+	}
+	if (!names_match(cursor, "mcc_maps", 8) || (cursor[8] != '\\' && cursor[8] != '/'))
+		return 0;
+	cursor += 9;
+	/* MCC-owned resource discovery also serves the virtual fopen path. */
+	if (steam_workshop_resource_path(cursor, platform_data_root(), resolved, size))
+	{
+		*rest = cursor + strlen(cursor);
+		return 1;
+	}
+	while (cursor[length] >= '0' && cursor[length] <= '9' && length + 1 < sizeof(id))
+	{
+		id[length] = cursor[length];
+		length++;
+	}
+	id[length] = 0;
+	if (!length || (cursor[length] && cursor[length] != '\\' && cursor[length] != '/'))
+		return 0;
+	/* a package folder of that name in the data root wins */
+	if (posix_find_entry_case_insensitive(platform_data_root(), "mcc_maps", local_name, sizeof(local_name)))
+	{
+		snprintf(data_folder, sizeof(data_folder), "%s/%s", platform_data_root(), local_name);
+		if (posix_find_entry_case_insensitive(data_folder, id, local_name, sizeof(local_name)))
+			return 0;
+	}
+	if (!steam_workshop_package_folder(id, package, sizeof(package)) ||
+		strlen(package) >= size)
+		return 0;
+	snprintf(resolved, size, "%s", package);
+	trim_separators(resolved);
+	*rest = cursor + length;
+	return 1;
+}
+
 /* the data root's files and folders kept elsewhere when the settings say
 (paths.logs, paths.custom_maps): a read-only data root, a dedicated
 server's maps mounted so. The rest of the path after them in rest */
@@ -342,6 +395,8 @@ static int translate_elsewhere(const char *cursor, char *resolved, unsigned long
 
 	while (*cursor == '\\' || *cursor == '/')
 		cursor++;
+	if (translate_workshop(cursor, resolved, size, rest))
+		return 1;
 	for (index = 0; logs_folder[0] && index < sizeof(logs) / sizeof(logs[0]); index++)
 	{
 		if (names_match(cursor, logs[index], strlen(logs[index]) + 1))
@@ -418,6 +473,11 @@ static int find_entry_case_insensitive(const char *directory, const char *name, 
 static unsigned long drive_known[26];
 #endif
 
+#ifdef HALO_WIIU
+/* port/wiiu/src/wiiu_usb.c: where the checkpoint file is kept when halo/checkpoint_dir.txt says (a folder on a USB drive), else NULL */
+const char *wiiu_checkpoint_dir(void);
+#endif
+
 void platform_translate_path(const char *xbox_path, char *host_path, unsigned long host_path_size)
 {
 	char resolved[1024];
@@ -425,6 +485,20 @@ void platform_translate_path(const char *xbox_path, char *host_path, unsigned lo
 	unsigned long length;
 
 	FILE_COUNT(FILE_COUNT_TRANSLATE, 1);
+#ifdef HALO_WIIU
+	/* (the game state's file, z:\savegame.bin, on a USB drive: a test, halo/checkpoint_dir.txt) */
+	if ((xbox_path[0] == 'z' || xbox_path[0] == 'Z') && xbox_path[1] == ':' && (xbox_path[2] == '\\' || xbox_path[2] == '/') &&
+		names_match(xbox_path + 3, "savegame.bin", 13))
+	{
+		const char *folder = wiiu_checkpoint_dir();
+
+		if (folder)
+		{
+			snprintf(host_path, host_path_size, "%s/savegame.bin", folder);
+			return;
+		}
+	}
+#endif
 	snprintf(resolved, sizeof(resolved), "%s", platform_data_root());
 	if (((cursor[0] >= 'a' && cursor[0] <= 'z') || (cursor[0] >= 'A' && cursor[0] <= 'Z')) && cursor[1] == ':')
 	{
@@ -463,6 +537,11 @@ void platform_translate_path(const char *xbox_path, char *host_path, unsigned lo
 			}
 		}
 		cursor += 2;
+	}
+	else
+	{
+		/* (a path without a drive, as the package resources are named) */
+		translate_workshop(cursor, resolved, sizeof(resolved), &cursor);
 	}
 
 	while (*cursor)
@@ -861,6 +940,42 @@ static BOOL write_at(struct platform_file *file, LPCVOID buffer, DWORD count, LP
 {
 	DWORD total = 0;
 
+#ifdef HALO_WIIU
+	/* (a file on the USB drive, port/wiiu/src/wiiu_usb.c, is written from a buffer of the heap, in pieces of 128 KB: the drive wrote the game state's own
+	buffer, in the Xbox memory window, at 0.3 MB/s, and a heap buffer at 7 MB/s) */
+	if (!positioned && strncmp(file->path, "storage_usb:", 12) == 0)
+	{
+		static char *bounce;
+		const DWORD chunk = 128 * 1024;
+
+		if (!bounce)
+			bounce = memalign(64, chunk);
+		if (bounce)
+		{
+			while (total < count)
+			{
+				const DWORD size = count - total < chunk ? count - total : chunk;
+				ssize_t result;
+
+				memcpy(bounce, (const char *)buffer + total, size);
+				result = write(file->descriptor, bounce, size);
+				if (result < 0)
+				{
+					if (errno == EINTR)
+						continue;
+					platform_set_last_error_from_errno(errno);
+					if (bytes_written)
+						*bytes_written = total;
+					return FALSE;
+				}
+				total += (DWORD)result;
+			}
+			if (bytes_written)
+				*bytes_written = total;
+			return TRUE;
+		}
+	}
+#endif
 	while (total < count)
 	{
 		ssize_t result = positioned ?
@@ -911,6 +1026,17 @@ static unsigned read_trace_count;
 static unsigned long long read_trace_offset;
 void platform_log(const char *format, ...);
 static double write_yielded_ms;
+static unsigned long write_pieces;
+static double write_call_ms, write_pause_ms, write_slowest_ms;
+long wiiu_study_number(const char *name, long fallback);
+static int write_yield_enabled(void)
+{
+	static int enabled = -1;
+
+	if (enabled < 0)
+		enabled = wiiu_study_number("write_yield.txt", 1) != 0;
+	return enabled;
+}
 static volatile double last_read_end_ms;
 #endif
 
@@ -1035,19 +1161,36 @@ BOOL platform_write_file_in_pieces(HANDLE handle, LPCVOID buffer, DWORD count, D
 	start_ms = file_io_now_ms();
 #ifdef HALO_WIIU
 	write_yielded_ms = 0.0;
+	write_pieces = 0;
+	write_call_ms = 0.0;
+	write_pause_ms = 0.0;
+	write_slowest_ms = 0.0;
 #endif
 	while (done < count)
 	{
 		DWORD wrote = 0;
 		const DWORD size = count - done < piece ? count - done : piece;
+#ifdef HALO_WIIU
+		const double call_start = file_io_now_ms();
+#endif
 
 		result = write_at(file, (const char *)buffer + done, size, &wrote, FALSE, 0);
+#ifdef HALO_WIIU
+		{
+			const double took = file_io_now_ms() - call_start;
+
+			write_pieces++;
+			write_call_ms += took;
+			if (took > write_slowest_ms)
+				write_slowest_ms = took;
+		}
+#endif
 		done += wrote;
 		if (!result)
 			break;
 #ifdef HALO_WIIU
-		/* Give queued map reads a chance between checkpoint pieces. */
-		if (done < count)
+		/* Give queued map reads a chance between checkpoint pieces (halo/write_yield.txt 0: do not). */
+		if (done < count && write_yield_enabled())
 		{
 			const struct timespec pause = { 0, 2000000 };
 			const double begun = file_io_now_ms();
@@ -1061,9 +1204,16 @@ BOOL platform_write_file_in_pieces(HANDLE handle, LPCVOID buffer, DWORD count, D
 				(__atomic_load_n(&reads_in_flight, __ATOMIC_SEQ_CST) > 0 || file_io_now_ms() - last_read_end_ms < 40.0))
 				nanosleep(&pause, NULL);
 			write_yielded_ms += file_io_now_ms() - begun;
+			write_pause_ms += file_io_now_ms() - begun;
 		}
 #endif
 	}
+#ifdef HALO_WIIU
+	if (done >= 1024 * 1024)
+		platform_log("write: %lu KB in %lu pieces of %lu KB, %.0f ms in all: %.0f ms inside the write calls, %.0f ms waiting for reads, the slowest piece %.0f ms (%s)",
+			(unsigned long)(done / 1024), write_pieces, (unsigned long)(piece / 1024), file_io_now_ms() - start_ms, write_call_ms, write_pause_ms, write_slowest_ms,
+			strncmp(file->path, "storage_usb:", 12) == 0 ? "USB drive" : "SD card");
+#endif
 	file_io_note(file, 1, done, start_ms);
 	if (bytes_written)
 		*bytes_written = done;

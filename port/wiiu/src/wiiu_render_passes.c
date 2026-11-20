@@ -56,9 +56,13 @@ static void passes_log(int first, int last)
 	platform_log("render passes, ms a window (%lu windows): %s", windows, line);
 }
 
+void wiiu_join_pass_note(int pass);
+
 void wiiu_render_pass(int pass)
 {
 	const OSTime now = OSGetSystemTime();
+
+	wiiu_join_pass_note(pass);
 
 	if (current_pass >= 0)
 	{

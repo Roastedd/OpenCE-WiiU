@@ -384,10 +384,14 @@ symbols in this file:
 #include "memory/byte_swapping.h" /* port: SWAP4 */
 #include "memory/data.h"
 #include "networking/network_client_manager.h"
+#include "mcc_load_network.h" /* port: bounded MCC conversion wait */
 #include "networking/network_client_message_handler.h"
 #include "networking/network_connection.h"
 #include "networking/network_game_globals.h"
 #include "networking/network_game_manager.h"
+void network_game_client_reset_settings_staging(void); /* port: discard partial settings across connections */
+#include "mcc_cache.h" /* port: MCC-only origin-change admission guard */
+#include "mcc_identity.h" /* port: MCC content admission and local package resolution */
 #include "networking/network_game_protocol.h"
 #include "networking/network_messages.h"
 #include "networking/network_server_manager.h"
@@ -622,6 +626,7 @@ struct message_client_join_game_request
 	zero for none (port/linux/src/player_link.c) */
 	byte link_pass[170];
 	byte link_proof[64];
+	word network_version; /* port: shared agreement before host admission */
 };
 
 struct message_client_map_is_precached_pregame
@@ -750,7 +755,7 @@ typedef char message_client_ping_size_assert[
 	sizeof(struct message_client_ping) == 8 ? 1 : -1];
 /* (port: and a Discord account's pass and proof after the Xbox's 0x70) */
 typedef char message_client_join_game_request_size_assert[
-	sizeof(struct message_client_join_game_request) == 0x70 + 170 + 64 ? 1 : -1];
+	sizeof(struct message_client_join_game_request) == 0x70 + 170 + 64 + 2 ? 1 : -1];
 typedef char network_game_client_seconds_to_game_start_offset_assert[
 	offsetof(struct network_game_client, seconds_to_game_start) == NETWORK_GAME_CLIENT_TAIL_OFFSET + 0x10 ? 1 : -1];
 typedef char network_game_client_error_offset_assert[
@@ -929,6 +934,8 @@ void network_game_client_dispose(
 {
 	if (client)
 	{
+		network_game_client_reset_settings_staging(); /* port: discard partial old-host settings */
+		mcc_identity_disconnect(); /* port: discard the MCC session's local binding */
 		if (client->connection)
 			network_connection_delete(client->connection);
 
@@ -1040,6 +1047,7 @@ boolean network_game_client_switch_to_pregame(
 		network_game_reset_for_next_round(&client->game, TRUE);
 		network_connection_keep_alive(client->connection);
 		client->next_update_number = 0;
+		network_game_client_reset_settings_staging(); /* port: discard the previous host's partial record */
 		client->join_in_progress = TRUE;
 		client->connection_silent = FALSE;
 		client->state = _network_game_client_state_pregame;
@@ -1314,9 +1322,19 @@ boolean network_game_client_game_settings_updated(
 			return FALSE;
 		}
 		if (csstrcmp(message_packet->map.name, client->game.map.name) ||
-			message_packet->map.version != client->game.map.version)
+			/* port: MCC validation also belongs to the advertised origin in the name tail. */
+			(mcc_level_name(message_packet->map.name) &&
+			 memcmp(message_packet->map.name, client->game.map.name, sizeof(message_packet->map.name))) ||
+			message_packet->map.version != client->game.map.version ||
+			/* port: the host's MCC content may change without changing its stored checksum */
+			memcmp(message_packet->mcc_content_sha256, client->game.mcc_content_sha256, 32) ||
+			/* port: a changed MCC campaign manifest also requires admission. */
+			memcmp(message_packet->mcc_metadata_sha256, client->game.mcc_metadata_sha256, 32))
 		{
 			char build[0x20];
+
+			/* port: resolve MCC locally before native presence checks, retaining the host's wire name */
+			if (!mcc_identity_accept(message_packet)) return FALSE;
 
 			/* port: a map this machine has not (a Custom Edition map not in
 			its custom_maps folder, or another version of it than the host's,
@@ -1352,6 +1370,7 @@ boolean network_game_client_game_settings_updated(
 			&previous_game.local_data,
 			sizeof(client->game.local_data));
 
+		JOIN_STEP("game settings updated");
 		network_event(
 			"received updated game settings from the server; there are %d players on %d machines in the game",
 			message_packet->player_count,
@@ -1554,6 +1573,7 @@ boolean network_game_client_add_player(
 	player.team_index = NONE;
 	player.player_list_index = NONE;
 
+	JOIN_STEP("player addition requested");
 	network_event(
 		"requesting a player addition (controller index #%d)",
 		player.controller_index);
@@ -1676,6 +1696,11 @@ boolean network_game_client_handle_game_update(
 			message_packet->game_time);
 		game_time_set_distributed(message_packet->game_time);
 	}
+	else
+	{
+		/* port: smaller deficits need simulation ticks too, bounded per frame. */
+		game_time_synchronize_distributed(message_packet->game_time);
+	}
 
 	return TRUE;
 }
@@ -1752,14 +1777,21 @@ boolean network_game_client_game_has_started(
 					NULL,
 					1))
 				{
+					JOIN_STEP("loaded: ready to play");
+#ifdef HALO_WIIU
+					wiiu_join_safe_arm();
+#endif
 					network_event("local machine is loaded & ready to play");
 
 					client->state = _network_game_client_state_ingame;
 					client->next_update_number = 0;
 					client->connection_silent = FALSE;
 
+					JOIN_STEP("ui widgets closing");
 					ui_widgets_close_all();
+					JOIN_STEP("game time starting");
 					game_time_start();
+					JOIN_STEP("game time started");
 					/* (a game in progress: the host's time when it said to start,
 					and the ticks this machine spent loading it) */
 					if (network_game_client_late_join_time > 0)
@@ -1772,13 +1804,16 @@ boolean network_game_client_game_has_started(
 						network_event("joined the game in progress at game tick #%ld",
 							network_game_client_late_join_time + ticks);
 					}
+					JOIN_STEP("clock set");
 					network_game_client_late_join_time = 0;
 					/* (the clock waits for the host's first game update, which
 					brings the host's time, game_time_update: at a start the host
 					ticks only once every machine has loaded) */
 					network_game_client_late_join_clock_pending =
 						game_connection() == _game_connection_network_client;
+					JOIN_STEP("initial pulse");
 					game_initial_pulse();
+					JOIN_STEP("initial pulse done");
 				}
 				else
 				{
@@ -1861,6 +1896,26 @@ boolean network_game_client_remove_player(
 				{
 					break;
 				}
+			}
+
+			/* port: a local player who leaves while another remains no longer has
+			its slot: its entry in the local players is cleared here, as the datum
+			stays until a joiner takes the slot (network_game_spawn_player), which
+			then deletes it and makes another with a new identifier, and the entry
+			would name a player that no longer exists (player_get halts on it). The
+			last to leave ends the game, whose sounds and views still name it until
+			then, so its entry stays */
+			if (network_player_index != MAXIMUM_NUMBER_OF_PLAYERS &&
+				player->machine_index == client->machine_index &&
+				player->controller_index >= 0 && player->controller_index < MAXIMUM_LOCAL_PLAYERS &&
+				local_player_get_player_index(player->controller_index) == player_index)
+			{
+				local_player_set_player_index(player->controller_index, NONE);
+				/* (and its control, which names its unit: the datum no longer has a
+				local player index, so the host deleting the unit does not reset it
+				(network_player_detach_unit), and player_control_update would get a
+				unit that is gone) */
+				player_control_new_unit(player->controller_index, NONE);
 			}
 
 			/* port: a dedicated server's own machine never has a player
@@ -2936,6 +2991,7 @@ static boolean network_game_client_idle_joining(
 				message_header *message;
 
 				csmemset(&join_game_request, 0, sizeof(join_game_request));
+				join_game_request.network_version = HALO_PORT_NETWORK_VERSION; /* port: explicit shared agreement */
 				network_game_generate_local_machine_name(join_game_request.machine_name);
 				csmemcpy(
 					join_game_request.join_token,
@@ -3151,6 +3207,14 @@ static boolean network_game_client_idle_ingame(
 		client->connection_silent = connection_stale;
 	}
 
+	/* port: progressing MCC conversion has an absolute limit too, even when
+	 * the host keeps writing while its synchronous map conversion runs. */
+	if (success && mcc_load_network_client_expired())
+	{
+		network_event("MCC loading exceeded its bounded conversion window");
+		display_error_when_main_menu_loaded(_error_network_connection_lost);
+		success = FALSE;
+	}
 	if (success == TRUE)
 	{
 		success = network_connection_idle(client->connection, started ? 15000 : 75000, NULL);
@@ -3323,6 +3387,18 @@ boolean network_game_client_advertised_game_in_progress(
 
 	return game_index >= 0 && game_index < MAXIMUM_NETWORK_ADVERTISED_GAMES &&
 		(network_game_client_advertised_versions[game_index].flags & HALO_PORT_ADVERTISED_IN_PROGRESS_FLAG) != 0;
+}
+
+/* port: the network version the advertised game's host sent (0: a build
+that sent none), for the system link list's rule (p2p_lobby_version_shown) */
+unsigned int network_game_client_advertised_game_version(
+	struct network_game_client *client,
+	struct network_advertised_game const *game)
+{
+	long game_index = client ? game - client->available_games : NONE;
+
+	return game_index >= 0 && game_index < MAXIMUM_NETWORK_ADVERTISED_GAMES ?
+		network_game_client_advertised_versions[game_index].version : 0;
 }
 
 /* port: whether the advertised game's host is a dedicated server

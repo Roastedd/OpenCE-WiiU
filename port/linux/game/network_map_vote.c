@@ -146,6 +146,7 @@ static void map_vote_fill_header(
 	/* port: in the wire's order (network_wire_order.c): the message is sent
 	as it is (its entries are bytes) */
 	NETWORK_WIRE(header->game_time);
+	header->checkpoint_epoch = 0; /* Lobby votes are independent of the restored world. */
 }
 
 /* a text copied into a field, ended within it, printable ASCII */
