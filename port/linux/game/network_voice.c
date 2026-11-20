@@ -483,7 +483,6 @@ static void voice_fill_header(
 	/* port: in the wire's order, little-endian (network_wire_order.c), as every other message's header has it: the message is
 	sent as it is, and a big-endian machine's game time went out the other way round */
 	NETWORK_WIRE(header->game_time);
-	header->checkpoint_epoch = 0; /* Voice continues across checkpoint restores. */
 }
 
 /* ---------- the host */

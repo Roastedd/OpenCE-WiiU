@@ -705,8 +705,6 @@ def regenerate_settings():
         (CE / name).write_text("\n".join(lines))
     bar = CE / (port_settings.MULTIPLAYER_FOLDER.replace("/", ".") + ".xml")
     bar.write_text(port_settings.multiplayer_bar_patched(bar.read_text()))
-    from mcc_menu_patches import regenerate
-    regenerate(CE)
     manifest = MENUS / "menus.json"
     data = json.loads(manifest.read_text())
     files = set(data["files"]) | {"ce/" + name for name in screens}

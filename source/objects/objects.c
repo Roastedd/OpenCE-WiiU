@@ -7,8 +7,6 @@ OBJECTS.C
 #include "cseries.h"
 #include "infection.h" /* port: port/linux/game/infection.c */
 #include "objects.h"
-#include "mcc_object_names.h" /* port: port/linux/game/mcc_object_names.c */
-#include "mcc_objects.h" /* port: port/linux/game/mcc_objects.c */
 #include "coop_pickups.h" /* port: the host's extra campaign pickups */
 #include "coop_vehicles.h" /* port: the host's extra campaign vehicles */
 
@@ -64,7 +62,6 @@ OBJECTS.C
 #include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
 #include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
 #endif
-#include "units/bipeds.h" /* port: vehicle riding */
 /* port: object_bounds_cache.c's */
 void object_bounds_cache_update(long object_index, real_point3d const *center, real radius);
 /* port: port/linux/game/first_person_legs.c's */
@@ -437,17 +434,10 @@ long object_get_ultimate_parent(
 {
 	long result = NONE;
 	struct object_datum *object;
-	long steps = 0;
 	for (;object_index!=NONE; object_index = object->object.parent_object_index)
 	{
 		result = object_index;
 		object = object_get(object_index);
-		/* port: a chain of parents that comes back to itself would be walked for ever (a limit, and a line) */
-		if (++steps > MAXIMUM_OBJECTS_PER_MAP)
-		{
-			error(_error_silent, "object_get_ultimate_parent: the parents of object #%ld come back on themselves; stopped at #%ld", result, object_index);
-			break;
-		}
 	}
 
 	return result;
@@ -464,9 +454,6 @@ void object_set_object_index_for_name_index(
 	short name_index,
 	long object_index)
 {
-	/* port: expanded MCC names use a separate table. */
-	if (mcc_object_names_active()) { mcc_object_names_set(name_index, object_index); return; }
-
 	/* port: and one the name list holds (a map's count; retail has up to
 	448 names) */
 	if (VALID_INDEX(name_index, MIN(global_scenario_get()->object_names.count, MAXIMUM_OBJECT_NAMES_PER_SCENARIO)))
@@ -1214,8 +1201,6 @@ void objects_initialize(
 	{
 		object_header_data = game_state_data_new("object", MAXIMUM_OBJECTS_PER_MAP, sizeof(struct object_header_datum));
 		object_memory_pool = game_state_memory_pool_new("objects", OBJECT_MEMORY_POOL_SIZE);
-		/* port: (none in the editor, where riding never runs) */
-		vehicle_riding_objects_initialize();
 	}
 	else
 	{
@@ -1248,8 +1233,6 @@ void objects_initialize_for_new_map(
 	first_person_legs_reset();
 	
 	data_make_valid(object_header_data);
-	/* port: (zeroed for a new map only: a revert or a load brings them back with the bipeds' snapshots) */
-	vehicle_riding_objects_reset();
 	object_name_list_clear();
 
 	cluster_partition_make_valid(&collideable_object_cluster_partition);
@@ -1595,16 +1578,10 @@ void object_get_velocities(
 	real_vector3d *angular_velocity)
 {
 	struct object_datum *ultimate_parent = object_get(object_index);
-	long steps = 0;
 
 	while (ultimate_parent->object.parent_object_index!=NONE)
 	{
 		ultimate_parent = object_get(ultimate_parent->object.parent_object_index);
-		if (++steps > MAXIMUM_OBJECTS_PER_MAP)
-		{
-			error(_error_silent, "object_get_velocities: the parents of object #%ld come back on themselves", object_index);
-			break;
-		}
 	}
 
 	if (translational_velocity)
@@ -1616,27 +1593,6 @@ void object_get_velocities(
 	{
 		*angular_velocity = ultimate_parent->object.angular_velocity;
 	}
-
-	return;
-}
-
-/* port: the velocity of a point on an object: its ultimate parent's motion
-and spin (v + w x r about the parent's position, as physics.c works out its
-mass points' velocities), in world units a tick. For the sounds' Doppler
-effect (game_sound.c, sound_manager.c): a sound on a turning vehicle and the
-ear of whoever rides it move as their points do, and cancel. */
-void object_get_point_velocity(
-	long object_index,
-	real_point3d const *point,
-	real_vector3d *velocity)
-{
-	struct object_datum *ultimate_parent = object_get(object_get_ultimate_parent(object_index));
-	real_vector3d radius;
-	real_vector3d spin;
-
-	vector_from_points3d(&ultimate_parent->object.position, point, &radius);
-	cross_product3d(&ultimate_parent->object.angular_velocity, &radius, &spin);
-	add_vectors3d(&ultimate_parent->object.translational_velocity, &spin, velocity);
 
 	return;
 }
@@ -2023,9 +1979,6 @@ short objects_in_clusters_by_indices(
 long object_index_from_name_index(
 	short name_index)
 {
-	/* port: expanded MCC names use a separate table. */
-	if (mcc_object_names_active()) return mcc_object_names_get(name_index);
-
 	return name_index>=0 && name_index<MAXIMUM_OBJECT_NAMES_PER_SCENARIO ? object_name_list[name_index] : NONE;
 }
 
@@ -4236,9 +4189,6 @@ static boolean object_update_inner(
 	boolean result = TRUE;
 	if (!TEST_FLAG(header->flags, _object_header_do_not_update_bit))
 	{
-		/* port: (vehicle_riding.c) */
-		object_count_update(object_index);
-
 		if (TEST_FLAG(object->object.flags, _object_garbage_bit))
 		{
 			++object_globals->active_garbage_object_count;
@@ -4979,18 +4929,6 @@ static void objects_update_look_ahead(
 
 	return;
 }
-
-static struct objects_update_look_ahead objects_update_look_ahead_state;
-
-/* the main loop's update of one object, with the look ahead of the loop that was here (objects_update_passes calls it for each object it updates) */
-static boolean object_update_ahead(
-	long object_index)
-{
-	if (HALO_TOUCHES_ON())
-		objects_update_look_ahead(&objects_update_look_ahead_state, (struct object_header_datum *)object_header_data->data, object_header_data->count,
-			(short)DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index));
-	return object_update(object_index);
-}
 #endif
 
 void objects_update(
@@ -5003,6 +4941,9 @@ void objects_update(
 	short cluster_count;
 	short i;
 	struct object_header_datum *object_header;
+#ifdef HALO_PPC_HOTPATHS_ON
+	struct objects_update_look_ahead look_ahead;
+#endif
 
 	boolean dont_update_object = ((game_time_get()&1)!=0) && game_players_are_double_speed();
 
@@ -5060,19 +5001,46 @@ void objects_update(
 			cluster_count);
 	}
 
+	object_header = (struct object_header_datum *)object_header_data->data;
 #ifdef HALO_PPC_HOTPATHS_ON
-	objects_update_look_ahead_state.next = objects_update_look_ahead_state.after = objects_update_look_ahead_state.touched = -1;
+	look_ahead.next = look_ahead.after = look_ahead.touched = -1;
 #endif
-	/* port: the vehicles' touches of riders are kept for this tick's riders
-	alone (vehicle_riding.c): one whose own tick never comes takes none into
-	the next */
-	vehicle_riding_contacts_clear();
-	/* port: the main loop, riders last (objects_update_passes). Each update opens its object's snapshot scope (object_update) */
+	for (i = 0; i<object_header_data->count; ++object_header)
+	{
+		if (object_header->identifier)
+		{
+			if (TEST_FLAG(object_header->flags, _object_header_active_bit) &&
+				!TEST_FLAG(object_header->flags, _object_header_being_created_bit))
+			{
+				long object_index = DATUM_INDEX_NEW(i, object_header->identifier);
+#ifdef HALO_WIIU
+				/* port: the object's scope for the tick snapshot opens before anything is asked of it (object_update, above, is the scope of the children and siblings it updates) */
+				tick_snapshot_scope_enter(object_index);
+#endif
 #ifdef HALO_PPC_HOTPATHS_ON
-	objects_update_passes(dont_update_object, object_update_deferred, object_update_ahead);
+				if (HALO_TOUCHES_ON())
+					objects_update_look_ahead(&look_ahead, (struct object_header_datum *)object_header_data->data, object_header_data->count, i);
+#endif
+				match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 416, object_get(object_index)->object.parent_object_index==NONE);
+				match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 417, object_get(object_index)->object.next_object_index==NONE);
+			
+				if (!dont_update_object ||
+					TEST_FLAG(_object_mask_unit, object_header->type) &&
+					unit_get(object_index)->unit.player_index!=NONE)
+				{
+#ifdef HALO_WIIU
+					object_update_inner(object_index);
 #else
-	objects_update_passes(dont_update_object, object_update_deferred, object_update);
+					object_update(object_index);
 #endif
+				}
+#ifdef HALO_WIIU
+				tick_snapshot_scope_leave(object_index);
+#endif
+			}
+		}
+		++i;
+	}
 
 	object_header = (struct object_header_datum *)object_header_data->data;
 	for (i = 0; i<object_header_data->count; ++object_header)
@@ -5170,9 +5138,6 @@ static void object_name_list_free(
 static void object_name_list_clear(
 	void)
 {
-	/* port: clear MCC state on every new map and restart. */
-	if (mcc_object_names_active()) mcc_object_names_clear();
-
 	memset(object_name_list, NONE, MAXIMUM_OBJECT_NAMES_PER_SCENARIO * sizeof(*object_name_list));
 
 	return;
@@ -5183,9 +5148,6 @@ static void object_name_list_new(
 	short name_index)
 {
 	struct object_datum *object = object_get(object_index);
-
-	/* port: extended indices must not enter the legacy table. */
-	if (mcc_object_names_active()) { mcc_object_names_claim(name_index, object_index); return; }
 
 	match_assert(
 		"c:\\halo\\SOURCE\\objects\\objects.c",
@@ -5231,9 +5193,6 @@ void object_claim_scenario_name(
 	long object_index,
 	short name_index)
 {
-	/* port: expanded MCC names preserve the same first-owner rule. */
-	if (mcc_object_names_active()) { mcc_object_names_claim(name_index, object_index); return; }
-
 	if (object_index == NONE ||
 		!VALID_INDEX(name_index, MIN(global_scenario_get()->object_names.count, MAXIMUM_OBJECT_NAMES_PER_SCENARIO)) ||
 		object_name_list[name_index] != NONE)
@@ -5249,9 +5208,6 @@ static void object_name_list_delete(
 	long object_index)
 {
 	struct object_datum *object = object_get(object_index);
-
-	/* port: MCC also clears aliases outside the legacy name range. */
-	if (mcc_object_names_active()) { mcc_object_names_delete(object_index); return; }
 
 	if (object->object.name_index!=NONE)
 	{
@@ -5276,9 +5232,6 @@ static void object_name_list_delete(
 static long object_name_list_lookup(
 	short name_index)
 {
-	/* port: expanded MCC names use a separate table. */
-	if (mcc_object_names_active()) return mcc_object_names_get(name_index);
-
 	return VALID_INDEX(name_index, MAXIMUM_OBJECT_NAMES_PER_SCENARIO) ? object_name_list[name_index] : NONE;
 }
 
@@ -5559,18 +5512,10 @@ static void object_remove_from_list(
 	long *first_object_reference,
 	long object_index)
 {
-	long steps = 0;
-
 	while (*first_object_reference!=NONE)
 	{
 		struct object_datum *object = object_get(*first_object_reference);
 
-		/* port: a list that comes back on itself is left (a limit, and a line) */
-		if (++steps > MAXIMUM_OBJECTS_PER_MAP)
-		{
-			error(_error_silent, "object_remove_from_list: the list of object #%ld comes back on itself", object_index);
-			break;
-		}
 		if (*first_object_reference==object_index)
 		{
 			*first_object_reference = object->object.next_object_index;
@@ -5945,11 +5890,7 @@ static void object_compute_change_colors(
 				cc_index,
 				struct object_change_color_definition);
 
-			/* port: MCC signed RGB functions are clamped below, after darkening. */
-			if (change_color->scaled_by && !mcc_object_color_extrapolate(
-				&object->object.outgoing_change_colors[cc_index], change_color->scale_flags,
-				&change_color->color_lower_bound, &change_color->color_upper_bound,
-				OBJECT_INCOMING_FUNCTION_GET_VALUE(object, change_color->scaled_by)))
+			if (change_color->scaled_by)
 			{
 				rgb_colors_interpolate(
 					&object->object.outgoing_change_colors[cc_index],

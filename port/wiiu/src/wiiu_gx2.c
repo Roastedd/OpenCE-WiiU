@@ -2484,26 +2484,6 @@ static void census_log(unsigned frames)
 	gx.census_draws = gx.census_derive_runs = gx.census_same_as_last = gx.census_tuple_again = gx.census_mesh_again = gx.census_inline = 0;
 }
 
-#include "wiiu_join_trace.h"
-
-/* a draw that cannot be right is not issued (a count of nothing or of more than a model has, a primitive that is none, a stream shorter than the count says): said in the log, the first 20 and
-then a count a second, whatever has been drawn so far; the GPU hangs of a bad draw take the console with them */
-static unsigned draws_refused;
-static OSTime draws_refused_told;
-
-static void draw_refused(const struct dk_command_draw *command, const char *why)
-{
-	const OSTime now = OSGetSystemTime();
-
-	draws_refused++;
-	if (draws_refused <= 20 || now - draws_refused_told >= OSSecondsToTicks(1))
-	{
-		draws_refused_told = now;
-		wiiu_log("GX2: a draw is not issued (%s): prim %u count %u idx %08x off %d streams %u; %u so far", why, (unsigned)command->primitive, (unsigned)command->count,
-			(unsigned)command->index_address, (int)command->vertex_offset, (unsigned)command->stream_count, draws_refused);
-	}
-}
-
 static void draw(const struct dk_command_draw *command)
 {
 	/* (HOME can come between two draws: the game thread is held here, before the next call into GX2, not at the end of the stream) */
@@ -2525,12 +2505,6 @@ static void draw(const struct dk_command_draw *command)
 	if (!gx.color && !gx.depth)
 	{
 		gx.skipped_target++;
-		return;
-	}
-	if (command->count == 0 || command->count > 196605u || primitive > 9u || command->stream_count > DK_STREAM_COUNT)
-	{
-		if (command->count)
-			draw_refused(command, command->count > 196605u ? "too many vertices" : primitive > 9u ? "no such primitive" : "too many streams");
 		return;
 	}
 	if (range_later)
@@ -2623,21 +2597,6 @@ static void draw(const struct dk_command_draw *command)
 			return;
 		}
 		slot++;
-	}
-	/* (a stream of the draw that holds fewer vertices than the draw reads: the vertices of a draw with no indices are its count; with indices, the range the draw's own indices span) */
-	for (stream = 0; stream < DK_STREAM_COUNT; stream++)
-	{
-		const uint32_t stride = gx.format.strides[stream];
-
-		if (!buffers[stream] || !stride)
-			continue;
-		if (!command->index_address && !range_later && (uint64_t)command->count * stride > sizes[stream])
-		{
-			draw_refused(command, "a stream shorter than the vertices counted");
-			return;
-		}
-		/* (the first stream only: the others can be the draw's constants) */
-		break;
 	}
 	if (gx.constants_ring && gx.constants_frame == gx.frames && gx.constants_serial == gx.format_serial)
 		constants = gx.constants_ring;
@@ -2736,20 +2695,6 @@ static void draw(const struct dk_command_draw *command)
 	gx.section_now = OSGetSystemTime();
 	if (!gx.gpu_frame_open && !gx.replaying)
 		gpu_frame_begin();
-	if (wiiu_join_draw_trace_on())
-	{
-		/* the join's first frames (halo/join_steps.txt): the draw, written and fsync'd before it is issued */
-		char text[320];
-
-		snprintf(text, sizeof(text), "#%u frame %u vs %u ps %u/%d prim %u count %u idx %08x off %d streams %u %08x:%u:%u %08x:%u:%u mask %x tex %u/%u %u/%u vp %d,%d %dx%d blend %u depth %u",
-			(unsigned)gx.draw_total, (unsigned)gx.frames, (unsigned)gx.vs_handle, (unsigned)gx.ps_handle, (int)gx.ps_found, (unsigned)command->primitive, (unsigned)command->count,
-			(unsigned)command->index_address, (int)vertex_offset, (unsigned)command->stream_count,
-			command->stream_count > 0 ? (unsigned)command->streams[0][0] : 0u, command->stream_count > 0 ? (unsigned)command->streams[0][1] : 0u, (unsigned)gx.format.strides[0],
-			command->stream_count > 1 ? (unsigned)command->streams[1][0] : 0u, command->stream_count > 1 ? (unsigned)command->streams[1][1] : 0u, (unsigned)gx.format.strides[1],
-			(unsigned)gx.format.stream_mask, (unsigned)gx.stages[0].id, (unsigned)gx.stages[0].target, (unsigned)gx.stages[1].id, (unsigned)gx.stages[1].target,
-			(int)gx.state.viewport[0], (int)gx.state.viewport[1], (int)gx.state.viewport[2], (int)gx.state.viewport[3], (unsigned)gx.state.blend, (unsigned)gx.state.depth_test);
-		wiiu_join_draw_line(text);
-	}
 	if (indices)
 		GX2DrawIndexedEx(primitive_of(primitive), command->count, GX2_INDEX_TYPE_U16, indices, (uint32_t)vertex_offset, 1);
 	else

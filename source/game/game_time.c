@@ -82,7 +82,6 @@ symbols in this file:
 #include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
 #include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
 #endif
-#include "mcc_game_speed.h" /* port: port/linux/game/mcc_game_speed.c */
 /* port/linux/game/network_distributed.c's */
 void network_distributed_tick(void);
 
@@ -123,8 +122,6 @@ struct game_time_globals_struct
 /* ---------- globals */
 
 static struct game_time_globals_struct *game_time_globals;
-/* port: a reliable host update's time, not part of the saved world. */
-static long game_time_distributed_target = NONE;
 
 #ifdef HALO_WIIU
 /* port: the clock as the drawing thread sees it while a frame is drawn beside the ticks (tick_overlap.h): the tick the frame is drawn from, the ticks
@@ -176,7 +173,6 @@ void game_time_initialize(
 	/* port: inactive clock permits optional shader-file work. */
 	game_time_wiiu_capture_activity(FALSE);
 #endif
-	game_time_distributed_target = NONE; /* port: no previous session's target */
 
 	return;
 }
@@ -191,7 +187,6 @@ void game_time_initialize_for_new_map(
 	/* port: inactive clock permits optional shader-file work. */
 	game_time_wiiu_capture_activity(FALSE);
 #endif
-	game_time_distributed_target = NONE; /* port: no previous map's target */
 
 	return;
 }
@@ -199,7 +194,6 @@ void game_time_initialize_for_new_map(
 void game_time_dispose_from_old_map(
 	void)
 {
-	game_time_distributed_target = NONE; /* port: discard the departing map's target */
 	if (game_time_globals)
 	{
 		game_time_globals->initialized = FALSE;
@@ -228,7 +222,6 @@ void game_time_end(
 	/* port: inactive clock permits optional shader-file work. */
 	game_time_wiiu_capture_activity(FALSE);
 #endif
-	game_time_distributed_target = NONE; /* port: discard the finished game's target */
 
 	return;
 }
@@ -241,22 +234,6 @@ void game_time_set_distributed(
 	game_time_globals->local_time = time;
 	game_time_globals->server_time = time;
 	game_time_globals->leftover_dt = 0.f;
-	game_time_distributed_target = NONE; /* port: a new clock invalidates its target */
-
-	return;
-}
-
-/* port: remember only validated reliable host time. Small stalls used to
-leave clients behind indefinitely; game_time_update runs the missing ticks. */
-void game_time_synchronize_distributed(
-	long time)
-{
-	if (!game_time_globals || !game_time_globals->initialized ||
-		!game_time_globals->active || !network_game_distributed_client() ||
-		game_time_menu_scene() || time < 0 || time > 0x3FFFFFFF)
-		return;
-	if (time > game_time_globals->local_time && time > game_time_distributed_target)
-		game_time_distributed_target = time;
 
 	return;
 }
@@ -452,9 +429,6 @@ real game_time_get_tick_fraction(
 	if (!game_time_globals || !game_time_globals->active || game_time_globals->paused)
 		return 1.0f;
 	fraction = game_time_globals->leftover_dt * game_time_globals->speed * TICKS_PER_SECOND;
-	/* port: MCC clients interpolate using only the host's approved speed. */
-	if (network_game_distributed_client())
-		fraction = game_time_globals->leftover_dt * mcc_game_speed_client(game_time_globals->speed) * TICKS_PER_SECOND;
 	return PIN(fraction, 0.0f, 1.0f);
 }
 
@@ -466,7 +440,7 @@ real game_time_get_speed(
 	/* port: a client of another's game runs at the host's speed (its own
 	set before it joined too: cheats_network_client_enforce) */
 	if (network_game_distributed_client())
-		return mcc_game_speed_client(1.0f); /* port: legacy clients remain at one */
+		return 1.0f;
 	return game_time_globals->speed;
 }
 
@@ -606,12 +580,7 @@ static boolean game_time_clock_step(
 {
 	long connection;
 	long ticks_elapsed;
-	real ticks_per_second;
-
-	/* port: preserve native client cheat enforcement; use MCC host state separately. */
-	if (network_game_distributed_client())
-		speed = mcc_game_speed_client(speed);
-	ticks_per_second = speed*TICKS_PER_SECOND;
+	real ticks_per_second = speed*TICKS_PER_SECOND;
 
 	*ticks_elapsed_out = 0;
 	*leftover_out = leftover_in;
@@ -686,17 +655,6 @@ static boolean game_time_clock_step(
 			ticks_elapsed = 1;
 			leftover_dt = 0.f;
 		}
-		/* port: recover a small clock deficit by simulating, not skipping, ticks. Keep the fractional time and the frame's existing cap;
-		at most double its normal work, never extrapolating the host's time. */
-		if (network_game_distributed_client() && !game_time_held() && !game_time_menu_scene() && game_time_globals->local_time >= 0 &&
-			game_time_distributed_target > game_time_globals->local_time)
-		{
-			long ticks_behind = game_time_distributed_target - game_time_globals->local_time;
-			long extra_ticks = MIN(ticks_elapsed, ticks_behind - ticks_elapsed);
-
-			if (extra_ticks > 0)
-				ticks_elapsed += MIN(extra_ticks, TICKS_PER_SECOND - ticks_elapsed);
-		}
 		match_assert("c:\\halo\\SOURCE\\game\\game_time.c", 306,
 			leftover_dt>=0.f && leftover_dt<100.f);
 		*ticks_elapsed_out = ticks_elapsed;
@@ -717,8 +675,6 @@ static long game_time_run_ticks(
 	long final_local_time;
 	long maximum_possible_server_time;
 	long ticks_run = 0;
-
-	JOIN_FRAME_STEP("ticks: run begins");
 
 	final_local_time = game_time_globals->local_time + ticks_elapsed;
 	switch (game_connection())
@@ -801,8 +757,6 @@ void game_time_update(
 	real time_delta_sec)
 {
 	match_assert("c:\\halo\\SOURCE\\game\\game_time.c", 205, game_time_globals);
-	/* port: MCC speed updates must continue when simulation is stopped. */
-	mcc_game_speed_frame();
 
 	if (game_time_globals->active)
 	{

@@ -14,7 +14,7 @@ static char const *const remap_names[] = {"south","east","west","north","rb","lb
 void controller_remap_defaults(unsigned char *buttons)
 {
     static unsigned char const defaults[CONTROLLER_REMAP_ACTIONS] = {
-        0,4,2,3,1,5,6,7,14,15, 13,255,255,9,10,11, 8,255,255,255, 8,9,15,7,6,4
+        0,4,2,3,1,5,6,7,14,15, 13,255,255,9,10,11, 8,255,255,255, 8,9,15,7,6
     };
     memcpy(buttons, defaults, sizeof(defaults));
 }
@@ -60,9 +60,8 @@ int controller_remap_parse(char const *text, unsigned char *buttons)
     unsigned char parsed[CONTROLLER_REMAP_ACTIONS];
     int action, i, count;
     if (!text || !*text) return 0;
-    count = !strncmp(text, "v3:", 3) ? CONTROLLER_REMAP_ACTIONS :
-        !strncmp(text, "v2:", 3) ? 25 : CONTROLLER_REMAP_GAME_ACTIONS;
-    if (count != CONTROLLER_REMAP_GAME_ACTIONS) text += 3;
+    count = !strncmp(text, "v2:", 3) ? CONTROLLER_REMAP_ACTIONS : CONTROLLER_REMAP_GAME_ACTIONS;
+    if (count == CONTROLLER_REMAP_ACTIONS) text += 3;
     controller_remap_defaults(parsed);
     for (action = 0; action < count; action++)
     {
@@ -83,10 +82,6 @@ int controller_remap_parse(char const *text, unsigned char *buttons)
         else if (*text) return 0;
     }
     if (count == CONTROLLER_REMAP_GAME_ACTIONS) controller_remap_complete(parsed);
-    /* Older debug layouts keep their buttons if RB is already assigned. */
-    if (count < CONTROLLER_REMAP_ACTIONS &&
-        controller_remap_conflict(parsed, PAD_CAMERA_CYCLE, parsed[PAD_CAMERA_CYCLE]) >= 0)
-        parsed[PAD_CAMERA_CYCLE] = CONTROLLER_REMAP_UNBOUND;
     memcpy(buttons, parsed, sizeof(parsed));
     return 1;
 }
@@ -98,7 +93,7 @@ void controller_remap_format(unsigned char const *buttons, char *text, unsigned 
     if (!size) return;
     *text = 0;
     if (size < 4) return;
-    strcpy(text, "v3:");
+    strcpy(text, "v2:");
     for (action = 0; action < CONTROLLER_REMAP_ACTIONS; action++)
     {
         char const *name = "unbound";
@@ -124,7 +119,7 @@ int controller_remap_read(short port, unsigned char *buttons)
         {
             char const *text = config_string(controller_remap_setting((short)i));
             valid[i] = controller_remap_parse(text, layouts[i]);
-            if (valid[i] && i && strncmp(text, "v2:", 3) && strncmp(text, "v3:", 3))
+            if (valid[i] && i && strncmp(text, "v2:", 3))
             {
                 layouts[i][PAD_CHAT] = CONTROLLER_REMAP_UNBOUND;
                 layouts[i][PAD_FORWARD] = 8;

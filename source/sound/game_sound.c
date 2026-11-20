@@ -983,12 +983,11 @@ void game_sound_set_mouth_aperture(
 	return;
 }
 
-/* port: the native ports draw several frames per game tick (port/linux/game/
+/* The native ports draw several frames per game tick (port/linux/game/
 render_interpolation.c), and the sound manager refreshes every sound each
-frame; on the Xbox, frames and ticks were one. Sounds whose positions share
-a slot share one collision test for the tick. Each sound's own result for
-the tick is kept in sound_manager.c, so a full mixer does not crowd this
-table into testing again every frame. */
+frame; on the Xbox, frames and ticks were one. A sound's obstruction, a
+collision test from the camera, is computed once per tick and reused by the
+tick's other frames. */
 #define OBSTRUCTION_CACHE_SLOTS 128
 
 static struct
@@ -1232,11 +1231,10 @@ boolean track_object_impulse_sound(
 				node_matrix,
 				&attachment->forward,
 				&source->location.forward);
-			/* port: the attachment's velocity, not only the object's */
-			object_get_point_velocity(
+			object_get_velocities(
 				object_index,
-				&source->location.position,
-				&source->location.translational_velocity);
+				&source->location.translational_velocity,
+				NULL);
 
 			return TRUE;
 		}
@@ -1256,6 +1254,7 @@ static void update_potentially_audible_looping_sound(
 		sound->last_audible_frame_index == NONE
 		|| sound->last_audible_frame_index == game_sound_globals->update_index - 1;
 	boolean audible;
+	real_vector3d unused_velocity;
 	struct sound_source source;
 
 	if (!TEST_FLAG(sound->flags, _game_looping_sound_unattached_bit))
@@ -1286,11 +1285,10 @@ static void update_potentially_audible_looping_sound(
 				location);
 			matrix4x3_transform_point(node_matrix, &sound->position, &source.location.position);
 			matrix4x3_transform_normal(node_matrix, &sound->forward, &source.location.forward);
-			/* port: the attachment's velocity, not only the object's */
-			object_get_point_velocity(
+			object_get_velocities(
 				sound->object_index,
-				&source.location.position,
-				&source.location.translational_velocity);
+				&source.location.translational_velocity,
+				&unused_velocity);
 			source.location.game_location = *location;
 			source.spatialization_mode = _sound_spatialization_mode_absolute;
 		}

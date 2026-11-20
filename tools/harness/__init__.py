@@ -12,33 +12,8 @@ HARNESS = Path(__file__).resolve().parent
 
 
 def read(relative):
-    """A source file of the repository, as the compiler reads it, less the Wii U's Broadway kernel wrappers (#ifdef HALO_BW_KERNELS, which the
-    host build does not define: the function under them is the C, which is what a test extracts)."""
-    text = (ROOT / relative).read_text(encoding="latin-1")
-    return re.sub(r"^#ifdef HALO_BW_KERNELS\n.*?^#endif\n", "", text, flags=re.M | re.S)
-
-
-def host_view(text):
-    """a source as the host build reads it (HALO_WIIU not defined): the #ifdef HALO_WIIU branches out, their #else branches in; so that a test extracts
-    the function the host compiles, not the console's variant of the same name"""
-    out, stack = [], []   # each frame: [is HALO_WIIU's, still skipping]
-    for line in text.split("\n"):
-        word = line.strip()
-        if word.startswith("#if"):
-            stack.append([word.replace(" ", "") in ("#ifdefHALO_WIIU", "#ifdef(HALO_WIIU)", "#ifdefined(HALO_WIIU)"), False])
-            if stack[-1][0]:
-                stack[-1][1] = True
-                continue
-        elif word.startswith("#else") and stack and stack[-1][0]:
-            stack[-1][1] = False
-            continue
-        elif word.startswith("#endif") and stack:
-            frame = stack.pop()
-            if frame[0]:
-                continue
-        if not any(frame[0] and frame[1] for frame in stack):
-            out.append(line)
-    return "\n".join(out)
+    """A source file of the repository, as the compiler reads it."""
+    return (ROOT / relative).read_text(encoding="latin-1")
 
 
 def function(source, name):
@@ -111,7 +86,7 @@ def build(test, generated):
     work.mkdir(parents=True, exist_ok=True)
     for name, text in generated:
         (work / name).write_text(text)
-    executable = work / (test + (".exe" if os.name == "nt" else ""))
+    executable = work / test
     # (HALO_HARNESS_TARGET replaces -m32: "--target=powerpc-linux-gnu -fsigned-char -fuse-ld=lld -no-pie" builds
     # the tests big-endian, run by HALO_HARNESS_RUNNER, qemu-ppc)
     target = os.environ.get("HALO_HARNESS_TARGET", "-m32").split()
@@ -120,12 +95,7 @@ def build(test, generated):
     command = [os.environ.get("CC", "clang"), *target, "-std=gnu99", "-O2", "-ffp-contract=off", "-Wall", "-Werror",
                "-Wno-unused-function",
                "-Wno-unused-variable", "-I", str(HARNESS / "include"), "-I", str(work),
-               str(HARNESS / "tests" / f"{test}.c"), "-o", str(executable)]
-    # MSVC's runtime includes maths; there is no separate m.lib on Windows.
-    if os.name == "nt":
-        command.append("-D_CRT_SECURE_NO_WARNINGS=")
-    else:
-        command += ["-pthread", "-lm"]
+               str(HARNESS / "tests" / f"{test}.c"), "-o", str(executable), "-lm"]
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode:
         raise RuntimeError(f"{test}.c does not compile:\n{result.stderr}")

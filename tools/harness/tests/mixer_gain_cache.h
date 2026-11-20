@@ -1,16 +1,12 @@
 /* Exact target-cache dependencies, independent of their key array indices. */
 static void gain_cache_check(struct sdl_stream *stream, BOOL invalidated)
 {
-	float expected[7], actual[7];
+	float expected[5], actual[5];
 	unsigned long before;
-	BOOL expected_hrtf, actual_hrtf;
-	struct hrtf_parameters hrtf;
 
-	/* (the cache holds the pair, [5] and [6], too; the HRTF is off in these voices: the cache is not used for a voice it takes) */
-	voice_gains_uncached(stream, &expected[0], &expected[1], &expected[5], &expected[2], &expected[3], &expected[4], &expected_hrtf, &hrtf);
+	voice_gains_uncached(stream, &expected[0], &expected[1], &expected[2], &expected[3], &expected[4]);
 	before = voice_gain_recalculations;
-	voice_gains(stream, &actual[0], &actual[1], &actual[5], &actual[2], &actual[3], &actual[4], &actual_hrtf, &hrtf);
-	CHECK(!expected_hrtf && !actual_hrtf, "the HRTF took a voice with it off");
+	voice_gains(stream, &actual[0], &actual[1], &actual[2], &actual[3], &actual[4]);
 	CHECK(voice_gain_recalculations - before == (unsigned long)invalidated, "gain-cache miss/hit differs");
 	CHECK(!memcmp(expected, actual, sizeof(actual)), "cached gain/filter targets differ byte for byte");
 }
@@ -24,7 +20,7 @@ static void gain_cache_dependencies(void)
 	unsigned i;
 
 	if (sizeof(unsigned long) == 4)
-		CHECK(sizeof(struct voice_gain_inputs) + sizeof(stream->gain_cache_target) + sizeof(BOOL) == 176,
+		CHECK(sizeof(struct voice_gain_inputs) + sizeof(stream->gain_cache_target) + sizeof(BOOL) == 168,
 			"gain cache exceeded its Wii U per-stream bound");
 	stream->has_3d = TRUE;
 	stream->mode = DS3DMODE_NORMAL;
@@ -121,16 +117,16 @@ static void gain_cache_config(void)
 	before = gain_config_lock_calls;
 	gain_config_do_work();
 	CHECK(gain_config_lock_calls == before + 1, "settings published without the mixer lock");
-	CHECK(gain_config_reads == 4 && !gain_config_read_locked, "config read while holding mixer lock");
+	CHECK(gain_config_reads == 2 && !gain_config_read_locked, "config read while holding mixer lock");
 	CHECK(master_volume == 0.25f && !reverb_enabled, "config settings were not published together");
 	gain_cache_check(stream, TRUE);
 	gain_cache_check(stream, FALSE);
 	gain_config_do_work();
-	CHECK(gain_config_reads == 4 && gain_config_lock_calls == before + 1, "unchanged config was republished");
+	CHECK(gain_config_reads == 2 && gain_config_lock_calls == before + 1, "unchanged config was republished");
 	gain_config_serial++;
 	gain_config_volume = 0.75; gain_config_reverb = TRUE;
 	gain_config_do_work();
-	CHECK(gain_config_reads == 8 && !gain_config_read_locked && gain_config_completions == 3,
+	CHECK(gain_config_reads == 4 && !gain_config_read_locked && gain_config_completions == 3,
 		"config reload/completions changed");
 	CHECK(master_volume == 0.75f && reverb_enabled, "new config settings missing");
 	gain_cache_check(stream, TRUE);
