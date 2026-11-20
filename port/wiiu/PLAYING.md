@@ -138,10 +138,10 @@ player even when you play alone; **Merged** is the old behaviour (the first cont
 ## System link and online play
 
 - **System Link** (Multiplayer menu) finds and hosts games on your local network, with other Wii Us and with OpenCE on a computer built from the same
-  network version (the Wii U port speaks protocol 44, the same as upstream OpenCE's PC builds of that version). A game that tells you the version is
+  network version (the Wii U port speaks protocol 41, the same as upstream OpenCE's PC builds of that version). A game that tells you the version is
   different is from another build: update that side.
 - **Games from other versions are hidden.** The server browser and the System Link list show only games that this build can join. A game hosted on a
-  newer or older network version (the Wii U speaks 44; older OpenCE builds speak 41) is left out; when only such games exist, the line under the list
+  newer or older network version (the Wii U speaks 41; newer OpenCE builds speak 44) is left out; when only such games exist, the line under the list
   says how many are hidden. To see them anyway, set `network.show_incompatible_games = true` in `config.toml`, or **SHOW INCOMPATIBLE** in Settings →
   Network Setup → Server Browser. They then appear greyed and marked NEWER or OLDER, and choosing one does not join: the line under the list says it is on
   another network version (and which).
@@ -363,15 +363,3 @@ the pointing coordinates (default 0.9). Camera turning stops when tracking
 is lost. This on-foot implementation uses the separation of pointer aim, camera turning and filtering identified
 in the supplied BO2 executable. Scoped and vehicle
 controls still use Halo's existing paths.
-
-## Friends and the social screens (on by default)
-
-Friends, invites and parties are on: the Multiplayer screen has a FRIENDS button, the pause menu a PLAYERS page, and the GamePad's social view shows who is
-online. They need the internet play to be on (network.online) and cost nothing without a network. To turn them off, put a 0 in `halo/social.txt` on the card
-(the friends), or set `screens.enable` to 0 in config.toml (the screens).
-
-## Saved campaigns from older builds
-
-This build's saved campaign is not the older builds' (the game's biped grew a few fields for vehicle riding), so a campaign saved by an older build cannot be loaded.
-CONTINUE and LOAD GAME still show it with its level, and starting it begins that level from its beginning (the log says so). A campaign saved by this build continues as before.
-

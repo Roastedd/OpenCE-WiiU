@@ -33,14 +33,6 @@ static long config_integer(char const *name) { (void)name; return 0; }
 static void platform_log(char const *format, ...) { (void)format; }
 #define build_message_header(header, size, priority, flags) (*(header) = (message_header)(size))
 static struct { long sent; } distributed_statistics;
-/* (a game that is not a client's, and no MCC map: the header is filled and the MCC grenades and player actions are as stock) */
-enum { _game_connection_network_client = 1 };
-static int game_in_progress(void) { return 0; }
-static int game_connection(void) { return 0; }
-static boolean distributed_checkpoint_synchronized = TRUE;
-static unsigned long distributed_checkpoint_epoch;
-static boolean mcc_grenades_active(void) { return FALSE; }
-#define mcc_player_action_valid(action) TRUE
 /* (a batch with room for the message; the message goes to the test's wire) */
 #define distributed_batch_room(sender, minimum) ((word)DATAGRAM_MAXIMUM_SIZE)
 static void distributed_batch_add(short sender, void const *message, word size, word entry_size);
@@ -49,8 +41,6 @@ static void distributed_batch_add(short sender, void const *message, word size, 
 #define network_damage_wire_order(type, entries, count, size) ((void)(entries))
 #define network_actors_wire_order(type, entries, count, size) ((void)(entries))
 #define network_coop_wire_order(type, entries, count, size) ((void)(entries))
-#define mcc_network_wire_order_inventories(entries, count, size) ((void)(entries))
-#define mcc_object_names_wire_order(entries, count, size) ((void)(entries))
 #include "under_test.inc"
 
 enum { REMOTE_PLAYER = 3 };
@@ -166,7 +156,6 @@ running ahead, firing, buttons 0x0105. (Its first two bytes are not on the
 wire: a batch's message has the batch's.) */
 static byte const x86_message[] = {
  0x00, 0x00, _distributed_message_relayed_actions, 1, 0x84, 0x03, 0x00, 0x00,
- 0x00, 0x00, 0x00, 0x00, /* (the checkpoint epoch: none) */
  0x81, 0x23, 0x01, 0x00,
  REMOTE_PLAYER, 0x00, 0xFF, 0xFF, 0xFF, 0xBE, 0x28, 0xD0, 0xF5, 0x7F, 0x00, 0xFF, 0x05, 0x01,
 };

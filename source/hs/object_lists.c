@@ -60,7 +60,6 @@ symbols in this file:
 #include "errors.h"
 #include "data.h"
 #include "reference_lists.h"
-#include "objects/objects.h" /* port: object_try_and_get, for deleted objects */
 
 /* ---------- constants */
 
@@ -80,9 +79,6 @@ enum
 /* ---------- structures */
 
 /* ---------- prototypes */
-
-/* port: lists step over objects deleted since they were made */
-static long object_list_skip_deleted(long object_index, long *reference_index);
 
 /* ---------- globals */
 
@@ -196,10 +192,7 @@ long object_list_get_next(
 	long object_list_index,
 	long *reference_index)
 {
-	/* port: (object_list_skip_deleted) */
-	return object_list_skip_deleted(
-		reference_list_get_next_datum_index(object_list_data, reference_index),
-		reference_index);
+	return reference_list_get_next_datum_index(object_list_data, reference_index);
 }
 
 void object_list_add_reference(
@@ -284,25 +277,9 @@ long object_list_get_first(
 	if (object_list_index != NONE)
 	{
 		object_list_get_first_internal(object_list_index, reference_index, index);
-		/* port: (object_list_skip_deleted) */
-		index = object_list_skip_deleted(index, reference_index);
 	}
 
 	return index;
 }
 
 /* ---------- private code */
-
-/* port: a list in a script's global outlives the objects it holds, and its
-entry for a deleted object still has that object's index. Whoever walks the list
-gets the objects that still exist (hs_value_still_exists says why). list_count
-still counts the entries, as it always has. */
-static long object_list_skip_deleted(
-	long object_index,
-	long *reference_index)
-{
-	while (object_index!=NONE && !object_try_and_get(object_index))
-		object_index = reference_list_get_next_datum_index(object_list_data, reference_index);
-
-	return object_index;
-}

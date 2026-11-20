@@ -961,20 +961,18 @@ static void input_get_device_states(
 				input_globals.raw_gamepad_states[gamepad_index].sticks[_gamepad_stick_right].x = input_state.Gamepad.sThumbRX;
 				input_globals.raw_gamepad_states[gamepad_index].sticks[_gamepad_stick_right].y = input_state.Gamepad.sThumbRY;
 
-				/* port: each stick's dead range is a setting (halo_stick_dead_range), the
-				game's GAMEPAD_STICK_DEAD_RANGE by default */
 				gamepad_state->sticks[_gamepad_stick_left].x = fix_dead_zone(
 					input_state.Gamepad.sThumbLX,
-					halo_stick_dead_range(_gamepad_stick_left));
+					GAMEPAD_STICK_DEAD_RANGE);
 				gamepad_state->sticks[_gamepad_stick_left].y = fix_dead_zone(
 					input_state.Gamepad.sThumbLY,
-					halo_stick_dead_range(_gamepad_stick_left));
+					GAMEPAD_STICK_DEAD_RANGE);
 				gamepad_state->sticks[_gamepad_stick_right].x = fix_dead_zone(
 					input_state.Gamepad.sThumbRX,
-					halo_stick_dead_range(_gamepad_stick_right));
+					GAMEPAD_STICK_DEAD_RANGE);
 				gamepad_state->sticks[_gamepad_stick_right].y = fix_dead_zone(
 					input_state.Gamepad.sThumbRY,
-					halo_stick_dead_range(_gamepad_stick_right));
+					GAMEPAD_STICK_DEAD_RANGE);
 			}
 			else
 			{

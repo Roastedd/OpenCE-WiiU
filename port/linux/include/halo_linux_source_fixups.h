@@ -8,30 +8,6 @@ The port's functions that the game's sources call, declared for them.
 #define __HALO_LINUX_SOURCE_FIXUPS_H
 
 #ifdef HALO_WIIU
-/* the record of a client's join, written to the card by the thread that is at each step (port/wiiu/src/wiiu_join_trace.c) */
-void wiiu_join_step(char const *name);
-void wiiu_join_frame_step(char const *name);
-void wiiu_join_frame_stepf(char const *format, ...);
-#define JOIN_FRAME_STEPF(...) wiiu_join_frame_stepf(__VA_ARGS__)
-/* the Wii U's HUD sheet builder thread rests while a client loads the map it joined (port/wiiu/src/xbox_textures_gx2.c) */
-void wiiu_hud_builder_hold(int on);
-/* a joined game's first frames drawn safe (port/wiiu/src/wiiu_join_trace.c): armed at the load, taken by each window of rendering */
-void wiiu_join_render_frame_begin(void);
-void wiiu_join_safe_arm(void);
-int wiiu_join_safe_window(void);
-/* iteration counters of the helper threads, written in every line of the join record: which of them still turn (0 tick, 1 audio mixer, 2 silent clock, 3 decoder, 4 hud builder) */
-extern volatile unsigned wiiu_thread_beats[5];
-#define JOIN_BEAT(index) (wiiu_thread_beats[index]++)
-#define JOIN_STEP(name) wiiu_join_step(name)
-#define JOIN_FRAME_STEP(name) wiiu_join_frame_step(name)
-#else
-#define JOIN_STEP(name) ((void)0)
-#define JOIN_BEAT(index) ((void)0)
-#define JOIN_FRAME_STEP(name) ((void)0)
-#define JOIN_FRAME_STEPF(...) ((void)0)
-#endif
-
-#ifdef HALO_WIIU
 /* port: authoritative game-thread clock/menu activity for optional shader-file capture (port/wiiu/src/wiiu_missing_keys.c). */
 void wiiu_missing_keys_gameplay(int active);
 /* port: main-menu transitions project the game-thread clock state before changing file eligibility (source/game/game_time.c). */
@@ -71,12 +47,6 @@ int tick_snapshot_director_inhibited_facing(short local_player_index, int *inhib
 int tick_snapshot_player_unit(short local_player_index, long *unit_index);
 int tick_snapshot_player_facing(short local_player_index, union real_vector3d *facing);
 #endif
-/* Discard measured listener motion at camera cuts and lifecycle boundaries
-(source/sound/sound_manager.c). NONE resets every local listener. */
-void sound_listener_motion_reset(short local_player_index);
-
-/* MCC weapon-deletion notification (port/linux/game/mcc_first_person.inl). */
-void mcc_first_person_weapon_deleted(long weapon_index);
 
 /* frames between the 30 Hz ticks (port/linux/game/render_interpolation.c);
 the platform layer reads the display.interpolation setting */
@@ -96,8 +66,8 @@ struct real_matrix4x3 *render_interpolation_object_node_matrices(long object_ind
 void render_interpolation_object_point(long object_index, union real_point3d *point);
 struct observer_result const *render_interpolation_camera(short local_player_index,
 	struct observer_result const *observer);
-void render_interpolation_first_person(short local_player_index, long weapon_index, long animation_graph_index,
-	struct real_matrix4x3 *node_matrices, short node_count, struct render_camera const *camera);
+void render_interpolation_first_person(short local_player_index, struct real_matrix4x3 *node_matrices,
+	short node_count, struct render_camera const *camera);
 float render_interpolation_game_time_sec(long ticks);
 
 /* whether the map being loaded, by the name it was loaded by, is a
@@ -194,15 +164,6 @@ void server_console_output(const char *text);
 int halo_server_debug_echo(void);
 /* ... the level its rotation plays next, NULL if none (game_engine.c) */
 char const *server_director_first_level(void);
-/* the deflection of a stick (0 the left, 1 the right) read as none, of
-32767: input.left_stick_dead_zone and input.right_stick_dead_zone, else the
-game's own (port/linux/src/xinput_sdl.c) */
-#ifdef HALO_WIIU
-/* (port: the console's own input path sets its dead zones: the game's, here) */
-#define halo_stick_dead_range(stick) ((short)9000)
-#else
-short halo_stick_dead_range(short stick);
-#endif
 /* the mouse in the menus (source/interface/ui_widget.c) */
 #include "halo_ui_pointer.h"
 /* the debug camera's mouse and keys (source/camera/director.c): whether the

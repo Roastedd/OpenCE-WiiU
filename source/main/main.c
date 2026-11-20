@@ -391,7 +391,6 @@ symbols in this file:
 #include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
 #include "smooth_defaults.h" /* port: port/linux/game/smooth_defaults.c */
 #endif
-#include "network_riding_map.h" /* port: port/linux/game/network_riding_map.c */
 #include "map_share.h" /* port: port/linux/game/map_share.c */
 #include "profile_sections.h" /* port: port/linux/include/profile_sections.h */
 #include "halo_startup.h" /* port: port/linux/include/halo_startup.h */
@@ -413,9 +412,6 @@ symbols in this file:
 #include "text/font_group.h"
 #include "tag_files/files.h"
 #include "custom_edition_cache.h" /* port: custom_edition_level_name */
-#include "mcc_cache.h" /* port: port/linux/game/mcc_cache.h */
-#include "mcc_main.h" /* port: port/linux/game/mcc_main.h */
-#include "custom_edition_maps.h" /* port: main_script_map_name, a Custom Edition campaign's maps */
 #include "view_fov.h" /* port: display.fov, before the projection and culling */
 
 #if defined(HALO_WINDOWS) || defined(HALO_ANDROID) || defined(__linux__)
@@ -980,82 +976,6 @@ void main_won_map(
 	return;
 }
 
-/* port: the level a campaign map's own script named with map_name, which
-main_won_map_private takes next; empty for none */
-static char main_script_next_level[64];
-
-/* port: the level the scripts name in the same campaign as `current`: a
-mission of the same MCC package, else a Custom Edition campaign map; FALSE
-for any other. The name may have a path and an extension (".map"); only its
-last part counts */
-static boolean main_script_level_resolve(
-	char const *current,
-	char const *requested,
-	char *next,
-	size_t size)
-{
-	char const *leaf = requested;
-	char const *cursor;
-	char candidate[160];
-	size_t length;
-
-	if (!current || !current[0] || !requested)
-		return FALSE;
-	/* port: package mission identities and lookup belong to mcc_main.c. */
-	if (mcc_level_name(current))
-		return mcc_main_script_level_resolve(current, requested, next, size);
-	for (cursor = requested; *cursor; cursor++)
-	{
-		if (*cursor == '\\' || *cursor == '/')
-			leaf = cursor + 1;
-	}
-	length = strlen(leaf);
-	if (length > 4 && !_stricmp(leaf + length - 4, ".map"))
-		length -= 4;
-	if (!length || length > 64)
-		return FALSE;
-	if (custom_edition_level_name(current))
-	{
-		snprintf(candidate, sizeof(candidate), "%s%.*s", CUSTOM_EDITION_LEVEL_NAME_PREFIX, (int)length, leaf);
-		if (!custom_edition_maps_level_campaign(candidate) || strlen(candidate) >= size)
-			return FALSE;
-		csstrncpy(next, candidate, size - 1);
-		next[size - 1] = 0;
-		return TRUE;
-	}
-
-	return FALSE;
-}
-
-/* port: H1A and Custom Edition campaigns end a level by naming the next with
-map_name in its scripts, where the Xbox's game_won takes it to the next of
-its own levels. A campaign map's script that does so ends the level as a won
-one, with the level it names next (main_won_map_private): alone, it loads; in
-network co-op the host takes every machine there, and a dedicated server
-plays its rotation's next, as after any won level. Only a level of the same
-campaign is taken; any other name does nothing, and the map's other scripts
-run on (no map's script may switch to any map: hs.c) */
-void main_script_map_name(
-	char const *map_name)
-{
-	struct network_game *game = game_connection() == _game_connection_network_server ?
-		network_game_get_game() : NULL;
-	char const *current = game ? game->map.name : main_globals.soloplayer_map_name;
-	char next[NUMBEROF(main_script_next_level)];
-
-	if (!main_script_level_resolve(current, map_name, next, sizeof(next)))
-	{
-		error(_error_silent, "the scripts' map_name %s is no level of %s's campaign: nothing happens",
-			map_name ? map_name : "", current);
-		return;
-	}
-	error(_error_silent, "the scripts end %s, with %s next", current, next);
-	csstrncpy(main_script_next_level, next, sizeof(main_script_next_level) - 1);
-	main_script_next_level[sizeof(main_script_next_level) - 1] = 0;
-	main_won_map();
-	return;
-}
-
 void main_lost_map(
 	void)
 {
@@ -1222,10 +1142,6 @@ static void main_queue_map_private(
 		cache_files_precache_map_end();
 	if (!cache_files_precache_in_progress())
 	{
-#ifdef HALO_WIIU
-		/* port: the HUD sheets' builder thread rests while a map loads (xbox_textures_gx2.c) */
-		wiiu_hud_builder_hold(1);
-#endif
 		cache_files_precache_map_begin(main_globals.queued_map_name, FALSE);
 		main_globals.queue_map = FALSE;
 	}
@@ -1426,9 +1342,6 @@ short main_get_solo_level_from_name(
 {
 	char lower_name[128] = { 0 };
 	short level;
-
-	if (mcc_level_name(name))
-		return NONE;
 
 	/* port: a Custom Edition map (custom_maps\a30) is never one of the
 	campaign's levels, whatever its name holds
@@ -1650,9 +1563,6 @@ static void main_new_map(
 	}
 	else
 	{
-		/* port: an MCC map that fails to load goes back to the menus (mcc_main.c) */
-		if (mcc_main_load_failed(options->map_name))
-			return;
 		error(_error_immediate, "game_load() failed.");
 	}
 
@@ -2115,9 +2025,6 @@ void main_load_ui_scenario(
 void main_roll_credits(
 	void)
 {
-	/* port: standalone MCC scenarios finish through their own menu transition. */
-	if (mcc_main_map_completed())
-		return;
 	error(_error_silent, "congratulations, you won the game!");
 	main_menu_load();
 	game_end_credits_start();
@@ -2292,29 +2199,6 @@ static void main_saving_map_private(
 static void main_save_map_private(
 	void)
 {
-	/* port: none while a cinematic can be skipped and the checkpoint its skip
-	goes back to is taken: a script that saves every so often would replace it,
-	and the skip would play the rest of the cinematic again. A save waits until
-	cinematic_skip_stop as one that is not safe would: one with a timeout gives
-	up after as many ticks (a script may wait for game_saving before the
-	cinematic's end), and an unsafe one, which can't wait, at once. A skip lets
-	go of it (main_skip_cinematic) */
-	if (cinematic_port_holds_checkpoints())
-	{
-		long current_tick = game_time_get();
-
-		if (current_tick > main_save_last_tick && main_globals.save_map_timeout)
-			main_globals.ticks_unable_to_save += current_tick-main_save_last_tick;
-		main_save_last_tick = current_tick;
-		if (!main_globals.save_map_safely ||
-			(main_globals.save_map_timeout && main_globals.ticks_unable_to_save > 240))
-		{
-			if (debug_game_save)
-				console_printf(FALSE, "gave up trying to save");
-			main_globals.saving_map = FALSE;
-		}
-		return;
-	}
 	if (!game_time_get_paused())
 	{
 		boolean save_map_safely = main_globals.save_map_safely;
@@ -2598,26 +2482,11 @@ static void main_won_map_private(
 {
 	short level;
 	short local_player_index;
-	/* port: the level the scripts named with map_name (main_script_map_name),
-	if they did */
-	char next[NUMBEROF(main_script_next_level)];
-
-	csstrncpy(next, main_script_next_level, sizeof(next) - 1);
-	next[sizeof(next) - 1] = 0;
-	main_script_next_level[0] = 0;
-
-	/* port: explicit MCC campaigns own their mission order and host decision.
-	 * The Xbox/CE level table below cannot represent package mission identities. */
-	if (mcc_main_campaign_won(next[0] ? next : NULL))
-	{
-		main_globals.won_map = FALSE;
-		return;
-	}
 
 	/* port: when a network co-op level is won, the round ends for everyone as
 	in multiplayer, back to the lobby, and the next round is the campaign's
-	next level (The Maw's: The Pillar of Autumn), or the one the scripts named.
-	A level not in the campaign repeats. */
+	next level (The Maw's: The Pillar of Autumn). A level not in the campaign
+	repeats. */
 	if (game_connection() == _game_connection_network_server && network_coop_active())
 	{
 		struct network_game *game = network_game_get_game();
@@ -2625,7 +2494,7 @@ static void main_won_map_private(
 		main_globals.won_map = FALSE;
 		level = game ? main_get_solo_level_from_name(game->map.name) : NONE;
 		player_profile_save_level_completed(0);
-		network_game_server_port_cooperative_won(next[0] ? next : level != NONE ?
+		network_game_server_port_cooperative_won(level != NONE ?
 			main_get_solo_level_name((level + 1) % NUMBER_OF_SINGLE_PLAYER_LEVELS) : NULL);
 		return;
 	}
@@ -2639,14 +2508,6 @@ static void main_won_map_private(
 		level = NONE;
 	for (local_player_index = 0; local_player_index < player_spawn_count; local_player_index++)
 		player_profile_save_level_completed(local_player_index);
-	/* port: a Custom Edition campaign's next level, as its scripts named it,
-	begun anew as ui_set_next_level begins one (no saved game taken) */
-	if (next[0])
-	{
-		main_set_map_name(next);
-		main_disallow_persistent_storage();
-		return;
-	}
 	ui_set_next_level(level);
 	return;
 }
@@ -3798,9 +3659,7 @@ static void main_game_render(
 #ifdef HALO_WIIU
 	/* port: the particles, particle systems, contrails and decals that the ticks made since the frame's game_frame
 	(tick_owners.h), before the frame's draw reads and ages them */
-	JOIN_FRAME_STEP("render: before the render drain");
 	tick_owners_drain(TICK_OWNER_RENDER);
-	JOIN_FRAME_STEP("render: after the render drain");
 	/* port: the objects' memory pool is not compacted while this frame holds pointers into it (tick_owners.h) */
 	if (!overlap)
 		tick_owners_object_pool_reader_begin();
@@ -3813,26 +3672,20 @@ static void main_game_render(
 		/* port: the view first (the frame's work and the sound read objects, and the ticks run beside them), then the frame's own work, once,
 		whatever the number of times it is drawn: what the serial loop does at the end of game_time_update (game.c's game_frame), here on the
 		game thread, in the pose the frame draws (render_interpolation.c) */
-		JOIN_FRAME_STEP("render: snapshot view begins");
 		tick_snapshot_view_begin();
-		JOIN_FRAME_STEP("render: game frame begins");
 		if (!repeat)
 			game_frame((real)time_delta_since_tick_sec);
-		JOIN_FRAME_STEP("render: game frame done");
 	}
 #endif
 	/* port: the study's HALO_STUDY_NO_SOUND_RENDER=1 leaves it out */
-	JOIN_FRAME_STEP("render: sound_render begins");
 	if (!main_study_no_sound_render())
 		sound_render();
-	JOIN_FRAME_STEP("render: sound_render done");
 #ifdef HALO_WIIU
 	/* port: from here the frame reads the tick snapshot, if halo/tick_snapshot.txt says so (port/linux/game/tick_snapshot.c): the sound
 	above writes game state (mouth apertures) and reads what the tick sends it, and stays on the game state */
 	if (!overlap)
 		tick_snapshot_view_begin();
 #endif
-	JOIN_FRAME_STEP("render: windows begin");
 	force_single_screen = game_engine_force_single_screen();
 	last_local_player_index = NONE;
 
@@ -3883,18 +3736,14 @@ static void main_game_render(
 			observer = tick_snapshot_camera(window->local_player_index, observer);
 #endif
 #endif
-			JOIN_FRAME_STEP("render: the window's camera begins");
 			observer = render_interpolation_camera(window->local_player_index, observer);
-			JOIN_FRAME_STEP("render: the window's camera done");
 		}
 		else
 		{
 			window->local_player_index = NONE;
 		}
 
-		JOIN_FRAME_STEP("render: set_window_camera_values");
 		set_window_camera_values(window, observer);
-		JOIN_FRAME_STEP("render: the window's camera values set");
 		window->console_window = FALSE;
 	}
 
@@ -3907,7 +3756,6 @@ static void main_game_render(
 	window->local_player_index = NONE;
 	window->console_window = TRUE;
 	set_window_camera_values(window, NULL);
-	JOIN_FRAME_STEP("render: the console window set, render_frame next");
 
 	/* port: the study's HALO_RENDER_SKIP_FRAME=1: the frame's cameras and
 	sound done, its world not drawn (main_render_repeat) */
@@ -4338,7 +4186,6 @@ static boolean main_loop_iteration(
 		input_frame_begin();
 		input_update();
 		input_abstraction_update();
-		JOIN_FRAME_STEP("frame: input done");
 		profile_scope_exit(main_input_section)
 		profile_scope_enter(main_platform_events_section)
 		shell_idle();
@@ -4372,8 +4219,6 @@ static boolean main_loop_iteration(
 			network_aim_assist_update();
 			/* port: the host's shield effects, for every machine (port/linux/game/network_shield_effects.c) */
 			network_shield_effects_update();
-			/* port: the map's riding choice, for every machine (port/linux/game/network_riding_map.c) */
-			network_riding_map_update();
 			/* port: map sharing, in the lobby and in game (port/linux/game/map_share.c) */
 			map_share_update();
 			/* port: network games' text chat (port/linux/game/network_chat.c) */
@@ -4505,7 +4350,6 @@ static boolean main_loop_iteration(
 					network_distributed_time_end();
 					profile_scope_exit(main_network_end_frame_section)
 
-					JOIN_FRAME_STEP("frame: game time update begins");
 #ifdef HALO_WIIU
 					/* port: the frame's time in the game's ticks and in its rendering, for the Wii U's log (port/wiiu/src/d3d8_gx2.c) */
 					{
@@ -4560,10 +4404,6 @@ static boolean main_loop_iteration(
 #endif
 				if (render_frame && !debug_no_drawing)
 				{
-					JOIN_FRAME_STEP("frame: render begins");
-#ifdef HALO_WIIU
-					wiiu_join_render_frame_begin();
-#endif
 					profile_render_start();
 					render_interpolation_frame_begin();
 #ifdef HALO_WIIU
@@ -4585,7 +4425,6 @@ static boolean main_loop_iteration(
 					}
 #endif
 					render_interpolation_frame_end();
-					JOIN_FRAME_STEP("frame: render done");
 					profile_render_end();
 #ifdef HALO_WIIU
 					/* port: the frame's work is done but for the throttle and the present: its time, for the overlap's log */

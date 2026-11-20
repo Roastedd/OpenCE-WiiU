@@ -28,12 +28,6 @@ a time, and only the atlas's rows that changed are sent again.
 #include "xgpu.h"
 #include "halo_startup.h"
 #include "port_config.h"
-
-#ifndef JOIN_BEAT
-/* the join record's thread counters (wiiu_join_trace.c) */
-extern volatile unsigned wiiu_thread_beats[5];
-#define JOIN_BEAT(index) (wiiu_thread_beats[index]++)
-#endif
 #include "dk_commands.h"
 #include "dk_textures.h"
 #include "hud_hires.h"
@@ -1267,18 +1261,6 @@ static int hud_sheet_is_big(const struct hud_hires_embedded *embedded)
 	return !embedded->title && (unsigned long)embedded->width * embedded->height >= HUD_ASYNC_MIN_PIXELS;
 }
 
-/* the builder rests while a client loads a map it joined (wiiu_hud_builder_hold: on when a map's precache begins, off when its HUD list comes): the sheets' decoding takes the memory and the card's reads
-that the load wants, and the freezes of a join all had it running. It goes on 6 s after the load; the HUD draws the game's own bitmaps meanwhile */
-static volatile unsigned long hud_hold_until;
-
-void wiiu_hud_builder_hold(int on);
-
-/* on: a map load has begun (a minute at most: a load that never says it is done must not keep the HUD's sheets away for good); off: it is done, six seconds more */
-void wiiu_hud_builder_hold(int on)
-{
-	hud_hold_until = system_milliseconds() + (on ? 60000ul : 6000ul);
-}
-
 static void *hud_builder_main(void *unused)
 {
 	(void)unused;
@@ -1291,12 +1273,6 @@ static void *hud_builder_main(void *unused)
 		long asset;
 		int made;
 
-		JOIN_BEAT(4);
-		while ((long)(hud_hold_until - system_milliseconds()) > 0)
-		{
-			JOIN_BEAT(4);
-			usleep(20000);
-		}
 		pthread_mutex_lock(&hud_queue_lock);
 		while (!hud_queue_count)
 			pthread_cond_wait(&hud_queue_wake, &hud_queue_lock);
@@ -1566,7 +1542,6 @@ static void hud_prefetch(const long *assets, long count)
 	long index, asked = 0;
 	int pass;
 
-	wiiu_hud_builder_hold(0);
 	if (!hud_images_ensure())
 		return;
 	for (pass = 0; pass < 2; pass++)

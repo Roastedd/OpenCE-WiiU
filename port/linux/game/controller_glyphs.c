@@ -35,7 +35,6 @@ static struct
     struct bitmap_data *bitmap;
     long asset;
     boolean attempted;
-    void (*unbind)(unsigned long const *);
 } controller_glyph_cache[NUMBEROF(controller_glyph_assets)];
 
 static short controller_glyph_port(void)
@@ -82,8 +81,6 @@ void controller_glyphs_dispose(void)
         if (controller_glyph_cache[i].bitmap)
         {
             hud_hires_register_placeholder(controller_glyph_cache[i].asset, NULL);
-            if (controller_glyph_cache[i].unbind)
-                controller_glyph_cache[i].unbind(controller_glyph_cache[i].bitmap->hardware_format);
             bitmap_delete(controller_glyph_cache[i].bitmap);
         }
     }
@@ -104,52 +101,15 @@ static short controller_glyph_asset_index(short style, short slot)
     return (short)(32 + family * 10 + slot - 4);
 }
 
-/* Menu and gameplay draws must share the one placeholder registered per asset. */
-static struct bitmap_data *controller_glyph_bitmap_for_key(short key, real_rectangle2d *uv)
-{
-    struct controller_glyph_asset const *entry;
-    struct bitmap_data *bitmap;
-    long asset;
-    if (key == NONE) return NULL;
-    entry = &controller_glyph_assets[key];
-    if (!controller_glyph_cache[key].attempted)
-    {
-        controller_glyph_cache[key].attempted = TRUE;
-        for (asset = 0; asset < hud_hires_asset_count(); asset++)
-        {
-            if (strcmp(hud_hires_asset_tag(asset), entry->tag)) continue;
-            bitmap = bitmap_2d_new(64, 64, 0, 11);
-            if (!bitmap) break;
-            if (!rasterizer_bitmap_new(bitmap)) {bitmap_delete(bitmap); break;}
-            hud_hires_register_placeholder(asset, bitmap->hardware_format);
-            controller_glyph_cache[key].asset = asset;
-            controller_glyph_cache[key].bitmap = bitmap;
-            break;
-        }
-    }
-    bitmap = controller_glyph_cache[key].bitmap;
-    uv->x0 = entry->bounds[0] / 512.0f;
-    uv->y0 = entry->bounds[1] / 512.0f;
-    uv->x1 = entry->bounds[2] / 512.0f;
-    uv->y1 = entry->bounds[3] / 512.0f;
-    return bitmap;
-}
-
-struct bitmap_data *controller_glyph_bitmap(short style, short slot, real_rectangle2d *uv)
-{
-    return controller_glyph_bitmap_for_key(controller_glyph_asset_index(style, slot), uv);
-}
-
-boolean controller_glyph_draw_with_release(short style, short index,
-    struct icon_hud_element_definition const *icon, rectangle2d *cursor, pixel32 color,
-    void (*unbind)(unsigned long const *))
+boolean controller_glyph_draw(short style, short index,
+    struct icon_hud_element_definition const *icon, rectangle2d *cursor, pixel32 color)
 {
     struct rasterizer_dynamic_screen_geometry_parameters parameters;
     struct dynamic_screen_vertex vertices[4];
     struct controller_glyph_asset const *entry;
     struct bitmap_data *bitmap;
     short slot, key, i;
-    real_rectangle2d uv;
+    long asset;
     real scale, cell_width, cell_height, width, height, fit, x, y, center;
     slot = index < 6 ? index : hud_button_control_slot(index,
         icon->frame_rate > 0 ? game_time_get() / icon->frame_rate : 0);
@@ -167,10 +127,23 @@ boolean controller_glyph_draw_with_release(short style, short index,
     if (key == NONE) return FALSE;
     if (style == 12 && (index == 14 || index == 15)) slot = 0;
     entry = &controller_glyph_assets[key];
-    bitmap = controller_glyph_bitmap_for_key(key, &uv);
+    if (!controller_glyph_cache[key].attempted)
+    {
+        controller_glyph_cache[key].attempted = TRUE;
+        for (asset = 0; asset < hud_hires_asset_count(); asset++)
+        {
+            if (strcmp(hud_hires_asset_tag(asset), entry->tag)) continue;
+            bitmap = bitmap_2d_new(64, 64, 0, 11);
+            if (!bitmap) break;
+            if (!rasterizer_bitmap_new(bitmap)) {bitmap_delete(bitmap); break;}
+            hud_hires_register_placeholder(asset, bitmap->hardware_format);
+            controller_glyph_cache[key].asset = asset;
+            controller_glyph_cache[key].bitmap = bitmap;
+            break;
+        }
+    }
+    bitmap = controller_glyph_cache[key].bitmap;
     if (!bitmap) return FALSE;
-    /* Cached artwork can acquire an external binding on a later draw. */
-    if (unbind) controller_glyph_cache[key].unbind = unbind;
     scale = local_player_count() > 1 ? 0.75f : 1.0f;
     cell_width = (slot < 6 ? 21.0f : slot < 8 ? 44.0f : 32.0f) * scale;
     cell_height = (slot < 6 ? 26.0f : slot < 8 ? 33.0f : 34.0f) * scale;
@@ -200,10 +173,4 @@ boolean controller_glyph_draw_with_release(short style, short index,
     rasterizer_psuedo_dynamic_screen_quad_draw(&parameters, vertices);
     cursor->x0 += (short)((slot < 4 ? 22.0f : slot < 6 ? 20.0f : slot < 8 ? 45.0f : 33.0f) * scale);
     return TRUE;
-}
-
-boolean controller_glyph_draw(short style, short index,
-    struct icon_hud_element_definition const *icon, rectangle2d *cursor, pixel32 color)
-{
-    return controller_glyph_draw_with_release(style, index, icon, cursor, color, NULL);
 }

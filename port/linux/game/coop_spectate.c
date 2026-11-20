@@ -8,8 +8,7 @@ follows a teammate from behind, and A (jump on the keyboard) switches to
 the next one. director.c and hud.c call in here.
 
 It also draws the line telling players about the vote to skip a cutscene
-(network_coop.c counts the votes; on the touchscreen, the button they tap
-is touch_cinematic.c's).
+(network_coop.c counts the votes).
 */
 
 #include "cseries.h"
@@ -29,7 +28,6 @@ is touch_cinematic.c's).
 
 #include "coop_spectate.h"
 #include "network_coop.h"
-#include "touch_cinematic.h"
 
 #include <math.h>
 #ifdef HALO_WIIU
@@ -262,9 +260,6 @@ void coop_skip_vote_draw(
 		return;
 	if (voted)
 		usnprintf(text, NUMBEROF(text) - 1, L"VOTED TO SKIP   %d OF %d", votes, voters);
-	/* (the touchscreen's button: touch_cinematic.c) */
-	else if (touch_cinematic_button_enabled())
-		usnprintf(text, NUMBEROF(text) - 1, L"TAP SKIP TO VOTE   %d OF %d", votes, voters);
 	else
 		usnprintf(text, NUMBEROF(text) - 1, L"PRESS SPACE OR A TO VOTE TO SKIP   %d OF %d", votes, voters);
 	text[NUMBEROF(text) - 1] = 0;
