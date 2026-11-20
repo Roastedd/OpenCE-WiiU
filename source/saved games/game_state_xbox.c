@@ -1051,6 +1051,28 @@ static boolean game_state_read_header_from_persistent_storage_once(
 	return result;
 }
 
+boolean game_state_read_header_only_from_persistent_storage(
+	void *header,
+	long header_size)
+{
+	HANDLE file = game_state_open_persistent_storage(NULL);
+	unsigned long bytes_read = 0;
+	boolean result = FALSE;
+
+	if (file != INVALID_HANDLE_VALUE)
+	{
+		if (SetFilePointer(file, 0, NULL, FILE_BEGIN) != INVALID_SET_FILE_POINTER &&
+			ReadFile(file, header, header_size, &bytes_read, NULL) && bytes_read == (unsigned long)header_size)
+		{
+			game_state_header_terminate(header, header_size);
+			result = TRUE;
+		}
+		CloseHandle(file);
+	}
+
+	return result;
+}
+
 void game_state_write_to_persistent_storage(
 	void *buffer,
 	unsigned long *header_checksum,

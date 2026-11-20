@@ -10,6 +10,16 @@ The same samples go to the TV and to the GamePad.
 The pacing and resampler paths have native console measurements under reports/reviews.
 */
 
+#ifndef JOIN_BEAT
+#ifdef HALO_WIIU
+/* the join record's thread counters (port/wiiu/src/wiiu_join_trace.c) */
+extern volatile unsigned wiiu_thread_beats[5];
+#define JOIN_BEAT(index) (wiiu_thread_beats[index]++)
+#else
+#define JOIN_BEAT(index) ((void)0)
+#endif
+#endif
+
 #include "wiiu_shell.h"
 #include "wiiu_audio_ring.h"
 #include "wiiu_mixer_profile.h"
@@ -102,6 +112,32 @@ static void resampler_report(void)
 			status.selftest_cases, status.failed_case);
 }
 
+/* port: the ring is played round and round by the voices, so a mixer that falls behind the voices leaves them playing what the ring held a revolution ago (85 ms): that same
+sound again, an echo. The frames past the write cursor are kept silent (SILENCE_GUARD_FRAMES of them), and a cursor the voices have run past is moved to ahead of them, the part
+between silenced, so that an underrun is a gap, never a repeat. */
+#define SILENCE_GUARD_FRAMES 256u
+static uint32_t silenced; /* frames of the ring silent beyond `written`, counted without wrapping, up to */
+static unsigned ring_resyncs;
+
+static void ring_silence(uint32_t from, uint32_t frames)
+{
+	uint32_t done = 0;
+
+	while (done < frames)
+	{
+		const uint32_t at = (from + done) % RING_FRAMES;
+		uint32_t count = frames - done;
+
+		if (count > RING_FRAMES - at)
+			count = RING_FRAMES - at;
+		memset(rings[0] + at, 0, count * sizeof(int16_t));
+		memset(rings[1] + at, 0, count * sizeof(int16_t));
+		DCFlushRange(rings[0] + at, count * sizeof(int16_t));
+		DCFlushRange(rings[1] + at, count * sizeof(int16_t));
+		done += count;
+	}
+}
+
 static int audio_thread(int argc, const char **argv)
 {
 	float mixed[CHUNK_FRAMES * 2];
@@ -110,6 +146,9 @@ static int audio_thread(int argc, const char **argv)
 	OSTime last_poll = 0, last_report = 0;
 	const uint64_t budget = (uint64_t)OSMillisecondsToTicks(1000) * CHUNK_FRAMES / 48000u;
 	int have_poll = 0;
+	/* port: how long this thread has run without a sleep, and the times it has been made to sleep (see the end of a chunk) */
+	OSTime burst_started = OSGetSystemTime();
+	unsigned overload_sleeps = 0;
 
 	(void)argc;
 	(void)argv;
@@ -121,6 +160,7 @@ static int audio_thread(int argc, const char **argv)
 	{
 		uint32_t play;
 
+		JOIN_BEAT(1);
 		if (suspended)
 		{
 			/* New AX voices start with a fresh ring after HOME. */
@@ -136,6 +176,19 @@ static int audio_thread(int argc, const char **argv)
 		const uint32_t ahead = (write + RING_FRAMES - play) % RING_FRAMES;
 		const OSTime now = OSGetSystemTime();
 
+		if (have_poll && ahead >= AHEAD_HIGH + 2 * CHUNK_FRAMES)
+		{
+			/* the voices have run past the write cursor (a cursor ahead of them is at most AHEAD_HIGH + a chunk): what they play is a revolution old. Move the cursor to
+			AHEAD_LOW ahead of them, the frames between silent. */
+			const uint32_t target = (play + AHEAD_LOW) % RING_FRAMES;
+			const uint32_t skip = (target + RING_FRAMES - write) % RING_FRAMES;
+
+			ring_silence(play, AHEAD_LOW);
+			written += skip;
+			silenced = written;
+			ring_resyncs++;
+			continue;
+		}
 		if (have_poll)
 		{
 			if (mixer_profile_enabled)
@@ -145,9 +198,11 @@ static int audio_thread(int argc, const char **argv)
 				now - last_poll >= (OSTime)OSMillisecondsToTicks(85));
 			if (now - last_report >= (OSTime)OSMillisecondsToTicks(10000))
 			{
-				wiiu_log("Audio ring: %u apparent overtakes, %u at deadline, %u long polling gaps (10 s)",
+				wiiu_log("Audio ring: %u apparent overtakes, %u at deadline, %u long polling gaps, %u overload sleeps, %u underrun resyncs (10 s)",
 					(unsigned)observations.apparent_overtakes, (unsigned)observations.at_deadline,
-					(unsigned)observations.long_gaps);
+					(unsigned)observations.long_gaps, overload_sleeps, ring_resyncs);
+				overload_sleeps = 0;
+				ring_resyncs = 0;
 				observations.apparent_overtakes = observations.at_deadline = observations.long_gaps = 0;
 				if (mixer_profile_enabled)
 				{
@@ -216,15 +271,33 @@ static int audio_thread(int argc, const char **argv)
 				at = (at + 1) % RING_FRAMES;
 			}
 			written += CHUNK_FRAMES;
+			/* (the frames past the cursor stay silent: the guard) */
+			if ((int32_t)(silenced - written) < 0)
+				silenced = written;
+			if ((int32_t)(silenced - (written + SILENCE_GUARD_FRAMES)) < 0)
+			{
+				ring_silence(silenced, written + SILENCE_GUARD_FRAMES - silenced);
+				silenced = written + SILENCE_GUARD_FRAMES;
+			}
 			/* (the part of the ring written, flushed for the voices: a chunk never wraps, the ring being a whole number of them) */
 			DCFlushRange(rings[0] + write, CHUNK_FRAMES * sizeof(int16_t));
 			DCFlushRange(rings[1] + write, CHUNK_FRAMES * sizeof(int16_t));
 			/* Keep filling up to the high-water mark before sleeping. A 2 ms
 			   sleep after every 64-frame chunk consumes more than a chunk. */
+			/* port: but not for ever. This thread is above everything else on its core (priority 10: the watchdog, the black box, the log, the card's callbacks), and a mixer
+			   that cannot keep up (the merged mixer, with the dozens of sounds that a joined game starts at once) never finds the ring ahead, so it never slept: the core
+			   was taken whole and the console stopped answering. After 4 ms of work it sleeps 1 ms whatever the ring says: a sound that stutters for a moment, not a hung console. */
+			if (OSGetSystemTime() - burst_started > (OSTime)OSMillisecondsToTicks(4))
+			{
+				OSSleepTicks(OSMillisecondsToTicks(1));
+				burst_started = OSGetSystemTime();
+				overload_sleeps++;
+			}
 		}
 		else
 		{
 			OSSleepTicks(OSMillisecondsToTicks(2));
+			burst_started = OSGetSystemTime();
 		}
 	}
 	return 0;
@@ -323,6 +396,7 @@ static int voices_start(void)
 	AXVoiceEnd(voices[1]);
 	/* the ring starts AHEAD_LOW frames ahead of where the voices are */
 	written = AHEAD_LOW;
+	silenced = written;
 	return 1;
 }
 

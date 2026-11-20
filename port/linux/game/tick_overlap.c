@@ -257,6 +257,7 @@ static void *tick_overlap_thread_run(
 		void *argument;
 		unsigned long long idle_from;
 
+		JOIN_BEAT(0);
 		STORE(o.idle, 1);
 		wiiu_tick_idle_set(1);
 		idle_from = tick_overlap_now();

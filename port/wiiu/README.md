@@ -206,7 +206,7 @@ Written and tested on the build machine (`tools/harness/tests/test_wiiu_chat_inp
 ## The social screens: Players, bots, Friends, toasts, the GamePad's social view (`wiiu-screens`)
 
 Written and tested on the build machine (`tools/harness/tests/test_screens.py`, `test_wiiu_social_view.py`, `tools/test_social_menus.py`, `tools/screens_digest.py`); **not run on a console**.
-Everything is off by default: `screens.enable` (config.toml, `HALO_SCREENS`) is 0, and then no screen, button, tag or toast exists and the frames are the base's. 1 feeds them made-up players, friends,
+Release 1 turns them on for the Wii U: `screens.enable` (config.toml, `HALO_SCREENS`) is 2 by default (the game's own players and the friends service; a 0 in config.toml, or `HALO_SCREENS=0`, puts the base's menus back). With it 0, no screen, button, tag or toast exists and the frames are the base's. 1 feeds them made-up players, friends,
 a party and toasts (`screens_mock.c`), 2 the game's own players (a lobby's or a game's, bots tagged by their machine) and whatever friends service the build sets with `screens_backend_set`. The
 report is `reports/research/2026-11-08/screens-result.md` (what each screen shows, the provider interface a backend fills, pictures at the TV's and the GamePad's sizes, and the console checklist).
 
@@ -522,11 +522,12 @@ tools/wiiu/build_game.sh`), keep the card's `config.toml` and put it back at the
 It passes when 15 peers play a Wii U-hosted game for five minutes with the sockets as with none, no datagram lost in the process, and the joiners'
 views agreeing with the host's as `net_compare.py` judges two machines.
 
-## Friends, invites and parties (`wiiu-social`, off until the console has tried it)
+## Friends, invites and parties (`wiiu-social`, on by default in release 1)
 
 The same code as every other build (`port/linux/game/social_*.c`, `port/linux/src/social_p2p.inc`; `port/linux/README.md`, "Friends, invites and parties"), so friends work
-across the Wii U and the PC builds that have it. It is **off**: `social.enabled` is false, and `halo/social.txt` on the card (a 1) turns it on for a run; nothing was run on a
-console. On, it keeps the signalling brokers' sockets open for the whole run (up to four of the 27), reads `friends.key` and `friends.txt` on a thread of its own, writes
+across the Wii U and the PC builds that have it. It is **on by default in release 1**: `social.enabled` is true on the Wii U, and `halo/social.txt` on the card (a 0) turns it off (a 1 on again); it needs `network.online`, and with no network
+nothing of it is started. Nothing of it was run on a console before release 1. It is all on threads of their own (the loader, the p2p thread's pass, the saver), through bounded queues; the game thread only reads what they
+published (the roster for the screens) and never waits for the network or the card. On, it keeps the signalling brokers' sockets open for the whole run (up to four of the 27), reads `friends.key` and `friends.txt` on a thread of its own, writes
 `friends.txt` only while the app has the screen (`wiiu_in_foreground`), and logs `social:` lines. The console test plan is in `reports/research/2026-11-08/social-result.md`.
 
 ## Owned game-audio packet storage

@@ -363,3 +363,15 @@ the pointing coordinates (default 0.9). Camera turning stops when tracking
 is lost. This on-foot implementation uses the separation of pointer aim, camera turning and filtering identified
 in the supplied BO2 executable. Scoped and vehicle
 controls still use Halo's existing paths.
+
+## Friends and the social screens (on by default)
+
+Friends, invites and parties are on: the Multiplayer screen has a FRIENDS button, the pause menu a PLAYERS page, and the GamePad's social view shows who is
+online. They need the internet play to be on (network.online) and cost nothing without a network. To turn them off, put a 0 in `halo/social.txt` on the card
+(the friends), or set `screens.enable` to 0 in config.toml (the screens).
+
+## Saved campaigns from older builds
+
+This build's saved campaign is not the older builds' (the game's biped grew a few fields for vehicle riding), so a campaign saved by an older build cannot be loaded.
+CONTINUE and LOAD GAME still show it with its level, and starting it begins that level from its beginning (the log says so). A campaign saved by this build continues as before.
+

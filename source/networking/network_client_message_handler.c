@@ -959,6 +959,15 @@ static boolean network_game_client_handle_message_server_machine_rejected(
 piece is in */
 static struct network_game network_game_client_settings_staging;
 static long network_game_client_settings_staging_size = 0;
+static long network_game_client_settings_staging_total = 0; /* port: pin a fragmented layout */
+
+/* port: the record may be incomplete when its connection is disposed. */
+void network_game_client_reset_settings_staging(void)
+{
+	csmemset(&network_game_client_settings_staging, 0, sizeof(network_game_client_settings_staging));
+	network_game_client_settings_staging_size = 0;
+	network_game_client_settings_staging_total = 0;
+}
 
 static boolean network_game_client_receive_game_settings_piece(
 	struct network_game_client *client,
@@ -966,9 +975,10 @@ static boolean network_game_client_receive_game_settings_piece(
 {
 	boolean result = TRUE;
 
-	if (piece->total_size != sizeof(network_game_client_settings_staging) ||
+	if (piece->total_size != sizeof(network_game_client_settings_staging) || /* port: one complete versioned record */
+		!piece->length ||
 		piece->length > sizeof(piece->data) ||
-		piece->offset + piece->length > sizeof(network_game_client_settings_staging))
+		piece->offset + piece->length > piece->total_size)
 	{
 		network_event("got a message_server_game_settings_update piece for a different game layout");
 		network_game_client_settings_staging_size = 0;
@@ -979,9 +989,13 @@ static boolean network_game_client_receive_game_settings_piece(
 		/* each record is sent in order from its start, over a stream */
 		if (piece->offset == 0)
 		{
+			/* port: never retain bytes from the preceding settings record. */
+			csmemset(&network_game_client_settings_staging, 0, sizeof(network_game_client_settings_staging));
+			network_game_client_settings_staging_total = piece->total_size;
 			network_game_client_settings_staging_size = 0;
 		}
-		if (piece->offset != network_game_client_settings_staging_size)
+		if (piece->offset != network_game_client_settings_staging_size ||
+			piece->total_size != network_game_client_settings_staging_total)
 		{
 			network_event("got a message_server_game_settings_update piece out of order; waiting for the next record");
 			network_game_client_settings_staging_size = 0;
@@ -998,7 +1012,10 @@ static boolean network_game_client_receive_game_settings_piece(
 				network_game_client_settings_staging_size = 0;
 				/* port: in this machine's order (network_wire_order.c) */
 				network_wire_order_game(&network_game_client_settings_staging, TRUE);
-				result = network_game_client_game_settings_updated(client, &network_game_client_settings_staging);
+				/* port: validate the bounded name before any string consumers. */
+				result = memchr(network_game_client_settings_staging.map.name, 0,
+					sizeof(network_game_client_settings_staging.map.name)) != NULL &&
+					network_game_client_game_settings_updated(client, &network_game_client_settings_staging);
 				if (!result)
 				{
 					network_event("network_game_client_game_settings_updated() failed");
