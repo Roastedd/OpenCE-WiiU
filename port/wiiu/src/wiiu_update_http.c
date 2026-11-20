@@ -83,6 +83,28 @@ typedef struct connection
 browser's thread and the peer-to-peer DTLS may all want the TLS stack. One connection at a time is made and used here (all of it, from the lookup to
 the close), and the cryptography is started under a lock of its own. */
 static pthread_mutex_t request_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* A console whose clock is far behind (a drained clock battery or a reset reads 2000 or 2013) refuses every certificate as "not yet valid", and the server
+browser and the updater then find nothing. On by default (the lists are signed with pinned keys, the updater's manifest is signed and its files hashed, so
+none of them rests on the transport's dates), a certificate that is only too early or too late is accepted while the clock reads before
+WIIU_HTTP_CLOCK_FLOOR (1 January 2026, before this build); its chain to a root and the host's name are still checked. With the clock right, nothing changes. */
+#define WIIU_HTTP_CLOCK_FLOOR 1767225600LL
+static volatile int lenient_dates = 1;
+
+void wiiu_http_set_lenient_dates(int on)
+{
+	lenient_dates = on;
+}
+
+static int verify_dates_lenient(void *context, mbedtls_x509_crt *certificate, int depth, uint32_t *flags)
+{
+	(void)context;
+	(void)certificate;
+	(void)depth;
+	if (lenient_dates && (long long)time(NULL) < WIIU_HTTP_CLOCK_FLOOR)
+		*flags &= ~(uint32_t)(MBEDTLS_X509_BADCERT_EXPIRED | MBEDTLS_X509_BADCERT_FUTURE);
+	return 0;
+}
 static pthread_mutex_t crypto_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* ---------- the clock, sleeping */
@@ -182,6 +204,7 @@ wiiu_http *wiiu_http_create(const unsigned char *const *roots, const size_t *siz
 	/* (the certificate and the host's name checked, always) */
 	mbedtls_ssl_conf_authmode(&http->config, MBEDTLS_SSL_VERIFY_REQUIRED);
 	mbedtls_ssl_conf_ca_chain(&http->config, &http->roots, NULL);
+	mbedtls_ssl_conf_verify(&http->config, verify_dates_lenient, NULL);
 	mbedtls_ssl_conf_rng(&http->config, mbedtls_psa_get_random, MBEDTLS_PSA_RANDOM_STATE);
 	return http;
 }

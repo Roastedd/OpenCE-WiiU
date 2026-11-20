@@ -9,7 +9,7 @@
 [![Download](https://img.shields.io/badge/Download-latest_release-2ea44f?style=for-the-badge)](https://github.com/Roastedd/OpenCE-WiiU/releases/latest)
 
 [![Wii U · Aroma](https://img.shields.io/badge/Wii_U-Aroma-009ac7)](port/wiiu/PLAYING.md)
-[![Network · 41](https://img.shields.io/badge/network-protocol_41-536b8e)](#online-play)
+[![Network · 44](https://img.shields.io/badge/network-protocol_44-536b8e)](#online-play)
 [![AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](LICENSE)
 
 <img src="docs/assets/screenshots/menu.png" alt="OpenCE's main menu running on Wii U" width="90%">
@@ -124,10 +124,36 @@ gyro settings, and explains the settings in `config.toml`.
 
 ## Online play
 
-This version uses network protocol 41. It can join games hosted by other protocol 41 builds,
-but not games from newer OpenCE builds, which use protocol 44. A server showing up in the
-list does not mean you can join it, so if a game will not connect, check that first. How
-smooth a game is depends on the map, the host and how many people are in it.
+This version uses network protocol 44, the one almost every public OpenCE server runs now.
+It can join those servers from the server browser. Older protocol 41 games and servers are
+hidden from the list, because they cannot be joined; Settings, Network Setup, Server Browser
+has a Show incompatible row if you want to see them greyed out. How smooth a game is depends
+on the map, the host and how many people are in it.
+
+If you cannot connect:
+
+- **The list is empty.** Check that the console is online (the Wii U's own network test
+  should pass), and give the server browser a few seconds before giving up. A console whose
+  clock has reset to an old date still works: the game does not depend on it.
+- **The server uses a map you do not have.** The game downloads it from the host, into
+  `wiiu/apps/halo/data/custom_maps`. The first one can be 100 to 250 MB, because it also
+  brings Halo Custom Edition's `bitmaps.map`, `sounds.map` and `loc.map`. The card needs
+  that much free space, and the host has to allow downloads. If you own Halo Custom Edition
+  or the Master Chief Collection on a PC, you can copy those three files into the same
+  folder yourself, from its `maps` folder.
+- **It says the version is different.** The other side is on another network version; one of
+  you needs to update.
+- **Still stuck.** Open an issue and attach `wiiu/apps/halo/log.txt` from the card right
+  after the attempt. Its lines starting with `Internet play:` and `Net:` say where it stopped.
+
+## Updates
+
+The game checks for a newer version each time it starts, when the console is online. If one
+is out, a panel at the main menu offers it: **A** downloads and installs it (about 18 MB) and
+restarts the game, **B** asks again next time. Saves, settings and maps are never touched, and
+if the new version does not reach its main menu the old one is put back. To turn the check
+off, use Settings, your profile, Network Setup, Check for updates. The first version with
+this check is build 1; older versions have to be replaced by hand once.
 
 ## Questions
 
@@ -162,9 +188,13 @@ This repository starts from rc1, the source tag
 normally. Five-second windows averaged 55.9 FPS. The [per-map results and checksums](VALIDATION.md)
 are in the repository.
 
-It is still experimental. We have not tested finishing the whole campaign. A newer merge with
-upstream OpenCE (protocol 44) is in progress and still has joining problems, so it is not part
-of this release.
+Since then the build has moved to network protocol 44. On a console it joined five online
+games from the server browser and played two of them, Blood Gulch (about 53 frames a second)
+and Beaver Creek (about 56), with no freeze or crash. Drawing is lighter in busy scenes, the
+game steps detail down sooner when a frame runs late, and Save and Quit no longer freezes the
+screen while the saved game is written.
+
+It is still experimental. We have not tested finishing the whole campaign.
 
 ## Building and contributing
 

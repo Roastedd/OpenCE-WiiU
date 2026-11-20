@@ -32,6 +32,7 @@ Not run on a console.
 #include "wiiu_pacing.h"
 #include "wiiu_stream_queue.h"
 #include "wiiu_update.h"
+#include "wiiu_notice.h"
 #include "wiiu_keyboard.h"
 #include "wiiu_social_view.h"
 #include "wiiu_gpu_offload.h"
@@ -272,6 +273,10 @@ static struct
 	GX2Sampler panel_sampler;
 	unsigned panel_generation;
 	int panel_made, panel_shown;
+	/* the saving mark (wiiu_notice.h): a small texture made once, drawn in a corner of both screens while a save runs */
+	GX2Texture mark_texture;
+	GX2Sampler mark_sampler;
+	int mark_made, mark_shown;
 	/* the chat's keyboard on the GamePad (wiiu_keyboard.h): the atlas of its glyphs made into a texture when the glyphs are made, and the quads of the frame being presented
 	(none when it is closed) */
 	GX2Texture keyboard_texture;
@@ -822,6 +827,7 @@ static void gpu_frame_begin(void);
 static int overlay_make(void);
 static const char *overlay_mode_name(int mode);
 static int panel_make(void);
+static int mark_make(void);
 
 /* room in the ring, noted as written to (the caller writes it before it is flushed, which is at the end of the stream or the present) */
 static void *ring_reserve(uint32_t size)
@@ -2478,6 +2484,26 @@ static void census_log(unsigned frames)
 	gx.census_draws = gx.census_derive_runs = gx.census_same_as_last = gx.census_tuple_again = gx.census_mesh_again = gx.census_inline = 0;
 }
 
+#include "wiiu_join_trace.h"
+
+/* a draw that cannot be right is not issued (a count of nothing or of more than a model has, a primitive that is none, a stream shorter than the count says): said in the log, the first 20 and
+then a count a second, whatever has been drawn so far; the GPU hangs of a bad draw take the console with them */
+static unsigned draws_refused;
+static OSTime draws_refused_told;
+
+static void draw_refused(const struct dk_command_draw *command, const char *why)
+{
+	const OSTime now = OSGetSystemTime();
+
+	draws_refused++;
+	if (draws_refused <= 20 || now - draws_refused_told >= OSSecondsToTicks(1))
+	{
+		draws_refused_told = now;
+		wiiu_log("GX2: a draw is not issued (%s): prim %u count %u idx %08x off %d streams %u; %u so far", why, (unsigned)command->primitive, (unsigned)command->count,
+			(unsigned)command->index_address, (int)command->vertex_offset, (unsigned)command->stream_count, draws_refused);
+	}
+}
+
 static void draw(const struct dk_command_draw *command)
 {
 	/* (HOME can come between two draws: the game thread is held here, before the next call into GX2, not at the end of the stream) */
@@ -2499,6 +2525,12 @@ static void draw(const struct dk_command_draw *command)
 	if (!gx.color && !gx.depth)
 	{
 		gx.skipped_target++;
+		return;
+	}
+	if (command->count == 0 || command->count > 196605u || primitive > 9u || command->stream_count > DK_STREAM_COUNT)
+	{
+		if (command->count)
+			draw_refused(command, command->count > 196605u ? "too many vertices" : primitive > 9u ? "no such primitive" : "too many streams");
 		return;
 	}
 	if (range_later)
@@ -2591,6 +2623,21 @@ static void draw(const struct dk_command_draw *command)
 			return;
 		}
 		slot++;
+	}
+	/* (a stream of the draw that holds fewer vertices than the draw reads: the vertices of a draw with no indices are its count; with indices, the range the draw's own indices span) */
+	for (stream = 0; stream < DK_STREAM_COUNT; stream++)
+	{
+		const uint32_t stride = gx.format.strides[stream];
+
+		if (!buffers[stream] || !stride)
+			continue;
+		if (!command->index_address && !range_later && (uint64_t)command->count * stride > sizes[stream])
+		{
+			draw_refused(command, "a stream shorter than the vertices counted");
+			return;
+		}
+		/* (the first stream only: the others can be the draw's constants) */
+		break;
 	}
 	if (gx.constants_ring && gx.constants_frame == gx.frames && gx.constants_serial == gx.format_serial)
 		constants = gx.constants_ring;
@@ -2689,6 +2736,20 @@ static void draw(const struct dk_command_draw *command)
 	gx.section_now = OSGetSystemTime();
 	if (!gx.gpu_frame_open && !gx.replaying)
 		gpu_frame_begin();
+	if (wiiu_join_draw_trace_on())
+	{
+		/* the join's first frames (halo/join_steps.txt): the draw, written and fsync'd before it is issued */
+		char text[320];
+
+		snprintf(text, sizeof(text), "#%u frame %u vs %u ps %u/%d prim %u count %u idx %08x off %d streams %u %08x:%u:%u %08x:%u:%u mask %x tex %u/%u %u/%u vp %d,%d %dx%d blend %u depth %u",
+			(unsigned)gx.draw_total, (unsigned)gx.frames, (unsigned)gx.vs_handle, (unsigned)gx.ps_handle, (int)gx.ps_found, (unsigned)command->primitive, (unsigned)command->count,
+			(unsigned)command->index_address, (int)vertex_offset, (unsigned)command->stream_count,
+			command->stream_count > 0 ? (unsigned)command->streams[0][0] : 0u, command->stream_count > 0 ? (unsigned)command->streams[0][1] : 0u, (unsigned)gx.format.strides[0],
+			command->stream_count > 1 ? (unsigned)command->streams[1][0] : 0u, command->stream_count > 1 ? (unsigned)command->streams[1][1] : 0u, (unsigned)gx.format.strides[1],
+			(unsigned)gx.format.stream_mask, (unsigned)gx.stages[0].id, (unsigned)gx.stages[0].target, (unsigned)gx.stages[1].id, (unsigned)gx.stages[1].target,
+			(int)gx.state.viewport[0], (int)gx.state.viewport[1], (int)gx.state.viewport[2], (int)gx.state.viewport[3], (unsigned)gx.state.blend, (unsigned)gx.state.depth_test);
+		wiiu_join_draw_line(text);
+	}
 	if (indices)
 		GX2DrawIndexedEx(primitive_of(primitive), command->count, GX2_INDEX_TYPE_U16, indices, (uint32_t)vertex_offset, 1);
 	else
@@ -2935,6 +2996,9 @@ static int initialize(void)
 	gx.panel_made = panel_make();
 	if (!gx.panel_made)
 		wiiu_log("GX2: no memory for the updater's panel: it is not drawn");
+	gx.mark_made = mark_make();
+	if (!gx.mark_made)
+		wiiu_log("GX2: no memory for the saving mark: it is not drawn");
 	{
 		/* how fast the index range runs on this machine: over a buffer made as the game's index buffers are (calloc), written, then read at once, then again, then with a 1 MB sweep between
 		(the L1 holds 32 KB; the L2 the core has 0.5 to 2 MB) */
@@ -3829,13 +3893,14 @@ static void overlay_draw(GX2ColorBuffer *screen, GX2ContextState *context, unsig
 #define PANEL_WIDTH 256u
 #define PANEL_HEIGHT 64u
 
-static int panel_make(void)
+/* a small RGBA texture for the panel and the saving mark, cleared */
+static int note_texture_make(GX2Texture *texture, GX2Sampler *sampler, unsigned width, unsigned height)
 {
-	GX2Surface *surface = &gx.panel_texture.surface;
+	GX2Surface *surface = &texture->surface;
 
 	surface->dim = GX2_SURFACE_DIM_TEXTURE_2D;
-	surface->width = PANEL_WIDTH;
-	surface->height = PANEL_HEIGHT;
+	surface->width = width;
+	surface->height = height;
 	surface->depth = 1;
 	surface->mipLevels = 1;
 	surface->format = GX2_SURFACE_FORMAT_UNORM_R8_G8_B8_A8;
@@ -3847,16 +3912,21 @@ static int panel_make(void)
 	if (!surface->image)
 		return 0;
 	memset(surface->image, 0, surface->imageSize);
-	gx.panel_texture.viewNumMips = 1;
-	gx.panel_texture.viewNumSlices = 1;
-	gx.panel_texture.compMap = GX2_COMP_MAP(GX2_SQ_SEL_R, GX2_SQ_SEL_G, GX2_SQ_SEL_B, GX2_SQ_SEL_A);
-	GX2InitTextureRegs(&gx.panel_texture);
-	GX2InitSampler(&gx.panel_sampler, GX2_TEX_CLAMP_MODE_CLAMP, GX2_TEX_XY_FILTER_MODE_POINT);
+	texture->viewNumMips = 1;
+	texture->viewNumSlices = 1;
+	texture->compMap = GX2_COMP_MAP(GX2_SQ_SEL_R, GX2_SQ_SEL_G, GX2_SQ_SEL_B, GX2_SQ_SEL_A);
+	GX2InitTextureRegs(texture);
+	GX2InitSampler(sampler, GX2_TEX_CLAMP_MODE_CLAMP, GX2_TEX_XY_FILTER_MODE_POINT);
 	return 1;
 }
 
+static int panel_make(void)
+{
+	return note_texture_make(&gx.panel_texture, &gx.panel_sampler, PANEL_WIDTH, PANEL_HEIGHT);
+}
+
 /* the panel's lines drawn into its texture: a dark box with a green edge, its first line (the title) green, the others white */
-static void panel_refresh(const char *text)
+static void panel_refresh(const char *text, int bar)
 {
 	static uint8_t pixels[PANEL_WIDTH * PANEL_HEIGHT * 4];
 	GX2Surface *surface = &gx.panel_texture.surface;
@@ -3875,8 +3945,8 @@ static void panel_refresh(const char *text)
 			pixel[2] = edge ? 0x70 : 0x14;
 			pixel[3] = edge ? 0xff : 0xe6;
 		}
-	/* (two rows of pixels in from the edge: ten rows of 6-pixel cells fit under it) */
-	text_layer_init(&layer, pixels + 2 * PANEL_WIDTH * 4, PANEL_WIDTH, PANEL_HEIGHT - 4, 1);
+	/* (two rows of pixels in from the edge: ten rows of 6-pixel cells fit under it; the loading bar takes 12 of them at the bottom) */
+	text_layer_init(&layer, pixels + 2 * PANEL_WIDTH * 4, PANEL_WIDTH, PANEL_HEIGHT - 4 - (bar >= 0 ? 12 : 0), 1);
 	while (*line && row < layer.rows)
 	{
 		char part[80];
@@ -3893,6 +3963,21 @@ static void panel_refresh(const char *text)
 		if (*line == '\n')
 			line++;
 	}
+	if (bar >= 0)
+	{
+		/* the bar: a track with a white fill from the left, 6 pixels tall, 8 in from the box's sides */
+		const unsigned left = 8, right = PANEL_WIDTH - 8, top = PANEL_HEIGHT - 14, fill = left + (right - left) * (unsigned)(bar > 100 ? 100 : bar) / 100u;
+
+		for (y = top; y < top + 6; y++)
+			for (x = left; x < right; x++)
+			{
+				uint8_t *pixel = pixels + ((size_t)y * PANEL_WIDTH + x) * 4;
+				const int lit = x < fill;
+
+				pixel[0] = pixel[1] = pixel[2] = lit ? 0xf0 : 0x38;
+				pixel[3] = 0xff;
+			}
+	}
 	for (y = 0; y < PANEL_HEIGHT; y++)
 		memcpy((uint8_t *)surface->image + (size_t)y * surface->pitch * 4, pixels + (size_t)y * PANEL_WIDTH * 4, PANEL_WIDTH * 4);
 	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, surface->image, surface->imageSize);
@@ -3904,12 +3989,16 @@ static void panel_update(void)
 	static char text[704];
 	unsigned generation = gx.panel_generation;
 
-	gx.panel_shown = gx.panel_made && wiiu_update_panel(text, sizeof(text), &generation);
+	int bar = -1;
+
+	/* (the updater's panel first; else the loading bar or the slow card's message, wiiu_notice.h) */
+	gx.panel_shown = gx.panel_made && (wiiu_update_panel(text, sizeof(text), &generation) || wiiu_notice_panel(text, sizeof(text), &generation, &bar));
 	if (gx.panel_shown && generation != gx.panel_generation)
 	{
 		gx.panel_generation = generation;
-		panel_refresh(text);
+		panel_refresh(text, bar);
 	}
+	gx.mark_shown = gx.mark_made && wiiu_notice_saving();
 }
 
 /* the panel over the middle of a screen, below the main menu's title, in whole pixels per texel (its vertices are the ring's: each screen's draw its own) */
@@ -3958,6 +4047,87 @@ static void panel_draw(GX2ColorBuffer *screen, GX2ContextState *context)
 	GX2SetAttribBuffer(0, 6 * sizeof(struct blit_vertex), sizeof(struct blit_vertex), vertices);
 	GX2SetPixelTexture(&gx.panel_texture, gx.sampler_location);
 	GX2SetPixelSampler(&gx.panel_sampler, gx.sampler_location);
+	GX2DrawEx(GX2_PRIMITIVE_MODE_TRIANGLES, 6, 0, 1);
+}
+
+/* ---------- the saving mark (wiiu_notice.h): "Saving..." in a small dark box near the top right of each screen while a save runs */
+
+#define MARK_WIDTH 48u
+#define MARK_HEIGHT 12u
+
+static int mark_make(void)
+{
+	static uint8_t pixels[MARK_WIDTH * MARK_HEIGHT * 4];
+	GX2Surface *surface;
+	text_layer layer;
+	unsigned x, y;
+
+	if (!note_texture_make(&gx.mark_texture, &gx.mark_sampler, MARK_WIDTH, MARK_HEIGHT))
+		return 0;
+	surface = &gx.mark_texture.surface;
+	for (y = 0; y < MARK_HEIGHT; y++)
+		for (x = 0; x < MARK_WIDTH; x++)
+		{
+			uint8_t *pixel = pixels + ((size_t)y * MARK_WIDTH + x) * 4;
+
+			pixel[0] = 0x0c;
+			pixel[1] = 0x10;
+			pixel[2] = 0x14;
+			pixel[3] = 0xb0;
+		}
+	text_layer_init(&layer, pixels, MARK_WIDTH, MARK_HEIGHT, 1);
+	layer.color[0] = layer.color[1] = layer.color[2] = 0xff;
+	layer.color[3] = 0xff;
+	/* (a cell is 4 x 6: "Saving..." is nine of them, 36 pixels, in the box) */
+	text_layer_puts(&layer, 1, 1, "Saving...");
+	for (y = 0; y < MARK_HEIGHT; y++)
+		memcpy((uint8_t *)surface->image + (size_t)y * surface->pitch * 4, pixels + (size_t)y * MARK_WIDTH * 4, MARK_WIDTH * 4);
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_TEXTURE, surface->image, surface->imageSize);
+	return 1;
+}
+
+static void mark_draw(GX2ColorBuffer *screen, GX2ContextState *context, unsigned scale)
+{
+	static const unsigned corner_x[6] = { 0, 1, 0, 1, 1, 0 };
+	static const unsigned corner_y[6] = { 0, 0, 1, 0, 1, 1 };
+	const float screen_width = (float)screen->surface.width, screen_height = (float)screen->surface.height;
+	struct blit_vertex *vertices = ring_reserve(6 * sizeof(struct blit_vertex));
+	float x0, x1, y0, y1;
+	unsigned i;
+
+	if (!vertices)
+		return;
+	/* (whole pixels per texel; 2 percent in from the right edge and 4 percent down, clear of the overlay's panel at the top left) */
+	x1 = 1.0f - 2.0f * 0.02f;
+	x0 = x1 - 2.0f * (float)(MARK_WIDTH * scale) / screen_width;
+	y1 = 1.0f - 2.0f * 0.04f;
+	y0 = y1 - 2.0f * (float)(MARK_HEIGHT * scale) / screen_height;
+	for (i = 0; i < 6; i++)
+	{
+		struct blit_vertex *v = &vertices[i];
+
+		v->x = corner_x[i] ? x1 : x0;
+		v->y = corner_y[i] ? y0 : y1;
+		v->u = (float)corner_x[i];
+		v->v = (float)corner_y[i];
+		v->r = v->g = v->b = v->a = 1.0f;
+	}
+	GX2Invalidate(GX2_INVALIDATE_MODE_CPU_ATTRIBUTE_BUFFER, vertices, 6 * sizeof(struct blit_vertex));
+	GX2SetContextState(context);
+	GX2SetColorBuffer(screen, GX2_RENDER_TARGET_0);
+	GX2SetViewport(0.0f, 0.0f, screen_width, screen_height, 0.0f, 1.0f);
+	GX2SetScissor(0, 0, (uint32_t)screen_width, (uint32_t)screen_height);
+	blit_state();
+	GX2SetColorControl(GX2_LOGIC_OP_COPY, 1, FALSE, TRUE);
+	GX2SetBlendControl(GX2_RENDER_TARGET_0, GX2_BLEND_MODE_SRC_ALPHA, GX2_BLEND_MODE_INV_SRC_ALPHA, GX2_BLEND_COMBINE_MODE_ADD, TRUE, GX2_BLEND_MODE_ONE,
+		GX2_BLEND_MODE_INV_SRC_ALPHA, GX2_BLEND_COMBINE_MODE_ADD);
+	GX2SetFetchShader(&gx.blit.fetchShader);
+	GX2SetVertexShader(gx.blit.vertexShader);
+	GX2SetPixelShader(gx.blit.pixelShader);
+	GX2SetShaderMode(GX2_SHADER_MODE_UNIFORM_REGISTER);
+	GX2SetAttribBuffer(0, 6 * sizeof(struct blit_vertex), sizeof(struct blit_vertex), vertices);
+	GX2SetPixelTexture(&gx.mark_texture, gx.sampler_location);
+	GX2SetPixelSampler(&gx.mark_sampler, gx.sampler_location);
 	GX2DrawEx(GX2_PRIMITIVE_MODE_TRIANGLES, 6, 0, 1);
 }
 
@@ -4526,6 +4696,8 @@ static void perf_state_make(struct perf_state *state)
 	state->interpolation = gx.overlay.interpolation;
 	state->governor_step = gx.governor_step;
 	state->governor_max = gx.governor_max;
+	if (!wiiu_notice_card_speeds(&state->sd_write_mbs, &state->sd_read_mbs))
+		state->sd_write_mbs = state->sd_read_mbs = 0.0f;
 }
 
 /* the pools of the caches the game thread owns, read by it (platform_pump_events, a quarter of a second or a second apart) and published here under a sequence number */
@@ -5012,6 +5184,8 @@ static void present(const struct dk_command_present *command)
 			skip_bar_draw(WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState(), skip_progress);
 		if (gx.panel_shown)
 			panel_draw(WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState());
+		if (gx.mark_shown)
+			mark_draw(WHBGfxGetTVColourBuffer(), WHBGfxGetTVContextState(), 4);
 	}
 	GX2CopyColorBufferToScanBuffer(WHBGfxGetTVColourBuffer(), GX2_SCAN_TARGET_TV);
 	if (back)
@@ -5027,6 +5201,8 @@ static void present(const struct dk_command_present *command)
 			skip_bar_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState(), skip_progress);
 		if (gx.panel_shown)
 			panel_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState());
+		if (gx.mark_shown)
+			mark_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState(), 2);
 		/* (the chat's keyboard, on the GamePad alone, while it is open) */
 		keyboard_draw(WHBGfxGetDRCColourBuffer(), WHBGfxGetDRCContextState());
 	}

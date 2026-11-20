@@ -183,12 +183,14 @@ struct game_options;
 #include "structures/structures.h"
 #include "units/units.h"
 #include "units/vehicles.h"
+#include "units/bipeds.h" /* port: bipeds_riding_latch */
 #include "network_coop.h" /* port: port/linux/game/network_coop.c */
 #ifdef HALO_WIIU
 #include "tick_owners.h" /* port: port/linux/game/tick_owners.c */
 #include "tick_overlap.h" /* port: port/linux/game/tick_overlap.c */
 #include "smooth_defaults.h" /* port: port/linux/game/smooth_defaults.c */
 #endif
+#include "mcc_loading.h" /* port: port/linux/game/mcc_loading.c */
 #ifdef HALO_PROFILE
 #include "profile_console.h" /* port: port/linux/game/profile_console.c */
 #endif
@@ -455,6 +457,11 @@ void game_initial_pulse(
 {
 	struct data_iterator iterator;
 
+	/* port: the map's declared value before scripts run; a load must not read
+	it again (vehicle_riding.c) */
+	vehicle_riding_map_start();
+	bipeds_riding_latch();
+
 	data_iterator_new(&iterator, player_data);
 	while (data_iterator_next(&iterator))
 		game_engine_player_added(iterator.datum_index);
@@ -661,12 +668,14 @@ boolean game_load(
 		game_options_verify(options));
 
 	random_seed_debug_log(TRUE);
+	mcc_loading_begin(options->map_name); /* port: no-op for Xbox/CE loads */
 	csmemcpy(&game_globals->options, options, sizeof(*options));
 	if (scenario_load(options->map_name))
 	{
 		game_globals->map_loaded = TRUE;
 	}
 
+	mcc_loading_end(game_globals->map_loaded); /* port: includes failed MCC loads */
 	return game_globals->map_loaded;
 }
 
@@ -709,6 +718,14 @@ void game_initialize_for_new_map(
 	game_engine_initialize(&game_variant_global);
 	real_math_reset_precision();
 	rasterizer_initialize_for_new_map();
+#ifdef HALO_WIIU
+	{
+		/* port: the loading bar's stages (port/wiiu/src/wiiu_notice.c; nothing when it is off or no campaign load is going) */
+		void wiiu_loading_stage(int percent);
+
+		wiiu_loading_stage(85);
+	}
+#endif
 	game_state_initialize_for_new_map();
 	game_time_initialize_for_new_map();
 	interface_initialize_for_new_map();
@@ -737,6 +754,13 @@ void game_initialize_for_new_map(
 	contrails_initialize_for_new_map();
 	particles_initialize_for_new_map();
 	effects_initialize_for_new_map();
+#ifdef HALO_WIIU
+	{
+		void wiiu_loading_stage(int percent);
+
+		wiiu_loading_stage(92);
+	}
+#endif
 	particle_systems_initialize_for_new_map();
 	sound_initialize_for_new_map();
 	sound_classes_initialize_for_new_map();
@@ -756,6 +780,13 @@ void game_initialize_for_new_map(
 	hs_initialize_for_new_map();
 	recorded_animations_initialize_for_new_map();
 	cheats_initialize_for_new_map();
+#ifdef HALO_WIIU
+	{
+		void wiiu_loading_stage(int percent);
+
+		wiiu_loading_stage(98);
+	}
+#endif
 
 	game_globals->active = TRUE;
 	objects_place();
@@ -922,6 +953,14 @@ void game_precache_new_map(
 			{
 				map_status = cache_files_precache_map_status(
 					&game_globals->loading_progress);
+#ifdef HALO_WIIU
+				{
+					/* port: the loading bar (wiiu_notice.c) takes the first part of its length from the copy's progress */
+					void wiiu_loading_precache(float fraction);
+
+					wiiu_loading_precache(game_globals->loading_progress);
+				}
+#endif
 				main_pregame_render();
 				main_rasterizer_throttle();
 				main_present_frame();

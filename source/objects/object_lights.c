@@ -193,6 +193,8 @@ void shield_glow_update(void); /* port: port/linux/game/shield_glow.c */
 /* port: port/linux/src (halo.log) */
 void platform_log(const char *format, ...);
 
+#include "overshield_effect.h" /* port: port/linux/game/overshield_effect.c */
+
 /* ---------- constants */
 
 enum
@@ -788,6 +790,7 @@ void lights_initialize(
 void lights_dispose(
 	void)
 {
+	overshield_effect_reset(); /* port: queued identities and model heights belong to this map. */
 	cluster_partition_delete(&light_cluster_partition);
 
 	return;
@@ -856,6 +859,7 @@ boolean light_port_glow_set(
 void lights_initialize_for_new_map(
 	void)
 {
+	overshield_effect_reset(); /* port: queued identities and model heights belong to this map. */
 	light_port_glow_definition = NONE - 1; /* port: (looked for again) */
 #ifdef HALO_WIIU
 	csmemset(light_render_side, 0, sizeof(light_render_side));
@@ -870,6 +874,7 @@ void lights_initialize_for_new_map(
 void lights_dispose_from_old_map(
 	void)
 {
+	overshield_effect_reset(); /* port: queued identities and model heights belong to this map. */
 	data_make_invalid(light_data);
 	cluster_partition_make_invalid(&light_cluster_partition);
 
@@ -1355,10 +1360,13 @@ void lights_preprocess_scene(
 								&light_parameters.forward,
 								&light_parameters.up);
 
-							/* port: another player's beam, in a match, from
-							the marker on the pose the frame draws: the light's
-							own place is the tick's, so it stepped */
-							if (!centered && game_connection() != _game_connection_local)
+							/* port: a beam not on a first-person weapon
+							(another player's, or your own with no weapon in
+							hand), from the marker on the pose the frame draws
+							(render_interpolation.c): the light's own place is
+							the tick's, so it stepped at 30 a second while the
+							view moved every frame */
+							if (!centered)
 							{
 								struct object_marker markers[1];
 

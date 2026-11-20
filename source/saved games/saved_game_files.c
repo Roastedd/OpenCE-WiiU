@@ -327,6 +327,7 @@ symbols in this file:
 #include "text/text_group.h"
 #include "game_modes.h" /* port: port/linux/game/game_modes.c */
 #include "halo_startup.h" /* port: port/linux/include/halo_startup.h */
+#include "mcc_progress.h" /* port: port/linux/game/mcc_progress.c */
 #include "tag_files/tag_groups.h"
 /* the saved game file checksum is an XDK content signature, and enumerated
    saved game metadata is created/deleted through the XDK save game API. */
@@ -1152,6 +1153,29 @@ boolean saved_game_file_open(
 	return success;
 }
 
+#ifdef HALO_WIIU
+/* port: the path of the file saved_game_file_open opens (the profile's .sav), for the backup beside it (halo/save_backup.txt); the saved game files' mutex is held, as it is for the open */
+boolean saved_game_file_port_get_path(
+	long profile_index,
+	char *path,
+	long path_size)
+{
+	struct enumerated_saved_game_file file;
+	long memory_unit = SAVED_GAME_FILE_INDEX_MEMORY_UNIT(profile_index);
+	long n = SAVED_GAME_FILE_INDEX_FILE_INDEX(profile_index);
+
+	if (memory_unit==_memory_unit_hard_drive && n>=0 && n<MAXIMUM_ENUMERATED_SAVED_GAME_FILES_ANY_TYPE_PER_MEMORY_UNIT &&
+		get_nth_entry_in_mapfile(memory_unit, n, &file) && (long)strlen(file.path)<path_size)
+	{
+		strcpy(path, file.path);
+
+		return TRUE;
+	}
+
+	return FALSE;
+}
+#endif
+
 boolean synchronize_metadata_display_name_with_profile_name(
 	long profile_index,
 	wchar_t *game_display_name)
@@ -1216,6 +1240,8 @@ boolean synchronize_metadata_display_name_with_profile_name(
 							_snprintf(new_path, MAXIMUM_FILENAME_LENGTH, "%s%s", save_game_directory, "blam.sav");
 							new_path[MAXIMUM_FILENAME_LENGTH] = 0;
 							success = (boolean)CopyFileA(file.path, new_path, TRUE);
+							/* port: preserve the MCC-only companion before the old directory is deleted. */
+							if (success) success = mcc_progress_copy(file.path, save_game_directory);
 
 							if (success == TRUE)
 							{

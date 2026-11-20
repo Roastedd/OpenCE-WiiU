@@ -22,10 +22,14 @@ void tick_overlap_decide(int mid_map);                  /* tick_overlap.c: the o
 void render_governor_decide(int map_ok, int on);        /* render_governor.c */
 char const *main_smooth_defaults_reason(void);          /* main.c: NULL for a map the smooth settings are for, else why not */
 int main_smooth_defaults_net_game(void);                /* main.c: the game is a joined one or a hosted one (the log says so) */
+const char *config_string(const char *name);            /* port_config.c: display.wiiu_performance */
+void wiiu_gpu_offload_set_default(int on);              /* wiiu_gpu_offload.c: halo/gpu_offload.txt's blends where there is no such file */
 
 static struct
 {
 	int cards_read;
+	long file_card[NUMBER_OF_SMOOTH_SWITCHES];  /* what the card files said, read once */
+	int performance;                            /* SMOOTH_PERFORMANCE_* at the last map start */
 	int decided;
 	int map_ok;
 	char label[120];
@@ -125,6 +129,31 @@ char const *smooth_defaults_reason(struct smooth_defaults_map const *map)
 	return NULL;
 }
 
+/* ---------- display.wiiu_performance */
+
+int smooth_defaults_performance_parse(char const *text)
+{
+	if (text && !strcmp(text, "smoother"))
+		return SMOOTH_PERFORMANCE_SMOOTHER;
+	if (text && !strcmp(text, "off"))
+		return SMOOTH_PERFORMANCE_OFF;
+	return SMOOTH_PERFORMANCE_DEFAULT;
+}
+
+void smooth_defaults_performance_apply(long card[NUMBER_OF_SMOOTH_SWITCHES], int mode)
+{
+	int which;
+
+	if (mode != SMOOTH_PERFORMANCE_SMOOTHER && mode != SMOOTH_PERFORMANCE_OFF)
+		return;
+	for (which = 0; which < NUMBER_OF_SMOOTH_SWITCHES; which++)
+	{
+		/* (a card file that is there, 0 or above, wins) */
+		if (card[which] < 0)
+			card[which] = mode == SMOOTH_PERFORMANCE_SMOOTHER ? 1 : SMOOTH_CARD_OFF;
+	}
+}
+
 /* ---------- the cards */
 
 long smooth_defaults_net_overlap(void)
@@ -154,7 +183,7 @@ static void cards_once(void)
 {
 	if (!sd.cards_read)
 	{
-		smooth_defaults_read_cards(sd.now.card);
+		smooth_defaults_read_cards(sd.file_card);
 		sd.cards_read = 1;
 	}
 }
@@ -191,7 +220,20 @@ static void decide(int mid_map)
 
 	cards_once();
 	reason = main_smooth_defaults_reason();
-	smooth_defaults_resolve(&decided, sd.now.card, reason, 1);
+	{
+		/* (the files, then the Performance row's word for those that are absent) */
+		long cards[NUMBER_OF_SMOOTH_SWITCHES];
+		const int mode = smooth_defaults_performance_parse(config_string("display.wiiu_performance"));
+
+		memcpy(cards, sd.file_card, sizeof(cards));
+		smooth_defaults_performance_apply(cards, mode);
+		if (mode != sd.performance || !sd.maps)
+			platform_log("smooth defaults: display.wiiu_performance is %s", mode == SMOOTH_PERFORMANCE_SMOOTHER ? "smoother" : mode == SMOOTH_PERFORMANCE_OFF ? "off" : "default");
+		sd.performance = mode;
+		smooth_defaults_resolve(&decided, cards, reason, 1);
+		/* (the blends of halo/gpu_offload.txt follow the same word, for a map the smooth settings are for; the file wins where it is there) */
+		wiiu_gpu_offload_set_default(mode == SMOOTH_PERFORMANCE_SMOOTHER && !reason);
+	}
 	/* (a network game that halo/net_overlap.txt lets in gets the overlap, not the governor: the governor sheds what is drawn by the mean of the frames and was never tuned for a joined game,
 	where it would also confound the comparison of the overlap with the serial loop. Its own card file and its own study) */
 	if (!reason && main_smooth_defaults_net_game())

@@ -18,6 +18,7 @@ void platform_log(char const *format, ...);
 long wiiu_study_number(const char *name, long fallback);
 #ifdef __WIIU__
 void wiiu_thread_background(const char *name);
+void wiiu_thread_background_offset(const char *name, int offset);
 #endif
 
 static struct
@@ -56,6 +57,34 @@ int async_save_verify(void)
 	return job.verify;
 }
 
+int async_save_exit(void)
+{
+	static int exit_save = -1;
+
+	if (exit_save < 0)
+	{
+		/* (-1: not read yet; no file: on) */
+		exit_save = wiiu_study_number("async_save_exit.txt", 1) > 0;
+		if (exit_save)
+			platform_log("checkpoint: Save and Quit writes the saved game on the writer thread, beside the menus (halo/async_save_exit.txt)");
+	}
+	return exit_save;
+}
+
+int async_save_delta(void)
+{
+	static int delta = -1;
+
+	if (delta < 0)
+	{
+		/* (no file: on; 0: the whole file at every checkpoint. Four checkpoints on b40 wrote 348 to 520 KB of the 20,480 KB and read back the same, 2026-11-19) */
+		delta = wiiu_study_number("async_save_delta.txt", 1) > 0;
+		if (delta)
+			platform_log("checkpoint: only the parts of the game state that changed since the last checkpoint are written (halo/async_save_delta.txt: 0 writes the whole file)");
+	}
+	return delta;
+}
+
 int async_save_revert_image(void)
 {
 	static int revert_image = -1;
@@ -68,6 +97,23 @@ int async_save_revert_image(void)
 			revert_image ? "- yes" : "- no");
 	}
 	return revert_image;
+}
+
+int async_save_checkpoint_writes(void)
+{
+	static int mode = -1;
+
+	if (mode < 0)
+	{
+		const long number = wiiu_study_number("checkpoint_writes.txt", 0);
+
+		/* (-1 and no file: 0) */
+		mode = number < 1 ? 0 : number > 2 ? 2 : (int)number;
+		if (mode)
+			platform_log("checkpoint: the checkpoint's copy on the card is written %s (halo/checkpoint_writes.txt %d); a revert takes it from memory",
+				mode == 1 ? "only when the game is paused or ends" : "only when the game ends", mode);
+	}
+	return mode;
 }
 
 unsigned long async_save_piece_bytes(void)
@@ -86,7 +132,15 @@ static void *worker(void *unused)
 	(void)unused;
 #ifdef __WIIU__
 	/* (core 0, below the game thread: it waits for the card, and has no work worth the game's core) */
-	wiiu_thread_background("save");
+	{
+		/* (halo/async_save_priority.txt: how far below the game's priority the writer runs, 4 by default; 0 is the game's own) */
+		const long offset = wiiu_study_number("async_save_priority.txt", 4);
+
+		if (offset == 4)
+			wiiu_thread_background("save");
+		else
+			wiiu_thread_background_offset("save", (int)offset);
+	}
 #endif
 	pthread_mutex_lock(&job.lock);
 	for (;;)
@@ -177,6 +231,8 @@ int async_save_prepare(void)
 	if (!async_save_enabled())
 		return 0;
 	async_save_verify();
+	async_save_delta();
+	async_save_exit();
 	async_save_piece_bytes();
 	return make_thread();
 }

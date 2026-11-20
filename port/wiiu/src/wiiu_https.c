@@ -136,6 +136,7 @@ int wiiu_https_get(const char *url, const char *headers, unsigned long maximum, 
 	sink s;
 	wiiu_http *http;
 	char reason[200];
+	int request_result;
 
 	*status = 0;
 	*body = NULL;
@@ -173,7 +174,8 @@ int wiiu_https_get(const char *url, const char *headers, unsigned long maximum, 
 	options.response_headers = response_headers;
 	options.response_headers_size = response_headers && response_headers_size > 0 ? (size_t)response_headers_size : 0;
 	options.total_ms = WIIU_HTTPS_TOTAL_MS;
-	if (wiiu_http_request(http, url, maximum, &hooks, &options, &result) != 0)
+	request_result = wiiu_http_request(http, url, maximum, &hooks, &options, &result);
+	if (request_result != 0)
 	{
 		free(s.data);
 		snprintf(error, (size_t)error_size, "%s", result.error[0] ? result.error : "the request failed");

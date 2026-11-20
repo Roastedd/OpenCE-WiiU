@@ -100,13 +100,22 @@ In Settings → your profile → **Video Settings**, kept in `config.toml`:
 - **Performance overlay**: **L + R + −** goes round off, a compact strip (frame rate, frame time, CPU and GPU share) and a detailed panel (where the
   frame's time goes, the governor's step, how full the memory pools are). `overlay.txt` (see "Card files") starts the game in one of them.
 
-## Smoother fights (optional, off by default)
+## Smoother fights (Performance row)
 
-The release candidates of this port were played with five small files that put the game's ticks on a second processor core beside the drawing, and the blends
-cheaper. They are off unless you make them (the game then plays as it did before them): in `wiiu/apps/halo/` make `tick_thread.txt`,
-`tick_snapshot.txt`, `tick_overlap.txt` and `gpu_offload.txt` each holding `1`, and `governor.txt` holding `on`. Take them away (or write `-1` in each)
-to go back. They work in the campaign and in a game of one player on this console; a network game and split screen stay on the plain loop on
-purpose. They are still being qualified: if the game halts with them on, take them away and send the logs (see "If something goes wrong").
+The release candidates of this port were played with five small files that put the game's ticks on a second processor core beside the drawing, and the
+blends cheaper (see "Card files"). Video Settings → **Detail** has a row, **Performance**, for the same switches, so that nobody has to make files:
+
+- **Default** (as it ships): nothing is changed. The switches are as the build and the card files make them: with no card file, the build (see
+  `port/linux/game/smooth_defaults.h`) has the ticks beside the drawing and the governor on for a game of one player. The log's `smooth defaults:` lines say
+  what a run did.
+- **Smoother**: turns on every switch that has no card file: the ticks on their own thread, the snapshot, the overlap, the governor (auto detail) and the cheaper
+  blends (`gpu_offload.txt` 1, which have no other way to be on except the file).
+- **Off**: turns off every switch that has no card file.
+
+A card file that is there always wins over the row. The row is `display.wiiu_performance` in `config.toml` (`"default"`, `"smoother"` or `"off"`), is
+read at each map start (so a change in the menu applies to the next map you start, not the one you are in), and only ever changes a game of one local
+player with no network: split screen, network games and saved films stay on the plain loop. The log says what the row did (`display.wiiu_performance is ...`).
+They are still being qualified: if the game halts with Smoother, set the row to Default and send the logs (see "If something goes wrong").
 
 ## Split screen (two to four players)
 
@@ -129,22 +138,45 @@ player even when you play alone; **Merged** is the old behaviour (the first cont
 ## System link and online play
 
 - **System Link** (Multiplayer menu) finds and hosts games on your local network, with other Wii Us and with OpenCE on a computer built from the same
-  network version (the Wii U port speaks protocol 41, the same as upstream OpenCE's PC builds of that version). A game that tells you the version is
+  network version (the Wii U port speaks protocol 44, the same as upstream OpenCE's PC builds of that version). A game that tells you the version is
   different is from another build: update that side.
-- **Internet games** find each other through the servers in `brokers.txt` and use UPnP on your router to open a port. Playing over the internet, hosting
-  one from the Wii U, and large games (24 players and more) have **not been tried on a console**; a system link game with a computer standing in for the second
-  player has. The console has room for 27 network connections in all.
+- **Games from other versions are hidden.** The server browser and the System Link list show only games that this build can join. A game hosted on a
+  newer or older network version (the Wii U speaks 44; older OpenCE builds speak 41) is left out; when only such games exist, the line under the list
+  says how many are hidden. To see them anyway, set `network.show_incompatible_games = true` in `config.toml`, or **SHOW INCOMPATIBLE** in Settings →
+  Network Setup → Server Browser. They then appear greyed and marked NEWER or OLDER, and choosing one does not join: the line under the list says it is on
+  another network version (and which).
+- **Internet games** find each other through the servers in `brokers.txt` and use UPnP on your router to open a port. Joining public games over the internet
+  from the server browser has been tried on a console (five joins, two played through); hosting one from the Wii U and large games (24 players and more)
+  have **not been tried on a console**. The console has room for 27 network connections in all.
 - **Voice chat** uses the GamePad's microphone, or a headset in its headphone jack. Hold the GamePad's **TV** button to talk (Settings → your profile →
   Audio Setup → **Voice chat**: Push to talk is the default; **Open mic** talks whenever you speak, and wants a headset, because the GamePad's
   microphone also picks up its own speaker). The Pro Controller has no microphone or jack; USB headsets do not work. **Voice chat has not been tried
   on a console yet.**
 - A network game plays on the plain loop: it is not faster for the files in "Smoother fights".
 
+## Continue where you left off at the start
+
+`game.wiiu_auto_continue = true` in `config.toml` (the default is `false`) makes the game, once the main menu is up, go straight to Campaign → Continue on
+the last campaign save, as if you had chosen it. It does nothing, and says so in the log (`Auto continue:` lines), when:
+
+- there is no valid campaign save to continue;
+- a controller button is held, or pressed, between the start and the moment it would go (**hold B as the game starts to cancel it**, on any controller);
+- the last run left a crash note (the log said `The last run left a crash note`): the menu stays so that you can look at what happened.
+
+It happens at most once a run, about one and a half seconds after the main menu appears. It continues the save of the profile that Campaign → Continue
+would use (the one last used).
+
 ## Saves
 
 Saves, profiles and the settings live in `wiiu/apps/halo/data/` and `config.toml`. The game autosaves at checkpoints and when you quit a level. A save
 is written to the card while you play; do not take the card out or turn the console off while the game is running, and leave through HOME and **Close
 Software**, or the pause menu's Quit. If the card or the console is changed, copy the whole `wiiu/apps/halo/` folder back.
+
+The game keeps one step of safety for the files that hold your progress. Before it writes over your saved game (`savegame.bin` in your profile's folder,
+written when you Save and Quit) or your profile (`NN.sav`), it keeps the last good copy beside it as `savegame.bin.bak` or `NN.sav.bak`. If a freeze or a
+pulled card leaves the new file cut short, or the game finds the file failing its check, the next start tries the `.bak` once, and `log.txt` says what it did
+(lines that start `saves:`). A `.bak` is only replaced by a file that was good, and the saved game's takes another 20 MB of the card per profile. Leave the
+`.bak` files where they are. `halo/save_backup.txt` with 0 turns this off.
 
 ## Halo Custom Edition maps
 
@@ -196,7 +228,12 @@ found that no Custom Edition map was available on the development machines, so t
   was working and does not now, take away any card files you made (see below) and try again.
 - **A freeze or a halt**: the game writes why into `data/debug.txt` (a line that starts `EXCEPTION halt` says which check stopped it). Do not
   open the game again before you copy the files below: the next start renames them.
-- To report a problem, include these files from `wiiu/apps/halo/` on the SD card: `log.txt`, `log-previous.txt`, `crash.txt`, `blackbox.txt`,
+- **The easy way to report a problem**: after the run that went wrong, close the game, make a file called `make_report.txt` in `wiiu/apps/halo/` that holds
+  the number `1` (the card files below say how), and start the game once more. At the start it gathers the last run's log (its top, which names the build,
+  and its last 400 lines), crash note, black box, close trail and the last 100 lines of `data/debug.txt` into one text file, `wiiu/apps/halo/report.txt`
+  (under 200 KB), and removes `make_report.txt`; `log.txt` says where it is. Send that one file, and say which release and which settings and card files you
+  used. It holds only what those files hold. (Free space on the card is not in it: reading it takes seconds on a big card.)
+- Or include these files from `wiiu/apps/halo/` on the SD card: `log.txt`, `log-previous.txt`, `crash.txt`, `blackbox.txt`,
   `exit-trail.txt` and `data/debug.txt`, and say which release and which settings and card files you used. Take them after the game is closed.
   The log says what the game was doing in the last seconds, and the performance overlay's numbers help for a slow place.
 - A map missing from `data/maps/` stops the game at the end of the level before it. Make sure every converted map is there.
@@ -212,11 +249,11 @@ Small text files in `wiiu/apps/halo/` that change what the game does. Each holds
 | --- | --- | --- |
 | `overlay.txt` | 0 | 0 no performance overlay, 1 the compact strip, 2 the detailed panel (L + R + − goes round them any time) |
 | `governor.txt` | as Graphics mode says | text: `on` or `off` for auto detail; `target 25` the frame time it aims for in ms (at least 20), `max_step 2` the deepest step (0 to 3), `step 2` hold one step (a test), `blend 1500` the milliseconds a step change takes to reach its sizes (small and far props go first, the rest follow; 0: all at once) |
-| `tick_thread.txt` | 0 | 1: the game's ticks run on a thread of their own |
-| `tick_snapshot.txt` | 0 | 1: the drawing reads a copy of the objects (needed by the overlap) |
-| `tick_overlap.txt` | 0 | 1: the ticks run beside the drawing (needs the two above); campaign and one-player games only |
+| `tick_thread.txt` | no file: as Performance says (on for a one-player game in this build) | 1: the game's ticks run on a thread of their own; 0: never |
+| `tick_snapshot.txt` | as above | 1: the drawing reads a copy of the objects (needed by the overlap); 0: never |
+| `tick_overlap.txt` | as above | 1: the ticks run beside the drawing (needs the two above); campaign and one-player games only; 0: never |
 | `tick_core.txt` | 2 with the overlap | which core runs the ticks: 0, 1 or 2 |
-| `gpu_offload.txt` | 0 | 1: the interpolation's blends are cheaper (no correctly rounded square roots; the picture is the same to the eye) |
+| `gpu_offload.txt` | 0 (1 when Video Settings → Detail → Performance is Smoother) | 1: the interpolation's blends are cheaper (no correctly rounded square roots; the picture is the same to the eye) |
 | `stream.txt` | 0 | 1: texture streaming (the game draws from a bitmap's small tail while the rest is read from the card) |
 | `memcpy_touch.txt` | 0 | 1: the port's memory copy also asks the cache for the source ahead (faster or slower depending on the scene; for timing tests) |
 | `hotpaths.txt` | 0 | 1: the ticks ask the cache for the next objects ahead (for timing tests) |
@@ -229,9 +266,15 @@ Small text files in `wiiu/apps/halo/` that change what the game does. Each holds
 | `debug_server.txt` | 0 | 1 starts the debug server (screenshots, button presses, the log) for anyone on the network: leave it off unless you are testing |
 | `shader_capture.txt` | off | `always`: the shaders a level needs are written down during play, for making a new pack (a tester's) |
 | `profile.txt` | absent | its presence starts the sampling profiler (a tester's; delete the file to stop) |
+| `card_check.txt` | 1 | 0: no speed check of the SD card. A 2 MB file is written and read in `wiiu/apps/halo/bench.tmp` a few seconds after the main menu first shows (never while a save is being written; the file is removed), the speeds go to the log (`SD card: write X MB/s, read Y MB/s`) and the detailed overlay, and a card under 4 MB/s write or 8 MB/s read gets a message at the main menu, once a run |
+| `saving_mark.txt` | 1 | 0: no "Saving..." mark. It shows in a corner while a checkpoint or Save and Quit write runs, and for a second after, so that a pause is explained |
+| `loading_bar.txt` | 1 | 0: no loading bar. A campaign level load shows "Loading..." and a bar on the black screen, from the stage the load has reached |
 | `broadway.txt` | 0 | the Broadway kernels: **stays 0** (one failed its self-test on a console) |
+| `save_backup.txt` | 1 | 0: no `.bak` of the saved game and the profiles is kept or tried (see Saves) |
+| `checkpoint_writes.txt` | 0 | when a checkpoint's 20 MB copy is written to the card (`z/savegame.bin`, the run's own scratch file; your saved game is not it): 0 at every checkpoint, 1 only when you pause or the game ends, 2 only when it ends. The checkpoint is always copied in memory and a revert takes it from there, so a death costs no card write; a freeze loses nothing a run would read again. Needs `async_save.txt` and `async_save_revert_image.txt` on (they are) |
+| `make_report.txt` | absent | 1: at the next start the last run's files are gathered into `report.txt`, and this file is removed (see If something goes wrong) |
 
-Files the game writes there: `log.txt`, `log-previous.txt`, `blackbox.txt`, `crash.txt`, `exit-trail.txt`, `shader-misses-*.txt`, and `data/debug.txt`.
+Files the game writes there: `log.txt`, `log-previous.txt`, `blackbox.txt`, `crash.txt`, `exit-trail.txt`, `report.txt` (when asked), `shader-misses-*.txt`, `.bak` copies of the saved game and the profiles beside them, and `data/debug.txt`.
 
 ## Updates
 
@@ -320,3 +363,15 @@ the pointing coordinates (default 0.9). Camera turning stops when tracking
 is lost. This on-foot implementation uses the separation of pointer aim, camera turning and filtering identified
 in the supplied BO2 executable. Scoped and vehicle
 controls still use Halo's existing paths.
+
+## Friends and the social screens (on by default)
+
+Friends, invites and parties are on: the Multiplayer screen has a FRIENDS button, the pause menu a PLAYERS page, and the GamePad's social view shows who is
+online. They need the internet play to be on (network.online) and cost nothing without a network. To turn them off, put a 0 in `halo/social.txt` on the card
+(the friends), or set `screens.enable` to 0 in config.toml (the screens).
+
+## Saved campaigns from older builds
+
+This build's saved campaign is not the older builds' (the game's biped grew a few fields for vehicle riding), so a campaign saved by an older build cannot be loaded.
+CONTINUE and LOAD GAME still show it with its level, and starting it begins that level from its beginning (the log says so). A campaign saved by this build continues as before.
+

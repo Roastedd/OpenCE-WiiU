@@ -381,7 +381,7 @@ real_matrix4x3 const *first_person_legs_node_matrices(long object_index, real_ma
 /* port: port/linux/game/shield_color.c */
 real_rgb_color const *shield_color_colors(long unit_index, real_rgb_color const *colors);
 /* port: port/linux/game/overshield_effect.c */
-real const *overshield_effect_values(long unit_index, real const *values, boolean arms);
+real const *overshield_effect_values(long unit_index, real const *values);
 
 void render_object_shadows(
 	void)
@@ -635,7 +635,7 @@ static void render_object_list(
 							(port/linux/game/overshield_effect.c) */
 							model_effect.modifier_animation.values =
 								TEST_FLAG(_object_mask_unit, object->object.type) ?
-									overshield_effect_values(object_index, shown_functions, FALSE) :
+									overshield_effect_values(object_index, shown_functions) :
 									shown_functions;
 						}
 						else
@@ -867,6 +867,13 @@ static boolean render_object_shadow_begin(
 	real shadow_intensity = level_of_detail;
 
 	object_get_bounding_sphere(data->object_index, &center, &radius);
+	/* port: where this frame draws the object, between the ticks
+	(render_interpolation.c), not where the tick left it: the shadow map is
+	centered there and the model drawn into it as drawn, so a fast vehicle
+	(a Ghost) stood up to a tick's travel off its map's center, and the map's
+	edge and corner fade cut its shadow's trailing side by as much as each
+	frame's blend, flickering */
+	render_interpolation_object_point(data->object_index, &center);
 
 	perpendicular3d(&data->lighting->shadow_vector, &shadow_right);
 	normalize3d(&shadow_right);
@@ -1050,6 +1057,33 @@ static void object_render_state_refresh(
 		state->refresh_frame_index = game_time_get();
 	}
 
+#ifdef HALO_WIIU
+	/* halo/lighting_every.txt: the dynamic lighting (the point lights found for the object and its
+	lightmap samples) is made again in one frame of N for each object, and kept in between (the objects take
+	turns by their index); no file is 2; 1 is every frame, as it was. A rebuild and an object that has no
+	lighting yet are made at once. */
+	{
+		static long every = -1;
+
+		if (every < 0)
+		{
+			long wiiu_study_number(const char *name, long fallback);
+			void platform_log(const char *format, ...);
+
+			every = wiiu_study_number("lighting_every.txt", 2);
+			if (every < 1)
+				every = 1;
+			if (every > 6)
+				every = 6;
+			platform_log("lighting: the dynamic lighting is made again every %ld frame(s) for each object (halo/lighting_every.txt)", every);
+		}
+		if (every > 1 && !rebuild && scene_age > 0 && render_age <= 1 &&
+			((render.frame_index + (object_index & 0xFFFF)) % every) != 0)
+		{
+			scene_age = 0;
+		}
+	}
+#endif
 	if (rebuild || scene_age > 0)
 	{
 		lights_prepare_for_object_dynamic(object_index, &state->desired_lighting);

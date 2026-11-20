@@ -167,6 +167,7 @@ symbols in this file:
 #include "ai/ai.h"
 #include "bink/bink_playback.h"
 #include "cache/cache_files.h"
+#include "mcc_cache.h" /* port: port/linux/game/mcc_cache.h */
 #include "cseries/errors.h"
 #include "effects/contrails.h"
 #include "effects/decals.h"
@@ -1172,6 +1173,18 @@ boolean scenario_switch_structure_bsp(
 		checked. (A map's first bsp refused refuses the map: scenario_load) */
 		if (!loaded)
 		{
+			/* port: an MCC map's first bsp that is refused goes back to
+			scenario_load, and the menus, without the error's modal loop */
+			if (mcc_cache_tags_loaded() && old_structure_bsp_index == NONE)
+			{
+				error(_error_silent, "mcc: failed to load initial structure bsp #%d", structure_bsp_index);
+				global_structure_bsp = NULL;
+				global_collision_bsp = NULL;
+				global_bsp3d = NULL;
+				collision_log_enable(TRUE);
+				main_start_time();
+				return FALSE;
+			}
 			error(_error_immediate, "failed to load structure bsp #%d", structure_bsp_index);
 			global_structure_bsp = NULL;
 			global_collision_bsp = NULL;
@@ -1264,6 +1277,14 @@ boolean scenario_load(
 
 	check_memory_status(scenario_memory_status_attributed, "scenario_load");
 	global_scenario_index = scenario_tags_load(name);
+#ifdef HALO_WIIU
+	{
+		/* port: the loading bar's stage (port/wiiu/src/wiiu_notice.c): the tags are in */
+		void wiiu_loading_stage(int percent);
+
+		wiiu_loading_stage(70);
+	}
+#endif
 	if (global_scenario_index != NONE)
 	{
 		global_scenario = scenario_definition_get(global_scenario_index);
@@ -1273,6 +1294,13 @@ boolean scenario_load(
 				tag_loaded(GAME_GLOBALS_TAG, "globals\\globals"));
 			if (scenario_switch_structure_bsp(0))
 				result = TRUE;
+#ifdef HALO_WIIU
+			{
+				void wiiu_loading_stage(int percent);
+
+				wiiu_loading_stage(80);
+			}
+#endif
 		}
 		else
 		{
@@ -1301,6 +1329,11 @@ missing_tag_loop:
 		if (missing_tag)
 			goto missing_tag_loop;
 	}
+
+	/* port: an MCC map whose first bsp was refused is never loaded: its tags
+	are let go here, for the menus or the next map */
+	if (!result && mcc_cache_tags_loaded())
+		scenario_unload();
 
 	return result;
 }

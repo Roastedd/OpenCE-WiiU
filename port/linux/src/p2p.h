@@ -261,6 +261,9 @@ struct p2p_listing
 	unsigned char failed;
 	/* milliseconds, -1 if not known */
 	short ping;
+	/* its host is being probed for the ping now (a ping known stays), and
+	whether Refresh asked for it (until that probe ends) */
+	unsigned char probing, refreshing;
 	/* it has a password: its invite is sealed with it (p2p_listing_unlock) */
 	unsigned char locked;
 	unsigned char key_hash[P2P_LISTING_KEY_HASH_SIZE];
@@ -304,6 +307,10 @@ int p2p_joined_listing_masters(unsigned char (*key_ids)[P2P_LISTING_MASTER_KEY_I
 /* a copy of the public games found, in the order shown (the most players
 first; then those not failed, the open ones, by name); returns their count */
 int p2p_lobby_games(struct p2p_listing *games, int maximum_count);
+/* the games the server browser shows, in its order (its sort, after its
+tab and Filters): their hosts are probed in that order, those not shown
+last */
+void p2p_lobby_shown(const struct p2p_listing *games, int count);
 /* the master servers' (port/linux/src/master_list.c, server_master.c): a
 fresh signed listing of the game this machine hosts for the internet, as
 the brokers get it (0 if it hosts none, or none public); a master's entry's
@@ -375,11 +382,18 @@ struct p2p_lobby_choices
 	0 any */
 	int engine_type;
 	int maps;
+	/* games of another network version too (network.show_incompatible_games) */
+	int show_incompatible;
 };
+/* the one rule for network versions: whether a game of that network version
+is listed, which is when it is this build's (HALO_PORT_NETWORK_VERSION) or
+show_incompatible is set. A listing's, a master server's and a LAN
+advertisement's all pass through it */
+int p2p_lobby_version_shown(int version, int show_incompatible);
 /* the games the choices show, kept at the front in their order; returns
 how many. map_state tells what a game's map is to this machine (NULL: every
-map installed). A game of another network version is kept: shown, greyed,
-not joinable */
+map installed). A game of another network version is dropped unless
+choices->show_incompatible, then kept: shown, greyed, not joinable */
 int p2p_lobby_filter(struct p2p_listing *games, int count, const struct p2p_lobby_choices *choices,
 	int (*map_state)(const char *map));
 /* the games in the order's (reverse: the other way), those of another

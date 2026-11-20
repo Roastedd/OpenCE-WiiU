@@ -1286,7 +1286,9 @@ long wiiu_study_number(const char *name, long fallback)
 		!strcmp(name, "stream_delay.txt") ? "HALO_STREAM_DELAY" :
 		!strcmp(name, "hud_sheets.txt") ? "HALO_HUD_SHEETS" :
 		!strcmp(name, "async_save.txt") ? "HALO_ASYNC_SAVE" : !strcmp(name, "async_save_verify.txt") ? "HALO_ASYNC_SAVE_VERIFY" :
-		!strcmp(name, "async_save_piece_kb.txt") ? "HALO_ASYNC_SAVE_PIECE_KB" : !strcmp(name, "async_save_fault.txt") ? "HALO_ASYNC_SAVE_FAULT" : NULL;
+		!strcmp(name, "async_save_piece_kb.txt") ? "HALO_ASYNC_SAVE_PIECE_KB" : !strcmp(name, "async_save_fault.txt") ? "HALO_ASYNC_SAVE_FAULT" :
+		!strcmp(name, "async_save_delta.txt") ? "HALO_ASYNC_SAVE_DELTA" : !strcmp(name, "async_save_exit.txt") ? "HALO_ASYNC_SAVE_EXIT" :
+		!strcmp(name, "save_backup.txt") ? "HALO_SAVE_BACKUP" : !strcmp(name, "checkpoint_writes.txt") ? "HALO_CHECKPOINT_WRITES" : NULL;
 	const char *value;
 
 	/* (the fall back to the serial loop when the tick thread is late is on by default on the console and off here, where qemu is slow: HALO_TICK_OVERLAP_LATE=1) */

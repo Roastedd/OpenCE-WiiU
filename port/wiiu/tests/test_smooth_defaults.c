@@ -48,6 +48,11 @@ int main_smooth_defaults_net_game(void) { return net_game_now; }
 void tick_overlap_decide(int mid_map) { calls[0]++; calls[2] += mid_map; }
 void render_governor_decide(int map_ok, int on) { calls[1]++; last_governor_map_ok = map_ok; last_governor_on = on; }
 
+static char const *performance_now = "default";
+static int gpu_default_on = -9;
+const char *config_string(const char *name) { return !strcmp(name, "display.wiiu_performance") ? performance_now : ""; }
+void wiiu_gpu_offload_set_default(int on) { gpu_default_on = on; }
+
 static int logged(char const *text)
 {
 	int i;
@@ -334,6 +339,50 @@ static void test_decisions(void)
 }
 
 /* the owner's card (1, 1, 1, on) in a process of its own: the cards are read once, at the first map */
+/* display.wiiu_performance (the Video Settings row): default leaves the card files as they are, smoother makes an absent file 1, off makes it 0, and a file that is there wins */
+static void test_performance(void)
+{
+	long card[NUMBER_OF_SMOOTH_SWITCHES];
+	int which;
+
+	study_files[0] = study_files[1] = -1;
+	CHECK(smooth_defaults_performance_parse(NULL) == SMOOTH_PERFORMANCE_DEFAULT);
+	CHECK(smooth_defaults_performance_parse("default") == SMOOTH_PERFORMANCE_DEFAULT);
+	CHECK(smooth_defaults_performance_parse("junk") == SMOOTH_PERFORMANCE_DEFAULT);
+	CHECK(smooth_defaults_performance_parse("smoother") == SMOOTH_PERFORMANCE_SMOOTHER);
+	CHECK(smooth_defaults_performance_parse("off") == SMOOTH_PERFORMANCE_OFF);
+	for (which = 0; which < NUMBER_OF_SMOOTH_SWITCHES; which++)
+		card[which] = -1;
+	smooth_defaults_performance_apply(card, SMOOTH_PERFORMANCE_DEFAULT);
+	CHECK(card[0] == -1 && card[1] == -1 && card[2] == -1 && card[3] == -1);
+	card[0] = 0; card[1] = 3; card[2] = -1; card[3] = -1;
+	smooth_defaults_performance_apply(card, SMOOTH_PERFORMANCE_SMOOTHER);
+	CHECK(card[0] == 0 && card[1] == 3 && card[2] == 1 && card[3] == 1);
+	card[0] = 1; card[1] = -1; card[2] = -1; card[3] = 1;
+	smooth_defaults_performance_apply(card, SMOOTH_PERFORMANCE_OFF);
+	CHECK(card[0] == 1 && card[1] == 0 && card[2] == 0 && card[3] == 1);
+
+	/* at a map start: off with no card file turns the four off on a map that would have them, and the gpu blends follow only smoother */
+	performance_now = "off";
+	reason_now = NULL;
+	smooth_defaults_new_map();
+	CHECK(smooth_defaults_value(SMOOTH_TICK_THREAD) == 0 && smooth_defaults_value(SMOOTH_TICK_OVERLAP) == 0 && smooth_defaults_value(SMOOTH_GOVERNOR) == 0);
+	CHECK(logged("display.wiiu_performance is off") && gpu_default_on == 0);
+	/* the setting changed in the menus applies at the next map start */
+	performance_now = "smoother";
+	smooth_defaults_new_map();
+	CHECK(smooth_defaults_value(SMOOTH_TICK_THREAD) == 1 && smooth_defaults_value(SMOOTH_TICK_OVERLAP) == 1 && smooth_defaults_value(SMOOTH_GOVERNOR) == 1 && gpu_default_on == 1);
+	/* smoother does not make a map that is not one of the kind smooth */
+	reason_now = "split screen";
+	smooth_defaults_new_map();
+	CHECK(smooth_defaults_value(SMOOTH_TICK_OVERLAP) == 0 && gpu_default_on == 0);
+	/* and back to the default: the blends are off, the four are as the card files leave them (on) */
+	reason_now = NULL;
+	performance_now = "default";
+	smooth_defaults_new_map();
+	CHECK(smooth_defaults_value(SMOOTH_TICK_THREAD) == 1 && gpu_default_on == 0);
+}
+
 static void test_owner_card(void)
 {
 	study_files[0] = study_files[1] = 1;
@@ -378,6 +427,8 @@ int main(int argc, char **argv)
 {
 	if (argc > 2 && !strcmp(argv[1], "opt-out"))
 		test_opt_out(argv[2]);
+	else if (argc > 1 && !strcmp(argv[1], "performance"))
+		test_performance();
 	else if (argc > 1 && !strcmp(argv[1], "owner"))
 		test_owner_card();
 	else

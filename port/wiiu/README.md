@@ -206,7 +206,7 @@ Written and tested on the build machine (`tools/harness/tests/test_wiiu_chat_inp
 ## The social screens: Players, bots, Friends, toasts, the GamePad's social view (`wiiu-screens`)
 
 Written and tested on the build machine (`tools/harness/tests/test_screens.py`, `test_wiiu_social_view.py`, `tools/test_social_menus.py`, `tools/screens_digest.py`); **not run on a console**.
-Everything is off by default: `screens.enable` (config.toml, `HALO_SCREENS`) is 0, and then no screen, button, tag or toast exists and the frames are the base's. 1 feeds them made-up players, friends,
+Release 1 turns them on for the Wii U: `screens.enable` (config.toml, `HALO_SCREENS`) is 2 by default (the game's own players and the friends service; a 0 in config.toml, or `HALO_SCREENS=0`, puts the base's menus back). With it 0, no screen, button, tag or toast exists and the frames are the base's. 1 feeds them made-up players, friends,
 a party and toasts (`screens_mock.c`), 2 the game's own players (a lobby's or a game's, bots tagged by their machine) and whatever friends service the build sets with `screens_backend_set`. The
 report is `reports/research/2026-11-08/screens-result.md` (what each screen shows, the provider interface a backend fills, pictures at the TV's and the GamePad's sizes, and the console checklist).
 
@@ -522,11 +522,12 @@ tools/wiiu/build_game.sh`), keep the card's `config.toml` and put it back at the
 It passes when 15 peers play a Wii U-hosted game for five minutes with the sockets as with none, no datagram lost in the process, and the joiners'
 views agreeing with the host's as `net_compare.py` judges two machines.
 
-## Friends, invites and parties (`wiiu-social`, off until the console has tried it)
+## Friends, invites and parties (`wiiu-social`, on by default in release 1)
 
 The same code as every other build (`port/linux/game/social_*.c`, `port/linux/src/social_p2p.inc`; `port/linux/README.md`, "Friends, invites and parties"), so friends work
-across the Wii U and the PC builds that have it. It is **off**: `social.enabled` is false, and `halo/social.txt` on the card (a 1) turns it on for a run; nothing was run on a
-console. On, it keeps the signalling brokers' sockets open for the whole run (up to four of the 27), reads `friends.key` and `friends.txt` on a thread of its own, writes
+across the Wii U and the PC builds that have it. It is **on by default in release 1**: `social.enabled` is true on the Wii U, and `halo/social.txt` on the card (a 0) turns it off (a 1 on again); it needs `network.online`, and with no network
+nothing of it is started. Nothing of it was run on a console before release 1. It is all on threads of their own (the loader, the p2p thread's pass, the saver), through bounded queues; the game thread only reads what they
+published (the roster for the screens) and never waits for the network or the card. On, it keeps the signalling brokers' sockets open for the whole run (up to four of the 27), reads `friends.key` and `friends.txt` on a thread of its own, writes
 `friends.txt` only while the app has the screen (`wiiu_in_foreground`), and logs `social:` lines. The console test plan is in `reports/research/2026-11-08/social-result.md`.
 
 ## Owned game-audio packet storage
@@ -1261,6 +1262,9 @@ so that a harness that must not delete a card file can write -1 to put one back.
 | `hotpaths.txt` | 0 | 1: while an object or an actor updates, the tick asks (dcbt) for the cache lines of the next ones (`halo_ppc_hotpaths.h`); an A/B switch, off unless 1. The memory probe of 2026-11-04 found sequential loads with dcbt slower than without, so time it both ways |
 | `memcpy_touch.txt` | 0 | 1: the port's memcpy (`wiiu_memcpy.c`) asks for the source's lines 96 bytes ahead with dcbt (as it did until 2026-11-04); 0, absent or -1: it does not (the default: three alternating pairs of fight runs on the console had the tick thread 0.7 to 1.8 ms faster and the objects pass 0.5 to 1.4 ms faster without it; the dcbt of the destination (dcbz) stays) |
 | `async_save.txt` | absent | 0: a checkpoint's 20 MiB write to `z/savegame.bin` is made on the game thread, as it was until 2026-11-04 (the game stood still 1.3 to 1.6 s at every checkpoint); 1, absent or -1: the game thread copies the game state (a few ms) and a writer thread (core 0, below the game thread) writes it in pieces; a revert, a load, the next checkpoint and the app's close wait for the write (`port/linux/game/async_save.c`, `source/saved games/game_state_xbox.c`; reports/research/2026-11-04/async-save.md) |
+| `save_backup.txt` | on | 0: the saved game (`savegame.bin`, Save and Quit) and the profile `.sav` files are written over without a backup; 1, absent or -1: the last good copy is kept first as `NAME.bak` (renamed for the 20 MB saved game, copied for a profile; a copy cut short is not good: its header is zeroed until the write ends) and tried once (the saved game: put in place of the failing file, put back if it fails too) when the file fails its checksum; the log's `saves:` lines (`port/linux/game/save_backup.c`, `game_state_xbox.c`, `player_profile.c`) |
+| `checkpoint_writes.txt` | 0 | 1: a checkpoint is copied into the image as ever (a revert takes it from there) but its write to `z/savegame.bin` waits for the pause menu (or the game's end), and a newer checkpoint replaces one not yet written; 2: only the game's end. Anything that reads the file or takes the image writes it first; the delta write (`async_save_delta.txt`) compares with what the file held. Off if `async_save.txt` or `async_save_revert_image.txt` is 0. Log: `the write to the card is skipped`, `written to the card now` |
+| `make_report.txt` | absent | 1: before the new log replaces the old, `report.txt` is written (the top and last 400 lines of the last log, crash note, black box, close trail, last 100 lines of `data/debug.txt`; under 200 KB; `wiiu_shell_report.c`) and this file is removed |
 | `async_save_revert_image.txt` | on | 0: a revert reads the 20 MiB back from the card (1.4 to 1.8 s on the console); 1, absent or -1: it takes the game state from the copy of the last checkpoint that is still in memory (the image), whose bytes are the file's, and reads nothing (the log: `the saved game is taken from the copy held in memory in N ms`) |
 | `async_save_verify.txt` | 0 | 1: every checkpoint is checked (the copy against the game state, the file read back against the copy) and the copy's CRC is logged; costs a second or two per checkpoint, for tests |
 | `async_save_piece_kb.txt` | 256 | the size of the pieces the writer makes the write in (64 to 4096); the writer yields for 1 ms between pieces so map reads can proceed |
@@ -1358,6 +1362,15 @@ game thread the first time the HUD drew one (the decoding, the levels, the copie
 
 The log: `hud sheets: ...` (the switch, the builder's core, what the map asked for, what the map's end freed) and for every sheet `high-res hud: image N made for ... in X ms on
 the game thread: decode, levels, send; K held, M KB`, and when it was made ahead `was made ahead on the builder thread in X ms ..., Y ms after it was asked for`.
+
+### The menus' large pictures (`halo/menu_smooth.txt`, default on)
+
+The console's logs of the main menu (rc1, 2026-11-17) have hitches of 0.8 to 1.4 s in the "hud" part of the rendering (next to no draws, no file time) each time a menu
+screen's large background is first drawn: the picture was not among those the preload thread made ahead (32 MB, the main menu's screens first), so the game thread decoded
+and made its levels. A menu picture of 65,536 pixels or more is now asked of the HUD sheets' builder thread, the game's own transparent bitmap is drawn meanwhile, and the
+picture appears once it is made (a frame after, with its copies the game thread's). `halo/menu_smooth.txt` `0` puts back the game thread's making of them. Smaller pictures are
+made on the game thread as before. The log: `menus: the large pictures are made ...` and, for the first 48, `menus: NAME made ahead on the builder thread / on the game thread,
+X ms of the game thread's`. Not run on a console; the pop-in (a background a moment late after a screen opens) is the cost.
 
 ### Geometry range cache
 

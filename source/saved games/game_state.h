@@ -52,6 +52,9 @@ boolean game_state_port_save_lost(
 	void);
 int game_state_port_save_wait(
 	unsigned long timeout_ms);
+/* the pause menu opens (ending 0) or the game ends (1): a checkpoint kept in memory without its write is written (halo/checkpoint_writes.txt) */
+void game_state_port_flush_checkpoint(
+	int ending);
 #endif
 void game_state_save_to_persistent_storage(
 	void);
@@ -76,6 +79,8 @@ void game_state_tick_hash(
 boolean game_state_usage(
 	unsigned long *used_kib,
 	unsigned long *capacity_kib);
+/* port: checked MCC sidecar storage uses the otherwise-unused CPU tail. */
+void *game_state_port_cpu_region(unsigned long *used, unsigned long *capacity);
 void *game_state_malloc(
 	const char *name,
 	const char *type,
@@ -146,6 +151,13 @@ boolean game_state_read_header_from_persistent_storage(
 	long header_size,
 	long buffer_size,
 	boolean *corrupted);
+/* port: whether the last test of the saved game found one of another build's layout (its level begins again) */
+boolean game_state_saved_game_other_layout(
+	void);
+/* port: the saved game's header alone, with no check of the rest of the file (which a read of the whole of it, from the card, takes seconds for) */
+boolean game_state_read_header_only_from_persistent_storage(
+	void *header,
+	long header_size);
 void game_state_write_to_persistent_storage(
 	void *buffer,
 	unsigned long *header_checksum,

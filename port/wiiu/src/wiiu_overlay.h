@@ -14,7 +14,7 @@ Numbers update four times a second. Drawn at the top of the TV and GamePad. */
 #define OVERLAY_WIDTH 256
 #define OVERLAY_HEIGHT 7
 /* the detailed panel (halo/overlay.txt 2): the same width, a taller texture; the compact strip is drawn from the texture's top rows */
-#define OVERLAY_DETAIL_HEIGHT 164
+#define OVERLAY_DETAIL_HEIGHT 172
 #define OVERLAY_HISTORY 252 /* frame-time history, compressed for the graph */
 
 struct overlay_view

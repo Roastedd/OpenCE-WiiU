@@ -20,15 +20,18 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 */
 
 #include "../include/wut_clang_compat.h"
+#include "wiiu_join_trace.h"
 #include "wiiu_shell.h"
 
 #include "wiiu_crash.h"
 #include "wiiu_debug.h"
 #include "wiiu_shell_blackbox.h"
+#include "wiiu_shell_report.h"
 #include "wiiu_shell_log.h"
 #include "wiiu_missing_keys.h"
 #include "wiiu_shell_watch.h"
 #include "wiiu_update.h"
+#include "wiiu_auto_continue.h"
 #include "wiiu_map_summary.h"
 #include "../../linux/game/smooth_defaults.h" /* the cards and the map (smooth_defaults.c): whether the ticks run beside the drawing */
 
@@ -74,6 +77,8 @@ close, the black box); this is that, in C, for the game. Not run on a console.
 #define BLACKBOX_PREVIOUS_FILE WIIU_DATA_DIRECTORY "/blackbox-previous.txt"
 #define CRASH_FILE WIIU_DATA_DIRECTORY "/crash.txt"
 #define CRASH_PREVIOUS_FILE WIIU_DATA_DIRECTORY "/crash-previous.txt"
+#define REPORT_REQUEST_FILE WIIU_DATA_DIRECTORY "/make_report.txt"
+#define REPORT_FILE WIIU_DATA_DIRECTORY "/report.txt"
 
 /* Everything is static and never destroyed: a thread may still be using it as the process ends. */
 static wiiu_shell_log shell_log;
@@ -104,6 +109,9 @@ static int (*game_main_function)(void);
 static OSThread game_thread;
 static uint8_t *game_stack;
 static char last_beat[240];
+/* halo/make_report.txt: what became of the one-file report made at the start (-1 not asked, else wiiu_shell_report_make's answer) and its size */
+static int report_result = -1;
+static size_t report_bytes;
 
 /* ---------- time and threads */
 
@@ -512,6 +520,23 @@ void wiiu_thread_off_game_core(void)
 /* The checkpoint's writer (port/linux/game/async_save.c): on core 0, named, and below the game thread's priority like the other workers (setup_thread): it waits for the card
 most of its time, and what it has to do on a core is a piece of the file at a time. */
 void wiiu_thread_background(const char *name);
+/* the same with the priority below the game's by offset (a smaller number is a higher priority; 0 is the game's own) */
+void wiiu_thread_background_offset(const char *name, int offset);
+void wiiu_thread_background_offset(const char *name, int offset)
+{
+	OSThread *self = OSGetCurrentThread();
+	int priority = (int)main_priority + offset;
+
+	if (priority < 0)
+		priority = 0;
+	if (priority > 31)
+		priority = 31;
+	wiiu_thread_off_game_core();
+	OSSetThreadName(self, name);
+	OSSetThreadPriority(self, priority);
+	wiiu_tag_thread(name);
+}
+
 void wiiu_thread_background(const char *name)
 {
 	OSThread *self = OSGetCurrentThread();
@@ -827,6 +852,34 @@ static void make_directories(void)
 	mkdir(WIIU_DATA_DIRECTORY, 0755);
 }
 
+/* halo/make_report.txt (the number 1): the last run's log, crash note, black box, close trail and debug.txt into one file, report.txt, for a bug report. Called before
+this run's log replaces the last run's; the request is removed once it is answered (a failure is told in the log). */
+static void make_report_if_asked(void)
+{
+	FILE *request = fopen(REPORT_REQUEST_FILE, "r");
+	int asked = 0;
+
+	if (!request)
+		return;
+	if (fscanf(request, "%d", &asked) != 1)
+		asked = 0;
+	fclose(request);
+	unlink(REPORT_REQUEST_FILE);
+	if (asked == 1)
+	{
+		wiiu_shell_report_config config;
+
+		memset(&config, 0, sizeof(config));
+		config.output = REPORT_FILE;
+		config.log = LOG_FILE;
+		config.crash = CRASH_FILE;
+		config.blackbox = BLACKBOX_FILE;
+		config.exit_trail = EXIT_TRAIL_PREVIOUS_FILE; /* (put away by the start of this run) */
+		config.debug = ERROR_FILE;
+		report_result = wiiu_shell_report_make(&config, &report_bytes);
+	}
+}
+
 /* the last run's file out of the way, and its lines into this run's log; 1 if it had any */
 static int report_file(const char *previous, const char *what);
 
@@ -954,6 +1007,36 @@ static void threads_report(uint32_t window_ms)
 	wiiu_log("threads: core time in the last %.1f s: %s", (double)window_ms / 1000.0, text);
 }
 
+/* The game thread's real place, for a stall in a join's window: a running thread's saved context is its last switch's, so the thread is suspended for a moment (which saves it), read (its
+pc, lr and the return addresses up its stack) and resumed. The line goes to the log and, synchronously, to join-steps.txt. */
+static void game_thread_context_note(uint32_t stalled)
+{
+	char text[256];
+	uint32_t waited = 0, sp, depth, used;
+
+	OSSuspendThread(&game_thread);
+	while (!OSIsThreadSuspended(&game_thread) && waited < 100u)
+	{
+		sleep_ms(5);
+		waited += 5u;
+	}
+	used = (uint32_t)snprintf(text, sizeof(text), "the game's loop has not gone round for %u s: game thread pc=%08x lr=%08x, up the stack:", (unsigned)(stalled / 1000u),
+		(unsigned)game_thread.context.srr0, (unsigned)game_thread.context.lr);
+	sp = (uint32_t)game_thread.context.gpr[1];
+	for (depth = 0; depth < 8 && used + 12 < sizeof(text); depth++)
+	{
+		const uint32_t base = (uint32_t)(uintptr_t)game_stack;
+
+		if (!game_stack || sp < base || sp + 8 > base + GAME_STACK_BYTES || (sp & 7))
+			break;
+		used += (uint32_t)snprintf(text + used, sizeof(text) - used, " %08x", (unsigned)*(const uint32_t *)(uintptr_t)(sp + 4));
+		sp = *(const uint32_t *)(uintptr_t)sp;
+	}
+	OSResumeThread(&game_thread);
+	wiiu_log("%s", text);
+	wiiu_join_note(text);
+}
+
 static void *watchdog_main(void *unused)
 {
 	uint32_t frames_before = 0;
@@ -989,6 +1072,18 @@ static void *watchdog_main(void *unused)
 			wiiu_log("The game's loop has not gone round for %u s; its phase is: %s", (unsigned)(stalled / 1000u),
 				in_app_memory(phase, 0x01000000u) ? phase : "unknown");
 			box_wanted = 1;
+			/* a stall in a join's window (a step of the join in the last 25 s): where the game thread is, then, if it goes on, the app ends (the console's menu back, not a frozen game) */
+			if (wiiu_join_window_open())
+			{
+				game_thread_context_note(stalled);
+				if (stalled >= 12000u)
+				{
+					wiiu_log("The game has not gone round for %u s since a join: ending the app", (unsigned)(stalled / 1000u));
+					exit_note("a stall in a join: the watchdog ends the app (_Exit)");
+					wiiu_shell_log_flush(&shell_log, 600);
+					_Exit(0);
+				}
+			}
 		}
 		if (now - last_beat_ms >= HEARTBEAT_PERIOD_MS)
 		{
@@ -1022,6 +1117,16 @@ static void *blackbox_main(void *unused)
 		const uint32_t now = shell_ms();
 
 		sleep_ms(100);
+		/* (the join's record, a line a second while its window is open: wiiu_join_trace.c) */
+		{
+			static uint32_t beat_last;
+
+			if (now - beat_last >= 1000u)
+			{
+				beat_last = now;
+				wiiu_join_heartbeat();
+			}
+		}
 		if (box_stopping)
 			continue;
 		if (box_wanted || shell_ms() - last >= BLACKBOX_PERIOD_MS)
@@ -1246,6 +1351,7 @@ int wiiu_shell_run(int (*game_main)(void))
 	ProcUIRegisterCallback(PROCUI_CALLBACK_NET_IO_START, on_network_start, NULL, ACQUIRE_PRIORITY);
 
 	make_directories();
+	make_report_if_asked(); /* (before the log, the black box and the crash note of the last run are put away, and debug.txt rolled) */
 	unlink(LOG_PREVIOUS_FILE);
 	rename(LOG_FILE, LOG_PREVIOUS_FILE);
 	{
@@ -1302,10 +1408,16 @@ int wiiu_shell_run(int (*game_main)(void))
 	wiiu_log("OpenCE for the Wii U starting: main thread on core %u at priority %d", (unsigned)OSGetCoreId(), (int)main_priority);
 	if (memory_line(text, sizeof(text)))
 		wiiu_log("%s", text);
+	if (report_result == 0)
+		wiiu_log("The report for a bug report is made: " REPORT_FILE " (%u KB): send that one file; halo/make_report.txt is removed", (unsigned)((report_bytes + 1023) / 1024));
+	else if (report_result > 0)
+		wiiu_log("The report (halo/make_report.txt) could not be made (error %d): the six files are the report", report_result);
 	report_file(EXIT_TRAIL_PREVIOUS_FILE, "close trail");
 	report_previous(BLACKBOX_FILE, BLACKBOX_PREVIOUS_FILE, "black box");
 	crash_note = report_previous(CRASH_FILE, CRASH_PREVIOUS_FILE, "crash note");
 	wiiu_crash_install(CRASH_FILE, &shell_watch.phase, last_beat);
+	/* (game.wiiu_auto_continue: not after a run that crashed) */
+	wiiu_auto_continue_start(crash_note);
 
 	if (start_monitor(watchdog_main) || start_monitor(blackbox_main))
 		wiiu_log("A monitor thread could not be started");
