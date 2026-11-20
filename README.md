@@ -133,8 +133,8 @@ on the map, the host and how many people are in it.
 If you cannot connect:
 
 - **The list is empty.** Check that the console is online (the Wii U's own network test
-  should pass) and that its date is roughly right. Hold the game for a few seconds on the
-  server browser before giving up.
+  should pass), and give the server browser a few seconds before giving up. A console whose
+  clock has reset to an old date still works: the game does not depend on it.
 - **The server uses a map you do not have.** The game downloads it from the host, into
   `wiiu/apps/halo/data/custom_maps`. The first one can be 100 to 250 MB, because it also
   brings Halo Custom Edition's `bitmaps.map`, `sounds.map` and `loc.map`. The card needs
@@ -145,6 +145,15 @@ If you cannot connect:
   you needs to update.
 - **Still stuck.** Open an issue and attach `wiiu/apps/halo/log.txt` from the card right
   after the attempt. Its lines starting with `Internet play:` and `Net:` say where it stopped.
+
+## Updates
+
+The game checks for a newer version each time it starts, when the console is online. If one
+is out, a panel at the main menu offers it: **A** downloads and installs it (about 18 MB) and
+restarts the game, **B** asks again next time. Saves, settings and maps are never touched, and
+if the new version does not reach its main menu the old one is put back. To turn the check
+off, use Settings, your profile, Network Setup, Check for updates. The first version with
+this check is build 1; older versions have to be replaced by hand once.
 
 ## Questions
 

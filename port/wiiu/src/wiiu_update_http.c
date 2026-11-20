@@ -85,11 +85,11 @@ the close), and the cryptography is started under a lock of its own. */
 static pthread_mutex_t request_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* A console whose clock is far behind (a drained clock battery or a reset reads 2000 or 2013) refuses every certificate as "not yet valid", and the server
-browser then finds no master. With this switched on (the server browser's retry only: the lists are signed with pinned keys, and the updater's manifest too,
-so the lists do not rest on the transport's dates), a certificate that is only too early or too late is accepted while the clock reads before
-WIIU_HTTP_CLOCK_FLOOR (1 January 2026, before this build); its chain to a root and the host's name are still checked. */
+browser and the updater then find nothing. On by default (the lists are signed with pinned keys, the updater's manifest is signed and its files hashed, so
+none of them rests on the transport's dates), a certificate that is only too early or too late is accepted while the clock reads before
+WIIU_HTTP_CLOCK_FLOOR (1 January 2026, before this build); its chain to a root and the host's name are still checked. With the clock right, nothing changes. */
 #define WIIU_HTTP_CLOCK_FLOOR 1767225600LL
-static volatile int lenient_dates;
+static volatile int lenient_dates = 1;
 
 void wiiu_http_set_lenient_dates(int on)
 {
