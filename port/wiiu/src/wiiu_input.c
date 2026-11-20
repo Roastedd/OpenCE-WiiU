@@ -26,6 +26,16 @@ connect callback counts the changes a read could miss), the layout is arranged, 
 
 #include <coreinit/time.h>
 
+/* Current wut (it defines WUT_FREED_BY) spells the pad's accelerometer correctly and declares the KPAD calls below; the older pinned wut spells it
+"accelorometer" and omits the declarations. Both build. */
+#ifdef WUT_FREED_BY
+#define PAD_ACCELEROMETER accelerometer
+#else
+#define PAD_ACCELEROMETER accelorometer
+void KPADSetPosParam(KPADChan chan, float tolerance, float sensitivity);
+void KPADSetPosPlayMode(KPADChan chan, int mode);
+#endif
+
 #include <malloc.h>
 #include <stdlib.h>
 #include <string.h>
@@ -265,7 +275,7 @@ static void gyro_mouse_note(const VPADStatus *status, float pitch_rate, float ya
 	const OSTime now = OSGetSystemTime();
 	float seconds = gyro_mouse.last ? (float)OSTicksToMicroseconds(now - gyro_mouse.last) / 1000000.0f : 0.0f;
 	/* the accelerometer measures the push that holds the pad up, opposite to gravity */
-	float down[3] = { -status->accelerometer.acc.x, -status->accelerometer.acc.y, -status->accelerometer.acc.z };
+	float down[3] = { -status->PAD_ACCELEROMETER.acc.x, -status->PAD_ACCELEROMETER.acc.y, -status->PAD_ACCELEROMETER.acc.z };
 	float length = sqrtf(down[0] * down[0] + down[1] * down[1] + down[2] * down[2]);
 	float turned[3], turn, magnitude, scale;
 	int i;
@@ -349,7 +359,7 @@ static void gyro_mouse_note(const VPADStatus *status, float pitch_rate, float ya
 	{
 		gyro_mouse.told = now;
 		wiiu_log("Input: GamePad gravity %.2f %.2f %.2f (accelerometer %.2f %.2f %.2f)", gyro_mouse.gravity[0], gyro_mouse.gravity[1], gyro_mouse.gravity[2],
-			status->accelerometer.acc.x, status->accelerometer.acc.y, status->accelerometer.acc.z);
+			status->PAD_ACCELEROMETER.acc.x, status->PAD_ACCELEROMETER.acc.y, status->PAD_ACCELEROMETER.acc.z);
 	}
 }
 
