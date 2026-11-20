@@ -35,7 +35,6 @@ void *memalign(unsigned long alignment, unsigned long size); /* newlib's, malloc
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
-#include <sys/stat.h>
 
 /* ---------- the menus' file work, counted (halo_file_counts.h) */
 
@@ -820,24 +819,24 @@ void platform_log(const char *format, ...);
 
 static void map_preload(struct platform_file *file)
 {
-	struct stat information;
+	off_t size;
 	double started;
 	unsigned long long done = 0;
 
 	file->preload_tried = 1;
-	if (!strstr(file->path, "/maps/") || fstat(file->descriptor, &information) != 0 || information.st_size <= 0 ||
-		(unsigned long long)information.st_size > MAP_PRELOAD_LIMIT)
+	if (!strstr(file->path, "/maps/") || (size = lseek(file->descriptor, 0, SEEK_END)) <= 0 ||
+		(unsigned long long)size > MAP_PRELOAD_LIMIT)
 		return;
-	file->preload = malloc((size_t)information.st_size);
+	file->preload = malloc((size_t)size);
 	if (!file->preload)
 	{
-		platform_log("map preload: no room for %s (%llu KB)", file->path, (unsigned long long)information.st_size / 1024);
+		platform_log("map preload: no room for %s (%llu KB)", file->path, (unsigned long long)size / 1024);
 		return;
 	}
 	started = file_io_now_ms();
-	while (done < (unsigned long long)information.st_size)
+	while (done < (unsigned long long)size)
 	{
-		size_t wanted = (size_t)(information.st_size - done);
+		size_t wanted = (size_t)(size - done);
 		ssize_t got;
 
 		if (wanted > 0x100000)
@@ -847,10 +846,10 @@ static void map_preload(struct platform_file *file)
 			break;
 		done += (unsigned long long)got;
 	}
-	if (done != (unsigned long long)information.st_size)
+	if (done != (unsigned long long)size)
 	{
 		platform_log("map preload: %s stopped at %llu of %llu KB; read as before", file->path, done / 1024,
-			(unsigned long long)information.st_size / 1024);
+			(unsigned long long)size / 1024);
 		free(file->preload);
 		file->preload = NULL;
 		return;
