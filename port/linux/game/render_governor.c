@@ -126,7 +126,7 @@ static void settings_defaults(void)
 	settings.target_ms = 22.0;
 	settings.blend_ms = 1500.0;
 	settings.window_ms = 500.0;
-	settings.down_dwell_ms = 2000.0;
+	settings.down_dwell_ms = 1000.0;
 	settings.up_dwell_ms = 8000.0;
 	settings.up_margin = 0.88;
 	settings.log_ms = 5000.0;
@@ -139,7 +139,7 @@ static void settings_defaults(void)
 	settings.down_windows = 2;
 	settings.up_windows = 6;
 	settings.late_ms = 0.0;
-	settings.late_share = 0.20;
+	settings.late_share = 0.15;
 	settings.late_up_share = 0.08;
 	settings.card_on = settings.card_off = 0;
 }
@@ -287,7 +287,7 @@ static void settings_update_mode(void)
 	char const *mode = config_string("display.graphics_mode");
 	settings.performance_mode = mode && !strcmp(mode, "performance");
 	if (!settings.frame_rule_set)
-		settings.late_ms = settings.performance_mode ? 1000.0 / 60.0 : 0.0;
+		settings.late_ms = 1000.0 / 60.0;
 }
 
 static void settings_load(void)
@@ -542,7 +542,7 @@ static int governor_max_step(void)
 	other players (the owner's joined game reached step 5 and the far players were gone) */
 	if (online_map)
 		return settings.max_step < DEFAULT_MAX_STEP ? settings.max_step : DEFAULT_MAX_STEP;
-	return settings.performance_mode ? STEPS - 1 : settings.max_step;
+	return STEPS - 1;
 }
 
 void render_governor_set_online(int online)

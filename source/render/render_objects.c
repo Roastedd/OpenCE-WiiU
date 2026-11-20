@@ -1053,7 +1053,7 @@ static void object_render_state_refresh(
 #ifdef HALO_WIIU
 	/* halo/lighting_every.txt: the dynamic lighting (the point lights found for the object and its
 	lightmap samples) is made again in one frame of N for each object, and kept in between (the objects take
-	turns by their index); 1 or no file is every frame, as it was. A rebuild and an object that has no
+	turns by their index); no file is 2; 1 is every frame, as it was. A rebuild and an object that has no
 	lighting yet are made at once. */
 	{
 		static long every = -1;
@@ -1063,7 +1063,7 @@ static void object_render_state_refresh(
 			long wiiu_study_number(const char *name, long fallback);
 			void platform_log(const char *format, ...);
 
-			every = wiiu_study_number("lighting_every.txt", 1);
+			every = wiiu_study_number("lighting_every.txt", 2);
 			if (every < 1)
 				every = 1;
 			if (every > 6)
