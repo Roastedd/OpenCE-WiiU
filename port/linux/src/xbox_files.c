@@ -35,6 +35,7 @@ void *memalign(unsigned long alignment, unsigned long size); /* newlib's, malloc
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 /* ---------- the menus' file work, counted (halo_file_counts.h) */
 
@@ -666,6 +667,11 @@ struct platform_file
 {
 	int descriptor;
 	char path[1024];
+#ifdef HALO_WIIU
+	char *preload;
+	unsigned long long preload_size;
+	int preload_tried;
+#endif
 };
 
 static void file_destroy(struct platform_handle *handle)
@@ -673,6 +679,9 @@ static void file_destroy(struct platform_handle *handle)
 	struct platform_file *file = handle->data;
 
 	close(file->descriptor);
+#ifdef HALO_WIIU
+	free(file->preload);
+#endif
 	free(file);
 }
 
@@ -800,9 +809,81 @@ HANDLE WINAPI CreateFileA(LPCSTR file_name, DWORD desired_access, DWORD share_mo
 
 #define READ_BOUNCE_SIZE 0x40000UL
 
+#ifdef HALO_WIIU
+/* The map copy at a join (the game inflates maps/<name>.map into a cache file, 128 KB read, then 4 MB written, over and over) took 5 s some days and 54 s on
+others (2026-11-20: reads of 0.86 s each while the card was being written). A map of at most 48 MB is read whole, in 1 MB pieces with nothing written, on the first
+read of 64 KB or more, and the copy's reads are served from memory; the time is logged. A file that cannot be held is read as before. */
+static double file_io_now_ms(void);
+void platform_log(const char *format, ...);
+
+#define MAP_PRELOAD_LIMIT (48ULL * 1024 * 1024)
+
+static void map_preload(struct platform_file *file)
+{
+	struct stat information;
+	double started;
+	unsigned long long done = 0;
+
+	file->preload_tried = 1;
+	if (!strstr(file->path, "/maps/") || fstat(file->descriptor, &information) != 0 || information.st_size <= 0 ||
+		(unsigned long long)information.st_size > MAP_PRELOAD_LIMIT)
+		return;
+	file->preload = malloc((size_t)information.st_size);
+	if (!file->preload)
+	{
+		platform_log("map preload: no room for %s (%llu KB)", file->path, (unsigned long long)information.st_size / 1024);
+		return;
+	}
+	started = file_io_now_ms();
+	while (done < (unsigned long long)information.st_size)
+	{
+		size_t wanted = (size_t)(information.st_size - done);
+		ssize_t got;
+
+		if (wanted > 0x100000)
+			wanted = 0x100000;
+		got = pread(file->descriptor, file->preload + done, wanted, (off_t)done);
+		if (got <= 0)
+			break;
+		done += (unsigned long long)got;
+	}
+	if (done != (unsigned long long)information.st_size)
+	{
+		platform_log("map preload: %s stopped at %llu of %llu KB; read as before", file->path, done / 1024,
+			(unsigned long long)information.st_size / 1024);
+		free(file->preload);
+		file->preload = NULL;
+		return;
+	}
+	file->preload_size = done;
+	{
+		const double ms = file_io_now_ms() - started;
+
+		platform_log("map preload: %s read whole, %llu KB in %.0f ms (%.1f MB/s)", file->path, done / 1024, ms,
+			ms > 0.0 ? (double)done / 1048576.0 / (ms / 1000.0) : 0.0);
+	}
+}
+#endif
+
 static ssize_t read_some(struct platform_file *file, void *buffer, size_t count, BOOL positioned,
 	unsigned long long offset)
 {
+#ifdef HALO_WIIU
+	if (positioned && !file->preload_tried && count >= 65536)
+		map_preload(file);
+	if (positioned && file->preload)
+	{
+		size_t n;
+
+		if (offset >= file->preload_size)
+			return 0;
+		n = (size_t)(file->preload_size - offset);
+		if (n > count)
+			n = count;
+		memcpy(buffer, file->preload + offset, n);
+		return (ssize_t)n;
+	}
+#endif
 	return positioned ?
 		pread(file->descriptor, buffer, count, (off_t)offset) :
 		read(file->descriptor, buffer, count);
