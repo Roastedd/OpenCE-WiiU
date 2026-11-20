@@ -1050,6 +1050,33 @@ static void object_render_state_refresh(
 		state->refresh_frame_index = game_time_get();
 	}
 
+#ifdef HALO_WIIU
+	/* halo/lighting_every.txt: the dynamic lighting (the point lights found for the object and its
+	lightmap samples) is made again in one frame of N for each object, and kept in between (the objects take
+	turns by their index); 1 or no file is every frame, as it was. A rebuild and an object that has no
+	lighting yet are made at once. */
+	{
+		static long every = -1;
+
+		if (every < 0)
+		{
+			long wiiu_study_number(const char *name, long fallback);
+			void platform_log(const char *format, ...);
+
+			every = wiiu_study_number("lighting_every.txt", 1);
+			if (every < 1)
+				every = 1;
+			if (every > 6)
+				every = 6;
+			platform_log("lighting: the dynamic lighting is made again every %ld frame(s) for each object (halo/lighting_every.txt)", every);
+		}
+		if (every > 1 && !rebuild && scene_age > 0 && render_age <= 1 &&
+			((render.frame_index + (object_index & 0xFFFF)) % every) != 0)
+		{
+			scene_age = 0;
+		}
+	}
+#endif
 	if (rebuild || scene_age > 0)
 	{
 		lights_prepare_for_object_dynamic(object_index, &state->desired_lighting);
