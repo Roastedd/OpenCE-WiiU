@@ -74,6 +74,9 @@ typedef struct wiiu_http_request_options
 body hook, at most `most` bytes) are the answer whatever the status is, as the desktop's update_https_request gives them (a 204 or a 304 has no body;
 the start hook gets the status, 0 and the length if the server says). Only one connection is open at a time, the updater's included. 0 when a
 response came (result->status), -1 if not (result->error). */
+/* See wiiu_update_http.c: accept a certificate only too early or too late while the console's clock reads before 2026 (the server browser's retry). */
+void wiiu_http_set_lenient_dates(int on);
+
 int wiiu_http_request(wiiu_http *http, const char *url, uint64_t most, const wiiu_http_hooks *hooks, const wiiu_http_request_options *options,
 	wiiu_http_result *result);
 

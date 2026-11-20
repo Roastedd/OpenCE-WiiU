@@ -136,6 +136,7 @@ int wiiu_https_get(const char *url, const char *headers, unsigned long maximum, 
 	sink s;
 	wiiu_http *http;
 	char reason[200];
+	int request_result;
 
 	*status = 0;
 	*body = NULL;
@@ -173,7 +174,21 @@ int wiiu_https_get(const char *url, const char *headers, unsigned long maximum, 
 	options.response_headers = response_headers;
 	options.response_headers_size = response_headers && response_headers_size > 0 ? (size_t)response_headers_size : 0;
 	options.total_ms = WIIU_HTTPS_TOTAL_MS;
-	if (wiiu_http_request(http, url, maximum, &hooks, &options, &result) != 0)
+	request_result = wiiu_http_request(http, url, maximum, &hooks, &options, &result);
+	if (request_result != 0 && strstr(result.error, "certificate") != NULL && time(NULL) < 1767225600LL)
+	{
+		/* the console's clock reads before this build was made (a drained clock battery): the certificate's dates cannot be judged, and the answer
+		(a list signed with pinned keys) does not rest on them. The chain to a root and the host's name are still checked. */
+		free(s.data);
+		memset(&s, 0, sizeof(s));
+		s.maximum = maximum;
+		if (response_headers && response_headers_size > 0)
+			response_headers[0] = 0;
+		wiiu_http_set_lenient_dates(1);
+		request_result = wiiu_http_request(http, url, maximum, &hooks, &options, &result);
+		wiiu_http_set_lenient_dates(0);
+	}
+	if (request_result != 0)
 	{
 		free(s.data);
 		snprintf(error, (size_t)error_size, "%s", result.error[0] ? result.error : "the request failed");
