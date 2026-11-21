@@ -2047,10 +2047,18 @@ static void set_textbox_to_build_number(
 
 	if (!build_number_string[0])
 	{
+#ifdef HALO_WIIU
+		{
+			/* the release's own name (rc1.1 build 3) instead of the stock game's number, so a player can tell which version is installed */
+			extern const char *wiiu_version_label(void);
+			ascii_to_wide(wiiu_version_label(), build_number_string, sizeof(build_number_string));
+		}
+#else
 		ascii_to_wide(
 			"01.01.14.2342",
 			build_number_string,
 			sizeof(build_number_string));
+#endif
 	}
 
 	if (!widget->parameters.text_box.text)

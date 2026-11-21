@@ -53,6 +53,19 @@ Not run on a console.
 
 /* ---------- what the build was made with */
 
+/* The name shown in the main menu where the stock game shows its own version number. Add a line for each release: the number is what the
+   updater compares, the name is what the player knows the release as. */
+const char *wiiu_version_label(void)
+{
+	static const struct { unsigned build; const char *name; } releases[] = { { 3, "rc1.1 build 3" }, { 4, "rc1.2 build 4" } };
+	static char other[32];
+	for (unsigned at = 0; at < sizeof(releases) / sizeof(releases[0]); at++)
+		if (releases[at].build == (unsigned)HALO_BUILD_NUMBER)
+			return releases[at].name;
+	snprintf(other, sizeof(other), "OpenCE-U build %u", (unsigned)HALO_BUILD_NUMBER);
+	return other;
+}
+
 #ifndef HALO_BUILD_NUMBER
 #define HALO_BUILD_NUMBER 0
 #endif
