@@ -64,6 +64,24 @@ If something looks wrong, run `python3 setup_wiiu.py --check`. It lists what is 
 and what is missing, and changes nothing. The [setup guide](docs/ISO_SETUP.md) has the Mac
 details (formatting the card, the first open) and the command line options.
 
+## Already installed? Update
+
+You do not start over. Your maps, saves and settings stay on the card.
+
+1. Download `opence-wiiu.zip` from the [latest release](https://github.com/Roastedd/OpenCE-WiiU/releases/latest) and unzip it.
+2. Open the setup program (`Setup Wii U.bat` on Windows, `Setup Wii U.command` on a Mac).
+3. Choose your SD card and **leave the ISO empty**, then press Prepare SD card. It says
+   "The maps are already on the card, so they were left as they are" and "The game is updated".
+4. Eject the card and start OpenCE-U as usual.
+
+By hand instead: copy `app/halo.wuhb` and `app/shaders.pack` from the zip over the two files in
+`sd:/wiiu/apps/halo/`. Always replace both; they are a matching pair.
+
+**Which version do I have?** Open `wiiu/apps/halo/log.txt` after a start. If it has an `Update:`
+line, the game has the updater (rc1.1 or newer) and will offer new versions itself from now on. If
+there is no `Update:` line, it is rc1: update once by hand as above. (The number in the main menu, such as
+01.01.2.2342, is Halo's own version and does not change between our releases.)
+
 The first time the game starts it builds some cache files, so it takes longer than usual.
 Your saves are in `wiiu/apps/halo/data/`; back that folder up before changing builds.
 
